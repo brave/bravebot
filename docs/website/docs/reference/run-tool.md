@@ -330,7 +330,11 @@ A line runs unasked only where all of these hold:
   argument where it is executable or the stage is an interpreter or wrapper (`sh`, `python3`, `node`, `env`
   and the like), including inside a `sh -c` string or an option's value. An argument is looked up whole,
   so a file name holding a space is found, and also as the words in it, read with the quoting a shell
-  applies, so `sh "run script.sh"` and `sh -c "'run script.sh'"` name the file they run.
+  applies, so `sh "run script.sh"` and `sh -c "'run script.sh'"` name the file they run;
+- no word in the line's own arguments names a file your trust map holds as untrusted, for example the
+  fetched text copied over a trusted file by `cp fetched.md AGENTS.md`. A path inside a `sh -c` string
+  is not a word of the arguments. Such a line is asked about as the file
+  tools are, and a refusal leaves the file and the map as they were.
 
 Its output is untrusted and private, as for any line nobody vouched for. Such a line runs with the network
 closed for that line, even where the session's network is open, which is the default: a plain command that needs

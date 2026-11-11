@@ -7710,6 +7710,71 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.read_proven(plan)
     }
 
+    /// Every word of the plan's argv that could name a path, as the line spelled it, and for a
+    /// word written `key=value` (`--name=value`, `if=file`) the part after the first `=` as well.
+    /// What a caller with a file system looks up the other names of for a held line
+    /// ([`Policy::learn_operand_names`], RUN-5).
+    ///
+    /// The words are the planner's own, after the compiler expanded a pattern, so this is a list
+    /// of spellings and reads no file.
+    pub fn words_named_by(&self, plan: &crate::command::Plan) -> Vec<String> {
+        let mut words = Vec::new();
+        for step in plan.steps() {
+            for word in &step.args {
+                words.push(word.clone());
+                if let Some((_, value)) = word.split_once('=') {
+                    words.push(value.to_string());
+                }
+            }
+        }
+        words
+    }
+
+    /// Whether any word of the plan's argv names a path the trust map holds untrusted, under any
+    /// of the names the path has ([RUN-5], [TRUST-4]).
+    ///
+    /// The words are asked the way [`Policy::read_proven_label`] asks about a read set: a word that
+    /// climbs out through `..` is one no rule was written about and counts as untrusted, the
+    /// spellings of [`keys_for_the_map`] and the other names the caller found are all asked, and
+    /// the weakest answer decides. A word whose lookup did not finish, or that the caller left out
+    /// of a lookup it made, counts as untrusted. A name nothing in the map speaks about, such as a
+    /// path outside the root with no rule, counts as untrusted too, as it does in
+    /// [`Policy::read_proven_label`] and for the first write to a path nobody mentioned (TRUST-4):
+    /// the map holds no decision that makes it the person's own. A word that is not a path at all
+    /// (`test` in `make test`, `-r`) is a relative name under the root, which the root's rule covers.
+    ///
+    /// The subtree is asked about, not only the path: a directory word is untrusted where a rule
+    /// beneath it is ([`Policy::integrity_beneath_in_force`]), so `cp -r sub dest` asks when
+    /// `sub/x.md` is distrusted.
+    ///
+    /// A function of the line's own words, the map and the file system's names for those words.
+    /// No file is opened and no byte of one takes part. A program that is given a string to read
+    /// as a line (`sh -c`, `python3 -c`) or reads a file of its own (`make`) names no path in its
+    /// argv, so it is not covered.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    /// [TRUST-4]: ../../../docs/specs/trust-map.md
+    fn names_a_distrusted_path(&self, plan: &crate::command::Plan) -> bool {
+        self.words_named_by(plan).iter().any(|word| {
+            if climbs_out(word) {
+                return true;
+            }
+            let mut keys = keys_for_the_map(&plan.directory, word);
+            match &self.operand_names {
+                None => {}
+                Some(found) => match found.get(word.as_str()) {
+                    Some((others, true)) => keys.extend(others.iter().cloned()),
+                    _ => return true,
+                },
+            }
+            keys.iter().any(|key| {
+                self.integrity_beneath_in_force(key)
+                    .unwrap_or(Integrity::Untrusted)
+                    == Integrity::Untrusted
+            })
+        })
+    }
+
     /// Record the other names of each operand of the line about to be judged (TRUST-2, CMDLINE-8):
     /// for an operand as the line spelled it, the keys the map is asked under besides its own, and
     /// whether the lookup finished. Replaces what an earlier line left. Metadata of paths the
@@ -8007,7 +8072,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // Past every question above, which is what keeps this answer to the line it was given
         // for: private input, a scope, an unconfined start, a write, another tree, an assignment, a
         // rule and a fed reference all asked before it was reached. What remains is a plain line.
-        if containment == Containment::Held && self.confined_lines_were_allowed(plan) {
+        // And past the question of whether the line is given a path the map holds untrusted: the
+        // file tools put the same copy to the person (TRUST-4), and a held line that copies an
+        // untrusted file over a trusted one has made the same move. Such a line falls through to
+        // the vouched entry and the remembered line, which a person gave for that exact line.
+        //
+        // A line the audited table proves read-only is not asked about its paths: it copies
+        // nothing, and what it prints keeps the label of the paths it read ([`Policy::before_plan`]),
+        // so `cat /etc/hosts` adds a question that protects nothing. `read_proven` answers from
+        // program names and argv alone and is `None` for a renamed, assigned or redirecting step
+        // and for a program the table does not list, so every other line is still asked about.
+        if containment == Containment::Held
+            && self.confined_lines_were_allowed(plan)
+            && (self.read_proven(plan).is_some() || !self.names_a_distrusted_path(plan))
+        {
             self.answered_by_directory_trust = true;
             self.allow(
                 "approval",
@@ -14913,6 +14991,346 @@ five
         assert!(
             held(&mut policy, &elsewhere),
             "the trust of the root covered a directory beneath it"
+        );
+    }
+
+    /// RUN-5, TRUST-4: a held line whose argv names a path the map holds untrusted is put to the
+    /// person, as the file tools put an untrusted file into a trusted one. The control is the same
+    /// `cp` with a trusted source, which does not ask, so a gate that asked about every `cp`, or
+    /// about none, fails one of the two. The destination is named in the argv as well, and a
+    /// distrusted destination asks too.
+    #[test]
+    fn a_held_copy_of_an_untrusted_file_asks_and_the_copy_of_a_trusted_one_does_not() {
+        let held = |distrusting: &[&str], source: &str, target: &str| {
+            let mut sink = RecordingSink::new();
+            let mut policy =
+                held_line_policy(&mut sink, trusting_and_allowing_confined_lines(distrusting));
+            let line = plan_of(vec![step_named("cp", &[source, target])]);
+            let asked = policy.plan_needs_approval_held(&line, &[], Containment::Held);
+            (asked, policy.answered_by_directory_trust())
+        };
+        let distrusting = ["fetched-agents.md"];
+        assert_eq!(
+            held(&distrusting, "fetched-agents.md", "AGENTS.md"),
+            (true, false),
+            "a held copy of a distrusted file into a trusted one ran unasked"
+        );
+        assert_eq!(
+            held(&distrusting, "notes.md", "AGENTS.md"),
+            (false, true),
+            "the control: a held copy of a trusted file asked"
+        );
+        assert_eq!(
+            held(&["AGENTS.md"], "notes.md", "AGENTS.md"),
+            (true, false),
+            "a held line that names a distrusted file as its target ran unasked"
+        );
+        assert_eq!(
+            held(&["vendor"], "vendor/lib.js", "AGENTS.md"),
+            (true, false),
+            "a rule about a directory did not cover the file beneath it"
+        );
+        assert_eq!(
+            held(
+                &["fetched-agents.md"],
+                "--reference=fetched-agents.md",
+                "notes.md"
+            ),
+            (true, false),
+            "the value after the = of an option is a spelling of a path too"
+        );
+        assert_eq!(
+            held(&["vendor"], "--target-directory=vendor", "notes.md"),
+            (true, false),
+            "the value after the = of an option was not asked about"
+        );
+        assert_eq!(
+            held(&["fetched-agents.md"], "--preserve=mode", "notes.md"),
+            (false, true),
+            "the control: an option whose value is no distrusted path asked"
+        );
+    }
+
+    /// RUN-5, TRUST-4: the part after the first `=` of any word is a spelling of a path, not only
+    /// of a word that starts with `-`: `dd if=fetched-agents.md of=AGENTS.md` copies the file named
+    /// by `if=` over the one named by `of=`, and the whole word `if=fetched-agents.md` is a relative
+    /// name no rule is written about. Each control differs in one respect: a trusted `if=` value, a
+    /// key with no path in its value, and a word whose first `=` is followed by another.
+    #[test]
+    fn a_held_key_equals_path_operand_is_asked_about_as_the_path_it_names() {
+        let held = |distrusting: &[&str], words: &[&str]| {
+            let mut sink = RecordingSink::new();
+            let mut policy =
+                held_line_policy(&mut sink, trusting_and_allowing_confined_lines(distrusting));
+            let line = plan_of(vec![step_named("dd", words)]);
+            let asked = policy.plan_needs_approval_held(&line, &[], Containment::Held);
+            (asked, policy.answered_by_directory_trust())
+        };
+        let distrusting = ["fetched-agents.md"];
+        assert_eq!(
+            held(&distrusting, &["if=fetched-agents.md", "of=AGENTS.md"]),
+            (true, false),
+            "a dd-style copy of a distrusted file into a trusted one ran unasked"
+        );
+        assert_eq!(
+            held(&["AGENTS.md"], &["if=notes.md", "of=AGENTS.md"]),
+            (true, false),
+            "a key=path operand naming a distrusted file as the target ran unasked"
+        );
+        assert_eq!(
+            held(&["vendor"], &["if=vendor/lib.js", "of=AGENTS.md"]),
+            (true, false),
+            "a rule about a directory did not cover the file a key=path operand names"
+        );
+        assert_eq!(
+            held(&["fetched-agents.md"], &["opt=a=fetched-agents.md"]),
+            (false, true),
+            "only the part after the first = is a path, so a second = is part of the value"
+        );
+        assert_eq!(
+            held(&distrusting, &["if=notes.md", "of=AGENTS.md"]),
+            (false, true),
+            "the control: a dd-style copy of a trusted file asked"
+        );
+        assert_eq!(
+            held(&distrusting, &["if=notes.md", "of=AGENTS.md", "bs=4096"]),
+            (false, true),
+            "the control: a key whose value names no distrusted path asked"
+        );
+    }
+
+    /// RUN-5, TRUST-4: a directory word is asked about as a subtree, so a rule beneath it counts.
+    /// `cp -r sub dest` has no rule about `sub` and a distrusted `sub/x.md`, which a lookup of the
+    /// path alone does not see. The control is the same line with nothing distrusted beneath `sub`.
+    #[test]
+    fn a_held_recursive_copy_of_a_directory_holding_an_untrusted_file_asks() {
+        let held = |distrusting: &[&str]| {
+            let mut sink = RecordingSink::new();
+            let mut policy =
+                held_line_policy(&mut sink, trusting_and_allowing_confined_lines(distrusting));
+            let line = plan_of(vec![step_named("cp", &["-r", "sub", "dest"])]);
+            policy.plan_needs_approval_held(&line, &[], Containment::Held)
+        };
+        assert!(
+            held(&["sub/x.md"]),
+            "a directory with an untrusted file beneath it was copied unasked"
+        );
+        assert!(
+            !held(&["other/x.md"]),
+            "the control: a directory with nothing untrusted beneath it asked"
+        );
+    }
+
+    /// RUN-5, TRUST-4: a word naming a path outside the root that no rule speaks about is
+    /// untrusted, as it is for a read and for the first write there. The controls are an absolute
+    /// word inside the root, which the root's rule covers, and a relative word.
+    #[test]
+    fn a_held_line_naming_a_path_outside_the_root_with_no_rule_asks() {
+        let held = |source: &str| {
+            let mut sink = RecordingSink::new();
+            let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+            let line = plan_of(vec![step_named("cp", &[source, "AGENTS.md"])]);
+            policy.plan_needs_approval_held(&line, &[], Containment::Held)
+        };
+        assert!(
+            held("/elsewhere/downloaded.md"),
+            "a copy of a file outside the root that no rule speaks about ran unasked"
+        );
+        assert!(
+            !held("/work/notes.md"),
+            "the control: an absolute word inside the trusted root asked"
+        );
+        assert!(!held("notes.md"), "the control: a relative word asked");
+    }
+
+    /// RUN-5, TRUST-4: a held line the audited table proves read-only is not asked about the paths
+    /// it names, because it copies nothing: `cat /etc/hosts` and `ls /usr/lib` name paths outside
+    /// the root with no rule and run unasked, and what they print keeps the label of the paths they
+    /// read, which is untrusted here. Every other line naming such a path still asks, and each
+    /// differs from the audited read in one respect: a redirection that opens a file (`read_proven`
+    /// is `None` for it), a program the table does not list, a step started under another name than
+    /// the file it resolved to, and a copy.
+    #[test]
+    fn a_held_line_the_table_proves_read_only_is_not_asked_about_the_paths_it_reads() {
+        let held = |step: crate::command::Step| {
+            let mut sink = RecordingSink::new();
+            let mut policy = held_line_policy(
+                &mut sink,
+                trusting_and_allowing_confined_lines(&["fetched.md"]),
+            );
+            let line = plan_of(vec![step]);
+            let asked = policy.plan_needs_approval_held(&line, &[], Containment::Held);
+            let answered = policy.answered_by_directory_trust();
+            let label = policy.read_proven_label(&line);
+            (asked, answered, label)
+        };
+        for (program, operand) in [
+            ("cat", "/etc/hosts"),
+            ("ls", "/usr/lib"),
+            ("cat", "fetched.md"),
+        ] {
+            let (asked, answered, label) = held(step_named(program, &[operand]));
+            assert_eq!(
+                (asked, answered),
+                (false, true),
+                "{program} {operand}: an audited read asked"
+            );
+            assert_eq!(
+                label.map(|label| label.is_trusted()),
+                Some(false),
+                "{program} {operand}: the output of a read of an unvouched path was not untrusted"
+            );
+        }
+
+        let mut redirected = step_named("cat", &["fetched.md"]);
+        redirected.routes = vec![crate::command::Route::Stdout {
+            path: std::path::PathBuf::from("/work/AGENTS.md"),
+            append: false,
+        }];
+        let (asked, answered, label) = held(redirected);
+        assert_eq!(
+            (asked, answered, label),
+            (true, false, None),
+            "cat fetched.md > AGENTS.md was not asked about"
+        );
+
+        let mut redirected = step_named("cat", &["/etc/hosts"]);
+        redirected.routes = vec![crate::command::Route::Stdout {
+            path: std::path::PathBuf::from("/work/hosts"),
+            append: false,
+        }];
+        assert!(
+            held(redirected).0,
+            "cat /etc/hosts > hosts was not asked about"
+        );
+
+        for (label, step) in [
+            (
+                "a program the table does not list",
+                step_named("fetch-tool", &["/etc/hosts"]),
+            ),
+            (
+                "a copy of a file outside the root",
+                step_named("cp", &["/elsewhere/downloaded.md", "AGENTS.md"]),
+            ),
+            (
+                "a copy of a distrusted file",
+                step_named("cp", &["fetched.md", "AGENTS.md"]),
+            ),
+            (
+                "a dd-style copy of a distrusted file",
+                step_named("dd", &["if=fetched.md", "of=AGENTS.md"]),
+            ),
+        ] {
+            let (asked, answered, _) = held(step);
+            assert_eq!((asked, answered), (true, false), "{label} ran unasked");
+        }
+
+        let mut renamed = step_named("cat", &["/etc/hosts"]);
+        renamed.started_as = std::path::PathBuf::from("/usr/bin/zcat");
+        assert!(
+            held(renamed).0,
+            "a step started under another name than the file it resolved to was taken as the audited one"
+        );
+    }
+
+    /// RUN-5, CMDLINE-4: the words are those of the compiled plan, where a pattern has already been
+    /// replaced by the names it matched. The plan below is what `cp *.md AGENTS.md` compiles to in
+    /// a directory holding a distrusted `fetched-agents.md`; the pattern as typed names no path
+    /// the map holds. The control is the plan for a pattern that matched only a trusted file.
+    #[test]
+    fn a_held_line_is_asked_about_the_names_a_pattern_expanded_to() {
+        let held = |matched: &[&str]| {
+            let mut sink = RecordingSink::new();
+            let mut policy = held_line_policy(
+                &mut sink,
+                trusting_and_allowing_confined_lines(&["fetched-agents.md"]),
+            );
+            let mut words: Vec<&str> = matched.to_vec();
+            words.push("AGENTS.md");
+            let line = plan_of(vec![step_named("cp", &words)]);
+            policy.plan_needs_approval_held(&line, &[], Containment::Held)
+        };
+        assert!(held(&["fetched-agents.md", "notes.md"]));
+        assert!(!held(&["notes.md"]), "the control: a trusted match asked");
+    }
+
+    /// RUN-5, TRUST-2, TRUST-4: the held road asks about a word under every name the caller found
+    /// for it, takes the weakest answer, and reads a lookup that did not finish, or left a word
+    /// out, as untrusted. A `..` word asks whatever the map holds. Each case differs from the
+    /// control, a finished lookup with no other name, in one respect.
+    #[test]
+    fn a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed() {
+        let line = plan_of(vec![step_named("cp", &["lib.js", "AGENTS.md"])]);
+        let asks = |names: &[(&str, Vec<&str>, bool)], line: &crate::command::Plan| {
+            let mut sink = RecordingSink::new();
+            let mut policy =
+                held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&["vendor"]));
+            policy.learn_operand_names(
+                names
+                    .iter()
+                    .map(|(word, others, complete)| {
+                        (
+                            (*word).to_string(),
+                            (others.iter().map(|o| (*o).to_string()).collect(), *complete),
+                        )
+                    })
+                    .collect(),
+            );
+            policy.plan_needs_approval_held(line, &[], Containment::Held)
+        };
+        let finished = |lib: Vec<&'static str>, complete: bool| {
+            vec![("lib.js", lib, complete), ("AGENTS.md", Vec::new(), true)]
+        };
+        assert!(
+            !asks(&finished(Vec::new(), true), &line),
+            "the control: a finished lookup with no other name asked"
+        );
+        assert!(
+            asks(&finished(vec!["vendor/lib.js"], true), &line),
+            "another name under a distrusted rule did not make the line ask"
+        );
+        assert!(
+            asks(&finished(Vec::new(), false), &line),
+            "a lookup that did not finish was read as finding nothing"
+        );
+        assert!(
+            asks(&[("AGENTS.md", Vec::new(), true)], &line),
+            "a word the lookup left out was judged by its spelling"
+        );
+        let climbing = plan_of(vec![step_named("cp", &["../lib.js", "AGENTS.md"])]);
+        assert!(
+            asks(
+                &[
+                    ("../lib.js", Vec::new(), true),
+                    ("AGENTS.md", Vec::new(), true)
+                ],
+                &climbing
+            ),
+            "a word that climbs out of the root ran unasked"
+        );
+    }
+
+    /// RUN-5: a person who read the exact line and vouched for it has answered, so the vouched
+    /// road still covers a held line that names an untrusted path. The new question sits only in
+    /// front of the directory's answer, and the line is then not said to be answered by it, so it
+    /// keeps the network it was approved with.
+    #[test]
+    fn a_vouched_held_copy_of_an_untrusted_file_runs_and_is_not_credited_to_the_directory() {
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(
+            &mut sink,
+            trusting_and_allowing_confined_lines(&["fetched-agents.md"]),
+        )
+        .with_programs(crate::programs::TrustedPrograms::from_iter([vouched(
+            "/usr/bin/cp",
+            &["fetched-agents.md", "AGENTS.md"],
+        )]));
+        let line = plan_of(vec![step_named("cp", &["fetched-agents.md", "AGENTS.md"])]);
+        assert!(!policy.plan_needs_approval_held(&line, &[], Containment::Held));
+        assert!(
+            !policy.answered_by_directory_trust(),
+            "a line a person vouched for was run with the network closed as the directory's answer"
         );
     }
 

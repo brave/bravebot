@@ -507,6 +507,12 @@ All of these are deliberate.
   output redirected into a vouched-for tree marks the path it landed on untrusted. A file the program
   opens on its own, which is `cmd -o notes.txt` or anything a build writes, is not.
 
+  A command the sandbox confines, in a directory whose question said such commands run without
+  asking, is still asked about when its own arguments name a file you have not trusted and it can
+  change files, so
+  `cp fetched.md AGENTS.md` is shown first. A command that names no such file in its arguments, such as `sh -c`, `python3 -c`
+  or `make`, is not, and neither is one the audited list proves read-only, such as `cat fetched.md`.
+
   Said plainly: **trusting a directory trusts what lands in it**, so a tree that a build or a
   dependency manager writes into is a tree you are vouching for ahead of time.
 

@@ -621,7 +621,10 @@ that holds the workspace is asked about the project as well, since a line readin
 whole reads every file the project's own rules bear on. Nothing here is resolved, only re-spelled, so
 an operand outside the workspace keeps the name the line gave it and the rule about the directory
 holding it decides. Answering under every name can only cost a question and never grant trust, which
-is what makes it the right form for a road with no filesystem to settle a name with.
+is what makes it the right form for a road with no filesystem to settle a name with. A plain line the
+sandbox holds is asked about the words of its argument list the same way, unless the audited table
+proves the whole line read-only ([RUN-5](run.md#RUN-5)), and a word naming a path the map holds
+untrusted makes any other such line ask.
 
 **This is the proof road, and it is not the assertion road.** A person vouching for a command is a
 person taking responsibility for it. This is a claim about a program, checked against that program's
@@ -701,6 +704,8 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_line_reading_a_tree_the_map_says_nothing_about_still_asks`
 `verified-by: bravebot_core::policy::a_line_reading_a_vouched_for_tree_above_the_project_does_not_ask`
 `verified-by: bravebot_core::policy::a_climbing_operand_is_untrusted_under_a_root_spelled_with_a_climb`
+`verified-by: bravebot_core::policy::a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed`
+`verified-by: bravebot_core::policy::a_held_recursive_copy_of_a_directory_holding_an_untrusted_file_asks`
 
 <a id="CMDLINE-9"></a>
 ### CMDLINE-9: a read-proven plan does not prompt

@@ -10144,7 +10144,10 @@ struct Settled {
 /// relative to the root where it is inside it, because [`Workspace::resolve`] refuses an absolute
 /// name inside the root and the file would then be found to have no other name. An operand the
 /// lookup could not finish for is recorded as incomplete, which the policy reads as untrusted.
-/// Empty for a line that is not read-proven, which has no operands to label.
+/// Empty for a line that is not read-proven and names no argv word, which has no operands to label.
+/// The words of a line's argv are looked up as well as the read set, because a held line is asked
+/// whether it names a path the map holds untrusted (RUN-5), and a line the table does not account
+/// for, such as `cp`, has no read set.
 ///
 /// A directory named as an operand is looked up as the directory; the names of the files beneath
 /// it are not, which TRUST-2 lists as a cost.
@@ -10154,7 +10157,12 @@ fn operand_names_of<S: Sink>(
     plan: &bravebot_core::command::Plan,
 ) -> std::collections::HashMap<String, (Vec<String>, bool)> {
     let mut found = std::collections::HashMap::new();
-    for operand in policy.operands_read_by(plan).unwrap_or_default() {
+    let operands = policy
+        .operands_read_by(plan)
+        .unwrap_or_default()
+        .into_iter()
+        .chain(policy.words_named_by(plan));
+    for operand in operands {
         if found.contains_key(&operand) {
             continue;
         }

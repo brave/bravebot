@@ -2064,7 +2064,8 @@ trust-directory-regardless =
 # reads it should not expect more than they get.
 trust-directory-confined-lines =
     A yes also lets a command run here without asking when the sandbox confines it, with the
-    network closed for that command, which today is on macOS only. Anything that needs more still asks.
+    network closed for that command, which today is on macOS only. A command that can change files
+    and names a file you have not trusted, and anything that needs more, still asks.
 # The yes where the answer cannot be kept (TRUST-23): no state directory, a filesystem root, the home
 # directory or one holding it, a filesystem that does not say when a directory was made, or an
 # incognito session.
