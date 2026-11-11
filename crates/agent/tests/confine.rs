@@ -65,6 +65,7 @@ fn touch(file: impl std::fmt::Display) -> String {
 const SCRATCH: &str = "../../target/confine-scratch";
 
 /// The directory the other test binaries keep their scratch directories in.
+#[cfg(unix)]
 const SHARED_SCRATCH: &str = "../../target/test-scratch";
 
 /// A session directory, a second one beside it that the session was not opened on, and a home
