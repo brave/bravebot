@@ -1982,8 +1982,10 @@ pub fn run(
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
-    // alternate screen is worse than the original error.
-    hand_back_terminal(terminal.backend_mut())?;
+    // alternate screen is worse than the original error. However the run ended, it has left its
+    // herdr pane: a `/resume` stays inside the loop above, and a process started on the way out
+    // reports for itself.
+    leave_for_good(terminal.backend_mut())?;
     terminal.show_cursor()?;
 
     result
@@ -45284,6 +45286,7 @@ mod tests {
     mod chrome;
     mod clicks;
     mod completions;
+    mod herdr;
     mod hints;
     mod history_search;
     mod hover;

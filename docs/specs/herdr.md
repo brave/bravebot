@@ -6,6 +6,7 @@ governs:
   - crates/herdr/src/lib.rs
   - crates/herdr/src/transport.rs
   - crates/tui/src/herdr.rs
+  - crates/tui/src/app/terminal.rs
 documented-by: none (gap: a page saying a session inside herdr reports to it, owed with the interface reporting its state)
 ---
 
@@ -226,3 +227,29 @@ It still reports its state ([HERDR-8](#HERDR-8)).
 id in its own state, which outlives the session ([INCOG-3](incognito.md#INCOG-3)).
 
 `verified-by: bravebot_tui::herdr::an_incognito_session_sends_no_resume_command`
+<a id="HERDR-12"></a>
+### HERDR-12: the terminal interface releases its pane when it leaves for good
+
+When the interface ends, however it ended, it hands the terminal back and then releases
+([HERDR-7](#HERDR-7)), whether or not the terminal could be handed back: a quit by `/quit`, Ctrl-C
+or Ctrl-D, a failure that ends the interface, a session sent to the background and a session
+reopened by starting `bravebot` again all release. A process started on the way out reports for
+itself: a reopened session reports again from the new process, and a background session and
+`bravebot attach` do not report ([HERDR-8](#HERDR-8)). Handing the terminal to an editor, a viewer
+or the shell for a stop does not release, and nor does `/resume`, which changes the session without
+leaving the interface. A herdr that never answers holds the way out up for at most the quarter of a
+second a release may wait.
+
+**Why.** Until it is released, herdr shows the pane as bravebot in its last state, with the command
+that resumes its session, after the person is back at their shell. Releasing on a handover would
+show a pane still running bravebot as a plain terminal while the person is in their editor, and
+leave the session's next report refused as one from an agent that left.
+
+**Known cost.** A panic releases nothing, since a panic makes no request
+([CRASH-2](crash-reports.md#CRASH-2)), and nor does a session killed by a signal. herdr clears the
+pane when it sees the shell prompt again, later than a release would.
+
+`verified-by: bravebot_tui::app::tests::herdr::leaving_for_good_tells_herdr_the_run_has_left_its_pane_however_the_way_out_went`
+`verified-by: bravebot_tui::app::tests::herdr::handing_the_terminal_over_for_a_while_leaves_the_run_in_its_pane`
+`verified-by: bravebot_tui::app::tests::herdr::nothing_the_title_marks_after_leaving_reaches_herdr`
+`verified-by: bravebot_tui::app::tests::herdr::a_herdr_that_never_answers_holds_the_way_out_up_only_briefly`

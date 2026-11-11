@@ -58,6 +58,16 @@ fn tell(reporter: &Reporter, state: State) {
     reporter.report(shown, message);
 }
 
+/// Tell herdr the run has left its pane, waiting a quarter of a second at most for it to have it
+/// ([HERDR-12](../../../docs/specs/herdr.md#HERDR-12)). Nothing is reported after this.
+pub(crate) fn release() {
+    #[cfg(test)]
+    if script::released() {
+        return;
+    }
+    reporter().release();
+}
+
 /// A reporter a test holds in place of the run's, for one thread, so tests that drive the title
 /// side by side each see only their own reports.
 #[cfg(test)]
@@ -92,6 +102,11 @@ pub(crate) mod script {
                 .map(|reporter| super::tell(reporter, state))
                 .is_some()
         })
+    }
+
+    /// Release the held reporter, if one is held. Returns whether one was.
+    pub(super) fn released() -> bool {
+        REPORTER.with(|held| held.borrow().as_ref().map(Reporter::release).is_some())
     }
 }
 
