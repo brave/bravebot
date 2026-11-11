@@ -5905,18 +5905,6 @@ reported as what it is.
   seen to cross. The session's own `temp` directory, which a stage can replace by a
   link, is checked by name as the scratch directory is, and the junction case of that check is
   reasoned and not run on Windows.
-- The job limits of [SANDBOX-17](#SANDBOX-17) hold on the `Sandbox on Windows` job runner (windows-2025):
-  `a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses` (a `cmd.exe` built-in
-  exits 0 under a limit of one active process, so the console host the platform adds is not
-  counted against it or does not stop the start),
-  `a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses`,
-  `a_stage_starts_a_child_where_its_policy_allows_subprocesses`,
-  `a_stage_is_in_a_job_carrying_every_ui_limit` and
-  `a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses` pass, the last
-  two reading the limits from a program inside the stage. The test process on that runner is itself
-  in a job, so those stages are created in a job of their own.
-  `a_stage_is_limited_whether_or_not_this_process_is_in_a_job` prints `this process is in a job:
-  true` or `false` and repeats the checks from a process that has put itself in a job.
 - A stage started with a named environment of `SystemRoot` and one more variable fails to start
   with `SpawnFailed` and OS error 203 ("The system could not find the environment option that was
   entered") on the Windows runner. The platform does not say which variable it looked for, and
