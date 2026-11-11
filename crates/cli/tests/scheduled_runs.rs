@@ -646,6 +646,54 @@ fn an_entry_is_not_kept_where_the_crontab_would_not_take_the_line() {
     assert!(kept.is_empty(), "{kept:?}");
 }
 
+/// SANDBOX-30 over the process: `schedule remove` starts no `crontab` from a `bin` in the checkout
+/// the command runs in when that is first on `PATH`, and starts the installed one behind it. The
+/// planted program records a start in a file and takes no line out of the table, so a command that
+/// started it leaves both the marker and the entry. It sits in the checkout's root and the command
+/// runs in a subdirectory, so leaving out only the directory the command ran in fails too.
+#[test]
+fn schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("schedule-planted-crontab");
+    added(&scratch, &[]);
+    let work = scratch.path.join("work");
+    let here = work.join("sub");
+    std::fs::create_dir_all(work.join(".git")).unwrap();
+    std::fs::create_dir_all(&here).unwrap();
+    let planted = work.join("bin");
+    std::fs::create_dir_all(&planted).unwrap();
+    let marker = scratch.path.join("planted-crontab");
+    let program = planted.join("crontab");
+    std::fs::write(
+        &program,
+        format!("#!/bin/sh\nprintf x >> '{}'\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths([planted.as_path(), &scratch.path.join("bin")]).unwrap();
+
+    let mut command = scratch.command(&["schedule", "remove", "1"]);
+    command.env("PATH", path).current_dir(&here);
+    let output = command.output().unwrap();
+
+    assert!(
+        !marker.exists(),
+        "the crontab in the checkout was started: {}",
+        out(&output)
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        out(&output),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !scratch.table().contains("bravebot-schedule:1"),
+        "the installed crontab was not the one started: {}",
+        scratch.table()
+    );
+}
+
 #[test]
 fn a_host_with_no_crontab_refuses_add_and_remove() {
     let scratch = Scratch::new("schedule-no-crontab");

@@ -43,7 +43,7 @@ guards:
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1
       - crates/sandbox/src/programs.rs: 19
-      - crates/sandbox/tests/checkout_in_search.rs: 7
+      - crates/sandbox/tests/checkout_in_search.rs: 8
       - crates/tui/src/clipboard.rs: 9
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
@@ -3983,12 +3983,16 @@ file. A new spawn that looks a name up through
   Only the nearest is taken. Taking every ancestor with a `.git` would also leave out an outer repository
   that merely contains the checkout, such as a dotfiles repository at the account's home or the
   repository a worktree is nested in, and with it every installed `bin` under it. A directory under
-  no checkout is recorded by itself. The confinement finds the checkout of a session directory with
+  no checkout is recorded by itself, and so is a directory whose nearest marker is a `.hg` or a
+  `.jj`, which are not recognised. The confinement finds the checkout of a session directory with
   the same function, `bravebot_sandbox::programs::with_checkout`, to decide which files count as the
   plan's ([SANDBOX-20](#SANDBOX-20)), and leaves out a checkout that is the account's home directory
   or holds it, which this lookup does not. A virtualenv or tool directory a stage was granted elsewhere
   is not known to a command that opens no session. A program either doctor command starts is also
   started without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
+  The same nearest checkout is the one `confine.rs` counts among the places a plan could have
+  written ([SANDBOX-14](#SANDBOX-14), [SANDBOX-18](#SANDBOX-18)), and the one `--settings` is
+  judged against ([PERM-14](permissions.md#PERM-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one. An entry that does not exist yet leads
   where the part of it that exists does, since a stage can make the rest.
@@ -4614,7 +4618,12 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 A program a person keeps in a `bin` of the nearest checkout holding a directory a session opens,
 adds or moves to reads as not installed to every lookup above for the rest of the process, whether
 the session was opened at the checkout's root or below it, and every command, whether or not it
-opens a session, leaves out the one holding the directory it ran in. Where the account's home directory holds a `.git`, such as a dotfiles
+opens a session, leaves out the one holding the directory it ran in. The record is made in the
+process that starts the program and lives for that process only. A program a stage wrote in an
+earlier `bravebot` process, in a directory that process was granted and this one was not, is not
+known to this one, so a lookup in a later process can find it. No record is kept between
+processes: one would hold a directory nobody can say is still granted, and a `bravebot` that never
+ran a stage has no use for it. Where the account's home directory holds a `.git`, such as a dotfiles
 repository, a session opened in a directory below the home that has no nearer `.git` leaves out the
 home as its checkout, so `~/bin` and every other directory under the home that is on `PATH` is not
 searched and a program kept in one reads as not installed. A session opened below a nearer checkout
@@ -5533,7 +5542,19 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::running::schedule_add_and_list_start_no_crontab_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::a_command_run_in_the_checkouts_root_starts_no_program_from_its_bin`
 `verified-by: bravebot_cli::running::the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_status_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_with_the_aws_outside_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::doctor_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::scheduled_runs::schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in`
+`verified-by: bravebot_tui::opener::a_browser_opener_in_the_bin_of_the_checkout_holding_the_directory_is_not_the_one_started`
 `verified-by: bravebot_sandbox::checkout_in_search::a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin`
+`verified-by: bravebot_sandbox::checkout_in_search::a_value_naming_a_file_in_the_bin_of_the_checkout_holding_a_recorded_directory_is_withheld`
+`verified-by: bravebot_sandbox::checkout_in_search::a_mercurial_or_jujutsu_checkout_is_not_recognised`
+`verified-by: bravebot_agent::confine::the_checkout_above_the_session_directory_is_a_place_the_plan_could_have_written`
+`verified-by: bravebot_agent::confine::a_git_in_the_checkout_above_the_session_directory_does_not_write_a_git_directory`
+`verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_carries_no_scope_by_its_name`
+`verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_does_not_keep_a_closed_network_by_its_name`
+`verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_relative_path_entry_is_judged_under_the_directory_the_stage_runs_in`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_starts_the_program_behind_a_directory_a_stage_may_write`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_looks_up_the_programs_it_starts_only_behind_the_directory`

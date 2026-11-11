@@ -225,6 +225,48 @@ fn a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin() {
     );
 }
 
+/// A value of a variable that names a program or a file is judged against the same record as a
+/// lookup, so one in the `bin` of the checkout holding a recorded directory is withheld
+/// (SANDBOX-30). The controls are a file in a checkout nothing recorded and one outside every
+/// checkout, which show the judgment is not refusing everything. Rejects a judgment made against a
+/// set of its own, and one that holds the recorded directory without its checkout.
+#[test]
+fn a_value_naming_a_file_in_the_bin_of_the_checkout_holding_a_recorded_directory_is_withheld() {
+    use bravebot_sandbox::programs::{Names, may_be_run, outside_stage_writable};
+
+    let repo = fresh("may-be-run-recorded");
+    let here = repo.join("sub");
+    std::fs::create_dir_all(&here).unwrap();
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let planted = executable(&repo.join("bin"), "browser");
+    let unrecorded = fresh("may-be-run-unrecorded");
+    std::fs::create_dir_all(unrecorded.join(".git")).unwrap();
+    let in_unrecorded = executable(&unrecorded.join("bin"), "browser");
+    let installed = executable(&fresh("may-be-run-installed").join("bin"), "browser");
+
+    keep_out_with_checkout(&here);
+
+    for names in [Names::Program, Names::File] {
+        assert!(
+            !may_be_run(names, &planted, &outside_stage_writable),
+            "{names:?} accepted a file in the bin of the checkout holding the recorded directory"
+        );
+        assert!(
+            may_be_run(names, &in_unrecorded, &outside_stage_writable),
+            "{names:?} refused a file in a checkout nothing was recorded for"
+        );
+        assert!(
+            may_be_run(names, &installed, &outside_stage_writable),
+            "{names:?} refused a file outside every checkout"
+        );
+    }
+    let list = std::env::join_paths([&installed, &planted]).unwrap();
+    assert!(
+        !may_be_run(Names::Commands, Path::new(&list), &outside_stage_writable),
+        "a list with an entry in the checkout's bin was accepted"
+    );
+}
+
 /// Recording a directory records the checkout holding it, which is what the lookups of a running
 /// session read. Rejects a function that returns the set and records only the directory.
 #[test]
@@ -239,4 +281,29 @@ fn keeping_a_directory_out_keeps_the_checkout_holding_it_out() {
     let recorded = registered();
     assert!(recorded.contains(&here), "the directory itself");
     assert!(recorded.contains(&repo), "the checkout holding it");
+}
+
+/// Mercurial and Jujutsu checkouts are not recognised. A checkout is the nearest ancestor
+/// holding a `.git`, so a directory under a `.hg` or `.jj` repository is left out by itself. This
+/// pins that, and no support is added: the `.hg` repository above is not left out, so a `bin` in
+/// it is searched. Rejects a walk that also treats `.hg` or `.jj` as a checkout marker, which
+/// would change what is left out without a spec clause for it.
+#[test]
+fn a_mercurial_or_jujutsu_checkout_is_not_recognised() {
+    for marker in [".hg", ".jj"] {
+        let repo = fresh(&format!("not-recognised{marker}"));
+        let here = repo.join("sub");
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(repo.join(marker)).unwrap();
+        let installed = executable(&repo.join("bin"), "xclip");
+        let path = path_of(&[&repo.join("bin")]);
+
+        assert_eq!(first(&here, 1), std::slice::from_ref(&here), "{marker}");
+        assert!(!with_checkout(&here).contains(&repo), "{marker}");
+        assert_eq!(
+            find_in(OsStr::new("xclip"), &path, &first(&here, 1)),
+            Some(installed),
+            "the bin of a {marker} repository above the directory is searched"
+        );
+    }
 }

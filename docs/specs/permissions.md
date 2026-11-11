@@ -886,9 +886,11 @@ train the habit of answering without reading, which is the whole of what asking 
 An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
 resolves outside the workspace, outside every directory the session has been in, and outside the
 checkout holding each of them. The checkout holding a directory is its nearest ancestor that has a
-`.git`, as [SANDBOX-30](sandboxing.md#SANDBOX-30) finds it for a directory a session opens. An `allow` rule in
-`.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a `--settings` file that resolves
-inside any of those takes
+`.git`, as [SANDBOX-30](sandboxing.md#SANDBOX-30) finds it for a directory a session opens, so that
+a submodule's outer repository does not make every file under it a checkout's. A directory with no
+`.git` above it, or one marked by `.hg` or `.jj`, has no checkout and only the directory itself is
+compared. An `allow` rule in `.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a
+`--settings` file that resolves inside any of those takes
 effect on being read by nothing: it answers no prompt and permits no fetch. Every one is reported,
 with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
 granted where the person granted it at the question [PERM-15](#PERM-15) puts.
@@ -923,6 +925,9 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::the_local_layer_allow_rule_is_not_granted_either`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_an_allow_rule`
 `verified-by: bravebot_config::settings::a_project_layer_does_not_add_to_the_home_layers_allow_rules`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_a_subdirectory_is_not_honoured`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_where_the_session_began_grants_nothing_after_it_moves`
+`verified-by: bravebot_config::settings::a_named_layer_outside_the_checkout_holding_the_working_directory_still_grants`
 `verified-by: bravebot_config::settings::a_project_layers_deny_and_ask_rules_still_apply`
 `verified-by: bravebot_config::settings::a_project_layer_may_still_name_a_directory_to_ask_about`
 `verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`
