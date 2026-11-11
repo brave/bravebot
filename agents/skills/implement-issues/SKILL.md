@@ -129,7 +129,7 @@ so a later session finds it from the pull request's head ref. Keep it outside ev
 holds one row per item (`item | group | worktree | branch | status | commits`, with the issue as `#<n>`
 in the item cell, which `implement-issues.py` reads to claim a resumed run's issues), the path of each
 item's brief, which holds its checklist ([step 3](#3-plan)) and reproduction, the notes, the
-decisions, every dependency commit that bypassed the hook, and the follow-ups. The briefs, the
+decisions, every dependency commit that bypassed the hook, and the issues filed. The briefs, the
 handoff files and the subagents' reports are in `<tmp>/implement-issues/<branch>/`. Update the ledger
 at every status change, since it is what a resumed session reads.
 
@@ -373,8 +373,8 @@ git cherry-pick upstream/main..<group-branch>
 On a conflict, edit the region so both sides survive, `git add` the file, and
 `git cherry-pick --continue`; the resolution belongs to the commit it arose in. Catalogs, indexes
 and other files many items append to conflict most. Where both sides cannot survive, keep the side
-that closes more items, record it as a decision, and give the other item `Part of` with a filed
-follow-up for the behaviour it lost (cause 6 under [What is blocked](#what-is-blocked)). Run
+that closes more items, record it as a decision, and give the other item `Part of`, naming the
+behaviour it lost in its entry in the body (cause 6 under [What is blocked](#what-is-blocked)). Run
 each group's targeted tests again on the combined tree. Mark the items `combined`.
 
 Where the conflicts of a group are more than a few lines, or touch code two groups both changed,
@@ -471,8 +471,8 @@ costliest thing this skill can do.
 
 ## 7. Write the body and open the pull request
 
-Before writing: for each `blocked` row, and for each test that fails alone on the parent
-commit (step 6, item 9), draft an issue and file it with the
+Before writing: for each defect that [Follow-up issues](#follow-up-issues) says to file, including
+a test that fails alone on the parent commit (step 6, item 9), draft an issue and file it with the
 [issue-poster](../../agents/issue-poster.md) definition, which searches open and closed issues
 first, so its number exists when the body is written. Then have a subagent re-run `pr-fix.py issue
 <n>` for every item still `combined` and return the numbers a pull request now names. Drop each from
@@ -678,13 +678,31 @@ code of the service or of a program that uses it. A new dependency, a manifest o
 hook bypass, a design that needs plumbing through several crates, and a test that needs a seam are
 not causes. They are the work.
 
-For each blocked row, file the follow-up before the body, describing what remains, why it cannot be
-done here and who or what would unblock it. The item then has `Part of` where some of it landed,
-or no closing line where nothing did, and the item's entry in the body names the follow-up. A
-follow-up that cites the issue this pull request is for does not count: a row is parked on its own
-issue.
-The one other issue this skill files is for a test that also fails on the parent commit (step 6,
-item 9).
+A blocked row files no issue. The item has `Part of` where some of it landed, or no closing line
+where nothing did, so its own issue stays open and holds the row. Its entry in the body says what
+remains, why it cannot be done here and who or what would unblock it, and the report repeats that.
+
+## Follow-up issues
+
+This skill files an issue only for a defect: behaviour that is wrong on `main` today, and that no
+open issue and no Known costs entry covers. It files nothing else. Each issue is work for a person
+to triage, so a run files few.
+
+- A defect the specs accept is a Known costs entry in the spec that governs it, added in the commit
+  that leaves it, and the body cites the entry. No issue is filed beside it.
+- A finding about the guarantee that [labelling-issues.md](../../../docs/development/labelling-issues.md)
+  would label `severity/low` (the behaviour holds today, and nothing keeps it holding) is recorded
+  as a Known costs entry and not filed. `severity/medium` and above is filed.
+- A row blocked for cause 1, 4 or 5, a refactor, a cleanup, an enhancement and a test the change
+  does not add are not defects. The body states them in the test plan or under `## Decisions to
+  confirm`, and no issue is filed.
+- A worker that sees a defect outside its rows writes one line about it in its report and does not
+  look for more. The orchestrator files it only if this list says to.
+- A test that also fails on the parent commit (step 6, item 9) is a defect and is filed.
+
+A run files at most three issues, each through the [issue-poster](../../agents/issue-poster.md)
+definition, which finds an existing issue first. The defects past three are left out of the body and
+listed in the report with a draft title for each, for the person to pick from.
 
 ## Report
 
@@ -693,11 +711,12 @@ this order:
 
 - the dependency changes that bypassed the hook, as the callout states them, first and in the same
   words, or `No hook was bypassed.`;
-- rows by state: how many are `met`, `blocked` (each with its cause, who unblocks it and the
-  follow-up) and `unmet` (each with what is missing);
+- the issues filed, by number and title, or `No issue was filed.`, then the defects held back by the
+  limit of three, each with its draft title;
+- rows by state: how many are `met`, `blocked` (each with its cause and who unblocks it) and `unmet`
+  (each with what is missing);
 - one line per item: closed by the pull request, already fixed (with the test added), `Part of`,
-  skipped (with the pull request that covers it or why it is closed), or blocked (with the
-  follow-up);
+  skipped (with the pull request that covers it or why it is closed), or blocked (with its cause);
 - the commits on the branch: the count, and each one beyond the first of its item with what it is
   (a dependency or a refactor) and what it changes;
 - the decisions to confirm, numbered as in the body;
