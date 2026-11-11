@@ -5868,7 +5868,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         alias: &str,
         index: usize,
         resolved: &Labelled<crate::apply::Resolved>,
-    ) -> Gated<(String, Vec<(String, String)>)> {
+    ) -> Gated<(String, Vec<(String, crate::apply::Sent)>)> {
         let label = resolved.label();
         let proof =
             Declassification::authorise("a call a person approved in a list, sent to its server");
@@ -5893,12 +5893,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 call.name
             ),
         );
-        let arguments = call
-            .arguments
-            .into_iter()
-            .map(|(name, value, _)| (name, value))
-            .collect();
-        Ok((call.name, arguments))
+        Ok((call.name, call.sent))
     }
 
     /// Give back the last newline where the document had one and the answer does not.

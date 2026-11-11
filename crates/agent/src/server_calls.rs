@@ -578,7 +578,29 @@ impl Servers {
         let Some(offer) = &self.offer else {
             return Err(format!("{alias} is not offered to this run"));
         };
-        let shape = shape_of(step)?;
+        let mut shape = shape_of(step)?;
+        // The type the vouched list gives each argument, which the resolver sends each value as.
+        let callable = offer.callable();
+        for tool in &mut shape.tools {
+            let listed = callable
+                .iter()
+                .find(|listed| listed.alias == alias && listed.tool == tool.name);
+            tool.types = listed
+                .map(|listed| {
+                    listed
+                        .arguments
+                        .iter()
+                        .map(|argument| {
+                            let declared = bravebot_core::apply::Declared {
+                                kind: argument.kind.clone(),
+                                items: argument.items.clone(),
+                            };
+                            (argument.name.clone(), declared)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
         // Each list is numbered for the processor under its own name, from the array at the
         // pointer the plan gave it, and the processor reads those numbered lists and nothing else.
         let names = shape.lists.clone();
@@ -904,6 +926,7 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
             ));
         }
         tools.push(Tool {
+            types: Default::default(),
             name: (*name).to_string(),
             arguments,
         });

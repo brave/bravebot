@@ -61,6 +61,27 @@ impl Kind {
 pub struct Tool {
     pub name: String,
     pub arguments: Vec<(String, Kind)>,
+    /// The JSON type the list a person vouched for gives each argument, where it gives one: a
+    /// resolved value is sent as that type, and a row whose value is not that type is dropped.
+    pub types: BTreeMap<String, Declared>,
+}
+
+/// The type a tool's list gives one argument, and the type of its items where it is an array.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub kind: Option<String>,
+    pub items: Option<String>,
+}
+
+/// A resolved value as its call sends it, in the type the argument is declared to take.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Sent {
+    Text(String),
+    Integer(i64),
+    /// A finite number.
+    Number(f64),
+    Switch(bool),
+    Array(Vec<Sent>),
 }
 
 /// Everything about an `apply` step the plan fixed before anything was read.
@@ -123,7 +144,7 @@ pub enum Source {
 }
 
 /// One call a proposal resolved to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     /// The index of the tool in the shape.
     pub tool: usize,
@@ -132,6 +153,8 @@ pub struct Call {
     /// Each argument with its value and where the value came from, in the shape's order. A value
     /// taken from several entries is the JSON array of their values.
     pub arguments: Vec<(String, String, Source)>,
+    /// Each argument as the call sends it, typed as its tool declares, in the same order.
+    pub sent: Vec<(String, Sent)>,
     /// The earlier call this one depends on, by its index in the resolved list.
     pub after: Option<usize>,
 }
@@ -153,6 +176,8 @@ pub enum Dropped {
     Repeated,
     /// It went past a cap on rows, new values or entries.
     Cap,
+    /// A value was not the type the tool's list gives its argument.
+    Type,
 }
 
 impl Dropped {
@@ -166,12 +191,13 @@ impl Dropped {
             Self::Argument => "gave an argument the plan does not let it give",
             Self::Repeated => "repeated an earlier call or name",
             Self::Cap => "went past a cap",
+            Self::Type => "gave a value that is not the type its tool takes",
         }
     }
 }
 
 /// What a proposal resolved to: the calls, in row order, and how many rows were dropped and why.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Resolved {
     pub calls: Vec<Call>,
     pub dropped: BTreeMap<Dropped, usize>,
@@ -201,6 +227,7 @@ mod tests {
             tool,
             name: format!("tool{tool}"),
             arguments: Vec::new(),
+            sent: Vec::new(),
             after,
         }
     }
@@ -232,6 +259,7 @@ mod tests {
             lists: vec!["issues".into(), "labels".into()],
             tools: vec![
                 Tool {
+                    types: Default::default(),
                     name: "label".into(),
                     arguments: vec![
                         (
@@ -254,6 +282,7 @@ mod tests {
                     ],
                 },
                 Tool {
+                    types: Default::default(),
                     name: "close".into(),
                     arguments: vec![(
                         "issues".into(),
