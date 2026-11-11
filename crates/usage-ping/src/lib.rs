@@ -184,9 +184,17 @@ pub enum Outcome {
 /// background run does not call this. Dropping what this returns leaves the thread running.
 pub fn at_startup(surface: Surface, backend: Backend, premium: bool) -> Sending {
     let (done, finished) = std::sync::mpsc::channel();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a thread that cannot start sends nothing, which `settle` reports as not finished"
+    )]
     let _ = std::thread::Builder::new()
         .name("usage-ping".into())
         .spawn(move || {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "nobody waiting for the outcome is no failure of the ping"
+            )]
             let _ = done.send(send(surface, backend, premium));
         });
     Sending { finished }
@@ -249,8 +257,9 @@ struct Fields {
 /// [`send`] once the switches have been read, with the clock and the request handed in.
 ///
 /// The record is read once without the lock, so the ordinary start that already pinged today
-/// opens no file for writing. Read again under the lock, since the process that held it may have
-/// just pinged. The attempt is recorded before the request goes, so a start that crashes during
+/// opens no file for writing. Only that answer is taken from it: an attempt it records may be one
+/// still in flight, which is the lock's to report. Read again under the lock, since the process
+/// that held it may have just pinged. The attempt is recorded before the request goes, so a start that crashes during
 /// it waits an hour like one that failed.
 fn send_in(
     directory: &Path,
@@ -261,8 +270,8 @@ fn send_in(
 ) -> Outcome {
     let state_path = directory.join(STATE_FILE);
     let today = day_of(now);
-    if let Err(outcome) = due(&State::read(&state_path), today, now) {
-        return outcome;
+    if let Err(Outcome::AlreadyToday) = due(&State::read(&state_path), today, now) {
+        return Outcome::AlreadyToday;
     }
     if bravebot_agent::home::create_directory(directory).is_err() {
         return Outcome::Failed;
@@ -434,6 +443,10 @@ fn install_word(install: Option<Install>) -> &'static str {
 
 /// Whether this is the first ping of the install, and of the day, ISO week and month.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a query parameter of its own that the service reads as a boolean"
+)]
 struct Flags {
     first: bool,
     daily: bool,
