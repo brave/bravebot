@@ -300,6 +300,11 @@ cell backgrounds instead, so the letters and the face are solid. The terminal is
 Kitty graphics, which it would print as text at the top of the screen. Inside tmux the variable names
 tmux, so neither applies there.
 
+Inside tmux, pictures are drawn only if you have turned on `allow-passthrough` in tmux yourself
+(`set -g allow-passthrough on` in `~/.tmux.conf`). bravebot does not run `tmux` to turn it on, so
+with the option off, which is tmux's default, tmux drops the picture and you see the marker without a
+thumbnail. What is sent to the model is the same either way.
+
 ## Scrolling at rest
 
 | Key | Where the view goes |

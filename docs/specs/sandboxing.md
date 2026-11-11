@@ -4329,8 +4329,21 @@ file. A new spawn that looks a name up through
   `third_party/crossterm` with that fallback removed, so a failed query is an error and nothing is
   started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
   draw both end there. A dependency is audited for a bare-name start when it is added or
-  raised. `ratatui-image` 11.1.0 (`src/picker.rs`) starts `tmux` with the whole environment when
-  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853.
+  raised. `ratatui-image` 11.1.0 started `tmux set -p allow-passthrough on` by bare name, with the
+  whole environment and `PATH`, from `detect_tmux_and_outer_protocol_from_env` in `src/picker.rs`
+  when `TERM` started with `tmux` or `TERM_PROGRAM` was `tmux`. Every way into that function
+  reached it, and the interface reaches it when it senses the terminal at start-up. The tree keeps
+  `ratatui-image` in `third_party/ratatui-image` with that start removed, so nothing is started on
+  any platform and no `tmux` found through the `PATH` runs. The crate still detects tmux and wraps
+  the picture queries and pictures for it. Without the command, tmux drops those sequences unless
+  the person has set `allow-passthrough` themselves, so a picture does not draw in tmux until they
+  do. A test starts the built binary with `TERM` and then `TERM_PROGRAM` naming tmux, a `tmux`
+  planted first on `PATH` and loader and shell variables set, and requires that the planted
+  program never ran. It plants the program and does not run a real tmux. A second test reads the
+  source of `third_party/ratatui-image` (`src` and `build.rs`) and fails when a file names
+  `Command`, so a raise of the crate that brings a start back, or adds one, fails until it is
+  audited. That test does not see a start made through a macro or a name the source computes, or
+  one in a dependency of the crate.
 - **No caller reaches the starts in `gix-path`.** `gix-path` 0.13.0 is compiled in through
   `gix-features`, `gix-fs`, `gix-glob`, `gix-ignore`, `gix-odb`, `gix-pack` and `gix-ref`, and the
   crate has no feature that removes its `env` module. That module has three starts, none of them
@@ -5494,6 +5507,10 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_cli::terminal_size::a_failed_size_query_starts_no_tput`
+`verified-by: bravebot_cli::tmux_start::a_term_naming_tmux_starts_no_tmux`
+`verified-by: bravebot_cli::tmux_start::a_term_program_naming_tmux_starts_no_tmux`
+`verified-by: bravebot_cli::vendored_starts::the_vendored_ratatui_image_starts_no_program`
+`verified-by: bravebot_cli::vendored_starts::the_scan_of_the_vendored_crate_sees_a_command_under_any_name_and_not_a_comment`
 `verified-by: bravebot_cli::gix_path_starts::nothing_in_this_repository_names_gix_path`
 `verified-by: bravebot_cli::gix_path_starts::no_crate_that_depends_on_gix_path_names_its_env_module`
 `verified-by: bravebot_cli::gix_path_starts::gix_path_starts_a_program_only_in_its_env_module`
