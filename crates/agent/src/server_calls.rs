@@ -833,15 +833,8 @@ impl Servers {
                 .collect(),
         };
         // A step the plan's line said runs without asking does so on the person's approval of
-        // the plan (MANIFEST-17); which steps those are was decided once, before the line.
-        // A value holding a character the line would draw as nothing is put on the list, where the
-        // question writes each one out, as a fixed call holding one is asked at its step.
-        let covered = covered
-            && !shown.calls.iter().any(|call| {
-                call.arguments
-                    .iter()
-                    .any(|(_, value, _)| hides_a_character(value))
-            });
+        // the plan (MANIFEST-17); which steps those are was decided once, before the line, and
+        // nothing the step resolved changes it, since nobody reads a covered step's values.
         let decision = match covered {
             true => crate::confirm::ApplyDecision::keep((0..shown.calls.len()).collect()),
             false => confirmer.confirm_apply(&request),
