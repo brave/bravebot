@@ -244,7 +244,20 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     ("LD_PRELOAD", Names::Directories),
     ("LD_LIBRARY_PATH", Names::Directories),
     ("LD_AUDIT", Names::Directories),
+    // The directory the loader reads `$ORIGIN` as when it is set. One directory. Named in the
+    // candidates of #3810; the loader documentation was read and no loader was run with it.
+    ("LD_ORIGIN_PATH", Names::Directory),
     ("GCONV_PATH", Names::Directories),
+    // glibc's `sysdeps/generic/unsecvars.h` lists these two with `GCONV_PATH`, among names glibc
+    // removes for a secure-execution program. The file shows that glibc distrusts the names. It
+    // does not say whether they select code, and no Linux run was made with them. `LOCPATH` is a
+    // list of directories `setlocale` reads locale data from. `NLSPATH` is a list of templates
+    // (`%N`, `%L` and the like) `catopen` reads message catalogs from, so it is an option and is
+    // removed whatever it holds. Both are named in the candidates of #3810 and both name data the C
+    // library parses. The other names in that file are left out, with the reason, in SANDBOX-30
+    // "What a checked start does not cover".
+    ("LOCPATH", Names::Directories),
+    ("NLSPATH", Names::Options),
     ("DYLD_INSERT_LIBRARIES", Names::Directories),
     // Language runtimes and shells: modules, startup files and tools the program runs.
     selectors::PYTHONPATH,
@@ -2372,7 +2385,10 @@ mod tests {
             "LD_PRELOAD",
             "LD_LIBRARY_PATH",
             "LD_AUDIT",
+            "LD_ORIGIN_PATH",
             "GCONV_PATH",
+            "LOCPATH",
+            "NLSPATH",
             "DYLD_INSERT_LIBRARIES",
             "PYTHONPATH",
             "PYTHONUSERBASE",

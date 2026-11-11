@@ -2256,7 +2256,7 @@ The two loader tests start a copy of the host's shell that keeps the loader's na
 `gh` on a host can be built without the protection that ignores them. A host that cannot make that
 copy prints `skipped`, and a run with `CI` set fails instead, so a green run on a CI machine means
 the check ran. The `LD_` test uses a shell that records the names it is given. It has not been run
-against a Linux loader, which [SANDBOX-30](#SANDBOX-30) records as #3810.
+against a Linux loader. [SANDBOX-30](#SANDBOX-30) records which Linux runs have not been made.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -3898,10 +3898,10 @@ file. A new spawn that looks a name up through
 
   | Variable | Names |
   |---|---|
-  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
-  | `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `LD_ORIGIN_PATH`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
   | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
-  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
 
   `SHELLOPTS`, `PS4`, `BASH_FUNC_` and the asdf and pyenv names are in the generic table and not in
   one program's list because an asdf or pyenv shim is a `#!/usr/bin/env bash` script that is found
@@ -4027,8 +4027,49 @@ file. A new spawn that looks a name up through
   started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
   draw both end there. A dependency is audited for a bare-name start when it is added or
   raised. `ratatui-image` 11.1.0 (`src/picker.rs`) starts `tmux` with the whole environment when
-  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853, and the `git` and `sh` starts
-  compiled in from `gix-path` 0.13.0, which nothing in the tree calls, by #3852.
+  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853.
+- **No caller reaches the starts in `gix-path`.** `gix-path` 0.13.0 is compiled in through
+  `gix-features`, `gix-fs`, `gix-glob`, `gix-ignore`, `gix-odb`, `gix-pack` and `gix-ref`, and the
+  crate has no feature that removes its `env` module. That module has three starts, none of them
+  through `programs::start`, so none has its `PATH` reduced and none has its `CodeSelectors`
+  checked, and each is given this program's environment (the `git config` query removes or sets
+  some `GIT_*` variables and passes the rest on). `shell_command` starts `/bin/sh` on Unix, by
+  that absolute path. On Windows it starts the `sh.exe` that Git for Windows installs, by the full path found from
+  the output of `git --exec-path` (`bin/sh.exe`, then `usr/bin/sh.exe`), and falls back to the bare
+  name `sh.exe`, found through the `PATH`, when that path is not found (`src/env/mod.rs`,
+  `src/env/auxiliary.rs`). `core_dir` starts
+  `git --exec-path` on every platform; `core_dir_program` and `installation_program` reach it, and
+  on Windows so do `shell`, `shell_command` and `system_prefix`. `installation_config`,
+  `installation_config_is_system` and `installation_config_prefix` can start `git config` on every
+  platform, and `system_config` can on Windows (`src/env/git/mod.rs`). `git` is the bare name, so
+  it is found through the `PATH` the process has, and a `git` in a directory a stage may write,
+  such as the `bin` of an activated virtualenv, would run with the environment this program has.
+  Nothing in the tree reaches any of them. The tree holds that with a test that reads source: no
+  `.rs` or `.toml` file under `crates/`, `fuzz/` or `third_party/`, and no `Cargo.toml` at the
+  workspace root, names `gix-path` (other file kinds, such as `Cargo.lock`, are not read); no package in the resolved
+  graph of the workspace or of `fuzz/` that depends on `gix-path` names its `env` module in any of
+  its Rust source (a path through it, an import group or a glob that includes it, or the crate's
+  name with no path after it), other than `home_dir`, `var` and `xdg_config`, which start nothing;
+  and `gix-path` starts a program in no file outside `src/env`. A fourth check lists the functions
+  of `gix-path` that name `Command` (`shell_command`, `git_cmd`, the initialiser of `GIT_CORE_DIR`
+  and the import in `src/env/git/mod.rs`) in `AUDITED_STARTS`, and fails when the set the source
+  gives differs, so `home_dir`, `var` and `xdg_config` are read as starting nothing only while
+  they name no `Command`, and a raise of `gix-path` that changes the set of (file, function) pairs that name
+  `Command` needs a new audit before it merges. A raise that leaves the set the same is not
+  stopped, so a start added inside a function that already names `Command` is not seen. That check
+  attributes each use to the function it is in by counting braces, and does not see a start made
+  through a macro or by a function that another function calls. The test reads the graph with
+  `cargo metadata --locked` on every run. Cargo needs the manifest of every package the lock names, including
+  packages of other platforms and the crates of `fuzz/Cargo.lock` that the test jobs never build, and downloads
+  any that `CARGO_HOME` lacks, so the test needs the network on a machine with a cold `CARGO_HOME`. A graph
+  that cannot be read is skipped on a developer machine with the cause printed and fails the test where `CI`
+  is set. CI runs the workspace's tests on each
+  change, so a change that raises a gix crate or `gix-path` in `Cargo.lock` is read by the test
+  before it merges. A package whose source is not on disk is named in the test's output as
+  skipped. The test reads source and does not run the program: it does not see a call made through
+  a macro, a trait object or a name the source computes, and it cannot show that the list of
+  entry points is complete ([PATH-008](../best-practices/paths.md#PATH-008)). The starts are
+  accepted until a caller appears, and the test fails when one does.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -4240,9 +4281,9 @@ file. A new spawn that looks a name up through
   | File | Start | Names read | Basis |
   |---|---|---|---|
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
-  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` is not read on macOS and is tracked by #3810 | the strings of the macOS binaries. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` has four starts, `--user daemon-reload` (twice), `--user enable --now` and `--user disable --now`, each through `succeeds` in `schedule.rs`, which sends stdin, stdout and stderr to `/dev/null`. None passes `edit`, `-H` or `-M`. No name is listed for it. The systemctl manual page (freedesktop.org, latest) was read: `SYSTEMD_PAGER` and `PAGER` can only disable the pager unless `SYSTEMD_PAGERSECURE` is set, and `SYSTEMD_EDITOR`, `EDITOR` and `VISUAL` run only for `systemctl edit`, which `crates/` never calls. `SYSTEMD_UNIT_PATH`, `SYSTEMD_LIB_DIR` and `DBUS_SESSION_BUS_ADDRESS` are not named by the page read and are not listed. `Names` has no kind that judges a D-Bus address. Not run on Linux | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads. For `systemctl`, the manual page, with no run on any host |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
-  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` and `osascript`, which have lists of their own | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. The Linux tools are tracked by #3810 | the strings of the macOS binaries, for those two only |
+  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` and `osascript`, which have lists of their own | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. For `systemd-inhibit`, `xclip`, `xsel` and `wl-copy` no name was added to a list. The bullets on what a checked start does not cover give the manual pages read. None of the four was run on Linux | the strings of the macOS binaries for those two, and the manual pages for the Linux tools |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
 
   The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
@@ -4294,10 +4335,70 @@ shown by running the program, or not entirely:
   running `powershell` on Windows that any variable in it changes what runs, or that no other
   variable does. `gcloud.cmd` and `APPDATA` are not in it, and have not been checked on Windows. It
   is tracked by #3808.
-- The dynamic-loader names (`LD_*`, `GCONV_PATH`) are read from ld.so(8) and not shown by running a
-  loader. It is tracked by #3810.
-- `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
-  and no names of their own, and have not been run on Linux. It is tracked by #3810.
+- The dynamic-loader names (`LD_*`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`) have two tests in
+  `crates/sandbox/tests/linux_loader.rs`, which is compiled only on Linux. Neither has been run on
+  a Linux host or loader. The file was compiled and linted for `x86_64-unknown-linux-gnu` on
+  macOS. The first,
+  `a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_one_still_loads`,
+  builds libraries that write a marker file when the loader runs them. For `LD_PRELOAD`,
+  `LD_AUDIT`, `LD_LIBRARY_PATH` and `GCONV_PATH` (a converter module named by a `gconv-modules`
+  file) it starts a program through a kept start and a checked start, and asserts only whether a
+  marker is present, since the count of constructor runs depends on the loader. The converter
+  module exports no converter, so glibc aborts the `GCONV_PATH` program after
+  the module's constructor has run, and the test does not assert that program's exit status. The second,
+  `locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
+  starts a program that reports its environment. It shows what the start hands the process and
+  runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
+  `LD_ORIGIN_PATH` is in the generic table and no test starts a program with it.
+  The names come from ld.so(8) on man7.org, which was read. Its secure-execution section says that
+  in that mode "the effects of some environment variables are voided or modified, and furthermore
+  those environment variables are stripped from the environment", and lists `GCONV_PATH`,
+  `GETCONF_DIR`, `HOSTALIASES`, `LOCALDOMAIN`, `LD_AUDIT`, `LD_DEBUG`, `LD_DEBUG_OUTPUT`,
+  `LD_DYNAMIC_WEAK`, `LD_HWCAP_MASK`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH`, `LD_PRELOAD`,
+  `LD_PROFILE`, `LD_SHOW_AUXV`, `LOCPATH`, `MALLOC_TRACE`, `NIS_PATH`, `NLSPATH`,
+  `RESOLV_HOST_CONF`, `RES_OPTIONS`, `TMPDIR` and `TZDIR`. Its entry for `LD_ORIGIN_PATH` says it
+  is ignored in secure-execution mode since glibc 2.4. glibc's `sysdeps/generic/unsecvars.h`
+  (fetched from sourceware.org, version not recorded) lists these and also `GLIBC_TUNABLES`,
+  `LD_BIND_NOT`, `LD_BIND_NOW`, `LD_PROFILE_OUTPUT`, `LD_VERBOSE`, `LD_WARN` and eight `MALLOC_`
+  names. Both files show which names glibc distrusts under privilege. Neither says which of the names
+  outside the table select code. The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and
+  `LD_PRELOAD`, which name a library, a module or a directory searched for libraries, and `LOCPATH`
+  (`Names::Directories`) and `NLSPATH` (`Names::Options`, since it is a list of templates). `LOCPATH`
+  and `NLSPATH` are there because #3810 lists them as candidates. No source read shows that either
+  runs code. `TZDIR` and `RESOLV_HOST_CONF` are named by ld.so(8) and `unsecvars.h` too, are not
+  among the candidates in #3810, and are left out. The other names in the two lists are left out
+  for the same reason: nothing read shows that they name a library or program to run. No start in
+  `crates/` runs `getconf` on Linux, so `GETCONF_DIR` has no start to apply to.
+  `GLIBC_TUNABLES` is listed in `unsecvars.h` and is not in the table. The glibc manual page on
+  tunables (sourceware.org) was read and showed only the `GLIBC_TUNABLES=glibc.malloc...` syntax.
+  It gave no basis that the variable selects code to run, so there is no mechanism to judge. It
+  stays out until a Linux run shows one. #3810 lists it.
+  No musl documentation was read and no musl loader was run. `LD_LIBRARY_PATH` and `LD_PRELOAD`
+  are in the table by name, so a checked start removes them whichever loader the program uses.
+  `ci.yml` has no musl or Alpine job. `linux_loader.rs` uses a glibc converter module and
+  `RUNPATH`, so it is written for glibc.
+- `systemd-inhibit` and `systemctl --user` are given the generic table and no names of their own.
+  Neither was run on Linux. The manual pages read were systemctl(1) and systemd-inhibit(1) from
+  freedesktop.org (latest). Both say that without `SYSTEMD_PAGERSECURE`, `SYSTEMD_PAGER` and
+  `PAGER` can only disable the pager. Each `systemctl` start (`crates/schedule/src/schedule.rs`:
+  `--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, all through
+  `succeeds`) and the `systemd-inhibit` start (`crates/tui/src/caffeinate.rs`, `start_program`)
+  sends stdout and stderr to `/dev/null`. The systemctl page documents `SYSTEMD_EDITOR`, `EDITOR`
+  and `VISUAL` for `systemctl edit` only. No start in `crates/` passes `edit`, `-H` or `-M`
+  to `systemctl`. Neither page names `DBUS_SESSION_BUS_ADDRESS`, `DBUS_SYSTEM_BUS_ADDRESS` or
+  `SYSTEMD_UNIT_PATH`, so none is judged. The row for `crates/schedule/src/schedule.rs` in the
+  empty-list table has the rest.
+- `xclip`, `xsel` and `wl-copy` are given the generic table and no names of their own. None was
+  run on Linux. The pages read were xclip(1) and xsel(1) from linux.die.net and wl-copy(1) from
+  man.archlinux.org. The xclip page documents `DISPLAY`, the xsel page documents the X display
+  (`--display`), and the wl-copy page documents `WAYLAND_DISPLAY`, `WAYLAND_DEBUG` and `WL_SEAT`.
+  Each names a server to connect to and none selects code to run in the tool, so no name was added
+  and the start has an empty list. A server a stage
+  wrote can read what is copied, which this entry does not decide. The wl-copy page says it runs
+  `xdg-mime(1)` on the content to infer its type; the variables of `xdg-mime` are listed under the
+  browser opener below. The three pages do not name `XAUTHORITY`, `XLOCALEDIR` or `XCOMPOSEFILE`,
+  and what Xlib or libwayland read was not read, so those are unchecked. The starts are in
+  `crates/tui/src/clipboard.rs`.
 - A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
   examined for the variables they read to choose code, by running each where it could be run, and
   the names are in the generic table or in the list of the start that runs the program (the AWS
@@ -4364,68 +4465,61 @@ shown by running the program, or not entirely:
     names have no read in the files searched, which does not show they are never read. A run of
     `kde-open` on Linux is tracked by #3822.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
-  were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
-  mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
-  and `xdg-mime query default` returned a handler planted in a directory named by each of
-  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS`. With
-  `XDG_CURRENT_DESKTOP=GNOME`, `xdg-open` runs `gio open`, and `gio open` started a handler planted
-  in a directory named by each of those four, so each selects the program that opens the address.
-  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs
-  that for each of the four and fails when any one of them is left out of the list. For
-  `XDG_DATA_DIRS` it opens an address with the scheme `bravebot-test`, which no system handler
-  opens: with the planted value removed `gio open` reads the system's directories and finds no
-  handler, where an address with the scheme `https` would start the host's real browser. It sets
-  `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
-  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode` runs
-  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` with every variable that names a desktop
-  environment removed, so
-  `xdg-open` takes its generic path. That path asks `xdg-mime query default` for the handler of the
-  scheme only when `DISPLAY` or `WAYLAND_DISPLAY` is set (`has_display`, `xdg-open.in` line 507),
-  so the run sets `WAYLAND_DISPLAY` to a name no socket has. Nothing connects to it: `xdg-open`
-  and `xdg-mime` only test it for emptiness, and `xprop`, the one program on that path that would
-  open a display, reads `DISPLAY`, which is removed. `BROWSER` names an installed stand-in, so
-  a lookup that finds no handler runs the stand-in and not the browsers `xdg-open` tries when
-  `BROWSER` is unset. `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
-  runs `BROWSER` in that mode.
-  `xdg-open` reads `BROWSER` only in that generic path (`open_generic`, after the scheme handler
-  lookup). With `gio` installed it takes the GNOME path, runs `gio open` and never reads `BROWSER`,
-  so there is no `BROWSER` test under GNOME. Each of these asserts that the helper or
-  `mimeapps.list` in a directory a stage may write is not run or read and that the one in an
-  installed directory is. Each prints `skipped` and passes where `xdg-open` (and, for the `XDG_`
-  directories, `gio` under GNOME and `xdg-mime` in generic mode) is not installed, as on
-  macOS, and where the installed `xdg-open` does not run the installed handler, so on such a host
-  they assert nothing. The generic-desktop run of the three `XDG_` directories was run on macOS
-  against `xdg-open` and `xdg-mime` 1.2.1 built from their published source, with the `uname`
-  test changed so that they take the generic path, and with a planted name left out of the opener's
-  list it failed with `(true, true)` for each of the three. It has not run on Linux, and the
-  under-GNOME tests have so far passed only through the skip.
+  were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
+  cells marked run below. Every test added after that run is not run: the host here is macOS,
+  the opener tests are Linux-only and print `skipped` elsewhere, and CI has not yet run them. In the
+  `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
+  `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
+  `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
+  the installed handler does not start. The KDE test skips a name whose installed handler does not
+  start, since `kde-open` needs a session bus that a headless runner lacks and ran no installed
+  handler on the CI runner. The test that puts a stand-in `kde-open` first on `PATH` and reads what
+  the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
+  stand-in, so the opener's names are checked there against a started `kde-open`. The
+  generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
+  those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
+  With no `DISPLAY` or `WAYLAND_DISPLAY`, `xdg-open` 1.2.1 does not look up a scheme handler in
+  generic mode, so the generic test sets `DISPLAY`. The generic-mode test failed on the CI runner
+  with the installed handler not run; its run now prints `xdg-open`'s debug output when that
+  happens.
+  What is covered, per name and per desktop mode:
+
+  | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |
+  |---|---|---|---|
+  | `BROWSER` | Test, run on Linux: the planted helper is not run and an installed one is. | No test. `xdg-open` reaches `BROWSER` in `open_generic`, which `open_gnome` reaches only without `gio` (per the 1.1.x script; not checked against 1.2.1), and the GNOME test needs `gio`. Not run. | Test, not run: the planted helper must not run if an installed `BROWSER` helper runs. If it does not, the test prints that `kde-open` does not read `BROWSER` and asserts nothing. |
+  | `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Test, not run: the planted handler is not run and an installed one is. `xdg-mime query default` was run on Linux and returned a handler planted under each. | Test, run on Linux: `gio open` started a handler planted under each, so each selects the program that opens the address. The test was changed after that run and its new form is not run. | Test, not run: the planted handler is not run and an installed one is. |
+
+  The opener tests are `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+  (generic, `BROWSER`),
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode`,
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` and
+  `a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`.
+  The KDE test sets `KDE_SESSION_VERSION=5` where `kde-open5` is found and `6` otherwise, since
+  `xdg-open` 1.2.1 runs `kfmclient exec` when it is unset, `kde-open5` for 5 and `kde-open` for 4
+  and 6. The GNOME test opens an address with the scheme
+  `bravebot-test`, since with `XDG_DATA_DIRS` removed `gio open` would start the host's browser
+  for `https`. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
+
   Electron 44.9.3 on Linux, run under Xvfb, was made to call `openExternal` and `openPath` of
   `ui/src/main/external-open.ts` with all five names set to directories and a script a stage could
   have written. It started `xdg-open` for each call with none of the five in its environment. The
   same two calls made on Electron's `shell` without the deletion started `xdg-open` with all five,
-  so Electron hands its environment to `xdg-open` and the deletion is what removes them.
-  `ui/scripts/external-open-electron.test.mjs` repeats that run, with both the calls through
-  `external-open.ts` and the control, and fails when `openPath` skips the deletion. It prints
-  `skipped` where there is no Linux, `xvfb-run` or Electron binary. It needed `--no-sandbox` and
-  `--disable-dev-shm-usage` on the host that ran it. The by-hand run was made before
-  `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets fifteen.
-  `make check-code-selectors` fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or
-  `NAMES` in that test differs from `CODE_SELECTORS` in `crates/tui/src/opener.rs` other than by
-  `HOME`, which the desktop application leaves set because it and the agent it starts read it.
-  Under KDE `xdg-open` starts `kde-open` (`kde-open5` under `KDE_SESSION_VERSION=5`) with the
-  address. `a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
-  runs the opener's real launch path with `XDG_CURRENT_DESKTOP=KDE` and `KDE_SESSION_VERSION=6`
-  against the installed `xdg-open`, with a stand-in `kde-open` first on `PATH` that logs its
-  arguments and the names of the opener's list it can see. For each name it asserts that the
-  stand-in is started with the address, that a value in an installed directory reaches it and that
-  a value a stage may write does not. It shows what the opener hands on and not what the real
-  `kde-open` reads, which was read from the source. It prints `skipped` where there is no
-  `xdg-open`. It was run on macOS with the `xdg-open` 1.2.1 built from source, and with the
-  opener's list replaced by `Checked(&[])` it failed with `BROWSER reached kde-open`. It has not
-  run against a KDE session. `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
-  builds the Windows command on every host and asserts that its program and arguments are
-  `rundll32`, `url.dll,FileProtocolHandler` and the address, an address with `&`, `|`, `^`, `%` and
-  `"` included. That `rundll32` opens a page has not been observed.
+  so Electron hands its environment to `xdg-open` and the deletion is what removes them. The
+  by-hand run was made before `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets
+  fifteen. `ui/scripts/external-open-electron.test.mjs` repeats that run as the test case `electron
+  on linux starts xdg-open without the fifteen names for openExternal and openPath through
+  external-open.ts and with them without it`, which expects exactly two starts in each run. It
+  needed `--no-sandbox` and `--disable-dev-shm-usage` on the host that ran it. The case `electron
+  on linux starts any xdg-open for showItemInFolder without the fifteen names through
+  external-open.ts and with them without it` asserts no start count, since how many times Electron
+  starts `xdg-open` is Electron's choice, and fails when either run starts none. Each start through
+  `external-open.ts` must carry none of the names and each control start all fifteen. It sets
+  `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`, which
+  rests on a recollection of Electron's source. Both cases print `skipped` where
+  there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
+  or Electron fails them. Neither has been run on Linux since the test was changed. The
+  `showItemInFolder` case has never been run on Linux.
+
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
   the five names, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
   `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
@@ -4630,6 +4724,16 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_cli::terminal_size::a_failed_size_query_starts_no_tput`
+`verified-by: bravebot_cli::gix_path_starts::nothing_in_this_repository_names_gix_path`
+`verified-by: bravebot_cli::gix_path_starts::no_crate_that_depends_on_gix_path_names_its_env_module`
+`verified-by: bravebot_cli::gix_path_starts::gix_path_starts_a_program_only_in_its_env_module`
+`verified-by: bravebot_cli::gix_path_starts::the_scan_sees_each_way_to_reach_the_env_module_and_not_the_paths_that_start_nothing`
+`verified-by: bravebot_cli::gix_path_starts::the_scan_of_gix_path_sees_a_command_under_any_name_and_not_a_comment`
+`verified-by: bravebot_cli::gix_path_starts::a_dependency_on_gix_path_under_another_name_is_found_and_reported`
+`verified-by: bravebot_cli::gix_path_starts::the_functions_of_gix_path_that_start_a_program_are_the_audited_ones`
+`verified-by: bravebot_cli::gix_path_starts::the_audit_of_gix_path_passes_on_the_audited_shape`
+`verified-by: bravebot_cli::gix_path_starts::the_audit_of_gix_path_fails_when_a_new_function_starts_a_program`
+`verified-by: bravebot_cli::gix_path_starts::the_audit_of_gix_path_fails_when_an_audited_non_starting_function_starts_a_program`
 `verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
@@ -4690,6 +4794,8 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::powershell::a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
 `verified-by: bravebot_sandbox::programs::the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start`
+`verified-by: bravebot_sandbox::linux_loader::a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_one_still_loads`
+`verified-by: bravebot_sandbox::linux_loader::locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
 `verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
@@ -4708,6 +4814,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the six names set and the same calls on Electron's shell start it with all six; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME)`
+`verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
@@ -4727,6 +4834,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
+`verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the fifteen names where Electron's own shell starts it with all fifteen; its showItemInFolder case is a test case of its own and has never been run on Linux; the ui job of CI runs it through make check-ui-build on ubuntu-latest and it prints skipped elsewhere)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
