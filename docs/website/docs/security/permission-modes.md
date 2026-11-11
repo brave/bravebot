@@ -98,8 +98,11 @@ printed.
 Only the single word `allow` answers the question. A reply that says anything else, a failed call
 and a refused model leave the question with you, or refuse it where nobody can be asked. The
 classifier can remove a question and never refuses one. It is not asked about a command that starts
-with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, or
-one that reads standard input from a reference. It is not asked about `download_url`, a redirect to
+with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, one
+that reads standard input from a reference, or one with a `git` stage, which may write a
+repository's hooks and configuration and so is put to you as in asking. On Linux and Windows nothing
+holds a `.git` back from a program that is not `git`, so the classifier can answer a command whose
+program writes one there. It is not asked about `download_url`, a redirect to
 another host, a delegate's questions, or any question once the planner's context holds private
 content or has met something untrusted. The questions that stay with you in every mode, and the other
 questions a mode may not answer, are put to you as in asking.

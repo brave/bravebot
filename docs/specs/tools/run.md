@@ -262,7 +262,9 @@ settings and the person's answer and never from what a stage wrote or printed:
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
   with no stage keeping the network ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
   on a platform that holds the protected names back from every stage, which is macOS and not Linux or Windows
-  ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
+  ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back
+  (the auto mode's classifier is kept from a line with such a stage as well, on every platform,
+  [AUTO-3](../auto-mode.md#AUTO-3));
 - nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),

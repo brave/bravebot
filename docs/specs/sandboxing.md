@@ -968,6 +968,8 @@ refused, and the person makes that edit through a tool that asks.
 
 A person's trust of a directory lets a plain line run there without asking only where every stage of it
 is held back from a protected name by this clause, so on macOS and for a stage that is not git ([RUN-5](tools/run.md#RUN-5)).
+The auto mode's classifier is kept from a line with a git stage for the same reason, on every platform
+([AUTO-3](auto-mode.md#AUTO-3)).
 
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
@@ -1722,7 +1724,8 @@ stage because an install script, a `make` target or a test runs code the person 
 a hook it writes, or a `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, `!` alias or
 `credential.helper` it sets in `.git/config`, runs with the person's whole access the next time
 they run git there, in a terminal, an editor, or a later stage that carries the remote scope and
-the agent socket ([SANDBOX-16](#SANDBOX-16)). It is kept beneath every write row and not only the
+the agent socket ([SANDBOX-16](#SANDBOX-16)). The auto mode's classifier is therefore not put a line
+with a git stage ([AUTO-3](auto-mode.md#AUTO-3)). The hold-back is kept beneath every write row and not only the
 session's directories, because a repository made in the temporary directory or a cache can be moved
 into a session directory whole. The program is judged by the file it resolved to and by whether a
 stage could have put it there, so a `git` a stage wrote earns nothing by its name. A git stage keeps
