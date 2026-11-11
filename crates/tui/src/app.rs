@@ -1982,13 +1982,20 @@ pub fn run(
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
-    // alternate screen is worse than the original error. However the run ended, it has left its
-    // herdr pane: a `/resume` stays inside the loop above, and a process started on the way out
-    // reports for itself.
-    leave_for_good(terminal.backend_mut())?;
-    terminal.show_cursor()?;
+    // alternate screen is worse than the original error.
+    end_the_run(&mut terminal)?;
 
     result
+}
+
+/// Give the terminal back for good at the end of [`run`], cursor and all. However the run ended, it
+/// has left its herdr pane: a `/resume` stays inside the loop, and a process started on the way out
+/// reports for itself.
+///
+/// Split from `run` so a test can reach it, since that function needs a real terminal.
+fn end_the_run<W: Write>(terminal: &mut Terminal<CrosstermBackend<W>>) -> io::Result<()> {
+    leave_for_good(terminal.backend_mut())?;
+    terminal.show_cursor()
 }
 
 /// Sign in to the backend the next request will use, where it needs one and has none.

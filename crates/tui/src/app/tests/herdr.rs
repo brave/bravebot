@@ -106,6 +106,27 @@ fn leaving_for_good_tells_herdr_the_run_has_left_its_pane_however_the_way_out_we
     }
 }
 
+/// HERDR-12, through the end of `run`. Rejects: a run that ends by handing the terminal back the
+/// way an editor or a stop does, which is what it did before it knew about herdr, and so never
+/// tells herdr it has gone.
+#[test]
+fn the_end_of_a_run_tells_herdr_the_run_has_left_its_pane() {
+    use ratatui::layout::Rect;
+    use ratatui::{TerminalOptions, Viewport};
+    let herdr = FakeHerdr::start(true);
+    let _held = script::hold(herdr.reporter());
+    reported(&herdr);
+    let mut terminal = Terminal::with_options(
+        CrosstermBackend::new(Vec::new()),
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 20, 5)),
+        },
+    )
+    .unwrap();
+    end_the_run(&mut terminal).unwrap();
+    assert_eq!(herdr.next(), "pane.release_agent");
+}
+
 /// HERDR-12. Rejects: releasing on the way the terminal is handed to an editor, a viewer or the
 /// shell for a stop, which every one of them comes back from. herdr would show the pane as a plain
 /// terminal while the person is in their editor, and refuse the run's next report as one from an

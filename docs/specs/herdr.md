@@ -249,6 +249,7 @@ leave the session's next report refused as one from an agent that left.
 ([CRASH-2](crash-reports.md#CRASH-2)), and nor does a session killed by a signal. herdr clears the
 pane when it sees the shell prompt again, later than a release would.
 
+`verified-by: bravebot_tui::app::tests::herdr::the_end_of_a_run_tells_herdr_the_run_has_left_its_pane`
 `verified-by: bravebot_tui::app::tests::herdr::leaving_for_good_tells_herdr_the_run_has_left_its_pane_however_the_way_out_went`
 `verified-by: bravebot_tui::app::tests::herdr::handing_the_terminal_over_for_a_while_leaves_the_run_in_its_pane`
 `verified-by: bravebot_tui::app::tests::herdr::nothing_the_title_marks_after_leaving_reaches_herdr`
