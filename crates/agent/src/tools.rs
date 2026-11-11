@@ -713,6 +713,7 @@ impl<'a> Tools<'a> {
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch_made(), self.profile)?
                 .with_session_directories(&recorded)
+                .with_left_directories(&self.workspace.left_directories())
                 .with_network(bravebot_config::run_network())
                 .with_hosts(hosts)
                 .with_mode(self.sandbox)

@@ -267,7 +267,8 @@ settings and the person's answer and never from what a stage wrote or printed:
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
   or a rule that says ask ([permissions.md](../permissions.md));
-- no stage's program is a file under a directory the plan may write to, and no stage is given such a file
+- no stage's program is a file under a directory the plan may write to, the checkout holding a session
+  directory among them ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), and no stage is given such a file
   as an argument where the file is executable or the stage is an interpreter or wrapper (`sh`, `python3`,
   `node`, `env` and the like, known by the file its program resolved to). An argument is looked up whole,
   since a file name may hold a space or any character a word is cut at, and as the words in it, read with the
@@ -341,6 +342,7 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::a_plain_line_is_held_only_where_every_condition_of_the_answer_holds`
 `verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
+`verified-by: bravebot_agent::confine::a_program_above_the_session_directory_in_its_checkout_is_not_held`
 `verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
 `verified-by: bravebot_agent::confine::a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given`
 `verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`

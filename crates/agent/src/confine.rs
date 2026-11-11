@@ -93,6 +93,10 @@ pub struct Confinement {
     /// A directory is a row in `roots` only while its name leads to the directory recorded, and
     /// each stage is refused as it starts once the name leads to a link or a file (SANDBOX-18).
     roots_made: Vec<ScratchDirectory>,
+    /// The directories the session opened or added and has since left or closed
+    /// ([`Confinement::with_left_directories`]). They are no row of any stage now, but a stage wrote
+    /// in them while they were open, and closing one does not remove what was written (SANDBOX-20).
+    left: Vec<PathBuf>,
     scratch: Option<PathBuf>,
     /// The directory `scratch` was made as. `scratch` is a row only while its name leads to this
     /// directory, and each stage is refused as it starts once the name leads to a link or a file
@@ -207,6 +211,48 @@ impl Confinement {
         self
     }
 
+    /// This confinement with the directories the session has left or closed, which a file is the
+    /// plan's under as it is under one still open (SANDBOX-20).
+    #[must_use]
+    pub fn with_left_directories(mut self, directories: &[PathBuf]) -> Self {
+        self.left = directories.iter().map(|left| canonical(left)).collect();
+        self
+    }
+
+    /// The directories beyond the session's rows under which a file is the plan's (SANDBOX-14,
+    /// SANDBOX-16, SANDBOX-20): the checkout holding each session directory, and each directory the
+    /// session left with the checkout that held it.
+    ///
+    /// A file in the `bin` of a checkout, above the directory the session opened in, is as much a
+    /// contributor's or a stage's as one inside it, and can be first on `PATH`. The checkout is the
+    /// nearest ancestor with a `.git` ([`bravebot_sandbox::programs::with_checkout`]), the finder
+    /// that records the directories SANDBOX-30 keeps out of the search for bravebot's own programs.
+    /// A checkout that is the home directory or holds it is not counted: it is a dotfiles
+    /// repository or the whole machine, and counting it would take the reason from every program
+    /// the account installed, `~/.local/bin` and `/opt/homebrew` among them. Read from the file
+    /// system as it is asked, so a `.git` made since the session opened is counted.
+    fn beyond_the_session(&self) -> Vec<PathBuf> {
+        let mut held: Vec<PathBuf> = Vec::new();
+        for directory in self.roots.iter().chain(&self.left) {
+            for found in bravebot_sandbox::programs::with_checkout(directory) {
+                let a_checkout = found != *directory;
+                if a_checkout
+                    && self
+                        .home
+                        .as_deref()
+                        .is_some_and(|home| home.starts_with(&found))
+                {
+                    continue;
+                }
+                let found = canonical(&found);
+                if !held.contains(&found) {
+                    held.push(found);
+                }
+            }
+        }
+        held
+    }
+
     /// The temporary directory, where it is the session's own.
     fn sessions_temporary(&self) -> Option<&Path> {
         (self.temporary_owner == TemporaryOwner::Session).then_some(self.temporary.as_path())
@@ -296,6 +342,7 @@ impl Confinement {
             },
             roots,
             roots_made: Vec::new(),
+            left: Vec::new(),
             scratch,
             scratch_made: None,
             user_cache: None,
@@ -636,10 +683,11 @@ impl Confinement {
     }
 
     /// Whether `file` is under a directory the plan may write to, so that its name is one the plan
-    /// could have chosen (SANDBOX-16, SANDBOX-20): the session's directories, the scratch and
-    /// temporary directories, and every row some stage of this session may be given for writing,
-    /// whatever its program. A file another stage could have written is as much the plan's as one
-    /// this stage could.
+    /// could have chosen (SANDBOX-16, SANDBOX-20): the session's directories, the checkout holding
+    /// each of them and each one the session left ([`Confinement::beyond_the_session`]), the
+    /// scratch and temporary directories, and every row some stage of this session may be given
+    /// for writing, whatever its program. A file another stage could have written is as much the
+    /// plan's as one this stage could.
     fn writable_by_the_plan(&self, file: &Path) -> bool {
         let file = canonical(file);
         if self
@@ -649,6 +697,10 @@ impl Confinement {
             .any(|dir| file.starts_with(dir))
             || file.starts_with(&self.temporary)
             || file.starts_with(canonical(&self.temporary))
+            || self
+                .beyond_the_session()
+                .iter()
+                .any(|dir| file.starts_with(dir))
         {
             return true;
         }
@@ -1593,11 +1645,13 @@ impl Confinement {
             .collect();
         // The rows bypass gives without a request are the whole machine, so counting them would
         // leave no git anywhere; a git under one of them alone keeps the lift (SANDBOX-18).
+        let beyond = self.beyond_the_session();
         let planted: Vec<&Path> = policy
             .writable
             .iter()
             .filter(|row| !machine.contains(&row.path))
             .map(|row| row.path.as_path())
+            .chain(beyond.iter().map(PathBuf::as_path))
             .collect();
         let policy = match is_git(self.prelude, resolved, &planted) {
             true => policy.allow_git_directory_writes(),
@@ -4177,6 +4231,238 @@ mod tests {
         assert_eq!(
             held(&confined, &[&step("/usr/bin/make", &[])]),
             Containment::Held
+        );
+    }
+
+    /// A checkout on disk, since the finder asks the file system for the `.git`: `repo/.git`, the
+    /// session directory `repo/sub`, and files named for the programs the tests below ask about in
+    /// `repo/bin`, which lies above the session directory in its checkout and which a contributor's
+    /// commit can fill. Returns the checkout and the session directory, both canonical.
+    fn checked_out(name: &str) -> (PathBuf, PathBuf) {
+        let top = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("repo/.git")).expect("repository");
+        std::fs::create_dir_all(top.join("repo/sub")).expect("session directory");
+        std::fs::create_dir_all(top.join("repo/bin")).expect("bin");
+        for program in [
+            "git", "aws", "gh", "kubectl", "curl", "ssh", "cargo", "make",
+        ] {
+            std::fs::write(top.join("repo/bin").join(program), "").expect("program");
+        }
+        let top = top.canonicalize().expect("canonical");
+        (top.join("repo"), top.join("repo/sub"))
+    }
+
+    fn named(directory: &Path) -> &str {
+        directory.to_str().expect("a UTF-8 path")
+    }
+
+    /// SANDBOX-14, SANDBOX-18: a file named `git` in the checkout holding the session directory,
+    /// above that directory, could have been put there by a stage of the plan or by a commit it
+    /// pulled, so it earns no `.git` write lift by its name, as one inside the session directory
+    /// does not. A `git` outside every session directory keeps it. The regression it rejects: the
+    /// session directory alone counted as the plan's, so `repo/bin/git`, first on `PATH`, was the
+    /// lift's.
+    #[test]
+    fn a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory() {
+        let (repo, session) = checked_out("confine-above-root-git");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let confined = reading_confinement(prelude, &[named(&session)]);
+            let lifted = |program: &Path| {
+                confined
+                    .policy(&step(named(program), &["commit"]), &session, &[])
+                    .git_directories_writable
+            };
+            assert!(
+                !lifted(&repo.join("bin/git")),
+                "{prelude:?}: repo/bin/git above the session directory"
+            );
+            assert!(
+                !lifted(&session.join("git")),
+                "{prelude:?}: the guard inside the session directory"
+            );
+            assert!(
+                lifted(Path::new("/usr/bin/git")),
+                "{prelude:?}: the system's git"
+            );
+        }
+    }
+
+    /// SANDBOX-16: a file in the checkout above the session directory carries no credential scope
+    /// by being named `aws`, `kubectl`, `gh` or `git`, and the prompt lists none for it. The same
+    /// names installed outside the checkout keep theirs.
+    #[test]
+    fn a_program_above_the_session_directory_in_its_checkout_carries_no_scope_by_its_name() {
+        let (repo, session) = checked_out("confine-above-root-scope");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let confined = reading_confinement(prelude, &[named(&session)]);
+            for (name, args) in [
+                ("aws", vec!["s3", "ls"]),
+                ("kubectl", vec!["get", "pods"]),
+                ("gh", vec!["pr", "list"]),
+                ("git", vec!["push"]),
+            ] {
+                let planted = step(named(&repo.join("bin").join(name)), &args);
+                assert_eq!(confined.scope_of(&planted), None, "{prelude:?} {name}");
+                assert!(
+                    confined.describe(&[&planted]).carried.is_empty(),
+                    "{prelude:?} {name}"
+                );
+                assert!(
+                    confined.profile(&[&planted]).contains("scopes: none)"),
+                    "{prelude:?} {name}"
+                );
+                let installed = step(&format!("/usr/bin/{name}"), &args);
+                assert!(
+                    confined.scope_of(&installed).is_some(),
+                    "{prelude:?} /usr/bin/{name}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-20: under a closed setting a file in the checkout above the session directory keeps
+    /// no network by being named `curl`, `ssh` or `cargo`, on every platform, and `/usr/bin/curl`
+    /// keeps it.
+    #[test]
+    fn a_program_above_the_session_directory_in_its_checkout_keeps_no_network_by_its_name() {
+        let (repo, session) = checked_out("confine-above-root-network");
+        for (what, confined) in [
+            ("windows", confinement(&[named(&session)])),
+            (
+                "linux",
+                reading_confinement(Prelude::Linux, &[named(&session)]),
+            ),
+            (
+                "macos",
+                reading_confinement(Prelude::MacOs, &[named(&session)]),
+            ),
+        ] {
+            let closed = confined.with_network(Network::Closed);
+            for (name, args) in [
+                ("curl", vec!["https://a.example"]),
+                ("ssh", vec!["host"]),
+                ("cargo", vec!["build"]),
+            ] {
+                let planted = step(named(&repo.join("bin").join(name)), &args);
+                assert!(!closed.egress(&planted), "{what}: {name}");
+                assert!(
+                    !closed.policy(&planted, &session, &[]).allow_network,
+                    "{what}: {name}"
+                );
+            }
+            assert!(
+                closed.egress(&step("/usr/bin/curl", &["https://a.example"])),
+                "{what}: the system's curl"
+            );
+        }
+    }
+
+    /// RUN-5: a program in the checkout above the session directory is a line nobody saw, so it is
+    /// not held, and a program under an install directory is.
+    #[test]
+    fn a_program_above_the_session_directory_in_its_checkout_is_not_held() {
+        let (repo, session) = checked_out("confine-above-root-held");
+        let confined =
+            reading_confinement(Prelude::MacOs, &[named(&session)]).with_network(Network::Closed);
+        assert_eq!(
+            held(&confined, &[&step(named(&repo.join("bin/make")), &[])]),
+            Containment::Unknown
+        );
+        assert_eq!(
+            held(&confined, &[&step("/usr/bin/make", &[])]),
+            Containment::Held
+        );
+    }
+
+    /// SANDBOX-20: a directory the session left keeps the checkout that held it, since a stage
+    /// wrote there while it was open and closing it removes nothing. The regression it rejects:
+    /// only the directories still open counted, so closing the session's directory made the
+    /// `bin` of its checkout the system's again.
+    #[test]
+    fn a_directory_the_session_left_keeps_its_checkout_in_the_set_the_plan_writes() {
+        let (repo, session) = checked_out("confine-above-root-left");
+        let elsewhere = crate::testutil::scratch_dir("confine-above-root-left-now");
+        std::fs::create_dir_all(elsewhere.join(".git")).expect("directory with its own checkout");
+        let elsewhere = elsewhere.canonicalize().expect("canonical");
+        let program = step(named(&repo.join("bin/aws")), &["s3", "ls"]);
+
+        let open = reading_confinement(Prelude::MacOs, &[named(&elsewhere)]);
+        assert!(
+            open.scope_of(&program).is_some(),
+            "the control: nothing of the session holds the checkout"
+        );
+        let left = open.with_left_directories(&[session]);
+        assert_eq!(left.scope_of(&program), None);
+    }
+
+    /// Only the nearest `.git` holds the session directory (SANDBOX-30): a repository that merely
+    /// contains the checkout, and a dotfiles repository at the home directory, do not make the
+    /// installs beside them the plan's. The regressions it rejects: every ancestor with a `.git`
+    /// taken, and a home directory that holds a `.git` taken for the checkout of a project under it
+    /// that has none, which would take `~/.local/bin` from the programs installed there.
+    #[test]
+    fn an_outer_repository_or_a_home_that_is_a_repository_is_not_the_checkout_of_a_session_directory()
+     {
+        let top = crate::testutil::scratch_dir("confine-above-root-outer");
+        let _ = std::fs::remove_dir_all(&top);
+        for directory in [
+            "outer/.git",
+            "outer/repo/.git",
+            "outer/repo/sub",
+            "outer/bin",
+            "home/.git",
+            "home/proj",
+            "home/.local/bin",
+        ] {
+            std::fs::create_dir_all(top.join(directory)).expect("directory");
+        }
+        let top = top.canonicalize().expect("canonical");
+        let at = |directory: &str, program: &str| {
+            let file = top.join(directory).join(program);
+            std::fs::write(&file, "").expect("program");
+            file
+        };
+        let lifted = |confined: &Confinement, file: &Path| {
+            confined
+                .policy(&step(named(file), &["commit"]), &top, &[])
+                .git_directories_writable
+        };
+
+        let nested = reading_confinement(Prelude::MacOs, &[named(&top.join("outer/repo/sub"))]);
+        assert!(
+            !lifted(&nested, &at("outer/repo", "git")),
+            "the checkout's own file"
+        );
+        assert!(
+            lifted(&nested, &at("outer/bin", "git")),
+            "a file beside the repository that holds the checkout"
+        );
+        assert!(
+            nested
+                .scope_of(&step(named(&at("outer/bin", "aws")), &["s3", "ls"]))
+                .is_some()
+        );
+
+        let dotfiles = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(&top.join("home")),
+            vec![top.join("home/proj")],
+            Some(Path::new("/var/scratch")),
+        );
+        assert!(
+            lifted(&dotfiles, &at("home/.local/bin", "git")),
+            "an install in a home directory that is a repository"
+        );
+        assert!(
+            dotfiles
+                .scope_of(&step(named(&at("home/.local/bin", "aws")), &["s3", "ls"]))
+                .is_some()
+        );
+        assert!(
+            !lifted(&dotfiles, &at("home/proj", "git")),
+            "the session directory itself"
         );
     }
 
