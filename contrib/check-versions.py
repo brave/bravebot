@@ -14,7 +14,9 @@ which is why CI runs it and why `make bump-version` runs it before committing wh
 bump that misses one of these files fails instead of being found later.
 
 What is in scope is the version of the thing people install: the workspace, the published npm
-wrapper and the platform packages it depends on, and the desktop application. docs/website is a
+wrapper and the platform packages it depends on, and the desktop application. The TypeScript SDK
+under packages/sdk is private and unpublished (RELEASE-10), and its manifest states the workspace
+version so that the first publish does not go out under a stale one. docs/website is a
 documentation site whose package version names nothing anybody installs, so it is deliberately
 not here. The platform packages are built at publish time from the wrapper's own manifest, so the
 only place one states a version is the wrapper's `optionalDependencies`, each at exactly the
@@ -33,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # A manifest states the version once. The lockfiles are pnpm's, which do not record the version of
 # the project they lock, so a manifest is the only place each package states it.
-MANIFESTS = ("package.json", "ui/package.json")
+MANIFESTS = ("package.json", "ui/package.json", "packages/sdk/package.json")
 
 # The manifest whose `optionalDependencies` are the platform packages, each pinned to the version
 # the wrapper is published at: npm installs the one for the machine, and a range would let it take
@@ -192,7 +194,9 @@ CASES = [
     ("an agreeing tree passes", {}, None),
     ("the published wrapper lagging", {"package.json": "0.8.0"}, "package.json: states 0.8.0"),
     ("the application lagging", {"ui/package.json": "0.1.0"}, "ui/package.json"),
+    ("the SDK lagging", {"packages/sdk/package.json": "0.0.0"}, "packages/sdk/package.json: states 0.0.0"),
     ("a file that is not there", {"ui/package.json": None}, "ui/package.json"),
+    ("the SDK not there", {"packages/sdk/package.json": None}, "packages/sdk/package.json"),
     (
         "a platform package pinned to another version",
         {FIXTURE_PIN: "0.8.0"},
@@ -209,6 +213,7 @@ CASES = [
 def fixture(root, version, broken):
     """A tree stating `version` everywhere, except where `broken` says otherwise."""
     (root / "ui").mkdir(parents=True, exist_ok=True)
+    (root / "packages/sdk").mkdir(parents=True, exist_ok=True)
     (root / "Cargo.toml").write_text(
         '[workspace]\nrust-version = "1.88"\n\n[workspace.package]\n'
         f'version = "{version}"\nedition = "2024"\n',

@@ -149,6 +149,7 @@
  - Fixed the run question saying nothing of the signed-in tool a line reaches through a wrapper, such as `timeout 30 docker ps` or `env git push`, and the MCP server question missing an unpinned package given with `npm x` or a second `-p`. ([#3907](https://github.com/brave/bravebot/issues/3907), [#3906](https://github.com/brave/bravebot/issues/3906))
  - Fixed a state directory moved with `BRAVEBOT_HOME` being readable by sandboxed commands, which could read the keys and sign-ins in it. ([#2917](https://github.com/brave/bravebot/issues/2917))
  - Fixed the packaged desktop app loading its pages from an address `ELECTRON_RENDERER_URL` named. ([#3796](https://github.com/brave/bravebot/issues/3796))
+ - Added `packages/sdk`, a TypeScript library that runs `bravebot --json-stream` for one run or `--input-format lines` for a conversation and returns typed events and result objects. It passes only the flags it lists, has no option that approves an effect, and sends the words of a prompt as a program's unless it is started with `trustInputLines`. It is in the repository and is not published. ([#1554](https://github.com/brave/bravebot/issues/1554))
 
 ## [0.21.0](https://github.com/brave/bravebot/releases/tag/v0.21.0)
 
