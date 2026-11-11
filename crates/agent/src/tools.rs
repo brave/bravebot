@@ -10120,15 +10120,10 @@ fn check_the_plan_before_asking<S: Sink>(
     let destinations = plan
         .writes
         .iter()
-        .map(|path| {
-            let lands_on = crate::workspace::destination(path).filter(|lands| {
-                tools.workspace.relative_display(lands) != tools.workspace.relative_display(path)
-            });
-            crate::confirm::RunDestination {
-                written: path.clone(),
-                lands_on,
-                protected: redirection_is_protected(tools.workspace, path),
-            }
+        .map(|path| crate::confirm::RunDestination {
+            written: path.clone(),
+            lands_on: landing_other_than_the_name(path),
+            protected: redirection_is_protected(tools.workspace, path),
         })
         .collect();
 
@@ -10137,6 +10132,13 @@ fn check_the_plan_before_asking<S: Sink>(
         protected,
         destinations,
     })
+}
+
+/// Where `path` lands once every link is followed, when that is not the path itself. The two are
+/// compared as paths and not as the text shown for them, because two names that differ only in
+/// bytes that are not UTF-8 show the same (PATH-001).
+fn landing_other_than_the_name(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::workspace::destination(path).filter(|lands| lands != path)
 }
 
 /// What [`check_the_plan_before_asking`] found out about a line that it did not refuse.
@@ -32452,6 +32454,38 @@ mod tests {
         // A session with no directory of its own counts every write.
         let bare = Workspace::new(&project.path).expect("workspace");
         assert!(changed_in(&bare, "plain.txt".to_string()));
+    }
+
+    /// A redirection destination is listed with the file it lands on when that file is not the
+    /// one named. The regression it rejects: comparing the text shown for the two, which is the
+    /// same for two names that differ only in bytes that are not UTF-8, so a link to such a name
+    /// was listed as landing where it is named (PATH-001). The first pair is the control: a link
+    /// whose target shows differently. The second pair is made on Linux only, since other hosts
+    /// refuse a name that is not text.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_name_that_differs_only_in_bytes_that_are_not_text_is_listed_with_its_landing() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let top = crate::testutil::scratch_dir("landing-not-text");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(&top).unwrap();
+        let top = top.canonicalize().unwrap();
+        let named = |bytes: &[u8]| top.join(std::ffi::OsStr::from_bytes(bytes));
+        let mut pairs = vec![(&b"out-plain"[..], &b"real-plain"[..])];
+        if cfg!(target_os = "linux") {
+            pairs.push((&b"out-\xff"[..], &b"out-\xfe"[..]));
+        }
+        for (link, target) in pairs {
+            std::fs::write(named(target), "x").unwrap();
+            std::os::unix::fs::symlink(named(target), named(link)).unwrap();
+            assert_eq!(
+                landing_other_than_the_name(&named(link)),
+                Some(named(target))
+            );
+        }
+        std::fs::write(named(b"plain-file"), "x").unwrap();
+        assert_eq!(landing_other_than_the_name(&named(b"plain-file")), None);
     }
 
     /// The regression it rejects: a comparison of where a link lands with the skill's directory
