@@ -59,8 +59,9 @@ string that is neither word, reads as `off` and is reported, so a misspelling ne
 
 It is read from the home layer and from the file `--settings` names. A project or local layer that
 names it is ignored and reported, as one that names `provider` or `attribution` is
-([backends.md](backends.md)). A file `--settings` names that resolves inside the workspace is a
-checkout's file under another name and is ignored as well.
+([backends.md](backends.md)). A file `--settings` names that resolves inside the workspace, or inside a
+checkout the session has been in, is a checkout's file under another name ([PERM-14](permissions.md#PERM-14))
+and is ignored as well.
 
 **Why `off` by default.** A commit is written into a history other people read and push. A person who
 has not asked for one has said nothing about how that history should look.

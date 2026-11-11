@@ -1084,7 +1084,7 @@ by name, such as `origin`, has its URL in the repository's configuration, which 
 a clone or an earlier stage may have written, so it selects no entry. The run prompt names the key
 on the stage it applies to. Only the person's own settings file and a `--settings` file outside the
 workspace set the block, as for `sandbox.mode` ([SANDBOX-22](#SANDBOX-22)). A checkout's project and
-local files and a `--settings` file inside the workspace are not obeyed, and `doctor` names the
+local files and a `--settings` file inside the workspace or such a checkout are not obeyed, and `doctor` names the
 file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string, a
 `git` block or an `identities` value that is not an object, and an entry whose key the rules above
 refuse, all but the one about the directories the plan may write, which it has no session to know.
@@ -2094,7 +2094,10 @@ stage wrote there. The `bin` of a checkout can be first on `PATH` and hold a fil
 commit added, above the directory the session opened in, so a file there is as much the plan's as
 one inside that directory. A checkout that is the account's home directory, or holds it, such as a
 dotfiles repository, does not count, since it would take the reason from every program the account
-installed under the home, `~/.local/bin` among them. The checkout is read from the file system each
+installed under the home, `~/.local/bin` among them. [PERM-14](permissions.md#PERM-14) finds the same
+checkout for a `--settings` file and does not leave that one out: a file under a dotfiles repository
+at the home directory is the checkout's there, which fails closed (Known costs in
+[permissions.md](permissions.md#known-costs)). The checkout is read from the file system each
 time a stage is built. The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out, as they are for `git` ([SANDBOX-18](#SANDBOX-18)): they are
 every path the account can write, so counting them would take the reason from every program the
@@ -2116,8 +2119,8 @@ The setting is read from `--run-network <open|closed>`, from `run.network` in a 
 from a managed pin, in that order of strength: a managed pin is final, the flag outranks a file, and
 a file outranks the default. A managed pin that is neither word is read as `closed`, not ignored,
 because a mistyped restriction must not open the network. A file in the person's home, or one named by `--settings` from outside
-the workspace, may set either word. A file a checkout carries, which includes a named file inside
-the workspace, may set `closed` and never `open`, and `doctor` says that it was ignored. A word that
+the workspace and outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)), may set either word. A file a checkout carries, which includes a named file inside
+the workspace or such a checkout, may set `closed` and never `open`, and `doctor` says that it was ignored. A word that
 is neither is reported and not obeyed. The desktop's bridge takes no flag: it settles the answer once,
 when it starts, from the person's home layer, the file `--settings` named, when it exists, the settings file of the
 directory it started in and the managed pin, and every window's turns read that answer. A project a
@@ -2449,10 +2452,10 @@ managed pin of `strict` therefore keeps, and `strict` is still looser than `read
 
 The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
 key of the settings, and from the managed file's pin; the default is `workspace-write`. In the settings, the home file and a `--settings` file outside
-the workspace may name any of the four, the later of the two winning. The checkout's project and
-local files, and a `--settings` file inside the workspace, may name only `strict`; a `read-only`,
+the workspace and every checkout the session has been in ([PERM-14](permissions.md#PERM-14)) may name any of the four, the later of the two winning. The checkout's project and
+local files, and a `--settings` file inside either, may name only `strict`; a `read-only`,
 `workspace-write` or `off` there is not obeyed and `doctor` names the file and the word. A `strict` from any of them
-holds over what the home file or a `--settings` file outside the workspace chose, unless `strict` is looser than that
+holds over what the home file or a `--settings` file outside them chose, unless `strict` is looser than that
 choice or than the managed file's pin, which it is only of `read-only`. Such a `strict` is not obeyed and refuses
 nothing, and `doctor` names its file and the file that chose `read-only`. A value that is not exactly one of the four words chooses
 nothing and is reported with its file, except `standard`, the earlier name of `workspace-write`: it
@@ -2466,7 +2469,7 @@ run sets `sandbox.holdBackTemporaryDirectory` to `true`, as Codex's `workspace-w
 mode that confines, and under bypass, whose stages write every path the account can, it is a refusal of
 the directory: the scratch directory and a person's own `allowWrite` entries are rows of their own and stay. A program that makes a scratch file there is refused, which is a shell heredoc,
 `mktemp` and a compiler's intermediate files, and the `run` description says so. Only the person's own
-settings file and a `--settings` file outside the workspace are read for the key, as for `sandbox.mode`:
+settings file and a `--settings` file outside the workspace and the checkouts the session has been in are read for the key, as for `sandbox.mode`:
 a checkout's project or local file that sets it is not obeyed and is reported as an unread key. Any
 value but `true` asks for nothing. A `denyWrite` entry naming the temporary directory refuses it as well,
 and is the way to hold back one path of it. On Windows a session with a directory of its own grants no
@@ -2874,7 +2877,7 @@ keeps a name the program chose out of a sentence the planner reads.
 The list is named by `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` (`ask` or
 `refuse`). `deniedHosts` and `onUnlisted: refuse` only take reach away, so any layer may write them.
 `allowedHosts` and `onUnlisted: ask` give it back, so they are read from the person's own settings,
-the file `--settings` names outside the workspace and nothing a clone brings, as the allowances of
+the file `--settings` names outside the workspace and the checkouts the session has been in, and nothing a clone brings, as the allowances of
 `sandbox.filesystem` are; a project or local layer's is named by `doctor` and not read. A key that
 is not there is no list. A list that is set, even an empty one, is one, and a layer whose list was
 not read does not make one. A value that is not a list of strings, or an `onUnlisted` that is
@@ -3119,8 +3122,8 @@ nothing and is not added.
 
 `denyRead` and `denyWrite` are read from every layer, since they only take reach away. `allowRead`
 and `allowWrite` are read from the person's own file, the file `--settings` names from outside the
-workspace, the command line and the managed file, and never from a project layer, a local layer or a
-named file inside the workspace, so a cloned repository cannot widen its own sandbox. A layer that
+workspace and the checkouts the session has been in, the command line and the managed file, and never from a project layer, a local layer or a
+named file inside either, so a cloned repository cannot widen its own sandbox. A layer that
 tried names the file in `doctor`. The managed file may pin each list: a pinned `allowRead` or
 `allowWrite` is the whole list and the person's own entries are not read, and a pinned refusal is
 added to the person's and cannot be lifted by an entry at or beneath it.

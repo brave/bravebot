@@ -4540,9 +4540,14 @@ fn a_settings_file_named_on_the_command_line_is_read_above_the_ones_found() {
     let named = scratch.path.join("ci.json");
     std::fs::write(&named, r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
         .expect("write the named layer");
+    // Started in a checkout of its own: the scratch directory is under this repository's `target/`,
+    // so a run started in the crate's directory would have the named file inside its checkout.
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".git")).expect("create the checkout");
 
-    let output = bravebot(
+    let output = bravebot_started_in(
         &scratch.path,
+        &checkout,
         // A configuration with nothing wrong with it, so `doctor` reports the layers rather than
         // stopping at the configuration. Set rather than left out because CI builds with no
         // credentials baked in, where a run that read them off the build would find none.

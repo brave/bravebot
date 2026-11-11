@@ -194,6 +194,7 @@ pub(super) fn change_directory(
     // Against where the session is now, which is what changing directory means everywhere else: a
     // command that only took an absolute path would refuse `/cd crates/tui` and `/cd ..`, which are
     // the two ways anybody would think to say it.
+    let left = workspace.root().to_path_buf();
     let moved = match named_directory(
         workspace.root(),
         directory,
@@ -265,6 +266,9 @@ pub(super) fn change_directory(
         Some(_) => Whence::Unasked,
         None => Whence::Asked,
     };
+    // Before the rules are read for the new root: a `--settings` file in the directory just left, or
+    // in its checkout, stays the checkout's file wherever the session goes (PERM-14).
+    rules.sources.leave(&left);
     if rules.read_for(session, &moved.root, whence, id, ask) {
         Changed::Moved
     } else {

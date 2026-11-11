@@ -160,7 +160,7 @@ enum Entitled {
     /// The home layer, and the file the command line named.
     OwnOrNamed,
     /// The layers [`grants`] answers true for: the home layer, and a named file that resolves
-    /// outside the workspace and outside the directory the session began in.
+    /// outside every checkout the session has been in.
     Granting,
 }
 
@@ -1050,18 +1050,18 @@ impl Settings {
     /// rather than read from [`NAMED`] here, so the order and the merge rules are checked without a
     /// process-wide switch in force under every other test in this binary.
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
-        Self::layered_since(home, cwd, named, None)
+        Self::layered_since(home, cwd, named, &[])
     }
 
-    /// As [`Settings::layered`], for a session in `cwd` that began in `started`.
+    /// As [`Settings::layered`], for a session in `cwd` that has been in each of `left`.
     ///
-    /// A named file inside either is a checkout's file: moving out of the checkout it sits in does
-    /// not make it the person's.
+    /// A named file inside any of them, or inside the checkout holding one, is a checkout's file:
+    /// moving out of the checkout it sits in does not make it the person's.
     pub fn layered_since(
         home: Option<PathBuf>,
         cwd: Option<&Path>,
         named: Option<&Path>,
-        started: Option<&Path>,
+        left: &[PathBuf],
     ) -> Self {
         let home_layer = home.map(|home| user_settings_file(&home));
         // A found layer the command line also named is left out here and read at the end, since
@@ -1198,7 +1198,7 @@ impl Settings {
             let named_here = Some(&path) == named_path.as_ref();
             // Entitled the way an allow rule is for the keys marked [`Entitled::Granting`]: a named
             // file that resolves inside the workspace is a checkout's file.
-            let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            let granting = grants(&path, home_layer.as_deref(), named, cwd, left);
             // Removed here rather than read and dropped later, because the merge unions every name
             // a layer set and a removed key cannot reach [`Settings::from_map`] at all.
             for (key, entitled) in HOME_ONLY {
@@ -3175,9 +3175,10 @@ pub(crate) fn narrowing_stated(
 
 /// Whether a rule that *grants* may be read from this layer.
 ///
-/// True for the home layer, and for a file the command line named that sits outside the workspace
-/// and outside the one the session began in. False for `.bravebot/settings.json`, for
-/// `.bravebot/settings.local.json`, and for a named file that resolves inside either.
+/// True for the home layer, and for a file the command line named that sits outside the workspace,
+/// outside every directory the session has been in, and outside the checkout holding each of them.
+/// False for `.bravebot/settings.json`, for `.bravebot/settings.local.json`, and for a named file
+/// that resolves inside any of those.
 ///
 /// The home layer is the person's own, on the footing this module's own note on what these files
 /// are trusted for already states. A file the command line named is a path somebody typed at this
@@ -3185,7 +3186,9 @@ pub(crate) fn narrowing_stated(
 /// next. But it can name a file inside the checkout, which
 /// `a_command_line_file_that_is_already_a_layer_is_read_once` exists because people do, so a README
 /// saying `--settings ./tooling/bravebot.json` would be a route back in. A named file that resolves
-/// inside the workspace is therefore the checkout's file under another name.
+/// inside the workspace, or inside the checkout holding it, is therefore the checkout's file under
+/// another name. `left` is every other directory the session has been in, which `/cd` leaves
+/// behind without changing who wrote the file.
 ///
 /// The local layer is a checkout's file too. Nothing stops one being committed, and its being
 /// conventionally private is not a property this can rely on, which is the same reading `vetting`
@@ -3195,15 +3198,21 @@ fn grants(
     home_layer: Option<&Path>,
     named: Option<&Path>,
     cwd: Option<&Path>,
-    started: Option<&Path>,
+    left: &[PathBuf],
 ) -> bool {
     if Some(path) == home_layer {
         return true;
     }
-    Some(path) == named && !inside(cwd, path) && !inside(started, path)
+    Some(path) == named && !inside(cwd, path) && !left.iter().any(|left| inside(Some(left), path))
 }
 
-/// Whether `path` resolves to somewhere under `cwd`.
+/// Whether `path` resolves to somewhere under `cwd`, or under the checkout holding it.
+///
+/// The checkout is found as the sandbox finds the one a stage may not write
+/// ([`bravebot_sandbox::programs::with_checkout`]): the nearest ancestor with a `.git`. A session
+/// begun in a subdirectory reads no project layer, but the clone it sits in is the same tree, so a
+/// file `--settings ../tooling/bravebot.json` names from there is the checkout's file as much as one
+/// beside the working directory is.
 ///
 /// Both sides resolved, because the question is where the file *is* and not how it was spelled: a
 /// link, a `..`, or a relative name reaches the same file under a different string, and comparing
@@ -3213,7 +3222,9 @@ fn grants(
 fn inside(cwd: Option<&Path>, path: &Path) -> bool {
     let Some(cwd) = cwd else { return false };
     match (std::fs::canonicalize(cwd), std::fs::canonicalize(path)) {
-        (Ok(cwd), Ok(path)) => path.starts_with(cwd),
+        (Ok(cwd), Ok(path)) => bravebot_sandbox::programs::with_checkout(&cwd)
+            .iter()
+            .any(|held| path.starts_with(held)),
         _ => true,
     }
 }
@@ -5363,6 +5374,10 @@ mod tests {
             let project = root.join("cwd").join(PROJECT_DIR);
             std::fs::create_dir_all(&home).expect("scratch home");
             std::fs::create_dir_all(&project).expect("scratch project");
+            // The working directory is a checkout of its own. The scratch root is under the
+            // workspace's `target/`, so without this the checkout holding it would be the
+            // repository the tests run in, and every file written beside it would be inside.
+            std::fs::create_dir_all(root.join("cwd").join(".git")).expect("scratch checkout");
             Self {
                 home,
                 cwd: root.join("cwd"),
@@ -5407,6 +5422,29 @@ mod tests {
         fn named_inside_the_workspace(mut self, text: &str) -> Self {
             let path = self.cwd.join("tooling.json");
             std::fs::write(&path, text).expect("named layer inside the workspace");
+            self.named = Some(path);
+            self
+        }
+
+        /// A directory that is a checkout, under the scratch root and apart from the working
+        /// directory: `.git` is what makes it one.
+        fn checkout(&self, name: &str) -> PathBuf {
+            let checkout = self.home.parent().expect("the scratch root").join(name);
+            std::fs::create_dir_all(checkout.join(".git")).expect("scratch checkout");
+            checkout
+        }
+
+        /// A file the command line named that sits in a checkout the working directory is a
+        /// subdirectory of, without being inside the working directory: the layout a README gets
+        /// with `--settings ../tooling/bravebot.json` from `repo/sub`.
+        fn named_in_the_enclosing_checkout(mut self, text: &str) -> Self {
+            let repo = self.checkout("repo");
+            let sub = repo.join("sub");
+            std::fs::create_dir_all(&sub).expect("the subdirectory");
+            std::fs::create_dir_all(repo.join("tooling")).expect("the tooling directory");
+            let path = repo.join("tooling").join("bravebot.json");
+            std::fs::write(&path, text).expect("named layer in the enclosing checkout");
+            self.cwd = sub;
             self.named = Some(path);
             self
         }
@@ -7581,6 +7619,123 @@ mod tests {
         let ignored: Vec<_> = settings.allow_ignored().collect();
         assert_eq!(ignored.len(), 1);
         assert!(ignored[0].0.ends_with("tooling.json"));
+
+        // The same file one directory up, in the checkout the working directory is a
+        // subdirectory of, is that checkout's file as well.
+        let above = Layers::new("allow-named-above")
+            .named_in_the_enclosing_checkout(
+                r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+            )
+            .read();
+        assert!(
+            above.permissions().allow.is_empty(),
+            "a file in the checkout above the working directory answered an approval prompt"
+        );
+        let ignored: Vec<_> = above.allow_ignored().collect();
+        assert_eq!(ignored.len(), 1);
+        assert!(ignored[0].0.ends_with("bravebot.json"));
+    }
+
+    /// PERM-14: a session begun in a subdirectory of a checkout reads no project layer, but a file
+    /// `--settings ../tooling/bravebot.json` names from there is still the checkout's. The rule is
+    /// dropped and reported, and `grants` says so for the file beside the working directory and the
+    /// file above it alike.
+    #[test]
+    fn a_named_layer_in_the_checkout_above_the_working_directory_grants_nothing() {
+        let layers = Layers::new("grants-above").named_in_the_enclosing_checkout("{}");
+        let above = layers.named.clone().expect("the named file");
+        let sub = layers.cwd.clone();
+        assert!(
+            sub.ends_with("sub"),
+            "the working directory is the subdirectory"
+        );
+        assert!(
+            !grants(
+                &above,
+                None,
+                Some(&above),
+                Some(&sub),
+                std::slice::from_ref(&sub)
+            ),
+            "a file in the checkout above the working directory was read as the person's own"
+        );
+        let beside = sub.join("tooling.json");
+        std::fs::write(&beside, "{}").expect("a file beside the working directory");
+        assert!(!grants(
+            &beside,
+            None,
+            Some(&beside),
+            Some(&sub),
+            std::slice::from_ref(&sub)
+        ));
+    }
+
+    /// Over-refusal guard: only the checkouts the session has been in count. A named file in some
+    /// other repository is still the person's.
+    #[test]
+    fn a_named_layer_in_another_checkout_still_grants() {
+        let layers = Layers::new("grants-other-checkout");
+        let other = layers.checkout("other");
+        let elsewhere = other.join("tooling.json");
+        std::fs::write(&elsewhere, "{}").expect("a file in another checkout");
+        assert!(grants(
+            &elsewhere,
+            None,
+            Some(&elsewhere),
+            Some(&layers.cwd),
+            std::slice::from_ref(&layers.cwd)
+        ));
+    }
+
+    /// PERM-14, known cost: a `.git` at the home directory, or above it, makes every file under it
+    /// the checkout's, so a dotfiles repository refuses a `--settings` file beneath it that is not
+    /// the home layer. This lookup does not leave out a checkout that is or holds the home
+    /// directory, as the sandbox's does (SANDBOX-20, SANDBOX-30): a settings file fails closed.
+    /// Rejects an `inside` that does not take the checkout into account.
+    #[test]
+    fn a_named_layer_under_a_dotfiles_repository_at_or_above_home_grants_nothing() {
+        let rule = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+        for (name, repository_is_home) in [("at-home", true), ("above-home", false)] {
+            let layers = Layers::new(&format!("allow-named-dotfiles-{name}"));
+            let root = layers
+                .home
+                .parent()
+                .expect("the scratch root")
+                .to_path_buf();
+            let repository = if repository_is_home {
+                layers.home.clone()
+            } else {
+                root.clone()
+            };
+            std::fs::create_dir_all(repository.join(".git")).expect("the dotfiles repository");
+            // A session below the home directory, in a directory that is not a checkout itself.
+            let cwd = layers.home.join("work");
+            std::fs::create_dir_all(&cwd).expect("the working directory");
+            let named = repository.join("tooling.json");
+            std::fs::write(&named, rule).expect("a named layer in the dotfiles repository");
+
+            assert!(
+                !grants(&named, None, Some(&named), Some(&cwd), &[]),
+                "{name}: a file in the dotfiles repository was read as the person's own"
+            );
+            let settings = Settings::layered(Some(layers.home.clone()), Some(&cwd), Some(&named));
+            assert!(
+                settings.permissions().allow.is_empty(),
+                "{name}: a file in the dotfiles repository answered an approval prompt"
+            );
+            assert_eq!(settings.allow_ignored().count(), 1, "{name}");
+        }
+    }
+
+    /// A key other than `allow` that only the person's own file may set is refused from the file
+    /// above the working directory too, since every such key is read through `grants`.
+    #[test]
+    fn a_named_layer_in_the_checkout_above_cannot_open_the_network() {
+        let settings = Layers::new("network-named-above")
+            .named_in_the_enclosing_checkout(NETWORK_OPEN)
+            .read();
+        assert_eq!(settings.run_network(), None);
+        assert_eq!(settings.run_network_ignored().count(), 1);
     }
 
     /// Outside the workspace the session moved to, and still the checkout's file it started in.
@@ -7589,19 +7744,44 @@ mod tests {
         let layers = Layers::new("allow-named-left-behind").named_inside_the_workspace(
             r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
         );
-        let elsewhere = layers.home.with_file_name("elsewhere");
-        std::fs::create_dir_all(&elsewhere).expect("the directory moved to");
+        let elsewhere = layers.checkout("elsewhere");
         let settings = Settings::layered_since(
             Some(layers.home.clone()),
             Some(&elsewhere),
             layers.named.as_deref(),
-            Some(&layers.cwd),
+            std::slice::from_ref(&layers.cwd),
         );
         assert!(
             settings.permissions().allow.is_empty(),
             "a file in the checkout left behind answered an approval prompt"
         );
         assert_eq!(settings.allow_ignored().count(), 1);
+
+        // And the checkout above a directory left behind is left behind with it.
+        let above = Layers::new("allow-named-above-left-behind").named_in_the_enclosing_checkout(
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+        );
+        let elsewhere = above.checkout("elsewhere");
+        let settings = Settings::layered_since(
+            Some(above.home.clone()),
+            Some(&elsewhere),
+            above.named.as_deref(),
+            std::slice::from_ref(&above.cwd),
+        );
+        assert!(
+            settings.permissions().allow.is_empty(),
+            "a file in the checkout above a directory left behind answered an approval prompt"
+        );
+        assert_eq!(settings.allow_ignored().count(), 1);
+
+        // Every directory left counts, not only the first.
+        let settings = Settings::layered_since(
+            Some(above.home.clone()),
+            Some(&elsewhere),
+            above.named.as_deref(),
+            &[elsewhere.clone(), above.cwd.clone()],
+        );
+        assert!(settings.permissions().allow.is_empty());
     }
 
     /// A blank entry is nobody's grant, so which layer wrote it decides nothing. It goes through

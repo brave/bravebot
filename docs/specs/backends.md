@@ -1325,11 +1325,11 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
+| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
-| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside the checkout; a project or local layer, and a `--settings` file inside the checkout, naming one is ignored and reported the same way |
+| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside every checkout the session has been in; a project or local layer, and a `--settings` file inside one, naming one is ignored and reported the same way |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1693,7 +1693,8 @@ file `--settings` names, and removed from the project and local layers before th
 that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
 never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
 it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
-named file that resolves inside the workspace is a checkout's file under another name.
+named file that resolves inside the workspace, or inside a checkout the session has been in, is a
+checkout's file under another name ([PERM-14](permissions.md#PERM-14)).
 
 **A stated value is handed over as text to copy rather than as a sentence addressed to the
 planner.** The string is the person's own, so this is presentation rather than a defence: it is
@@ -2052,7 +2053,8 @@ The last six rows are the network names. Three more rows are the Google names, a
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
 `ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
-alone, the user's settings file and a file the command line named that is not inside the checkout.
+alone, the user's settings file and a file the command line named that is not inside the workspace or
+a checkout the session has been in ([PERM-14](permissions.md#PERM-14) says which).
 The project and local files arrive with a clone, and a proxy or an authority they chose would decide
 where conversation content is sent and who may read it, a Google key or project, or an AWS account,
 region, profile or tier model, they chose would decide which account receives it, and an endpoint

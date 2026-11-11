@@ -211,12 +211,13 @@ pub(super) fn rules_from(
 ///
 /// The state directory holds the person's own settings layer and the record of what they granted,
 /// and `named` is the file `--settings` named. Neither moves with the session, so rules read again
-/// after `/cd` differ from the ones before it by the checkout's layers alone. `started` is the root
-/// the session opened in, which keeps a named file inside it the checkout's wherever the session goes.
+/// after `/cd` differ from the ones before it by the checkout's layers alone. `left` is every root
+/// the session has been in, starting with the one it opened in, which keeps a named file inside any
+/// of them, or inside the checkout holding one, the checkout's wherever the session goes.
 pub(super) struct RuleSources {
     pub(super) state: Option<std::path::PathBuf>,
     pub(super) named: Option<std::path::PathBuf>,
-    pub(super) started: std::path::PathBuf,
+    pub(super) left: Vec<std::path::PathBuf>,
     /// The administrator's file, whose `deny` and `ask` rules join every layer's own (PERM-19).
     pub(super) managed: bravebot_config::Managed,
 }
@@ -227,7 +228,7 @@ impl RuleSources {
         Self {
             state: bravebot_agent::home::directory(),
             named: bravebot_config::named_settings_file().map(std::path::Path::to_path_buf),
-            started: started.to_path_buf(),
+            left: vec![started.to_path_buf()],
             managed: bravebot_config::Managed::load(),
         }
     }
@@ -240,9 +241,17 @@ impl RuleSources {
             self.state.clone(),
             Some(root),
             self.named.as_deref(),
-            Some(&self.started),
+            &self.left,
         )
         .under(&self.managed)
+    }
+
+    /// Remember that the session has been in `root`, so a named file inside it stays the checkout's
+    /// after the session moves elsewhere.
+    pub(super) fn leave(&mut self, root: &std::path::Path) {
+        if !self.left.iter().any(|left| left == root) {
+            self.left.push(root.to_path_buf());
+        }
     }
 
     /// The record of what was granted in `root`.
