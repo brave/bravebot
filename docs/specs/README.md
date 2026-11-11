@@ -168,12 +168,15 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   symbol has to be defined where its qualifier owns it, in an `impl` naming the type or, for
   `home::write_file`, at the margin of the module of that name: a method another type happens to
   spell the same way is not this one, and a guard whose qualifier defines nothing counts no uses
-  at all rather than that type's. The count reads two spellings of a method, `.method(` on a
-  receiver and `Type::method`. An entry that says `every-spelling: yes` also fails `make check-spec`
-  on any other spelling of its method (`Type::<T>::method(`, `<Type<T>>::method(`, an alias after
-  `use Type as L`) and on a use inside a `macro_rules!` body, which would count once however often
-  the macro is invoked. Only `Labelled::declassify` says so, since the bare name of most guards is a
-  free function elsewhere. The count is of releases of the symbol, not of the decisions a caller
+  at all rather than that type's. The count reads `.method(` on a
+  receiver, `Type::method`, and `Type::<T>::method` and `<Type<T>>::method`, which carry the type's
+  generics and are the same call. A name for the guarded type (`use Type as L`, `type L = Type`) fails
+  `make check-spec` for every pinned guard whose qualifier is that type, since `L::method` is a call
+  no count reads and the qualifier is not written for other reasons. An entry that says
+  `every-spelling: yes` also fails `make check-spec` on any other spelling of its method: a use
+  inside a `macro_rules!` body, which would count once however often the macro is invoked, and the
+  method named in any form the count does not read. Only `Labelled::declassify` says so, since the
+  bare name of most guards is a free function elsewhere. The count is of releases of the symbol, not of the decisions a caller
   then takes from what was released. A count rather than a line number, so moving a call inside a
   file changes nothing, while adding or removing one is an edit to this spec that a reviewer
   sees. `make check-spec` prints the number it found, which is the number to record.

@@ -820,7 +820,141 @@ CASES = [
     (
         "a guarded method called through a generic path",
         open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    <Gate>::open(g);\n}"),
-        "guard-spelling-unseen",
+        "guard-site-count",
+    ),
+    (
+        "a guarded method called through the qualifier's turbofish",
+        open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    Gate::<u8>::open(g);\n}"),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through the qualifier's turbofish",
+        open_the_gate_by_another_spelling('fn build() -> Gate {\n    Gate::<u8>::new("a gate")\n}'),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through a qualified generic path",
+        open_the_gate_by_another_spelling('fn build() -> Gate {\n    <Gate<u8>>::new("a gate")\n}'),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through a qualified path wrapped over lines",
+        open_the_gate_by_another_spelling(
+            'fn build() -> Gate {\n    <Gate<u8>>::\n        new("a gate")\n}'
+        ),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through a qualifier with nested generics",
+        open_the_gate_by_another_spelling(
+            'fn build() -> Gate {\n    Gate::<Vec<Option<u8>>>::new("a gate")\n}'
+        ),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through an alias",
+        open_the_gate_by_another_spelling(
+            'use Gate as G;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded constructor called through a type alias",
+        open_the_gate_by_another_spelling(
+            'type G = Gate;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded constructor called through a type alias with parameters",
+        open_the_gate_by_another_spelling(
+            'type G<T> = Gate;\n\nfn build() -> Gate {\n    G::<u8>::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "an associated type naming the guarded type in a trait impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Iterator for Reach {\n    type Item = Gate;\n\n"
+            "    fn next(&mut self) -> Option<Gate> {\n        None\n    }\n}"
+        ),
+        None,
+    ),
+    (
+        "a type alias of the guarded type inside a function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    fn build(&self) -> Gate {\n        type G = Gate;\n"
+            '        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type after an impl that holds an associated type",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Iterator for Reach {\n    type Item = Gate;\n\n"
+            "    fn next(&mut self) -> Option<Gate> {\n        None\n    }\n}\n\n"
+            'type G = Gate;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type inside an async function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    pub async fn build(&self) -> Gate {\n        type G = Gate;\n"
+            '        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type inside a const unsafe extern function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    pub const unsafe extern \"C\" fn build() -> Gate {\n"
+            '        type G = Gate;\n        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a trait-qualified path naming the guarded type",
+        open_the_gate_by_another_spelling(
+            "fn build() -> Gate {\n    <Gate as From<u8>>::from(1)\n}"
+        ),
+        None,
+    ),
+    (
+        "a guarded constructor called through an alias inside a use group",
+        open_the_gate_by_another_spelling(
+            'use crate::{Gate as G, Other};\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded method called through a qualified generic path wrapped over lines",
+        open_the_gate_by_another_spelling(
+            "fn reach(g: &Gate) {\n    <Gate<u8>>::\n        open(g);\n}"
+        ),
+        {"guard-site-count"},
+    ),
+    (
+        "another type's constructor through its own turbofish",
+        open_the_gate_by_another_spelling(
+            "fn build() -> Vec<Gate> {\n    Vec::<Gate>::new()\n}\n\n"
+            "fn wrap() -> Option<Gate> {\n    Option::<Gate>::None\n}"
+        ),
+        None,
+    ),
+    (
+        "a type that holds the guarded type, aliased",
+        open_the_gate_by_another_spelling("type Gates = Vec<Gate>;"),
+        None,
+    ),
+    (
+        "another type's constructor with generics, in a file that names the guarded type",
+        open_the_gate_by_another_spelling(
+            "struct Latch<T>(T);\n\nimpl<T> Latch<T> {\n    fn new(inner: T) -> Self {\n        Latch(inner)\n    }\n}\n\n"
+            "fn latch() -> Latch<Gate> {\n    Latch::<Gate>::new(Gate)\n}\n\n"
+            "fn qualified() -> Latch<Gate> {\n    <Latch<Gate>>::new(Gate)\n}"
+        ),
+        None,
     ),
     (
         "a guarded method called through an alias",

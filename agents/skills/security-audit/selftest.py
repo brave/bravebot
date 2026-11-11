@@ -2026,6 +2026,24 @@ def test_construction_pinned():
         ) == 1,
     )
 
+    spelled = {
+        Path("crates/agent/src/tools.rs"): [
+            "fn a(t: String) -> Labelled<String> { Labelled::<String>::trusted(t) }",
+            "fn b(t: String) -> Labelled<String> { <Labelled<String>>::trusted(t) }",
+            "fn c(t: String) -> Labelled<String> { Labelled::trusted(t) }",
+            "fn d(t: String) -> Vec<Labelled<String>> { Vec::<Labelled<String>>::new() }",
+        ]
+    }
+    check(
+        "a constructor written with its qualifier's generics is a construction site",
+        sum(site["count"] for site in audit.sites_for("Labelled::trusted", spelled)) == 3,
+        str([site["text"] for site in audit.sites_for("Labelled::trusted", spelled)]),
+    )
+    check(
+        "another type's constructor with generics is not a construction of Labelled",
+        sum(site["count"] for site in audit.sites_for("Labelled::new", spelled)) == 0,
+    )
+
 
 def test_the_gate_that_reads_a_number_is_counted():
     """The gate hands an answer's text to a function the caller names and takes a byte back.
