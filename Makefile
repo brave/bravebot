@@ -107,6 +107,7 @@ help:
 	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
+	@echo "  make app-release-signed                     Sign, notarise and staple the Mac bundles and images (SIGN_IDENTITY, APPLE_ID, APPLE_ID_PASSWORD, APPLE_TEAM_ID in the environment)"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
 	@echo "  make cli-packages-linux                     The CLI's .deb and .rpm for both Linux architectures, unsigned"
@@ -861,7 +862,7 @@ all-platforms: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 w
 # rather than through `pnpm run build`, which would build the debug pair again on the way past.
 #
 # Nothing here signs or notarises the result, so the bundle is installable and not distributable;
-# the job that signs the binaries is where that belongs, and issue #394 is where it is decided.
+# `make app-release-signed` signs the release bundles, which are a different build.
 # It is fused, as a release is, so it runs no Node program it is handed and Playwright cannot
 # drive it: `pnpm run package` in ui/ is the bundle the drivers attach to.
 .PHONY: app-bundle
@@ -935,6 +936,64 @@ app-dmg:
 			dist/bravebot-app-darwin-$$arch.dmg; \
 		echo "wrote dist/bravebot-app-darwin-$$arch.dmg"; \
 	done
+
+# Signing and notarising the Mac application. The release job is to run these on the Mac node
+# after `app-bundles`, in the order `app-release-signed` gives, and does not run them yet. The
+# Developer ID identity and the notary credentials come from the job's environment, as
+# SIGN_IDENTITY and as APPLE_ID, APPLE_ID_PASSWORD (an app-specific password) and APPLE_TEAM_ID.
+# The script reads them from there and not from make arguments, which keeps them off the `make`
+# command line. `@electron/notarize` still passes the password to `notarytool` as an argument.
+# Nothing here holds any of them.
+#
+# `app-sign`, `app-notarize` and `app-dmg-notarize` run ui/scripts/sign-mac.mjs, which calls
+# @electron/osx-sign and @electron/notarize and stops before it runs a tool when the identity or the
+# credentials it needs are unset or a bundle or image it works on is missing. Every path is from the
+# repository root, for the script and for the `spctl` that follows it, and the script finds its
+# libraries from its own location. It runs here and not inside the packager because packaging sets
+# the fuses after the packager returns, and that rewrites the Electron binary a signature covers.
+#
+# The libraries sign every binary from the inside out with the hardened runtime and a secure
+# timestamp, none with `--deep`, and the app last. The app, its main executable and the helper apps
+# carry the entitlements checked in under ui/build/, and the two Rust executables, frameworks and
+# dylibs carry none. They submit, require the status Accepted, which `notarytool` does not make its
+# exit status, and staple. These targets then have Gatekeeper assess each result: an app as an
+# executable and an image as an installer image.
+SIGN_MAC = node ui/scripts/sign-mac.mjs
+
+# Has Gatekeeper assess "$$path" with the `spctl` options $(1), and fails unless it is accepted as a
+# notarised Developer ID item. `spctl` also exits 0 for an Apple or App Store signature, so the
+# `source=` line it prints decides.
+assess-notarised = verdict=$$(spctl $(1) -vv "$$path" 2>&1) || { printf '%s\n' "$$verdict" >&2; exit 1; }; \
+	printf '%s\n' "$$verdict"; \
+	case "$$verdict" in *"source=Notarized Developer ID"*) ;; \
+	*) echo "$$path is not accepted as a notarised Developer ID item" >&2; exit 1;; esac
+
+.PHONY: app-release-signed
+app-release-signed:
+	$(MAKE) app-sign
+	$(MAKE) app-notarize
+	$(MAKE) app-dmg
+	$(MAKE) app-dmg-notarize
+
+.PHONY: app-sign
+app-sign:
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "ui/dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	$(SIGN_MAC) sign "$$@"
+
+.PHONY: app-notarize
+app-notarize:
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "ui/dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	$(SIGN_MAC) notarize "$$@"; \
+	for path in "$$@"; do $(call assess-notarised,-a -t exec); done
+
+.PHONY: app-dmg-notarize
+app-dmg-notarize:
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "dist/bravebot-app-darwin-$${pair%%:*}.dmg"; done; \
+	$(SIGN_MAC) image "$$@"; \
+	for path in "$$@"; do $(call assess-notarised,-a -t open --context context:primary-signature); done
 
 # The desktop application's Linux release assets, built on a Linux host from what the cross-build
 # left in dist/, for both architectures whichever one this host is:
