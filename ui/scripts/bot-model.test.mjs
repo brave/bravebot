@@ -324,6 +324,22 @@ test('a rise in what the requests leave out owes a briefing, as a rise in the ar
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
+test('a bot written before the count, after a compaction, reads as leaving out what was archived', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-left-out-old-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)((id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id), module, module.exports)
+  const storage = module.exports
+  try {
+    const { outOfRequest: _, ...old } = { ...definition, archived: 3 }
+    const parsed = parseBots({ bots: [old] }).bots[0]
+    assert.equal(parsed.outOfRequest, 3)
+    storage.saveBot({ ...parsed, session: '11111111-1111-4111-8111-111111111111' })
+    assert.equal(storage.noteBotArchived(definition.slug, 3, 3), null, 'the first turn after the upgrade is not a cut')
+    assert.equal(parseBots({ bots: [{ ...definition, archived: 3, outOfRequest: -1 }] }).bots[0].outOfRequest, 3)
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
 test('a consolidation after the retrieval cut says the earlier part is no longer sent, and one after a compaction says it was summarised', () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-cut-reason-'))
   const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text

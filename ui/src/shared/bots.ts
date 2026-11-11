@@ -278,6 +278,10 @@ function isText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && !value.includes('\0')
 }
 
+function count(value: unknown, otherwise: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : otherwise
+}
+
 /**
  * A bot list, always.
  *
@@ -352,10 +356,9 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       lastHome: parseHomeTurn(lastHome),
       // Clamped rather than refused. It is a watermark, and a nonsense one costs one needless
       // re-grounding, where dropping the bot over it costs the bot.
-      archived:
-        typeof archived === 'number' && Number.isInteger(archived) && archived >= 0 ? archived : 0,
-      outOfRequest:
-        typeof outOfRequest === 'number' && Number.isInteger(outOfRequest) && outOfRequest >= 0 ? outOfRequest : 0,
+      archived: count(archived, 0),
+      // A bot written before the count left out what compaction had archived, and nothing more.
+      outOfRequest: count(outOfRequest, count(archived, 0)),
       // Both clamped rather than refused, for the reason above them: these decide when a bot is
       // reminded to write, and a nonsense figure costs one needless briefing where dropping the
       // row over it costs the bot. Absent is the ordinary case — every bot written before this
