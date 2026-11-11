@@ -642,7 +642,8 @@ text the processor writes, or the new text an earlier row of the step gave. The 
 are routing, locked as every routing field is ([MANIFEST-6](#MANIFEST-6)). Every list is the slot of
 an earlier read. A kind other than literal is allowed only where the person's declaration of the
 server names that tool and argument with it ([mcp-servers.md](mcp-servers.md#SERVERS-26)), and a
-plan that gives one the declaration does not name is refused before it is put to anybody.
+plan that gives one the declaration does not name is refused before it is put to anybody. So is a
+step that gives no argument such a kind, since its calls would take nothing from the list.
 
 An isolated processor reads the lists, each numbered from 1, and answers with rows: a tool by its
 number, each entry by its list and number, new text by its number, an earlier row by its number. A
@@ -673,6 +674,7 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_step_makes_the_calls_the_person_approved_as_one_list`
 `verified-by: bravebot_agent::manifest_server_calls::unticking_a_call_unticks_what_depends_on_it_and_declining_makes_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::an_apply_of_literals_alone_is_refused_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_into_a_list_a_model_wrote_is_refused_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_call_could_depend_on_two_rows_is_refused`
 `verified-by: bravebot_agent::manifest_server_calls::a_move_may_land_in_a_folder_the_step_made_or_one_the_list_holds`

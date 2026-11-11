@@ -489,13 +489,21 @@ impl Servers {
                 "step {number}: no server's tools are offered to this run"
             ));
         };
-        if offer.asks_every_call(alias) {
+        let shape = shape_of(step)?;
+        // A step whose every argument is the plan's literal fills nothing from the list, and only
+        // a declaration lets an argument take anything else. No server asked about every call
+        // holds one (SERVERS-26), so this also keeps such a server's calls each put on its own.
+        let only_literals = shape.tools.iter().all(|tool| {
+            tool.arguments
+                .iter()
+                .all(|(_, kind)| matches!(kind, bravebot_core::apply::Kind::Literal(_)))
+        });
+        if only_literals {
             return Err(format!(
-                "step {number}: every call to {alias} is put to the person on its own, so an \
-                 APPLY step cannot call it"
+                "step {number}: an APPLY step gives at least one argument a kind other than \
+                 literal, which the declaration of {alias} lets a row fill"
             ));
         }
-        let shape = shape_of(step)?;
         // A list is what a fetch returned, never what a model wrote, so every entry a row names is
         // something the run read.
         for list in &shape.lists {

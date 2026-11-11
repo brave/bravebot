@@ -2339,6 +2339,39 @@ fn an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked() 
     assert!(ran.called.is_empty());
 }
 
+/// An apply step gives at least one argument a kind other than literal, which only a declaration
+/// allows and no server asked about every call holds, so a step of literals alone is refused before
+/// the plan is put to anybody and no list covers calls that would each be put on their own.
+///
+/// Rejects an implementation that lets one list answer a step's calls without any value from the
+/// list, which on a server declared to ask every call would answer its calls together.
+#[test]
+fn an_apply_of_literals_alone_is_refused_before_anybody_is_asked() {
+    let scratch = Scratch::new("apply-literals");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["arguments"] = json!({
+        "make_folder": {"title": {"literal": "Work"}, "parent": {"literal": "Organised"}},
+        "move_mark": {"url": {"literal": "https://brave.com/"}, "folder": {"literal": "Work"}},
+    });
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps.clone()), plan(steps)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(
+        failure.contains("at least one argument a kind other than literal"),
+        "{failure}"
+    );
+    assert!(ran.asked.plans.is_empty());
+    assert!(ran.called.is_empty());
+}
+
 /// A list an apply step points into is what a read returned. A plan that points it at what a
 /// model wrote, so that a model could write the URLs a row then "copies", is refused before it is
 /// put to anybody.
