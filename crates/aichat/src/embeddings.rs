@@ -368,6 +368,13 @@ pub fn list_models(
     let response = Egress::with_timeouts(PASSAGE_TIMEOUTS)
         .fetch(&mut policy, request, Label::untrusted_public())
         .map_err(EmbedError::Egress)?;
+    if response.truncated {
+        return Err(EmbedError::Egress(EgressError::Transport {
+            url,
+            detail: "the reply was larger than a reply is read to".to_string(),
+            transient: false,
+        }));
+    }
     let label = response.body.label();
     let (bytes, _) = policy
         .decode_transport("embeddings models", label)
@@ -1730,6 +1737,22 @@ mod tests {
         assert!(matches!(
             list_models(&url, None),
             Err(EmbedError::Reply { .. })
+        ));
+    }
+
+    #[test]
+    fn a_listing_cut_off_at_the_reply_limit_is_no_listing() {
+        let (url, _) = serve(Box::new(|_, _| {
+            let padding = "x".repeat(bravebot_net::MAX_RESPONSE_BYTES);
+            (
+                200,
+                format!(r#"{{"data": [{{"id": "a/e", "name": "{padding}"}}]}}"#),
+            )
+        }));
+
+        assert!(matches!(
+            list_models(&url, None),
+            Err(EmbedError::Egress(EgressError::Transport { .. }))
         ));
     }
 
