@@ -53,8 +53,22 @@ fn touch(file: impl std::fmt::Display) -> String {
     }
 }
 
+/// Where the directories of this suite are made, relative to this crate.
+///
+/// It holds nothing but this suite's directories. A stage that is given what a request would be
+/// granted (SANDBOX-28) holds a write row and a socket row for every entry of `/`, of each
+/// directory above the home and of the home, and Seatbelt takes longer than linearly to compile
+/// those rows: a profile of about 2000 rows takes seconds, and one run starts a stage for every
+/// line. `target/test-scratch` is shared by every test binary and keeps what each of them made, so
+/// a home beneath it takes a row for each of those entries, which took a run of this suite from
+/// seconds to minutes on a checkout that had run many tests.
+const SCRATCH: &str = "../../target/confine-scratch";
+
+/// The directory the other test binaries keep their scratch directories in.
+const SHARED_SCRATCH: &str = "../../target/test-scratch";
+
 /// A session directory, a second one beside it that the session was not opened on, and a home
-/// directory holding a credential of each kind, all under the build directory.
+/// directory holding a credential of each kind, all under [`SCRATCH`].
 struct Places {
     session: PathBuf,
     beside: PathBuf,
@@ -111,7 +125,7 @@ impl Places {
         #[cfg(windows)]
         hold_path_to_what_every_container_reads();
         let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
+            .join(SCRATCH)
             .join(format!("confine-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let session = top.join("session");
@@ -1159,6 +1173,45 @@ fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
             "{name}: bravebot started a program a stage wrote: {found:?}"
         );
     }
+}
+
+/// SANDBOX-28 under bypass: the rows a stage is given for the directories above the home do not
+/// include an entry of the directory every test binary keeps its scratch in. The regression it
+/// rejects is a home made under `target/test-scratch`, where each entry another test left becomes
+/// a write row and a socket row, and a stage takes minutes to start once a few thousand are
+/// there. The decoys stand for those entries, so the check does not depend on what has run before.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_holds_no_row_for_what_other_tests_keep_in_the_shared_scratch_directory() {
+    let shared = Path::new(env!("CARGO_MANIFEST_DIR")).join(SHARED_SCRATCH);
+    let decoys: Vec<PathBuf> = (0..40)
+        .map(|number| shared.join(format!("confine-decoy-{}-{number}", std::process::id())))
+        .collect();
+    for decoy in &decoys {
+        std::fs::create_dir_all(decoy).expect("a decoy directory");
+    }
+    let places = Places::new("scratch-rows");
+    let rows = bravebot_sandbox::rules::writable_without_a_request(&places.home, None);
+    for decoy in &decoys {
+        let _ = std::fs::remove_dir_all(decoy);
+    }
+
+    let shared = resolved(&shared);
+    let inside: Vec<&PathBuf> = rows.iter().filter(|row| row.starts_with(&shared)).collect();
+    assert!(
+        inside.len() <= 1,
+        "{} rows lie in {}, the first {:?}",
+        inside.len(),
+        shared.display(),
+        inside.iter().take(3).collect::<Vec<_>>()
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with(&places.beside)
+            || row.starts_with(&places.session)
+            || places.home.starts_with(row)),
+        "no row reaches the directories of the suite itself, {} rows",
+        rows.len()
+    );
 }
 
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
