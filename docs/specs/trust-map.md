@@ -314,7 +314,9 @@ A pair is two files when a write through the second name leaves the first as it 
 needs a file identity to say so. A Windows host leaves out the names of `AWKWARD_NAMES` it cannot
 hold as written (`*`, `\`, a control character) or that the workspace refuses before a key is made
 (a stream, a trailing space or dot). CI's `Awkward names on Windows` job runs the pair tests
-over the workspace and the mention read-back test on a Windows runner (#2869); `make check-windows`
+over the workspace and the mention read-back test on a Windows runner (#2869), and a test that asks
+the volume which characters it opens as an ASCII letter, for the program word of a deny rule
+([PERM-5](permissions.md#PERM-5)); `make check-windows`
 is what compiles that arm locally, since no local target runs it.
 
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion

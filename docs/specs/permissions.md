@@ -363,15 +363,23 @@ A `deny` or `ask` rule compares the program word without regard to case and as a
 reads it: without the dots and spaces it drops from the end of a name, without a `::$DATA` stream
 suffix, and with one `.exe`, `.com`, `.cmd` or `.bat` taken off, so `Bash(touch *)` covers
 `TOUCH x`, `Touch x`, `touch.exe x`, `TOUCH.EXE x`, `touch.exe. x`, `touch.exe::$DATA x`,
-`touch.cmd x` and `touch.bat x`. Only one extension is taken off, so `touch.exe.exe` and
+`touch.cmd x` and `touch.bat x`. Two letters are the same letter when lowercasing takes them to the
+same letter or when the simple case mapping does, which is upper case and then lower case with each
+letter becoming one letter, the way NTFS compares names. `Bash(git push *)` therefore covers
+`g\u{131}t push`, `Bash(ssh *)` covers `\u{17f}sh host` and `Bash(kubectl *)` covers
+`\u{212a}ubectl get`. The simple mapping is used rather than the full one because it is NTFS's, and
+it takes `\u{130}` to itself, so `g\u{130}t` is not `git`. The suffixes are taken off by an ASCII
+comparison, which is complete because no letter outside ASCII folds to `e`, `x`, `c`, `o`, `m`, `b`,
+`a`, `t` or `d`. Only one extension is taken off, so `touch.exe.exe` and
 `touch.exe.bak` are other files than `touch`. A rule written `touch.exe` does not cover `touch x`:
 the rule is matched as written against the line, and the line is read both as written and with the
 suffixes off. Every other word is compared as written, so an argument keeps its case. The reading
 is the same on every host, because the rule has to hold for a line whichever machine runs it, and
 a host that folds case, drops a trailing dot or starts a program by a name without its suffix runs
-the respelling as the program the rule names. A program given by a path (`/usr/bin/touch x`) is
-not read this way and is not covered by `Bash(touch *)`. An `allow` rule is matched as written and
-grants none of the respellings.
+the respelling as the program the rule names. A letter that a volume does not open as the rule's
+letter but that the fold joins is covered anyway, which is the direction [PERM-4](#PERM-4) allows.
+A program given by a path (`/usr/bin/touch x`) is not read this way and is not covered by
+`Bash(touch *)`. An `allow` rule is matched as written and grants none of the respellings.
 
 An 8.3 short name (`POWERS~1`, `POWERS~1.EXE`) names a file that cannot be read off the word, and
 the matcher asks the file system nothing. While a `deny` or `ask` command rule is in force, a stage
@@ -402,6 +410,11 @@ evaluated on would make the same settings file refuse a line on one machine and 
 `verified-by: bravebot_core::permissions::a_short_name_program_is_reported_only_where_a_command_rule_restricts`
 `verified-by: bravebot_core::policy::a_short_name_program_is_refused_at_both_gates_only_under_a_restricting_rule`
 `verified-by: bravebot_core::policy::a_short_name_refusal_names_the_short_name_and_not_the_wrapper_over_it`
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_a_program_spelled_with_a_letter_a_volume_folds_to_an_ascii_one`
+`verified-by: bravebot_core::permissions::a_restricting_rule_keeps_apart_what_a_volume_holds_apart`
+`verified-by: bravebot_core::permissions::no_letter_outside_ascii_folds_to_a_letter_of_the_suffixes`
+`verified-by: bravebot_agent::program_word_fold::a_deny_rule_covers_every_spelling_the_volume_opens_as_the_program`
+`verified-by: bravebot_agent::program_word_fold::a_deny_rule_covers_exactly_the_pinned_spellings_and_the_extra_ones_are_listed`
 `verified-by: bravebot_core::policy::a_denied_program_respelled_is_refused_at_both_gates`
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_core::permissions::a_trailing_colon_star_is_a_trailing_wildcard_and_a_colon_elsewhere_is_not`
@@ -1209,9 +1222,10 @@ its name (`A-B=1`, `1A=x` and `=1` included, and `-X=1` after the `--` or after 
 assignment), then the program. `env` is read as having its options anywhere before the program, so
 an option after an assignment is skipped too, which can only make a deny or ask rule match more. A
 wrapper is named without regard to case and read as the program word is ([PERM-5](#PERM-5)): without
-trailing dots and spaces, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat`, on every
-host, so `TIMEOUT 30 git push`, `env.exe git push` and `timeout.exe. 30 git push` are read as
-`timeout` and `env` are. A wrapper written as an 8.3 short name is refused with the program word
+trailing dots and spaces, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat`, by the same
+comparison of letters, on every host, so `TIMEOUT 30 git push`, `env.exe git push`,
+`timeout.exe. 30 git push` and `t\u{131}meout 30 git push` are read as `timeout` and `env` are. A
+wrapper written as an 8.3 short name is refused with the program word
 under [PERM-5](#PERM-5). A wrapper with an option the table does not list, a
 `command -v`, a wrapper with nothing after it to run, a wrapper named by a path, and a program that
 only runs another one by another way (`xargs`, `npx`, `devbox run`, `docker exec`) are left whole,
@@ -1238,6 +1252,7 @@ against them whole. A wrapper added to the table is a decision about both questi
 
 `verified-by: bravebot_core::permissions::the_wrapper_table_answers_each_question_for_exactly_the_programs_it_lists`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_a_program_spelled_with_a_letter_a_volume_folds_to_an_ascii_one`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_however_it_is_cased_or_suffixed`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_the_names_windows_ignores`
 `verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
@@ -1346,9 +1361,15 @@ against them whole. A wrapper added to the table is a decision about both questi
   stage may start as `touch.exe`. The fold covers the spellings the
   code says Windows ignores, and a spelling it ignores that this list omits is not covered. The
   `.cmd` and `.bat` forms matter only to a host that runs the stage unconfined or reaches the file
-  by another route, since the AppContainer backend refuses a batch file. The fold is Unicode
-  lowercase, and NTFS folds names by its own table, so a character the two fold differently
-  (`\u{17f}`, `\u{131}`) can name the program in one and not in the other; that is unchecked as well.
+  by another route, since the AppContainer backend refuses a batch file. Letters are joined by the
+  simple mapping, which is NTFS's, so `\u{17f}`, `\u{131}` and the Kelvin sign name the program they
+  fold to. Lowercasing already joins the Kelvin sign with `k`; `\u{131}` and `\u{17f}` are the two it
+  leaves apart. Which characters a Windows volume opens as an ASCII letter is asked of the volume
+  by a test that CI runs on Windows; its result there is not recorded in this entry. A character
+  the fold joins and the volume does not open as the program is covered anyway, which is the safe
+  direction: the cost is a refusal or a question for a line the volume would have started as
+  another program, and no line is let through. That direction is not measured on any volume,
+  because nothing depends on the answer.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers

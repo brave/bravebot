@@ -349,7 +349,8 @@ do. Each program the wrappers leave is read with the arguments it is given, so t
 wrapper do not decide whether a tool is spent. The wrapper table is the one that rule matches
 through, read case-insensitively and as the permission rules read a program word
 ([PERM-5](permissions.md#PERM-5)): without trailing dots and spaces, a `::$DATA` suffix and one
-`.exe`, `.com`, `.cmd` or `.bat`, on the wrapper names and on the program word alike.
+`.exe`, `.com`, `.cmd` or `.bat`, on the wrapper names and on the program word alike, with letters
+compared as a deny rule compares them, so `\u{17f}sh` is `ssh`.
 
 **Why.** A logged-in tool, a live socket and a metadata endpoint have no custody to rank and no
 bound to enforce, so placing them on the scale would put unbounded authority at the top of it. The
@@ -361,6 +362,7 @@ one thing available before confinement is that nobody grants it thinking they gr
 `verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_judged_by_its_own_arguments`
 `verified-by: bravebot_core::ambient::a_wrapper_is_read_in_any_case_and_with_an_extension`
 `verified-by: bravebot_core::ambient::a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them`
+`verified-by: bravebot_core::ambient::a_program_spelled_with_a_folded_letter_is_the_program`
 `verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`

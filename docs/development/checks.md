@@ -458,7 +458,8 @@ at all, so a Windows arm that does not build or that trips a lint reaches main w
 cross-compiles, which clippy allows because it stops before linking, so no Windows host is
 involved and the suite is not run on one. CI's `Desktop on Windows` job runs the file helper's
 suite and the walkthrough on a Windows runner, and CI's `Awkward names on Windows` job runs the
-pair tests over file names there, which no local target does. Worth running for
+pair tests over file names there and asks the volume which characters it opens as an ASCII letter
+(`program_word_fold`), which no local target does. Worth running for
 anything with a platform branch in it, and for any test that has one: a `#[cfg(unix)]` left off a
 test is invisible from every platform that has `unix`.
 

@@ -1045,7 +1045,8 @@ jobs:
   # The job also runs the tests that pin how a `deny` or `ask` command rule folds the spellings of a
   # program that Windows ignores, and refuses an 8.3 short name (#3926). They pass on every host,
   # but a test that passes on the Linux host does not show the name handling is the same on a
-  # Windows host.
+  # Windows host. The last step asks the volume which characters it opens as an ASCII letter and
+  # whether a deny rule covers the program word spelled with each (PERM-5).
   names-windows:
     name: Awkward names on Windows
     runs-on: windows-latest
@@ -1112,6 +1113,17 @@ jobs:
           cargo test -p bravebot-core --locked --lib -- --exact "${tests[@]}" \
             | tee "$RUNNER_TEMP/rules.log"
           grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/rules.log"
+
+      - name: Test the program word against the spellings the volume opens
+        # Opens every character below U+10000 by name against a file for each ASCII letter. The first
+        # test asks a deny rule to cover each one the volume opened as the letter. The second pins the
+        # characters the rule covers for an ASCII letter and lists those the volume did not open (PERM-5).
+        run: |
+          cargo test -p bravebot-agent --locked --test program_word_fold -- --exact \
+            a_deny_rule_covers_every_spelling_the_volume_opens_as_the_program \
+            a_deny_rule_covers_exactly_the_pinned_spellings_and_the_extra_ones_are_listed \
+            --nocapture | tee "$RUNNER_TEMP/program-word.log"
+          grep -q 'test result: ok. 2 passed' "$RUNNER_TEMP/program-word.log"
 
   # The installers a release ships, built as a release builds them from the cross-built helpers,
   # and each installed on a runner of its own architecture by the job after this one. Beside each

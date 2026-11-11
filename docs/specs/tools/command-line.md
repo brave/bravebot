@@ -568,7 +568,10 @@ the system's, is not read-proven, and neither is one whose line named a path rat
 a file for a stream. The table's entries are claims about the programs a system provides under those
 names and are matched on the name a program resolved to, which identifies no file: so a file called
 `wc` in the tree being inspected would answer as the audited one, and it reaches that answer whether
-the line pointed at it or a name did. `$PATH` decides what a name means, so a project directory on it
+the line pointed at it or a name did. The name is compared as written, with no fold of case or of
+letters: the table grants an answer, so a spelling it does not list keeps the opaque default, and
+`\u{17f}ort` is not `sort` here as it is in a deny rule ([PERM-5](../permissions.md#PERM-5)).
+`$PATH` decides what a name means, so a project directory on it
 is enough for a file a contributor added to be what an audited name runs, and `PATH_add bin` in a
 project's own `.envrc` puts one there. The directories that are not the system's are the working
 directory, the checkout holding it (a session begun in a subdirectory has the `bin` above it on
@@ -671,6 +674,7 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::pure::a_reporting_program_with_no_path_proves_nothing`
 `verified-by: bravebot_core::pure::a_reporting_program_following_links_or_reading_a_list_proves_nothing`
 `verified-by: bravebot_core::pure::cat_answers_with_the_files_it_reads`
+`verified-by: bravebot_core::pure::a_program_spelled_with_a_folded_letter_is_not_in_the_table`
 `verified-by: bravebot_core::policy::a_pipeline_of_sort_uniq_cat_and_ls_over_vouched_paths_does_not_ask`
 `verified-by: bravebot_core::trust::a_subtree_is_trusted_only_when_nothing_beneath_it_is_not`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted`
