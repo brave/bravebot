@@ -581,6 +581,13 @@ pub struct Policy<'sink, S: Sink> {
     /// would have the gates comparing names to a map about another project's files. `None` where
     /// the caller has not said, and then nothing that needs it holds.
     root: Option<std::path::PathBuf>,
+    /// Directories besides [`Policy::root`] that a file the proof road would start may not lie in:
+    /// the checkout holding the working directory, the directories added by name, and the ones the
+    /// session left. Empty until [`Policy::set_unproven_directories`] is called.
+    ///
+    /// Worked out by the caller, which can look at the file system, from directories the person
+    /// opened. [`Policy::resolves_inside_the_project`] only compares paths against it.
+    unproven_directories: Vec<std::path::PathBuf>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable with no rule written about it, so a path under it that no rule covers answers as
@@ -814,6 +821,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // every path whatever it is read under.
             trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
+            unproven_directories: Vec::new(),
             scratch: None,
             skill_reach: Vec::new(),
             backslash_separates: false,
@@ -1719,6 +1727,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             operand_names: None,
             trust: self.trust.clone(),
             root: self.root.clone(),
+            unproven_directories: self.unproven_directories.clone(),
             scratch: self.scratch.clone(),
             skill_reach: self.skill_reach.clone(),
             backslash_separates: self.backslash_separates,
@@ -1769,10 +1778,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The workspace root, which is also the directory the map handed to [`Policy::with_trust`]
     /// was made against. Without it, a gate that has to compare a directory it was handed against
-    /// the one the turn is in cannot, and refuses rather than guessing.
+    /// the one the turn is in cannot, and refuses rather than guessing. The proof road also refuses
+    /// a program that resolves under it, together with the directories
+    /// [`Policy::set_unproven_directories`] adds.
     pub fn with_root(mut self, root: &std::path::Path) -> Self {
         self.root = Some(root.to_path_buf());
         self
+    }
+
+    /// Say which directories besides the working directory a file started by an audited name may
+    /// not lie in, replacing what was said before ([`Policy::resolves_inside_the_project`]).
+    ///
+    /// The caller passes directories it found from the ones the person opened: the checkout holding
+    /// the working directory, the directories added by name, and the ones the session left, whose
+    /// `bin` may still be on `$PATH`. This crate does no I/O, so it cannot find them. A setter and
+    /// not a builder, because the caller says it again before each run: a directory added in the
+    /// middle of a turn is not known when the policy is built.
+    pub fn set_unproven_directories(&mut self, directories: &[std::path::PathBuf]) {
+        self.unproven_directories = directories.to_vec();
     }
 
     /// Say where the session's own directory outside the project is, where it has one.
@@ -7517,22 +7540,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// person vouches on, where an assertion must not follow a name onto a different binary.
     ///
     /// The path compared is the one the driver resolved and will execute, canonicalised before it
-    /// was returned, so a symlink into the project is compared as the file it is. False when no root
-    /// is known, which costs nothing: [`Policy::read_proven`] has already refused the plan by then,
+    /// was returned, so a symlink into the project is compared as the file it is. The directories
+    /// are the working directory and the ones the agent passed to
+    /// [`Policy::set_unproven_directories`]: the checkout holding the working directory, which a
+    /// session begun in a subdirectory has on `$PATH` as readily as one begun at its root, and the
+    /// directories added or left. Both sides are paths the driver computed, and a component
+    /// boundary decides, so `/work/repo-tools` is not under `/work/repo`. False when no directory is
+    /// known, which costs nothing: [`Policy::read_proven`] has already refused the plan by then,
     /// since it is asked whether the line runs at a root that does not exist.
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn resolves_inside_the_project(&self, resolved: &std::path::Path) -> bool {
         self.root
-            .as_deref()
-            .is_some_and(|root| resolved.starts_with(root))
+            .iter()
+            .chain(&self.unproven_directories)
+            .any(|directory| resolved.starts_with(directory))
     }
 
     /// The paths every step of the plan reads, or `None` where any step proves nothing.
     ///
     /// A step is read-proven when the line named a program rather than a path, the file that name
-    /// resolved to lies outside the workspace and is started by a path outside it under its own
-    /// file name, the audited table answers for that file's name and for the exact argv, the step
+    /// resolved to lies outside the workspace and the rest of the set
+    /// [`Policy::resolves_inside_the_project`] compares against, and is started by a path outside
+    /// them under its own file name, the audited table answers for that file's name and for the exact argv, the step
     /// carries no environment assignment, and it opens no file for a stream. `2>&1` renames a
     /// descriptor and opens nothing, so it is not one.
     ///
@@ -12183,6 +12213,261 @@ five
                 !label_of(&mut policy, &started).is_trusted(),
                 "pwd started as {started_as} came back as the audited program's output"
             );
+        }
+
+        // The same two positions with the working directory below a checkout and the checkout in
+        // the set the agent passes: a name that starts a file of the checkout's `bin` is refused
+        // whichever of the two fields holds it, against the system's `pwd` as the control.
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/repo/sub", &["."], &[]))
+            .with_root(std::path::Path::new("/work/repo/sub"));
+        policy.set_unproven_directories(&[std::path::PathBuf::from("/work/repo")]);
+        let started_as = |resolved: &str, started_as: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(started_as);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/work/repo/sub");
+            plan
+        };
+        let control = started_as("/usr/bin/pwd", "/usr/bin/pwd");
+        assert!(
+            !policy.plan_needs_approval(&control),
+            "the proof road is shut for the line this test contrasts with"
+        );
+        for (resolved, from) in [
+            ("/usr/bin/pwd", "/work/repo/bin/pwd"),
+            ("/work/repo/bin/pwd", "/usr/bin/pwd"),
+        ] {
+            let planted = started_as(resolved, from);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "pwd resolved to {resolved} and started as {from} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "pwd resolved to {resolved} and started as {from} came back as the audited \
+                 program's output"
+            );
+        }
+    }
+
+    /// A session begun in a subdirectory of a checkout has the checkout's `bin` on `$PATH` as readily
+    /// as one begun at its root (`PATH_add ../bin`), so a file there answering to an audited name
+    /// runs unasked and prints as the audited program unless the checkout is refused as well as the
+    /// working directory (CMDLINE-8, CMDLINE-9). The set is the one the agent passes.
+    ///
+    /// Each fixture trips one position the file can be named in, against the `/usr/bin` control that
+    /// shows the road is open for this line. A sibling that merely shares the checkout's name as a
+    /// prefix is a control too: it rejects a comparison of the text of the paths, which would refuse
+    /// `/work/repo-tools/bin/pwd`, and the directory above the checkout is not refused with it.
+    #[test]
+    fn a_program_in_the_checkout_above_the_working_directory_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/repo/sub", &["."], &[]))
+            .with_root(std::path::Path::new("/work/repo/sub"));
+        policy.set_unproven_directories(&[std::path::PathBuf::from("/work/repo")]);
+
+        let started = |resolved: &str, started_as: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(started_as);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/work/repo/sub");
+            plan
+        };
+
+        for (resolved, started_as) in [
+            ("/usr/bin/pwd", "/usr/bin/pwd"),
+            ("/work/repo-tools/bin/pwd", "/work/repo-tools/bin/pwd"),
+            ("/work/bin/pwd", "/work/bin/pwd"),
+        ] {
+            let control = started(resolved, started_as);
+            assert!(
+                !policy.plan_needs_approval(&control),
+                "pwd resolving to {resolved} asked: the proof road is shut for the control"
+            );
+            assert!(
+                label_of(&mut policy, &control).is_trusted(),
+                "pwd resolving to {resolved} came back untrusted: the proof road is shut for the control"
+            );
+        }
+
+        for (resolved, started_as) in [
+            ("/work/repo/bin/pwd", "/work/repo/bin/pwd"),
+            ("/work/repo/bin/pwd", "/usr/bin/pwd"),
+            ("/usr/bin/pwd", "/work/repo/bin/pwd"),
+            ("/work/repo/sub/bin/pwd", "/work/repo/sub/bin/pwd"),
+        ] {
+            let planted = started(resolved, started_as);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "pwd resolved to {resolved} and started as {started_as} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "pwd resolved to {resolved} and started as {started_as} came back as the audited \
+                 program's output"
+            );
+        }
+    }
+
+    /// A delegate working in a checkout (CHECKOUT-7) has the directory the checkout was made from on
+    /// `$PATH` as the session that made it does, so a file there answering to an audited name runs
+    /// unasked and prints as the audited program unless that directory is refused as well as the
+    /// checkout (CMDLINE-8, CMDLINE-9). The delegate's policy root is its checkout, and the set is
+    /// the one the agent passes: the working directory it was made from, and the checkout holding
+    /// that.
+    ///
+    /// Against the `/usr/bin` control, which shows the road is open for this line. The checkout
+    /// itself is a control too: it rejects a set that replaces the root instead of adding to it,
+    /// which would stop refusing the delegate's own `bin`.
+    #[test]
+    fn a_delegate_in_a_checkout_is_refused_programs_from_the_directory_it_was_made_from() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/state/checkouts/c1", &["."], &[]))
+            .with_root(std::path::Path::new("/state/checkouts/c1"));
+        policy.set_unproven_directories(&[
+            std::path::PathBuf::from("/work/repo/sub"),
+            std::path::PathBuf::from("/work/repo"),
+        ]);
+
+        let started = |resolved: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/state/checkouts/c1");
+            plan
+        };
+
+        let control = started("/usr/bin/pwd");
+        assert!(
+            !policy.plan_needs_approval(&control),
+            "the proof road is shut for the line this test contrasts with"
+        );
+        assert!(
+            label_of(&mut policy, &control).is_trusted(),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
+        for resolved in [
+            "/work/repo/sub/bin/pwd",
+            "/work/repo/bin/pwd",
+            "/state/checkouts/c1/bin/pwd",
+        ] {
+            let planted = started(resolved);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "a delegate ran {resolved} unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "{resolved} came back as the audited program's output"
+            );
+        }
+    }
+
+    /// After `/cd` the session's `$PATH` still lists the directory it left, so a file there
+    /// answering to an audited name runs unasked and prints as the audited program unless the
+    /// directory left is in the set. A relative `$PATH` entry resolves under the old root, since
+    /// `/cd` does not move the process (CMDLINE-8), and arrives here as a file under it. The
+    /// regression it rejects: a set that holds only the current root, which proves the old
+    /// directory's `pwd`.
+    ///
+    /// Against the `/usr/bin` control, and the new root is one too.
+    #[test]
+    fn a_program_in_a_directory_the_session_left_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/new", &["."], &[]))
+            .with_root(std::path::Path::new("/work/new"));
+
+        let started = |resolved: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/work/new");
+            plan
+        };
+
+        // Without the directory left in the set, the old project's file is as good as the system's:
+        // the situation the set exists to change.
+        assert!(
+            !policy.plan_needs_approval(&started("/work/old/bin/pwd")),
+            "the control does not show the road open for a directory nobody listed"
+        );
+
+        policy.set_unproven_directories(&[std::path::PathBuf::from("/work/old")]);
+        assert!(
+            !policy.plan_needs_approval(&started("/usr/bin/pwd")),
+            "the proof road is shut for the control"
+        );
+        assert!(
+            label_of(&mut policy, &started("/usr/bin/pwd")).is_trusted(),
+            "the proof road is shut for the control"
+        );
+        for resolved in ["/work/old/bin/pwd", "/work/new/bin/pwd"] {
+            let planted = started(resolved);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "{resolved} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "{resolved} came back as the audited program's output"
+            );
+        }
+    }
+
+    /// The set adds to the working directory and changes nothing for a session that opened one
+    /// directory: `/work/repo/sub` with the system's `pwd` is proven, with its own `bin/pwd` asks,
+    /// and a session rooted at the checkout asks for the checkout's `bin/pwd` with the set empty
+    /// and with the set holding the checkout. The regressions it rejects: a set that replaces the
+    /// root, which stops refusing the working directory's own `bin`, and a set that refuses the
+    /// system's programs along with the project's.
+    #[test]
+    fn the_set_leaves_the_results_for_the_directory_alone_as_they_were() {
+        let started = |root: &str, resolved: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from(root);
+            plan
+        };
+
+        for set in [
+            vec![],
+            vec![std::path::PathBuf::from("/work/repo")],
+            vec![std::path::PathBuf::from("/elsewhere/added")],
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_trust(trusting("/work/repo/sub", &["."], &[]))
+                .with_root(std::path::Path::new("/work/repo/sub"));
+            policy.set_unproven_directories(&set);
+            let system = started("/work/repo/sub", "/usr/bin/pwd");
+            assert!(!policy.plan_needs_approval(&system), "{set:?}");
+            assert!(label_of(&mut policy, &system).is_trusted(), "{set:?}");
+            let own = started("/work/repo/sub", "/work/repo/sub/bin/pwd");
+            assert!(policy.plan_needs_approval(&own), "{set:?}");
+            assert!(!label_of(&mut policy, &own).is_trusted(), "{set:?}");
+        }
+
+        for set in [vec![], vec![std::path::PathBuf::from("/work/repo")]] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_trust(trusting("/work/repo", &["."], &[]))
+                .with_root(std::path::Path::new("/work/repo"));
+            policy.set_unproven_directories(&set);
+            let planted = started("/work/repo", "/work/repo/bin/pwd");
+            assert!(policy.plan_needs_approval(&planted), "{set:?}");
+            assert!(!label_of(&mut policy, &planted).is_trusted(), "{set:?}");
         }
     }
 

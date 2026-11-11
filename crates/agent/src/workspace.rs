@@ -270,6 +270,12 @@ pub struct Workspace {
     /// stage is given a row for only while its name still leads there (SANDBOX-18). None where it
     /// could not be read as a directory then.
     root_made: Option<ScratchDirectory>,
+    /// The working directories and closed added directories the session has left, oldest first.
+    ///
+    /// A directory left with `/cd` can still have its `bin` on `$PATH`, so a file there is as much
+    /// the project's as one under the root. A plain copy and not a shared handle: only the session
+    /// moves the root, and a turn's clone is taken after the move.
+    left: Vec<PathBuf>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
@@ -514,7 +520,7 @@ impl Workspace {
             path: root.display().to_string(),
             detail: e.to_string(),
         })?;
-        bravebot_sandbox::programs::keep_out(&canonical);
+        bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         Ok(Self {
             #[cfg(test)]
             after_write: Arc::new(Mutex::new(None)),
@@ -524,6 +530,7 @@ impl Workspace {
             while_backing_up: Arc::new(Mutex::new(None)),
             root_made: ScratchDirectory::observed(canonical.clone()),
             root: canonical,
+            left: Vec::new(),
             added: Arc::default(),
             scratch: None,
             memories: None,
@@ -4629,6 +4636,167 @@ mod tests {
             .change_root(&moved.display().to_string())
             .expect("moved");
         assert!(!found_in(&moved, "bravebot-probe-moved", &recorded()));
+    }
+
+    /// SANDBOX-30: a session opened in a subdirectory of a checkout also leaves out the checkout, so
+    /// a program planted in that checkout's `bin`, first on `PATH`, is not the one started
+    /// unconfined. The directory a session opens, adds and moves to each record it. Rejects a
+    /// record of the directory alone, which finds the `bin` of the checkout above it, and one that
+    /// leaves out more than the checkout, which loses a `bin` outside every checkout.
+    #[test]
+    fn the_checkout_holding_a_directory_a_session_opens_is_kept_out_of_the_search_for_programs() {
+        // Each repository has its own `.git`: `scratch_dir` is under this repository's `target/`, so
+        // a fixture with no `.git` of its own would be held by this repository's, which every
+        // workspace in the process records.
+        let parent = crate::testutil::scratch_dir("programs-checkout");
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).expect("scratch");
+        let parent = parent.canonicalize().expect("canonical");
+        let repository = |name: &str| {
+            let repository = parent.join(name);
+            for directory in [".git", "bin", "sub"] {
+                std::fs::create_dir_all(repository.join(directory)).expect("repository");
+            }
+            repository
+        };
+        let opened = repository("opened");
+        let added = repository("added");
+        let moved = repository("moved");
+        let elsewhere = parent.join("elsewhere").join("bin");
+        std::fs::create_dir_all(&elsewhere).expect("elsewhere");
+
+        // Only the rows inside the fixture: the record is shared by every test in the process and
+        // already holds the checkout above `target/`, which would hide every program planted here.
+        let recorded = || -> Vec<PathBuf> {
+            bravebot_sandbox::programs::registered()
+                .into_iter()
+                .filter(|row| row.starts_with(&parent))
+                .collect()
+        };
+        let in_bin = |repository: &Path, program: &str| {
+            found_in(&repository.join("bin"), program, &recorded())
+        };
+        for (repository, program) in [
+            (&opened, "bravebot-checkout-opened"),
+            (&added, "bravebot-checkout-added"),
+            (&moved, "bravebot-checkout-moved"),
+        ] {
+            assert!(
+                in_bin(repository, program),
+                "the probe finds {program} before the session opens anything in its checkout"
+            );
+        }
+
+        let mut workspace = Workspace::new(opened.join("sub")).expect("workspace");
+        assert!(
+            !in_bin(&opened, "bravebot-checkout-opened"),
+            "the bin of the checkout holding the directory the session opened was searched"
+        );
+        assert!(
+            in_bin(&added, "bravebot-checkout-added"),
+            "opening one checkout left out another"
+        );
+
+        workspace
+            .add_directory(&added.join("sub").display().to_string())
+            .expect("added");
+        assert!(
+            !in_bin(&added, "bravebot-checkout-added"),
+            "the bin of the checkout holding the directory that was added was searched"
+        );
+        assert!(
+            in_bin(&moved, "bravebot-checkout-moved"),
+            "adding one checkout left out another"
+        );
+
+        workspace
+            .change_root(&moved.join("sub").display().to_string())
+            .expect("moved");
+        assert!(
+            !in_bin(&moved, "bravebot-checkout-moved"),
+            "the bin of the checkout holding the directory moved to was searched"
+        );
+
+        // A bin outside every checkout is still searched.
+        assert!(
+            found_in(&elsewhere, "bravebot-checkout-elsewhere", &recorded()),
+            "a bin outside every checkout was left out"
+        );
+    }
+
+    /// CMDLINE-8: the directories a program resolving into may not be taken for the system's are the
+    /// working directory and its checkout, each directory added and its checkout, and each directory
+    /// the session has left (`/cd`) or closed, since its `bin` stays on `$PATH`. Rejects a set of
+    /// the working directory alone, which is the defect; one that forgets a directory once it is left
+    /// or closed; and one that holds the directory above the checkout, which would put every
+    /// installed `bin` in the set.
+    #[test]
+    fn the_directories_a_program_may_not_resolve_into_follow_the_session() {
+        let parent = crate::testutil::scratch_dir("unproven-directories");
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).expect("scratch");
+        let parent = parent.canonicalize().expect("canonical");
+        let repository = |name: &str| {
+            let repository = parent.join(name);
+            for directory in [".git", "bin", "sub"] {
+                std::fs::create_dir_all(repository.join(directory)).expect("repository");
+            }
+            repository
+        };
+        let opened = repository("opened");
+        let added = repository("added");
+        let moved = repository("moved");
+
+        let mut workspace = Workspace::new(opened.join("sub")).expect("workspace");
+        assert_eq!(
+            workspace.unproven_directories(),
+            [opened.join("sub"), opened.clone()],
+            "a session begun in a subdirectory did not hold its checkout"
+        );
+
+        workspace
+            .add_directory(&added.join("sub").display().to_string())
+            .expect("added");
+        assert_eq!(
+            workspace.unproven_directories(),
+            [
+                opened.join("sub"),
+                opened.clone(),
+                added.join("sub"),
+                added.clone()
+            ],
+            "a directory added with /add-dir did not bring its checkout"
+        );
+
+        workspace
+            .close_added_directory(&added.join("sub").display().to_string())
+            .expect("closed");
+        let after_closing = workspace.unproven_directories();
+        assert!(
+            after_closing.contains(&added.join("sub")) && after_closing.contains(&added),
+            "a directory closed since was forgotten while its bin may still be on PATH"
+        );
+
+        workspace
+            .change_root(&moved.join("sub").display().to_string())
+            .expect("moved");
+        let after_moving = workspace.unproven_directories();
+        for held in [
+            moved.join("sub"),
+            moved.clone(),
+            opened.join("sub"),
+            opened.clone(),
+        ] {
+            assert!(
+                after_moving.contains(&held),
+                "{} was not held after /cd",
+                held.display()
+            );
+        }
+        assert!(
+            !after_moving.contains(&parent),
+            "the directory above the checkouts was held, which refuses every program under it"
+        );
     }
 
     /// CHECKOUT-23. A name the driver recorded for a write is relative to the root it was written

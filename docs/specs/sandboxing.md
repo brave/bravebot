@@ -35,10 +35,12 @@ guards:
   - symbol: find_in
     sites:
       - crates/agent/src/confine.rs: 1
+      - crates/agent/src/programs.rs: 6
       - crates/agent/src/servers.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1
       - crates/sandbox/src/programs.rs: 19
+      - crates/sandbox/tests/checkout_in_search.rs: 7
       - crates/tui/src/clipboard.rs: 9
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
@@ -3834,7 +3836,8 @@ file. A new spawn that looks a name up through
 `PATH` is added to the list above, in the same change, or resolved first.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
-  moved to, its scratch directory, the system temporary directory, every row a stage's policy
+  moved to and the checkout holding it (next bullet), its scratch directory, the system temporary
+  directory, every row a stage's policy
   grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it, and every row the policy a
   local MCP server is launched under grants writes in, its declared directory and its own home
   among them ([SERVERS-10](mcp-servers.md#SERVERS-10)). A row that came with the
@@ -3848,13 +3851,22 @@ file. A new spawn that looks a name up through
   closing a directory does not remove a file already written there. A server's rows are recorded
   from the policy it is launched under, after the rows its backend cannot name are dropped and
   before the launch.
-- **A command that opens no session leaves out the directory it ran in.** `doctor --push-identity`
-  and `doctor --sandbox-check` are new processes, which know of no directory a stage wrote in an
-  earlier session. Each leaves out the directory it ran in and the checkout holding it, the nearest
-  ancestor with a `.git`, so a `bin` in the checkout that is first on `PATH` is not searched. A
-  virtualenv or tool directory a stage was granted elsewhere is not known to it. A program either
-  starts is also started without this agent's own credentials
-  ([CRED-14](credential-protection.md#CRED-14)).
+- **The checkout holding a directory is left out with it.** The `bin` of a checkout can be first on
+  `PATH` and hold a file a contributor added, which a session opened in a subdirectory of the
+  checkout would start in place of the installed program, unconfined. The same function,
+  `bravebot_sandbox::programs::keep_out_with_checkout`, records a directory and its checkout for a
+  directory a session opens, adds or moves to, and for a command that opens no session.
+  `doctor --push-identity` and `doctor --sandbox-check` are new processes, which know of no
+  directory a stage wrote in an earlier session, so each records the directory it ran in the same
+  way. The checkout is the nearest of the directory itself and its ancestors with a `.git`, a file
+  as well as a directory, so a linked worktree or a submodule is the checkout holding the
+  directory. A directory that holds a `.git` is its own checkout and nothing above it is added.
+  Only the nearest is taken. Taking every ancestor with a `.git` would also leave out an outer repository
+  that merely contains the checkout, such as a dotfiles repository at the account's home or the
+  repository a worktree is nested in, and with it every installed `bin` under it. A directory under
+  no checkout is recorded by itself. A virtualenv or tool directory a stage was granted elsewhere
+  is not known to a command that opens no session. A program either doctor command starts is also
+  started without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one. An entry that does not exist yet leads
   where the part of it that exists does, since a stage can make the rest.
@@ -3872,7 +3884,8 @@ file. A new spawn that looks a name up through
   path is started as given. A hook's relative path is the person's own and runs from the directory
   the hook runs in ([HOOK-4](hooks.md#HOOK-4)).
 - **Nothing found is not installed.** A person whose only `aws` is in such a directory, an
-  activated virtualenv's `bin` among them, is told it is not installed
+  activated virtualenv's `bin` among them, or in the `bin` of the checkout a session was opened in,
+  is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
 - **The editor's, a hook's, the credential authority's, the inhibitor's, a clipboard tool's, the
@@ -4361,6 +4374,16 @@ own read-only program under a row such as `~/.cargo/bin` reads as not installed,
 directory a stage may write does. A program in directories the account neither owns nor can write,
 such as `/usr/bin` on a system where root owns it, is found. Where the account owns the whole tree a
 program is in, as when bravebot runs as root, none is found under a row of that tree.
+
+A program a person keeps in a `bin` of the nearest checkout holding a directory a session opens,
+adds or moves to reads as not installed to every lookup above for the rest of the process, whether
+the session was opened at the checkout's root or below it, and a command that opens no session
+leaves out the same one. Where the account's home directory holds a `.git`, such as a dotfiles
+repository, a session opened in a directory below the home that has no nearer `.git` leaves out the
+home as its checkout, so `~/bin` and every other directory under the home that is on `PATH` is not
+searched and a program kept in one reads as not installed. A session opened below a nearer checkout
+leaves out that checkout only, and the repository at the home stays searched. The record only
+grows, so a checkout recorded for one session stays left out when the session moves elsewhere.
 
 A directory a person declares for a local MCP server is left out from the launch on, as a whole, so
 a program they keep in it or below it, and every program under a home directory declared as one,
@@ -4897,8 +4920,17 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::clipboard::a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::clipboard::the_reads_of_the_clipboard_start_no_tool_found_only_in_a_directory_a_stage_may_write`
-`verified-by: bravebot_cli::push_identity::the_checkout_holding_the_directory_is_left_out_with_it`
-`verified-by: bravebot_cli::push_identity::a_directory_under_no_checkout_is_left_out_by_itself`
+`verified-by: bravebot_sandbox::checkout_in_search::the_checkout_holding_the_directory_is_left_out_with_it`
+`verified-by: bravebot_sandbox::checkout_in_search::a_directory_under_no_checkout_is_left_out_by_itself`
+`verified-by: bravebot_sandbox::checkout_in_search::a_directory_that_holds_its_own_git_leaves_out_only_itself`
+`verified-by: bravebot_sandbox::checkout_in_search::the_nearest_checkout_is_the_one_left_out_with_the_directory`
+`verified-by: bravebot_sandbox::checkout_in_search::the_checkout_root_is_listed_once`
+`verified-by: bravebot_sandbox::checkout_in_search::a_program_in_the_bin_of_the_checkout_above_the_directory_is_not_found`
+`verified-by: bravebot_sandbox::checkout_in_search::a_program_in_a_bin_outside_the_checkout_is_still_found`
+`verified-by: bravebot_sandbox::checkout_in_search::the_checkout_root_and_a_directory_below_it_leave_out_the_same_bin`
+`verified-by: bravebot_sandbox::checkout_in_search::keeping_a_directory_out_keeps_the_checkout_holding_it_out`
+`verified-by: bravebot_agent::workspace::the_checkout_holding_a_directory_a_session_opens_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session`
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent`
 `verified-by: bravebot_cli::running::doctor_sandbox_check_starts_no_program_from_the_checkout_it_runs_in`

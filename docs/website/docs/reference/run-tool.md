@@ -291,8 +291,10 @@ operand therefore leaves the step unproven, so `grep -r TODO src -n` is asked ab
 
 Five other things leave a step unproven. Naming the program by path rather than by name, since a file
 called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
-resolves to a file inside the workspace, for the same reason: a `PATH` entry in the project can put
-one there. An environment assignment, which decides what a program loads before its own arguments are read. A
+resolves to a file inside the workspace, the checkout holding it, a directory you added or left
+with `/cd`, or a directory a stage was granted to write (and, for a delegate working in a checkout,
+the directory the checkout was made from), for the same reason: a `PATH` entry in the project can
+put one there. An environment assignment, which decides what a program loads before its own arguments are read. A
 redirection, which opens a file the argument list does not name. And running anywhere but the
 directory the trust map's rules are written against.
 
