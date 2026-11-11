@@ -675,6 +675,10 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_agent::manifest_server_calls::unticking_a_call_unticks_what_depends_on_it_and_declining_makes_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_of_literals_alone_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::an_apply_naming_what_the_vouched_list_does_not_hold_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_list_nobody_can_answer_makes_no_call`
+`verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_refuses_an_apply_steps_call_the_list_approved`
+`verified-by: bravebot_core::apply::applying_keeps_what_its_dependencies_allow_and_a_failure_skips_its_dependants`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_into_a_list_a_model_wrote_is_refused_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_call_could_depend_on_two_rows_is_refused`
 `verified-by: bravebot_agent::manifest_server_calls::a_move_may_land_in_a_folder_the_step_made_or_one_the_list_holds`
