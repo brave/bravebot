@@ -67,6 +67,9 @@
 # their path.
 /contrib/affected-checks.py @bbondy
 /Makefile @bbondy
+/ui/scripts/sign-mac.mjs @bbondy
+/ui/build/entitlements.mac.plist @bbondy
+/ui/build/entitlements.mac.none.plist @bbondy
 /contrib/check-pnpm-lockfiles.py @bbondy
 /contrib/measure-flakes.py @bbondy
 /contrib/measure-mutants.py @bbondy
