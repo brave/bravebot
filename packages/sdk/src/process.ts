@@ -17,7 +17,7 @@ export interface Running {
   /** Writes one line to stdin. A line is one JSON object, so it holds no raw newline. */
   write(line: string): void
   endInput(): void
-  /** Stops the process. */
+  /** Marks the run as stopped, so the close is reported to `failed` as a `ProcessError`, not to `ended`. */
   kill(): void
   readonly exited: Promise<ExitInfo>
 }
