@@ -17,7 +17,8 @@ nothing to install or turn on.
   pane is a fixed sentence and says nothing about what is being asked.
 - **How to reopen the session.** Once the session's record is written, herdr is given
   `bravebot --resume <id>`. After a herdr server restart, herdr runs that command in the pane's
-  directory and you are back in the same session. A session that becomes another, as `/clear` and
+  directory and you are back in the same session. herdr finds `bravebot` on the `PATH` its server
+  was started with, so start herdr from a shell where `bravebot` runs. A session that becomes another, as `/clear` and
   `/branch` make it, gives herdr the new id.
 - **That it has left.** Quitting tells herdr the pane is free, so herdr clears the agent and its
   resume command at once. Opening an editor or a viewer, stopping with Ctrl+Z, or switching sessions with `/resume` does not, since

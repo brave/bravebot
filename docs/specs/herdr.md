@@ -231,7 +231,7 @@ id in its own state, which outlives the session ([INCOG-3](incognito.md#INCOG-3)
 ### HERDR-12: the terminal interface releases its pane when it leaves for good
 
 When the interface ends, however it ended, it hands the terminal back and then releases
-([HERDR-7](#HERDR-7)), whether or not the terminal could be handed back: a quit by `/quit`, Ctrl-C
+([HERDR-7](#HERDR-7)), whether or not the terminal could be handed back: a quit by `/exit`, Ctrl-C
 or Ctrl-D, a failure that ends the interface, a session sent to the background and a session
 reopened by starting `bravebot` again all release. A process started on the way out reports for
 itself: a reopened session reports again from the new process, and a background session and
