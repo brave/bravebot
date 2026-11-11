@@ -330,6 +330,16 @@ name = "bravebot-filetype"
 version = "0.21.0"
 
 [[package]]
+name = "bravebot-herdr"
+version = "0.21.0"
+dependencies = [
+ "bravebot-sandbox",
+ "rustix 1.1.6",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "bravebot-i18n"
 version = "0.21.0"
 
