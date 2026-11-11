@@ -394,7 +394,9 @@ as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-
 does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
 read them and Electron reaches the session bus through the last two, and the ten Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
 `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
-which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only the second. `make check` runs it and so does CI. It
+which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). Without `HOME`, `gio` reads the account's
+passwd home, which is a further reason for `HOME`
+([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)). An options variable needs only the second. `make check` runs it and so does CI. It
 cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
 `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in

@@ -13,11 +13,14 @@
  * `crates/tui/src/opener.rs`, which also judges `HOME`, `XDG_RUNTIME_DIR` and
  * `DBUS_SESSION_BUS_ADDRESS` and removes them from the opener's own start.
  * Those three are not deleted here: this process and the agent it starts read them, and Electron
- * finds the session bus through the last two, so under a GNOME session on Linux the opener still
- * reads a `HOME`, a runtime directory or a bus address the sandbox let a program write
- * (brave/bravebot#3904 tracks `HOME` and brave/bravebot#3940 tracks the other two, which the bullet "The starts
- * that keep XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS" under "What a checked start does not
- * cover" in SANDBOX-30 records). `external-open.test.mjs` asserts that all three are left set.
+ * finds the session bus through the last two. Without `HOME`, `gio` reads the account's passwd
+ * home, which is the same directory whenever the real home is a place the sandbox let a program
+ * write. So under a GNOME session on Linux the opener still reads a `HOME`, a runtime directory
+ * or a bus address the sandbox let a program write (SANDBOX-30 gives the reasons and the cost;
+ * brave/bravebot#3904 is the issue for `HOME` and brave/bravebot#3940 tracks the other two, which
+ * the bullet "The starts that keep XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS" under "What a
+ * checked start does not cover" in SANDBOX-30 records). `external-open.test.mjs` asserts that all
+ * three are left set.
  * The ten Windows names of the `rundll32 url.dll,FileProtocolHandler`
  * start in `opener.rs` (`PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`,
  * `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`) are not deleted here. The opener

@@ -31,6 +31,9 @@ governs:
   - crates/tui/src/powershell.rs
   - ui/scripts/host-card.test.mjs
   - ui/scripts/shown.test.mjs
+  - ui/src/main/external-open.ts
+  - ui/scripts/external-open.test.mjs
+  - ui/scripts/external-open-electron.test.mjs
 guards:
   - symbol: find_in
     sites:
@@ -4148,10 +4151,25 @@ file. A new spawn that looks a name up through
   application reads `HOME` itself, Electron reaches the session bus through the other two, the
   agent's allowed-hosts proxy makes its socket directory under `XDG_RUNTIME_DIR`
   ([SANDBOX-24](#SANDBOX-24)), `process.env` is shared with the agent it starts, and a value
-  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`. On Linux
-  under a GNOME session the application's opener therefore still reads a `HOME`, a runtime directory
-  or a bus address that a stage may write.
-  [#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME` and
+  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`.
+  For `HOME` there is a further reason. GLib takes the home directory from `HOME` and, when `HOME`
+  is unset, from the account's passwd entry (`g_get_home_dir`, `g_get_user_data_dir` and
+  `g_get_user_config_dir` of GLib 2.90.1 on macOS return the passwd home and its `.local/share` and
+  `.config` when `HOME` is unset), so `gio open` with `HOME` removed is expected to read the same
+  directories under the account's real home. The application's `HOME` comes from the person's login
+  session, which a stage cannot change, so the opener reads a directory a stage may write only when
+  the account's home is one, and removing `HOME` does not change that.
+  On Linux under a GNOME session the application's opener therefore still reads a `HOME`, a
+  runtime directory or a bus address that a stage may write. For `HOME` that happens when a session
+  was opened on the home directory, on `~/.config` or on `~/.local/share/applications`, or was
+  granted writes there: a program the person approved with `run` can write a `mimeapps.list` or a
+  `.desktop` file there, and the next open from the application runs that handler outside the
+  sandbox. Neither `~/.config/mimeapps.list` nor `~/.local/share/applications` is among the
+  persistence locations named in this clause as refused for writing. A person avoids it by opening
+  sessions on a project directory and not on the home directory, and by not adding `~/.config` or
+  `~/.local/share/applications` as a session directory. `gio open` and `xdg-open` on Linux with
+  `HOME` removed were not run, and the opener was not run through Electron under a GNOME session.
+  [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME` and
   [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
   "What a checked start does not cover". The names another program
@@ -5479,7 +5497,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
 `verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the fifteen names where Electron's own shell starts it with all fifteen; its showItemInFolder case is a test case of its own and has never been run on Linux; the ui job of CI runs it through make check-ui-build on ubuntu-latest and it prints skipped elsewhere)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
