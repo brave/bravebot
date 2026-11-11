@@ -195,3 +195,52 @@ fn a_bridge_shutting_down_waits_for_a_session_closed_just_before() {
     release.send(()).unwrap();
     assert!(bridge.shut_down(PATIENCE));
 }
+
+/// Shutting down refuses a question still waiting rather than leaving it to the cancel alone
+/// (ACP-4, ACP-7). A test that only watches a write's side effect cannot tell that refusal from a
+/// plain cancellation: both stop the turn before the write lands, so removing
+/// `running.refuse_pending()` from `Bridge::close`, or `self.stop_all()` from `Bridge::shut_down`,
+/// leaves such a test passing for a turn that is now stuck waiting on an answer that is never
+/// coming (#3530). This one reads the reply the question was actually given.
+#[test]
+fn shutting_down_refuses_a_waiting_question_rather_than_only_cancelling_its_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let cancel = Cancel::new();
+    let (answers, received) = mpsc::channel();
+    let pending: crate::turn::Pending = Arc::new(Mutex::new(Some(crate::turn::Question {
+        id: 1,
+        kind: Kind::Write,
+    })));
+    let running = Running {
+        cancel: cancel.clone(),
+        answers,
+        pending,
+        target: 1,
+        finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        interjections: None,
+    };
+    let _handle = bridge.mint(Open {
+        running: Some(running),
+        ..Open::opened(
+            directory.path().to_path_buf(),
+            State::fresh(TrustStore::new(directory.path())),
+            true,
+            None,
+            false,
+        )
+    });
+
+    assert!(bridge.shut_down(PATIENCE));
+
+    assert!(cancel.is_cancelled(), "the turn was not told to stop");
+    let reply = received.recv_timeout(PATIENCE).expect(
+        "the waiting question was never answered: a turn reading only the cancel would block \
+         on it forever",
+    );
+    assert_eq!(
+        reply.decision(),
+        Some(Decision::Reject),
+        "the waiting question was not refused"
+    );
+}
