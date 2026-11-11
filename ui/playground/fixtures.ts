@@ -42,12 +42,12 @@ export const BOTS = (): Bot[] => [
     slug: 'review-bot', name: 'Review Bot', purpose: 'Review diffs for harbour-lights and remember how the team likes them written.',
     avatar: 'review-bot', model: null, home: BOT_HOME, definition: 'review-bot', session: IDS.bot,
     conversations: [{ id: IDS.bot, directory: BOT_HOME }], lastHome: { id: IDS.bot, prompt: 0 },
-    archived: 0, remembered: 1, quiet: 0, retired: 0, created: Date.now() - 9 * 86400_000, updated: Date.now() - 2 * 86400_000,
+    archived: 0, outOfRequest: 0, remembered: 1, quiet: 0, retired: 0, created: Date.now() - 9 * 86400_000, updated: Date.now() - 2 * 86400_000,
   },
   {
     slug: 'release-bot', name: 'Release Bot', purpose: 'Write release notes from merged pull requests.',
     avatar: 'release-bot', model: 'sample/deep', home: BOT_HOME.replace('review-bot', 'release-bot'), definition: 'release-bot', session: null,
-    conversations: [], lastHome: null, archived: 0, remembered: 0, quiet: 0, retired: 0, created: Date.now() - 86400_000, updated: Date.now() - 86400_000,
+    conversations: [], lastHome: null, archived: 0, outOfRequest: 0, remembered: 0, quiet: 0, retired: 0, created: Date.now() - 86400_000, updated: Date.now() - 86400_000,
   },
 ]
 

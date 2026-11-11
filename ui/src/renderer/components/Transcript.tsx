@@ -7,7 +7,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RecalledExchange, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
@@ -32,7 +32,9 @@ import { failureSummary } from '../failure'
 import { FailureSentence } from './FailureSentence'
 import { FilePreview } from './FilePreview'
 import { ThinkingTail } from './ThinkingTail'
-import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
+import { TurnFooter, TurnNotices, TurnRecalled, type OpenAudit } from './TurnDetails'
+import { recalledLines, recalledRows } from '../recalled'
+import type { ExcerptsKey } from '../excerpts'
 import { LabelChip } from './LabelChip'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
@@ -65,6 +67,8 @@ interface Live {
   thinkingSeen?: boolean
   contextTokens?: number
   archived?: number
+  outOfRequest?: number
+  recalled?: RecalledExchange[]
   tokens: number
   running: boolean
   askingTrust: string | null
@@ -828,6 +832,9 @@ export function Transcript({
         <EntryList
           entries={entries}
           turns={live.turns}
+          recalled={live.recalled ?? NO_RECALLED}
+          directory={live.summary.directory}
+          record={live.summary.id ?? null}
           running={live.running}
           focused={focused}
           matched={matches[match % (matches.length || 1)] ?? null}
@@ -893,6 +900,7 @@ export function Transcript({
           compacting={live.phase === 'compacting'}
           contextTokens={live.contextTokens}
           archived={live.archived}
+          outOfRequest={live.outOfRequest}
           pending={!!pending}
           scope={bot ? 'bot' : 'conversation'}
           draft={draft}
@@ -1148,8 +1156,13 @@ export function runs(entries: t.Entry[]): Run[] {
  * Every entry, drawn. Memoised on its props, which are the entries and stable callbacks, so
  * nothing but a change to the conversation re-draws it.
  */
+/** Where an exchange's sends are asked for, once there is a record and a prompt number to ask by. */
+function excerptsKey(directory: string, id: string | null, prompt: number | undefined): ExcerptsKey | undefined {
+  return id === null || prompt === undefined ? undefined : { directory, id, prompt }
+}
+
 const EntryList = memo(function EntryList({
-  entries, turns, running, focused, matched, marked,
+  entries, turns, recalled, directory, record, running, focused, matched, marked,
   onTurnDisclosure, onAudit, onRecover, onChooseModel, onDecide, onAnswer, onFork, rewind, onRewind,
   faces, cards, onOpenSummon,
 }: {
@@ -1160,6 +1173,11 @@ const EntryList = memo(function EntryList({
   onOpenSummon: (summon: Summon) => void
   entries: t.Entry[]
   turns: Turns
+  /** What each exchange of the opened record recalled. */
+  recalled: RecalledExchange[]
+  /** The record a recalled row asks its words from, or `null` before the session has one. */
+  directory: string
+  record: string | null
   running: boolean
   focused: string | null
   matched: string | null
@@ -1186,6 +1204,7 @@ const EntryList = memo(function EntryList({
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
   const answeredBy = useMemo(() => t.summonedReplies(entries), [entries])
+  const lines = useMemo(() => recalledLines(entries, turns, recalled), [entries, turns, recalled])
   return <>
     {grouped.map((run) => {
       const id = run.kind === 'run' ? run.id : run.entry.id
@@ -1228,6 +1247,10 @@ const EntryList = memo(function EntryList({
             face={run.entry.kind === 'user' && run.entry.summoned !== undefined ? faces.get(run.entry.summoned) : undefined}
             revealed={run.entry.id === focused || run.entry.id === matched}
           />}
+          {lines.has(run.entry.id) && <TurnRecalled count={lines.get(run.entry.id)!.used.length}
+            rows={recalledRows(entries, lines.get(run.entry.id)!.used)}
+            asked={excerptsKey(directory, record, lines.get(run.entry.id)!.prompt)}
+            details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} />}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
             <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
@@ -1387,6 +1410,7 @@ function RepliedCard({ summon, faces, onOpen }: { summon: Summon; faces: Map<str
 
 const nothing = (): undefined => undefined
 const NO_POINTS: RewindPoint[] = []
+const NO_RECALLED: RecalledExchange[] = []
 const NO_ENTRIES: t.Entry[] = []
 
 /**

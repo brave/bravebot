@@ -2,6 +2,7 @@ import { useCallback, useState, type MutableRefObject, type SetStateAction } fro
 import type { RewoundSession } from '../shared/protocol'
 import type { Live } from './live'
 import { pointForPrompt, rewindFailure, rewoundLive } from './rewind'
+import { forgetExcerpts } from './excerpts'
 import { call } from './rpc'
 import { showToast } from './toasts'
 
@@ -47,6 +48,7 @@ export function useRewind({ liveRef, updateSession, refresh, draft, setDraft, se
     setRewinding({ ...rewinding, busy: true })
     try {
       const rewound = await call<RewoundSession>('session.rewind', { session: handle, steps })
+      forgetExcerpts()
       updateSession(handle, (old) => old ? rewoundLive(old, rewound) : old)
       const draftNow = liveRef.current?.handle === handle ? draft : ''
       setDraft(rewound.text + (draftNow.trim() ? `\n\n${draftNow}` : ''))

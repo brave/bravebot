@@ -300,3 +300,43 @@ test('a slug the desktop composes is always one the agent accepts, even when the
   }
   assert.equal(slugFor('a'.repeat(47) + ' b'), 'a'.repeat(47))
 })
+
+test('a rise in what the requests leave out owes a briefing, as a rise in the archive does (RETRIEVE-28)', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-left-out-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)((id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id), module, module.exports)
+  const storage = module.exports
+  try {
+    storage.saveBot({ ...parseBots({ bots: [definition] }).bots[0], session: '11111111-1111-4111-8111-111111111111' })
+    assert.equal(storage.bot(definition.slug).outOfRequest, 0, 'a bot written before the count has none')
+    assert.equal(storage.noteBotArchived(definition.slug, 0, 40), 'cut', 'the cut moving is a rise')
+    assert.equal(storage.noteBotArchived(definition.slug, 0, 40), null, 'the same figure again is not')
+    assert.equal(storage.noteBotArchived(definition.slug, 0, 12), null, 'a lower figure is another conversation')
+    assert.equal(storage.noteBotArchived(definition.slug, 3, 40), 'compaction', 'the archive rising still is')
+    assert.equal(storage.noteBotArchived(definition.slug, 5, 48), 'compaction', 'a compaction that moves the cut too is a compaction')
+    assert.deepEqual([storage.bot(definition.slug).archived, storage.bot(definition.slug).outOfRequest], [5, 48])
+    storage.releaseBotSession(definition.slug)
+    assert.equal(storage.bot(definition.slug).outOfRequest, 0, 'a new session starts from nothing left out')
+    for (const outOfRequest of [-1, 1.5, '7', null]) {
+      assert.equal(parseBots({ bots: [{ ...definition, outOfRequest }] }).bots[0].outOfRequest, 0)
+    }
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
+test('a consolidation after the retrieval cut says the earlier part is no longer sent, and one after a compaction says it was summarised', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-cut-reason-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)((id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id), module, module.exports)
+  const { AFTER_COMPACTION, AFTER_RETRIEVAL_CUT, consolidationPrompt } = module.exports
+  try {
+    const held = parseBots({ bots: [definition] }).bots[0]
+    const cut = consolidationPrompt(held, AFTER_RETRIEVAL_CUT)
+    assert.ok(cut.startsWith('The earlier part of your conversation is no longer sent with each request'))
+    assert.match(cut, /excerpts/)
+    assert.doesNotMatch(cut, /summar/i, 'nothing was summarised')
+    const compacted = consolidationPrompt(held, AFTER_COMPACTION)
+    assert.ok(compacted.startsWith('Your conversation has just been summarised, and the detail behind that summary is now the only thing your memory can still be written from.'))
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})

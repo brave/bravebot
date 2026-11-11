@@ -98,6 +98,14 @@ export interface Bot {
    */
   archived: number
   /**
+   * How many earlier messages that session's requests leave out, last time anyone looked.
+   *
+   * Compaction's and the retrieval cut's together, and rising only, like `archived`. A rise is the
+   * same moment for the same reason: something the bot was told is no longer in what it is sent.
+   * Main-written.
+   */
+  outOfRequest: number
+  /**
    * The modification time its memory file had, last time a turn of its finished.
    *
    * Not a copy of the memory and not a judgement about it — only the answer to "has it changed
@@ -307,6 +315,7 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       conversations,
       lastHome,
       archived,
+      outOfRequest,
       remembered,
       quiet,
       retired,
@@ -345,6 +354,8 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       // re-grounding, where dropping the bot over it costs the bot.
       archived:
         typeof archived === 'number' && Number.isInteger(archived) && archived >= 0 ? archived : 0,
+      outOfRequest:
+        typeof outOfRequest === 'number' && Number.isInteger(outOfRequest) && outOfRequest >= 0 ? outOfRequest : 0,
       // Both clamped rather than refused, for the reason above them: these decide when a bot is
       // reminded to write, and a nonsense figure costs one needless briefing where dropping the
       // row over it costs the bot. Absent is the ordinary case — every bot written before this

@@ -76,6 +76,15 @@ let rows: SessionSummary[] = SESSIONS()
 let bots: Bot[] = BOTS()
 let experience: Experience = parseExperience(null)
 let effort: EffortLevel | null = null
+/** `playground:recall` set to `managed` or `run` draws the switch locked. */
+const recallLock = globalThis.localStorage?.getItem('playground:recall')
+const recall = {
+  enabled: false, path: '/Users/example/.bravebot/settings.json', from: null as string | null,
+  locked: recallLock === 'managed' ? { by: 'managed', path: '/Library/Application Support/Bravebot/managed-settings.json' }
+    : recallLock === 'run' ? { by: 'run', path: '/Users/example/work/team-settings.json' } : null,
+  disclosed: false,
+  endpoint: { service: 'brave', url: 'https://ai-chat-backend-dev.bsg.brave.software/v1/embeddings', host: 'ai-chat-backend-dev.bsg.brave.software', model: 'embedding_gemma', dimensions: 768, development: true },
+}
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
 let requests = 100
 let created = 0
@@ -412,9 +421,17 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'connectors.list': return ok({ connectors: [] })
     case 'settings.inspect': return ok({
       build: '0.19.0 (playground)', configured: playground.configured, problem: playground.configured ? null : 'No model service is configured.', model: 'sample/fast', brave: false, bedrock: false,
-      providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] },
+      providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] }, retrieval: recall,
       network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null },
     })
+    case 'retrieval.set': {
+      if (recall.locked) return failed('config', `retrieval is set by ${recall.locked.path}`)
+      if (params.enabled === true && !recall.disclosed && params.disclosed !== recall.endpoint?.url) return failed('bad_request', 'retrieval was not turned on: the person has not been shown where it sends')
+      if (params.enabled === true) recall.disclosed = true
+      recall.enabled = params.enabled === true
+      recall.from = recall.path
+      return ok({ ...recall })
+    }
     case 'hooks.inspect': return ok({ path: '~/.bravebot/hooks.json', text: null, entire: true, timeoutSeconds: { min: 1, max: 600, defaultFor: {} }, hooks: [] })
     case 'doctor': return ok({ found: true, text: playground.configured ? 'Everything the playground needs is here.' : 'Backend not configured. Install a configured build or rebuild with the approved environment.' })
     case 'about': return ok({ version: '0.19.0', build: 'playground', home: '/Users/example/.bravebot' })
@@ -468,7 +485,7 @@ const bridge: BravebotApi = {
   writeBotServers: async () => ({ servers: null, tools: true, inline: false, kind: 'default', editable: true, every: true, everyPossible: true }),
   writeBot: async (form) => {
     const slug = form.slug ?? (form.name ?? 'bot').toLowerCase().replace(/[^a-z0-9]+/g, '-')
-    const bot: Bot = { ...(bots.find((each) => each.slug === slug) ?? { slug, avatar: form.avatar ?? slug, home: `${BOT_HOME}-${slug}`, definition: slug, session: null, conversations: [], lastHome: null, archived: 0, remembered: 0, quiet: 0, retired: 0, created: Date.now(), name: '', purpose: '', model: null, updated: 0 }), ...(form.name ? { name: form.name } : {}), ...(form.purpose ? { purpose: form.purpose } : {}), ...(form.model !== undefined ? { model: form.model } : {}), updated: Date.now() }
+    const bot: Bot = { ...(bots.find((each) => each.slug === slug) ?? { slug, avatar: form.avatar ?? slug, home: `${BOT_HOME}-${slug}`, definition: slug, session: null, conversations: [], lastHome: null, archived: 0, outOfRequest: 0, remembered: 0, quiet: 0, retired: 0, created: Date.now(), name: '', purpose: '', model: null, updated: 0 }), ...(form.name ? { name: form.name } : {}), ...(form.purpose ? { purpose: form.purpose } : {}), ...(form.model !== undefined ? { model: form.model } : {}), updated: Date.now() }
     bots = [...bots.filter((each) => each.slug !== slug), bot]
     return bot
   },

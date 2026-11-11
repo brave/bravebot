@@ -20,7 +20,7 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
-import type { AgentEntry, SessionSettled } from '../shared/protocol'
+import type { AgentEntry, RecalledExchange, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
 
 /** A message waiting for the turn to end, and the grants it was written with. */
@@ -151,6 +151,15 @@ export interface Live {
    * exactly once per compaction that actually happened.
    */
   archived: number
+  /**
+   * How many earlier messages the request leaves out, compaction's and the retrieval cut's
+   * together (RETRIEVE-28). Rises whenever `archived` does, and also as the cut moves.
+   */
+  outOfRequest?: number
+  /** What each exchange of the opened record recalled. A turn run since is read from `turns`. */
+  recalled?: RecalledExchange[]
+  /** Why the latest round that could not retrieve summarised instead, and `null` once one retrieves. */
+  fellBack?: string | null
   /**
    * The conversation's integrity word from `session.open` or `session.rewind`. Cleared when a
    * turn starts, since no event reports it again until one of those does.

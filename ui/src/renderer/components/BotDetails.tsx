@@ -5,6 +5,7 @@ import { useFitTextArea } from '../hooks'
 import { Dropdown, Input, TextArea } from '../nala'
 import { AvatarEditor } from './AvatarEditor'
 import { BotMemory } from './BotMemory'
+import { BotRecall } from './BotRecall'
 import { BotServers } from './BotServers'
 import type { BotFormValue } from './Bots'
 import { ConfirmArchive } from './ConfirmArchive'
@@ -16,8 +17,11 @@ import { IconMenu } from './IconMenu'
  * Name and purpose are saved when a field is left. A field left empty goes back to what is stored. The
  * memory is the one kept in a folder this bot has worked in; its home folder first.
  */
-export function BotDetails({ bot, onSave, onArchive }: {
+export function BotDetails({ bot, onSave, onArchive, fellBack = null, running = false }: {
   bot: Bot
+  /** How the bot's last turn here fell back from recalling, if it did. */
+  fellBack?: string | null
+  running?: boolean
   onSave: (bot: BotFormValue) => Promise<boolean>
   onArchive: () => void
 }): React.JSX.Element {
@@ -74,6 +78,7 @@ export function BotDetails({ bot, onSave, onArchive }: {
           </TextArea>
         </div>
         <BotServers key={bot.slug} slug={bot.slug} />
+        <BotRecall bot={bot} fellBack={fellBack} running={running} />
         {folders.length > 1 && (
           <Dropdown value={folder} size="small" data-test="memory-folder"
             onChange={(detail) => { if (typeof detail.value === 'string' && folders.includes(detail.value)) setFolder(detail.value) }}>
