@@ -131,7 +131,9 @@ Apply one only on evidence in the tree, cited in the report:
   `cfg(windows)`, the Linux sandbox backend, the macOS Seatbelt profile, the Windows installer or
   signing path), and nothing shared has to change;
 - the fix cannot be checked on another host, for example because it needs a Linux container
-  runtime, the Windows registry or macOS keychain.
+  runtime, the Windows registry or macOS keychain, or because what the issue asks for is an
+  observation on that platform (a run on a Windows host, a real GNOME or KDE session) that no
+  container or cross-compile gives.
 
 Do not apply one because the report came from that platform, because the defect shows there first,
 or because the issue mentions the platform. A defect in shared code that only appears on Windows is
@@ -181,8 +183,15 @@ One subagent per group of related issues, grouped by subsystem so each reads one
 the tree. Launch them in a single message. Give each the verdict table, the method notes
 below, and this instruction: **read-only, do not edit, close, or comment on anything.**
 
-Ask for at most 120 words per issue: verdict, evidence as file:line or SHA, and for a
-stale one, exactly which sentences of the body are now false.
+Ask for at most 120 words per issue: verdict, evidence as file:line or SHA, for a
+stale one exactly which sentences of the body are now false, and the platform the work can be
+done on. That last is `any`, or one or more of `linux`, `macos` and `windows` with the gated
+path or the host-only check that makes it so, judged by
+[Issues that can only be developed on one platform](#issues-that-can-only-be-developed-on-one-platform),
+which goes to the subagent with the verdict table. Ask it for every issue, including one that
+already carries a `develop-on` label, so a label applied on weaker evidence is found. A report
+with no platform line is incomplete, and the issue's label is left as it is and named in the
+report.
 
 ### Step 4: verify every FIXED verdict yourself
 
@@ -242,6 +251,17 @@ Each line is a number and its `[importance, urgency, size]` counts, so a `0` is 
 the run never reached and a `2` is a replacement that added a value without removing the
 old one. A run that stopped early is caught here rather than found in a query a week
 later.
+
+Then compare the `develop-on` labels GitHub holds with the platform each subagent reported:
+
+```bash
+gh issue list --state open --limit 200 --json number,labels \
+  -q '.[] | [.labels[].name | select(startswith("develop-on/"))] as $d
+      | select($d | length > 0) | "#\(.number) \($d | join(","))"'
+```
+
+An issue on this list that the run judged `any`, or an issue judged platform-only that is not on
+it, is an edit Step 5 missed.
 
 ---
 
