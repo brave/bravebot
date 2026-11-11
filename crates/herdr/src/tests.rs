@@ -110,36 +110,42 @@ fn argv(words: &[&str]) -> Vec<String> {
 }
 
 /// A session outside herdr, or in a pane herdr did not fully describe, must not connect to a socket
-/// a stray variable names: that socket could be anything's.
+/// a stray variable names: that socket could be anything's. Each row leaves one variable missing,
+/// empty or other than herdr sets it, with the others valid and a herdr listening where the socket
+/// variable points, so a reporter that let any one of them through would reach it.
 #[test]
 fn a_reporter_outside_herdr_is_inactive_and_connects_to_nothing() {
+    /// Stands for the listening herdr's socket in the rows below.
+    const SOCKET: &str = "<the fake herdr's socket>";
     let herdr = FakeHerdr::answering();
     let socket = herdr.socket.as_os_str().to_owned();
-    let partial: [&[(&str, &str)]; 4] = [
+    let pane = ("HERDR_PANE_ID", "w1:p2");
+    let at = ("HERDR_SOCKET_PATH", SOCKET);
+    let rows: [&[(&str, &str)]; 9] = [
         &[],
-        &[("HERDR_PANE_ID", "w1:p2"), ("HERDR_SOCKET_PATH", "")],
-        &[("HERDR_ENV", "1"), ("HERDR_SOCKET_PATH", "")],
-        &[
-            ("HERDR_ENV", "0"),
-            ("HERDR_PANE_ID", "w1:p2"),
-            ("HERDR_SOCKET_PATH", ""),
-        ],
+        &[pane, at],
+        &[("HERDR_ENV", "0"), pane, at],
+        &[("HERDR_ENV", "true"), pane, at],
+        &[("HERDR_ENV", ""), pane, at],
+        &[("HERDR_ENV", "1"), at],
+        &[("HERDR_ENV", "1"), ("HERDR_PANE_ID", ""), at],
+        &[("HERDR_ENV", "1"), pane],
+        &[("HERDR_ENV", "1"), pane, ("HERDR_SOCKET_PATH", "")],
     ];
-    for set in partial {
+    for row in rows {
         let reporter = Reporter::from_variables(|name| {
-            set.iter().find(|(set, _)| *set == name).map(|(_, value)| {
-                if name == "HERDR_SOCKET_PATH" {
-                    socket.clone()
-                } else {
-                    (*value).into()
-                }
-            })
+            row.iter()
+                .find(|(set, _)| *set == name)
+                .map(|&(_, value)| match value {
+                    SOCKET => socket.clone(),
+                    value => value.into(),
+                })
         });
-        assert!(!reporter.is_active(), "{set:?}");
+        assert!(!reporter.is_active(), "{row:?}");
         reporter.report(State::Working, None);
         reporter.release();
+        assert!(herdr.quiet(), "{row:?}");
     }
-    assert!(herdr.quiet());
 }
 
 /// A pane id or socket path that is not valid UTF-8 leaves the reporter inactive. The regression
