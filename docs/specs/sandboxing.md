@@ -4168,7 +4168,7 @@ file. A new spawn that looks a name up through
   cross compiling or `TARGET_<NAME>` for one that is, and `<NAME>`. The `cc` crate also puts
   `CROSS_COMPILE` in front of the program names it looks for. The suite removes every one of them
   whatever it holds: `CROSS_COMPILE` and the plain `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` are
-  in the list (`CC`, `CXX`, `AR`, `CFLAGS`, `CXXFLAGS` and `PKG_CONFIG` already were), and the
+  in the list, as are `CC`, `CXX`, `AR`, `CFLAGS`, `CXXFLAGS` and `PKG_CONFIG`, and the
   per-target forms are matched as a family by `names_a_compiler_for_a_target`. In `cc` 1.4.3 the
   plain `RANLIB` is the program `get_ranlib` returns (`lib.rs` 3669) and `RANLIBFLAGS` is put on it
   (3658), `ARFLAGS` is put on the `ar` that `Build::compile` runs (3611), and `NVCC` is the program
@@ -4208,7 +4208,7 @@ file. A new spawn that looks a name up through
   uses the `cc` crate, so the workflows do not reach the names; the test does, and a workflow with
   such a build script would need the crate on a host that has no registry cache.
 
-  The names the suite's list gained for the `cc` crate, make and python3 are:
+  The suite's list also holds these names for the `cc` crate, make and python3:
 
   | Variable | Names | Why it selects code |
   |---|---|---|
