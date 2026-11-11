@@ -4823,6 +4823,19 @@ cancel kills it rather than asking it to stop.
   imported and then not read, and an `amazon-bedrock` entry from opencode with one is left with the
   reason that it has no region.
 
+- **A project or local layer naming the key id or the signing key on a source build is accepted,
+  and still reaches no host but the person's own.** `SERVICES_KEY_AICHAT` and
+  `BRAVE_SERVICES_KEY_ID` are not in any of the four sets [BACKEND-33](#BACKEND-33) keeps to the
+  person's own layers, so BACKEND-35's rule applies to them like any other name: on a source build,
+  which carries neither, a checkout's `.bravebot/settings.json` may set both. What that costs is a
+  request to Brave's endpoint signed with a credential the checkout chose rather than the person
+  running it, on a build that had none compiled in. It is accepted because the two endpoint names
+  are kept to the person's own layers regardless, so a checkout that supplies the key id and the
+  signing key still cannot choose where a request signed with them is sent: it reaches the host the
+  person's own file, environment or build named, or none at all if a source build has no endpoint
+  anywhere in those layers. A person who runs a source build inside such a checkout is signing
+  requests, if any are sent, with a key id and a key they did not type and may not have read.
+
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
   the field, so it is not validated, and on `near-glm-5`, which reports a non-zero reasoning-token
