@@ -711,10 +711,10 @@ package's key does not decide what is trusted for this one.
   or a new signing subkey reaches only the install scripts served, and the publishes made, after it.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
-  remote, and the agreement among the files that state a version. The publish job builds the tip of a
-  branch it is handed, refuses a `package.json` mismatch, and refuses unless tag `v` plus the
-  version in `Cargo.toml` already names that commit. A commit that is not `origin/main` can
-  still be published if that is what the tag names and BRANCH points there.
+  remote, and the agreement among the files that state a version. The publish job is given a tag,
+  builds the commit it names, refuses a `package.json` mismatch, and refuses unless tag `v` plus
+  the version in `Cargo.toml` names that commit. A commit that is not `origin/main` can still be
+  published if a tag names it.
 
 - **Who published a release is not recoverable from here.** A publish is a parameterised build in
   another system, so who asked for it lives in that system's history. The job requires the tag

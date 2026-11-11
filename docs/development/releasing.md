@@ -64,10 +64,10 @@ git config bravebot.releaseRemote upstream
 
 The tag push does not publish binaries. GitHub Actions still builds and tests on the tag.
 Signed, configured assets are built, notarised, and uploaded by the Jenkins job
-`bravebot-build` with `UPLOAD` and `RELEASE` enabled. That job builds the tip of the branch it
-is given. A RELEASE run refuses unless tag `v<version>` from `Cargo.toml` already exists and
-points at that commit, then creates a GitHub release of that name and attaches the signed
-binaries plus the `.sha256` files written after signing. `gh release create` fails if that
+`bravebot-build` with `UPLOAD` and `RELEASE` enabled. That job is given a tag and builds the
+commit the tag names. A RELEASE run refuses unless tag `v<version>` from `Cargo.toml` already
+exists and points at that commit, then creates a GitHub release of that name and attaches the
+signed binaries plus the `.sha256` files written after signing. `gh release create` fails if that
 release already exists.
 
 After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
