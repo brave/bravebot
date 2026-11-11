@@ -128,12 +128,43 @@ impl fmt::Display for SandboxError {
 
 impl std::error::Error for SandboxError {}
 
+/// Refuses a program that is not an absolute path.
+///
+/// A bare or relative program is found after the confinement is installed, by a search the
+/// caller's `PATH` and the directory the process starts in decide, so the file that runs is one
+/// nobody named. It is refused before a command, a grant or a process exists, with the same error
+/// on every backend that confines a program the caller names.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub(crate) fn require_absolute_program(
+    mechanism: &'static str,
+    program: &OsStr,
+) -> Result<(), SandboxError> {
+    if std::path::Path::new(program).is_absolute() {
+        return Ok(());
+    }
+    Err(SandboxError::SetupFailed {
+        mechanism,
+        detail: format!(
+            "the program {} is not an absolute path, so the file that runs would be whichever \
+             one a search finds once the confinement is installed; refusing rather than \
+             starting a program nobody named",
+            program.to_string_lossy()
+        ),
+    })
+}
+
 /// A platform confinement backend.
 pub trait Sandbox: Send {
     /// What this backend can enforce here, on this kernel.
     fn capabilities(&self) -> Capabilities;
 
     /// Start a confined process, or refuse.
+    ///
+    /// For a backend that runs the program on this machine, `program` is an absolute path and the
+    /// backend refuses one that is not, with [`SandboxError::SetupFailed`], before it creates a
+    /// command, writes a grant or starts a process, since a name left to a search is resolved
+    /// after the confinement is installed. The OpenShell backend runs the program inside an image
+    /// and takes the name as the image spells it (SANDBOX-1).
     ///
     /// The backend starts the process rather than handing back a command for the caller
     /// to spawn, because confinement can be carried by an argument to the call that
@@ -151,6 +182,9 @@ pub trait Sandbox: Send {
     ) -> Result<ConfinedChild, SandboxError>;
 
     /// A command that is confined when it is spawned, or refuse.
+    ///
+    /// `program` is an absolute path, and a backend that runs the program on this machine refuses
+    /// one that is not, as it does for [`Sandbox::spawn`].
     ///
     /// For a caller that runs the process itself, a pipeline wiring one stage's output to the
     /// next and watching every stage, which [`Sandbox::spawn`]'s streams cannot describe. Only
@@ -180,6 +214,9 @@ pub trait Sandbox: Send {
     /// creation: the pipeline the caller runs cannot be described by [`Streams`], and there is
     /// no command to hand back, so the caller hands over the three handles instead and watches
     /// the process it gets back. Only on the platform that has no `command`.
+    ///
+    /// `program` is an absolute path, and a backend that runs the program on this machine refuses
+    /// one that is not, as it does for [`Sandbox::spawn`].
     ///
     /// A backend that does not provide it refuses, so a caller cannot reach an unconfined
     /// process by asking a backend that never wrote one.
@@ -417,5 +454,43 @@ mod tests {
     fn errors_explain_the_refusal() {
         let err = SandboxError::PolicyTooPermissive;
         assert!(err.to_string().contains("would not confine anything"));
+    }
+
+    /// An absolute path passes. A bare name, a relative path, the empty string and the Windows
+    /// forms `\cmd.exe` (rooted, no drive) and `C:cmd.exe` (drive, no root) are refused, each with
+    /// the mechanism the caller named.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn only_an_absolute_program_passes_the_check_every_backend_makes() {
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\cmd.exe"
+        } else {
+            "/usr/bin/cat"
+        };
+        assert!(require_absolute_program("test", OsStr::new(absolute)).is_ok());
+
+        for named in [
+            "cat",
+            "cat.exe",
+            "./cat",
+            "bin/cat",
+            "../bin/cat",
+            ".",
+            "",
+            r"\cmd.exe",
+            "C:cmd.exe",
+        ] {
+            let refused = require_absolute_program("test", OsStr::new(named));
+            assert!(
+                matches!(
+                    refused,
+                    Err(SandboxError::SetupFailed {
+                        mechanism: "test",
+                        ..
+                    })
+                ),
+                "{named:?}: {refused:?}"
+            );
+        }
     }
 }

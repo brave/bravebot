@@ -121,7 +121,22 @@ fn cmd(
     line: &str,
     policy: &SandboxPolicy,
 ) -> Result<(Option<i32>, String), SandboxError> {
-    run(sandbox, "cmd.exe", &["/c", line], policy)
+    run(sandbox, &cmd_exe(), &["/c", line], policy)
+}
+
+/// `cmd.exe` in the system directory, an absolute path as the backend requires.
+fn cmd_exe() -> String {
+    system32("cmd.exe")
+}
+
+/// A program in the system directory, an absolute path as the backend requires.
+fn system32(name: &str) -> String {
+    let root = std::env::var_os("SystemRoot").expect("the system directory is named");
+    Path::new(&root)
+        .join("System32")
+        .join(name)
+        .display()
+        .to_string()
 }
 
 /// How long a program in a container is given to run the first line it is handed.
@@ -178,7 +193,7 @@ fn a_stage_reading_its_input(
     };
     let mut child = sandbox
         .spawn(
-            "cmd.exe".as_ref(),
+            cmd_exe().as_ref(),
             &[OsString::from("/c"), OsString::from("cmd")],
             &the_base(name),
             streams,
@@ -371,7 +386,7 @@ fn a_grant_does_not_reach_through_a_junction_a_stage_made() {
         };
         let mut waiting = reading
             .spawn(
-                "cmd.exe".as_ref(),
+                cmd_exe().as_ref(),
                 &[OsString::from("/c"), OsString::from("cmd")],
                 &policy,
                 streams,
@@ -449,12 +464,7 @@ fn a_program_writes_inside_its_grants_and_not_outside() {
 
 /// `curl.exe` in the system directory, which every container reads without an entry of its own.
 fn curl() -> String {
-    let root = std::env::var_os("SystemRoot").expect("the system directory is named");
-    Path::new(&root)
-        .join("System32")
-        .join("curl.exe")
-        .display()
-        .to_string()
+    system32("curl.exe")
 }
 
 /// What `curl` ends with when it could not resolve the host, and when it could not connect.
@@ -602,7 +612,7 @@ fn a_program_answering_lines_on_its_streams_starts_under_the_base_and_ends_with_
     };
     let mut child = sandbox
         .spawn(
-            "findstr.exe".as_ref(),
+            system32("findstr.exe").as_ref(),
             &[OsString::from("^")],
             &policy,
             streams,
@@ -645,9 +655,16 @@ fn a_program_answering_lines_on_its_streams_starts_under_the_base_and_ends_with_
 #[test]
 fn git_starts_under_the_empty_base() {
     let sandbox = sandbox();
+    let git = on_the_path("git").expect("git is on PATH, and this job installs it");
     let policy = the_base("git");
 
-    let (code, printed) = run(&sandbox, "git", &["--version"], &policy).expect("git starts");
+    let (code, printed) = run(
+        &sandbox,
+        &git.display().to_string(),
+        &["--version"],
+        &policy,
+    )
+    .expect("git starts");
 
     assert_eq!(
         code,
@@ -718,7 +735,7 @@ fn hold_a_stage() -> ! {
     };
     let stage = sandbox
         .spawn(
-            "cmd.exe".as_ref(),
+            cmd_exe().as_ref(),
             &[OsString::from("/c"), OsString::from("cmd")],
             &the_base("held"),
             streams,
@@ -1224,6 +1241,38 @@ fn a_policy_that_refuses_a_read_or_a_write_starts_no_program() {
     assert!(!marker.exists(), "a program ran under a refused policy");
 }
 
+/// A program that is not an absolute path is refused before a container is configured, so the
+/// directory is not made by whichever `cmd.exe` a search of the caller's `PATH` finds. The
+/// regression it rejects is the backend starting a bare name, which the platform resolves outside
+/// anything the policy named.
+#[test]
+fn a_program_that_is_not_an_absolute_path_is_refused_before_a_container_exists() {
+    let sandbox = sandbox();
+    let directory = scratch("bare-program");
+    let marker = directory.join("marker");
+    let policy = the_base("bare-program").allow_write(&directory);
+    let made = format!("mkdir {}", marker.display());
+
+    for program in [
+        "cmd.exe",
+        "cmd",
+        r".\cmd.exe",
+        r"System32\cmd.exe",
+        r"\cmd.exe",
+        "C:cmd.exe",
+    ] {
+        let refused = run(&sandbox, program, &["/c", &made], &policy);
+        assert!(
+            matches!(refused, Err(SandboxError::SetupFailed { .. })),
+            "{program:?} started: {refused:?}"
+        );
+    }
+    assert!(
+        !marker.exists(),
+        "a program ran from a name left to a search"
+    );
+}
+
 /// SANDBOX-4 for `cmd.exe` with a real process: a name holding `&` is refused before anything
 /// starts, so the directory is not made under any name. The regression it rejects is the backend
 /// quoting the argument and starting `cmd.exe`, which reads the `&` as its own rather than as part
@@ -1235,9 +1284,10 @@ fn cmd_with_an_argument_holding_an_ampersand_starts_nothing() {
     let policy = the_base("ampersand").allow_write(&directory);
     let named = directory.join("R&D");
 
+    let interpreter = cmd_exe();
     let refused = run(
         &sandbox,
-        "cmd.exe",
+        &interpreter,
         &["/c", "mkdir", &named.display().to_string()],
         &policy,
     );

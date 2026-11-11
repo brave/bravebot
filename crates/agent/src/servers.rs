@@ -2634,6 +2634,21 @@ fn start_under(
                 choice_arguments,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
+                let Some(program_text) = program.to_str() else {
+                    notes.push(
+                        t!(
+                            servers_not_reached,
+                            alias = alias,
+                            reason = t!(
+                                servers_program_not_text,
+                                program = program.to_string_lossy()
+                            )
+                            .to_string()
+                        )
+                        .to_string(),
+                    );
+                    continue;
+                };
                 let sandbox = match &sandbox {
                     Some(Ok(sandbox)) => sandbox,
                     Some(Err(error)) => {
@@ -2697,7 +2712,7 @@ fn start_under(
                     });
                 let launched = StdioServer::launch(
                     alias.as_str(),
-                    program.to_str().unwrap_or_default(),
+                    program_text,
                     &arguments,
                     variables,
                     sandbox.as_ref(),
@@ -8168,6 +8183,60 @@ for line in sys.stdin:
                 "asking {asking}"
             );
         }
+    }
+
+    /// A program whose name is not text is not started, and the note says so with the path shown
+    /// lossily. Only a Unix path can fail to be text, so the test is gated to Unix. The regression
+    /// it rejects is a launch that starts whatever an empty or lossy name resolves to.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_server_whose_program_name_is_not_text_is_not_started() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = scratch("cli-servers-program-not-text");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let home_dir = root.join("home");
+        std::fs::create_dir_all(&home_dir).expect("home");
+        let home = Home {
+            directory: Some(home_dir),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program: root.join(OsStr::from_bytes(b"mock-mcp-\xff")),
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: None,
+            declared: digested(&["mock-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, None),
+            vec![("mock".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert!(started.is_empty(), "the server started: {notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("is not text") && note.contains("mock-mcp-\u{fffd}")),
+            "the refusal did not name the program as not text: {notes:?}"
+        );
     }
 
     /// SERVERS-22: the plan of a local server carries the arguments its declaration says take a

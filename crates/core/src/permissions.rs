@@ -1366,8 +1366,8 @@ fn command_pattern(specifier: &str) -> String {
 enum Place {
     /// A character of a word after the program word.
     Char(char),
-    /// A character of the program word. A rule that restricts compares it without regard to case
-    /// (PERM-5).
+    /// A character of the program word. A rule that restricts compares it without regard to case,
+    /// by the one-letter fold a volume compares names with (PERM-5).
     Program(char),
     /// Where one word ends and the next begins.
     Gap,
@@ -1430,10 +1430,11 @@ pub(crate) fn without_suffixes(program: &str) -> Option<&str> {
     (stem != program && !stem.is_empty()).then_some(stem)
 }
 
-/// The name a wrapper is looked up under: without regard to case, and read as the program word is
-/// ([`without_suffixes`]).
+/// The name a wrapper is looked up under: read as the program word is ([`without_suffixes`]) and
+/// folded by the fold the program word is compared with, so a letter a volume opens as an ASCII one
+/// names the same wrapper (PERM-5, PERM-20).
 fn wrapper_name(program: &str) -> String {
-    without_suffixes(program).unwrap_or(program).to_lowercase()
+    crate::trust::fold_simple(without_suffixes(program).unwrap_or(program))
 }
 
 impl Permissions {
@@ -1754,10 +1755,31 @@ pub fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
 /// that restricts should cover more, and a rule that grants should cover what it names.
 fn covers_place(c: char, place: &Place, restricting: bool) -> bool {
     match *place {
-        Place::Program(found) if restricting => c.to_lowercase().eq(found.to_lowercase()),
+        Place::Program(found) if restricting => program_letters_meet(c, found),
         Place::Char(found) | Place::Program(found) => c == found && (c != ' ' || restricting),
         Place::Gap => c == ' ',
     }
+}
+
+/// Whether a character of a restricting rule meets a character of the program word.
+///
+/// The letters meet when [`fold_simple`](crate::trust::fold_simple) takes them to the same letter:
+/// upper case first and then lower case, one letter to one letter. That is how NTFS compares names,
+/// and it joins `\u{17f}` with `s` and `\u{131}` with `i`, which lowercasing leaves apart. The
+/// Kelvin sign lowercases to `k`, so lowercasing joins it too. Every pair that lowercases to the
+/// same letter is joined by the fold as well, which
+/// `lowercasing_joins_no_letters_that_the_simple_fold_keeps_apart` checks over every code point.
+/// ASCII letters are compared directly.
+fn program_letters_meet(c: char, found: char) -> bool {
+    if c == found {
+        return true;
+    }
+    if c.is_ascii() && found.is_ascii() {
+        return c.eq_ignore_ascii_case(&found);
+    }
+    let (mut rule, mut word) = ([0; 4], [0; 4]);
+    crate::trust::fold_simple(c.encode_utf8(&mut rule))
+        == crate::trust::fold_simple(found.encode_utf8(&mut word))
 }
 
 /// Whether a command pattern covers one stage's argv.
@@ -4077,6 +4099,161 @@ mod tests {
         }
     }
 
+    /// A deny or ask rule reads the program word by the fold a volume compares names with, which
+    /// joins a letter with the one it is the upper or lower case of: `\u{131}` with `i`, `\u{17f}`
+    /// with `s` and the Kelvin sign with `k`. Lowercasing alone leaves `\u{131}` and `\u{17f}`
+    /// apart from `i` and `s`, so a program spelled with one is not covered where the rule is
+    /// written in ASCII and the line runs unasked (PERM-5, PERM-20). The Kelvin sign lowercases to
+    /// `k`, and its cases hold the fold to the same answer. The answer does not depend on the
+    /// machine the test runs on.
+    #[test]
+    fn a_restricting_rule_covers_a_program_spelled_with_a_letter_a_volume_folds_to_an_ascii_one() {
+        let cases = [
+            (
+                "Bash(git push *)",
+                [
+                    "g\u{131}t push",
+                    "G\u{131}T push origin",
+                    "g\u{131}t.exe push",
+                    "env g\u{131}t push",
+                    "t\u{131}meout 5 git push",
+                    "N\u{131}CE -n 3 g\u{131}t push",
+                ],
+            ),
+            (
+                "Bash(ssh *)",
+                [
+                    "\u{17f}sh host",
+                    "\u{17f}\u{17f}h host",
+                    "\u{17f}\u{17f}H.EXE host",
+                    "timeout 5 \u{17f}sh host",
+                    "ENV.EXE \u{17f}sh host",
+                    "t\u{131}meout.exe 5 ssh host",
+                ],
+            ),
+            (
+                "Bash(kubectl *)",
+                [
+                    "\u{212a}ubectl get pods",
+                    "kubectl get pods",
+                    "KUBECTL get pods",
+                    "nohup \u{212a}ubectl get pods",
+                    "t\u{131}meout 5 \u{212a}UBECTL get pods",
+                    "\u{212a}ubectl.com get pods",
+                ],
+            ),
+        ];
+        for list in 0..2 {
+            for (rule, lines) in cases {
+                let permissions = if list == 0 {
+                    rules(&[rule], &[], &[])
+                } else {
+                    rules(&[], &[rule], &[])
+                };
+                let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+                for line in lines {
+                    assert_eq!(
+                        permissions.for_command(&words(line)),
+                        expected,
+                        "{rule}: {line}"
+                    );
+                    assert_eq!(
+                        permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                        expected,
+                        "{rule}: {line} as a later stage"
+                    );
+                }
+            }
+            // The respelling is read in the other direction too: a rule written with the letter
+            // covers the program written without it.
+            let rule = "Bash(g\u{131}t push *)";
+            let permissions = if list == 0 {
+                rules(&[rule], &[], &[])
+            } else {
+                rules(&[], &[rule], &[])
+            };
+            let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+            for line in [
+                "git push",
+                "GIT push origin",
+                "g\u{131}t push",
+                "Git.exe push",
+            ] {
+                assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
+            }
+        }
+    }
+
+    /// Only the letters a volume joins are joined. `\u{130}` lowercases to two characters and its
+    /// upper case is itself, so it stays apart from `i`, an extra letter makes another program, and
+    /// an argument is compared as written in every spelling.
+    #[test]
+    fn a_restricting_rule_keeps_apart_what_a_volume_holds_apart() {
+        let permissions = rules(&["Bash(git push *)"], &["Bash(ssh *)"], &[]);
+        for line in [
+            "g\u{130}t push",
+            "g\u{131}\u{131}t push",
+            "git\u{17f} push",
+            "git pu\u{17f}h",
+            "git PUSH",
+            "\u{17f}\u{17f}\u{17f}h host",
+            "echo \u{17f}sh host",
+            "t\u{130}meout 5 git push",
+            "t\u{131}meout 5 -x git push",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+    }
+
+    /// Two letters that lowercase to the same text are joined by the simple fold too, so the fold
+    /// alone decides whether a deny or ask rule meets a letter of the program word.
+    #[test]
+    fn lowercasing_joins_no_letters_that_the_simple_fold_keeps_apart() {
+        let mut folded_by_lowercase = std::collections::HashMap::<String, String>::new();
+        for code in 0..=0x10_FFFF_u32 {
+            let Some(letter) = char::from_u32(code) else {
+                continue;
+            };
+            let mut buffer = [0; 4];
+            let folded = crate::trust::fold_simple(letter.encode_utf8(&mut buffer));
+            let lowered = letter.to_lowercase().collect::<String>();
+            let first = folded_by_lowercase
+                .entry(lowered)
+                .or_insert_with(|| folded.clone());
+            assert_eq!(
+                *first, folded,
+                "U+{code:04X} lowercases with a letter the fold takes elsewhere"
+            );
+        }
+    }
+
+    /// A suffix is taken off by comparing its letters as ASCII, which is right only while no other
+    /// letter folds to a letter of `.exe`, `.com`, `.cmd`, `.bat` or `::$DATA`. The program word is
+    /// compared by the simple mapping and by lowercase, and a letter outside ASCII that either
+    /// takes to one of those would make a suffix spelled with it a suffix too.
+    #[test]
+    fn no_letter_outside_ascii_folds_to_a_letter_of_the_suffixes() {
+        let suffix_letters = ['e', 'x', 'c', 'o', 'm', 'b', 'a', 't', 'd'];
+        for code in 0..=0x10_FFFF_u32 {
+            let Some(letter) = char::from_u32(code).filter(|letter| !letter.is_ascii()) else {
+                continue;
+            };
+            let mut buffer = [0; 4];
+            let folded = crate::trust::fold_simple(letter.encode_utf8(&mut buffer));
+            let lowered = letter.to_lowercase().collect::<String>();
+            for suffix_letter in suffix_letters {
+                assert!(
+                    folded != suffix_letter.to_string() && lowered != suffix_letter.to_string(),
+                    "U+{code:04X} folds to {suffix_letter}, so a suffix spelled with it is not taken off"
+                );
+            }
+        }
+    }
+
     /// An `allow` rule is matched as written, so a rule for `touch` does not grant `TOUCH`,
     /// `touch.exe` or `touch` under a wrapper, and a rule spelled `Touch` does not grant `touch`.
     #[test]
@@ -4108,6 +4285,20 @@ mod tests {
         let permissions = rules(&[], &[], &["Bash(Touch *)"]);
         assert_eq!(
             permissions.for_command(&words("touch x")),
+            Decision::Unmatched
+        );
+        // A letter a volume folds to an ASCII one is no more granted than a case is.
+        let permissions = rules(&[], &[], &["Bash(git push *)", "Bash(ssh *)"]);
+        for line in ["g\u{131}t push", "\u{17f}sh host"] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+        let permissions = rules(&[], &[], &["Bash(g\u{131}t push *)"]);
+        assert_eq!(
+            permissions.for_command(&words("git push")),
             Decision::Unmatched
         );
         // A deny rule still wins over an allow rule spelled the way the line is.

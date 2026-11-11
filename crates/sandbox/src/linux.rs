@@ -657,6 +657,7 @@ impl LandlockSandbox {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
         }
+        crate::require_absolute_program("landlock", program)?;
 
         // A stage with no network, or held to a proxy's port, runs in a network namespace of its
         // own, where it has a loopback and nothing else. A kernel that will not make one refuses
@@ -925,6 +926,34 @@ mod tests {
                     .allow_subprocesses(),
                 SandboxPolicy::allow_read,
             )
+    }
+
+    /// A program that is not an absolute path is refused before a command exists: a name left to a
+    /// search is resolved after the ruleset is installed, by the caller's `PATH` and working
+    /// directory, so the file that runs is one nobody named.
+    ///
+    /// The regression it rejects is a backend that builds the command from a bare or relative
+    /// program, which starts whichever file the search finds. The absolute path is held to also
+    /// start, so a refusal of every program is not mistaken for the check.
+    #[test]
+    fn a_program_that_is_not_an_absolute_path_is_refused_before_a_command_exists() {
+        for program in ["cat", "./cat", "bin/cat", "../bin/cat", ""] {
+            let refused = LandlockSandbox::confining(OsStr::new(program), &[], &loadable_policy());
+
+            assert!(
+                matches!(
+                    refused,
+                    Err(SandboxError::SetupFailed {
+                        mechanism: "landlock",
+                        ..
+                    })
+                ),
+                "{program:?}: {refused:?}"
+            );
+        }
+        assert!(
+            LandlockSandbox::confining(OsStr::new("/usr/bin/cat"), &[], &loadable_policy()).is_ok()
+        );
     }
 
     /// RUN-8: the program and arguments the command holds are the bytes the caller gave, so a

@@ -911,6 +911,22 @@ mod tests {
         assert!(!is_pure_filter("/usr/bin/sed", &args(&["s/a/b/"])));
     }
 
+    /// The table grants an answer, so its program name is compared as written. A letter a volume may
+    /// open as another (`\u{17f}` for `s`) is a different name here and keeps the opaque default,
+    /// where a deny or ask rule folds it (PERM-5).
+    #[test]
+    fn a_program_spelled_with_a_folded_letter_is_not_in_the_table() {
+        assert_eq!(read_set("sort", &args(&["-rn"])), Some(vec![]));
+        assert_eq!(read_set("\u{17f}ort", &args(&["-rn"])), None);
+        assert_eq!(read_set("/usr/bin/\u{17f}ort", &args(&["-rn"])), None);
+        assert_eq!(read_set("Wc", &args(&["-l"])), None);
+        assert_eq!(read_set("\u{212a}at", &args(&["a.md"])), None);
+        assert_eq!(
+            read_set("cat", &args(&["a.md"])),
+            Some(vec!["a.md".to_string()])
+        );
+    }
+
     /// The most important test here. These are the two programs a reader would list first, and both
     /// can write files and run commands from an argument, so neither may ever qualify.
     #[test]

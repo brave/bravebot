@@ -10,10 +10,14 @@
  * `GIO_MODULE_DIR`, and Qt loads plug-ins from the `QT_` names and the service cache from
  * `KDESYCOCA`. A program the person approved with `run` may have written the file any of these
  * name, and the opener then runs it outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
- * `crates/tui/src/opener.rs`, which also judges `HOME` and removes it from the opener's own start.
- * `HOME` is not deleted here: this process and the agent it starts read it, so under a GNOME
- * session on Linux the opener still reads a `HOME` the sandbox let a program write
- * (brave/bravebot#3904).
+ * `crates/tui/src/opener.rs`, which also judges `HOME`, `XDG_RUNTIME_DIR` and
+ * `DBUS_SESSION_BUS_ADDRESS` and removes them from the opener's own start.
+ * Those three are not deleted here: this process and the agent it starts read them, and Electron
+ * finds the session bus through the last two, so under a GNOME session on Linux the opener still
+ * reads a `HOME`, a runtime directory or a bus address the sandbox let a program write
+ * (brave/bravebot#3904 tracks `HOME` and brave/bravebot#3940 tracks the other two, which the bullet "The starts
+ * that keep XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS" under "What a checked start does not
+ * cover" in SANDBOX-30 records). `external-open.test.mjs` asserts that all three are left set.
  *
  * The names are deleted from `process.env`, which Node writes through to the process's real
  * environment, immediately before each call, so the first call and every later one is covered

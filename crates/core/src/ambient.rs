@@ -363,9 +363,11 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
         let inner = crate::permissions::wrapped_commands(&argv);
         called.extend(inner.iter().map(|words| (words[0], &words[1..])));
         for (spelling, given) in called {
-            let name = program_name(spelling);
+            // Folded as a deny or ask rule folds the program word (PERM-5), so a spelling the
+            // volume opens as the program is read as the program.
+            let name = crate::trust::fold_simple(program_name(spelling));
             for entry in REACHING {
-                let named = entry.program.eq_ignore_ascii_case(name);
+                let named = entry.program == name;
                 let spending =
                     entry.spends.is_empty() || given.iter().any(|arg| entry.spends.contains(arg));
                 if named && spending {
@@ -728,6 +730,18 @@ mod tests {
         ] {
             assert_eq!(names(wrapper, &["30", "docker", "ps"]), daemon, "{wrapper}");
         }
+    }
+
+    /// The program is read as a deny rule reads it: a letter a volume folds to an ASCII one names
+    /// the same program (PERM-5), so `\u{17f}sh` is `ssh` and `\u{131}` does not hide a wrapper.
+    #[test]
+    fn a_program_spelled_with_a_folded_letter_is_the_program() {
+        let ssh = names("ssh", &["host"]);
+        assert!(!ssh.is_empty());
+        assert_eq!(names("\u{17f}sh", &["host"]), ssh);
+        assert_eq!(names("\u{17f}SH.exe", &["host"]), ssh);
+        assert_eq!(names("t\u{131}meout", &["30", "\u{17f}sh", "host"]), ssh);
+        assert!(names("\u{17f}\u{17f}sh", &["host"]).is_empty());
     }
 
     /// The metadata service is reached by address rather than by a program, so the address is
