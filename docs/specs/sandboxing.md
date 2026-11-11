@@ -4380,19 +4380,15 @@ file. A new spawn that looks a name up through
   `third_party/crossterm` with that fallback removed, so a failed query is an error and nothing is
   started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
   draw both end there. A dependency is audited for a bare-name start when it is added or
-  raised. `ratatui-image` 11.1.0 started `tmux set -p allow-passthrough on` by bare name, with the
-  whole environment and `PATH`, from `detect_tmux_and_outer_protocol_from_env` in `src/picker.rs`
-  when `TERM` started with `tmux` or `TERM_PROGRAM` was `tmux`. Every way into that function
-  reached it, and the interface reaches it when it senses the terminal at start-up. The tree keeps
-  `ratatui-image` in `third_party/ratatui-image` with that start removed, so nothing is started on
-  any platform and no `tmux` found through the `PATH` runs. The crate still detects tmux and wraps
-  the picture queries and pictures for it. Without the command, tmux drops those sequences unless
-  the person has set `allow-passthrough` themselves, so a picture does not draw in tmux until they
-  do. A test starts the built binary with `TERM` and then `TERM_PROGRAM` naming tmux, a `tmux`
-  planted first on `PATH` and loader and shell variables set, and requires that the planted
-  program never ran. It plants the program and does not run a real tmux. A second test reads the
-  source of `third_party/ratatui-image` (`src` and `build.rs`) and fails when a file names
-  `Command`, so a raise of the crate that brings a start back, or adds one, fails until it is
+  raised. `third_party/ratatui-image` (`ratatui-image` 11.1.0) starts no program on any platform,
+  so no `tmux` found through the `PATH` runs when `TERM` starts with `tmux` or `TERM_PROGRAM` is
+  `tmux`. The crate detects tmux and wraps the picture queries and pictures for it. tmux drops
+  those sequences unless the person has set `allow-passthrough` themselves, so a picture does not
+  draw in tmux until they do. A test starts the built binary with `TERM` and then `TERM_PROGRAM`
+  naming tmux, a `tmux` planted first on `PATH` and loader and shell variables set, and requires
+  that the planted program never ran. It plants the program and does not run a real tmux. A second
+  test reads the source of `third_party/ratatui-image` (`src` and `build.rs`) and fails when a file
+  names `Command`, so a raise of the crate that brings a start back, or adds one, fails until it is
   audited. That test does not see a start made through a macro or a name the source computes, or
   one in a dependency of the crate.
 - **No caller reaches the starts in `gix-path`.** `gix-path` 0.13.0 is compiled in through
