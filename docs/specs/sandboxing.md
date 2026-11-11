@@ -5235,12 +5235,9 @@ shown by running the program, or not entirely:
   there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
   or Electron fails them. The `ci.yml` job `Front end` runs `make check-ui-build` on `ubuntu-latest`
   after installing `xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64`, no workflow sets
-  `ELECTRON_SKIP_BINARY_DOWNLOAD`, and the log of run 42949876078 lists both cases as passed (✔)
-  and not skipped. The earlier fifteen-name form of the first case passed on the `ubuntu-latest`
-  `Front end` job of that run (3.27 s; 1.99 s for the `showItemInFolder` case, which asserted a
-  start of the control and of the run through `external-open.ts`),
-  so that form started Electron there and `showItemInFolder` started `xdg-open`. Neither case has
-  been run on Linux since the test was changed to sixteen names.
+  `ELECTRON_SKIP_BINARY_DOWNLOAD`, and the `Front end` log of run 43104226342 (image
+  `ubuntu-26.04`) lists both cases, with the sixteen names, as passed (✔, 5.01 s and 1.67 s) and
+  not skipped, so Electron started there and `showItemInFolder` started `xdg-open`.
 
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
   the names in the opener's list, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
@@ -5946,7 +5943,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the sixteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the sixteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
-`verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the sixteen names where Electron's own shell starts it with all sixteen; its showItemInFolder case is a test case of its own and passed on Linux in CI in its fifteen-name form, asserting a start of xdg-open; the ui job of CI runs it through make check-ui-build on ubuntu-latest and fails on Linux when Electron or xvfb-run is missing)`
+`verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the sixteen names where Electron's own shell starts it with all sixteen; its showItemInFolder case is a test case of its own, asserts a start of xdg-open and passed on Linux in CI run 43104226342; the ui job of CI runs it through make check-ui-build on ubuntu-latest and fails on Linux when Electron or xvfb-run is missing)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`

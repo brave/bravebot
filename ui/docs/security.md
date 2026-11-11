@@ -101,9 +101,9 @@ run.
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
 launcher it starts is a script that records which of the sixteen names it was started with. The
 Electron test has a case for `openExternal` and `openPath` and a case for `showItemInFolder`. Both
-ran on Linux in CI at 8975ba4 (the `Front end` job, `make check-ui-build`, on `ubuntu-latest` with
-`xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64` installed and Electron 44.9.3 downloaded by
-`postinstall`), as passed and not skipped, with the test then written for fifteen names. On Linux
+passed on Linux, and were not skipped, in CI run 43104226342 (the `Front end` job,
+`make check-ui-build`, on `ubuntu-latest` with `xvfb`, `libgtk-3-0`, `libnss3` and
+`libasound2t64` installed and Electron 44.9.3 downloaded by `postinstall`). On Linux
 with `CI` set the test fails, rather than skips, when Electron or `xvfb-run` is missing. On Linux
 `showItemInFolder` asks the session bus whether the portal or the file manager is running
 (`platform_util_linux.cc`, `ShowItemHelper`, Electron 44.9.3). With neither, which is the case when
@@ -111,8 +111,7 @@ the test points `DBUS_SESSION_BUS_ADDRESS` at a missing socket, or when a call t
 it calls `OpenParentFolderFallback`,
 which runs `xdg-open` on the folder, so the case sees at least one start and the start carries the
 environment of the main process. With a portal or file manager running, as in a desktop session, it
-sends the path over D-Bus and starts no `xdg-open`, so the deletion has nothing to do there. The
-case was not re-run on Linux after the names went from fifteen to sixteen.
+sends the path over D-Bus and starts no `xdg-open`, so the deletion has nothing to do there.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 
