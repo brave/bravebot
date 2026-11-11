@@ -261,16 +261,19 @@ gh issue list --state open --limit 200 --json number,labels \
       | select($d | length > 0) | "#\(.number) \($d | join(","))"'
 ```
 
-An issue judged platform-only that is not on this list is an `--add-label` Step 5 missed. An issue
-on it that the run judged `any` is a missed `--remove-label` only where the label came from an
-earlier triage run (the issue's `labeled` event names the account the run used) or the verdict made
-it wrong. Where a person set it, the label stays, and the issue is listed in the report for a human
-decision with the evidence for `any`:
+The `develop-on` labels an issue carries must be the set of platforms its subagent reported, and
+`any` is the empty set. Each platform reported and not labelled is an `--add-label` Step 5 missed.
+Each label on an issue that names a platform not reported (a `windows` label on an issue judged
+`linux`, or the `linux` of `linux,windows` on one judged `windows`) is a missed `--remove-label`
+only where an earlier triage run set it or the verdict made it wrong. Where a person set it, the
+label stays, and the issue is listed in the report for a human decision with the evidence for the
+reported set. The latest `labeled` event for that label names who set it, since a person can re-add
+a label a run removed:
 
 ```bash
-gh api repos/brave/bravebot/issues/N/events \
-  -q '.[] | select(.event == "labeled" and (.label.name | startswith("develop-on/")))
-      | "\(.actor.login) \(.label.name)"'
+gh api --paginate repos/brave/bravebot/issues/N/events \
+  -q '.[] | select(.event == "labeled" and .label.name == "develop-on/linux")
+      | "\(.created_at) \(.actor.login)"' | sort | tail -n 1
 ```
 
 ---
