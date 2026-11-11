@@ -1260,6 +1260,34 @@ fn plant_in_home(file: &str, lines: &[String]) -> Stage {
     )
 }
 
+/// The rustup home the control run gives the programs it starts: the `RUSTUP_HOME` the account
+/// configured when it is set and not empty, else `.rustup` under the account's `home`.
+fn rustup_home_for_control(configured: Option<std::ffi::OsString>, home: &str) -> String {
+    match configured.filter(|value| !value.is_empty()) {
+        Some(value) => value.to_str().expect("a utf-8 RUSTUP_HOME").to_string(),
+        None => format!("{home}/.rustup"),
+    }
+}
+
+/// The control run gives cargo the rustup home the account configured, so a machine whose rustup
+/// is not under `$HOME/.rustup` still finds its toolchain and the home tests assert something.
+#[test]
+fn the_control_run_uses_the_rustup_home_the_account_configured() {
+    let configured = Some(std::ffi::OsString::from("/opt/rustup"));
+    assert_eq!(
+        rustup_home_for_control(configured, "/Users/a"),
+        "/opt/rustup"
+    );
+    assert_eq!(
+        rustup_home_for_control(None, "/Users/a"),
+        "/Users/a/.rustup"
+    );
+    assert_eq!(
+        rustup_home_for_control(Some(std::ffi::OsString::new()), "/Users/a"),
+        "/Users/a/.rustup"
+    );
+}
+
 /// Runs the setup stage `program args` over `files`, after a stage that writes `lines` to `file`
 /// under the scratch home, and asserts nothing ran the file that writes `marker`. The control
 /// starts the same program with `lines` in `file` under a home of the test's, and where it does not
@@ -1282,8 +1310,15 @@ fn home_configuration_is_not_read(
     let home = control_home.to_str().expect("utf-8").to_string();
     // The rustup proxy finds its toolchains from the account's home, which the control replaces.
     // A `cargo test` run under it holds `CARGO_HOME` for the account's home, which cargo reads in
-    // place of `.cargo` under `HOME`, so the control names the replacement's.
-    let rustup = format!("{}/.rustup", std::env::var("HOME").expect("a home"));
+    // place of `.cargo` under `HOME`, so the control names the replacement's. The lock keeps a test
+    // that holds `RUSTUP_HOME` for a start from being read here.
+    let rustup = {
+        let _environment = Environment::held(&[], &[]);
+        rustup_home_for_control(
+            std::env::var_os("RUSTUP_HOME"),
+            &std::env::var("HOME").expect("a home"),
+        )
+    };
     let cargo_home = format!("{home}/.cargo");
     match runs_the_helper_when_given(
         name,
