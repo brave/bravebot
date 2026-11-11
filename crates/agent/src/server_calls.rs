@@ -668,12 +668,12 @@ impl Servers {
         let usage = proposed.usage;
         let resolved = proposed.resolved;
         let shown = policy.proposal_for_display(&resolved);
-        if shown.calls.is_empty() {
-            // No row at all is the processor saying nothing in the list needed a call, as it is
-            // told to say it; rows that were all dropped are a proposal nothing could be made of.
-            let note = match shown.dropped.is_empty() {
-                true => format!("the processor found nothing in {named} that needed a call"),
-                false => format!(
+        // No row at all is the processor saying nothing in the list needed a call, as it is told
+        // to say it; rows that were all dropped are a proposal nothing could be made of.
+        if let Some(dropped) = policy.proposes_nothing(&resolved) {
+            let note = match dropped {
+                false => format!("the processor found nothing in {named} that needed a call"),
+                true => format!(
                     "the processor proposed no call that could be made{}",
                     dropped_note(&shown)
                 ),
@@ -710,44 +710,19 @@ impl Servers {
                 "the calls to {alias} are put to the person as one list, and nobody could be asked"
             ));
         }
-        // A call is kept only where every call it depends on is kept too.
-        let mut kept: Vec<usize> = Vec::new();
-        for (at, call) in shown.calls.iter().enumerate() {
-            let chosen = decision.kept.contains(&at);
-            let after_kept = call.after.is_none_or(|before| kept.contains(&before));
-            if chosen && after_kept {
-                kept.push(at);
-            }
-        }
-        if kept.is_empty() {
-            return Err(format!("the person declined every call to {alias}"));
-        }
-        policy.endorse_applied(alias, &resolved, &kept);
-        let mut skipped: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-        let (mut made, mut failed) = (0, 0);
-        let mut came: Vec<Came> = (0..shown.calls.len())
-            .map(|at| match kept.contains(&at) {
-                true => Came::Unmade,
-                false => Came::LeftOut,
-            })
-            .collect();
-        for at in kept.iter().copied() {
-            if skipped.contains(&at) {
-                came[at] = Came::Skipped;
-                continue;
-            }
+        // Which calls are kept, and which a failure skips, are worked out in the policy layer from
+        // the labelled list; the driver makes the calls it is handed, in order.
+        let mut applying = policy
+            .keep_applied(alias, &resolved, &decision.kept)
+            .map_err(|denial| denial.message)?;
+        while let Some(at) = applying.next_call() {
             let called = crate::mcp::call_applied(
                 policy, offer, egress, confirmer, reporter, alias, at, &resolved,
             );
-            came[at] = match &called {
-                crate::mcp::Called::Answered(_) => Came::Made,
-                crate::mcp::Called::Problem(_) => Came::Unmade,
-                _ => Came::Failed,
-            };
             match called {
-                crate::mcp::Called::Answered(_) => made += 1,
+                crate::mcp::Called::Answered(_) => applying.made(at),
                 crate::mcp::Called::Failed(text) => {
-                    failed += 1;
+                    applying.failed(at);
                     let name = format!("{alias}:{}", shown.calls[at].name);
                     let preview = crate::turn::preview_for(policy, manifest::APPLY, &text);
                     reporter.quarantined(Shown {
@@ -757,25 +732,20 @@ impl Servers {
                         lines: preview.lines,
                         preview: preview.preview,
                     });
-                    skipped.extend(shown.dependants(at));
                 }
-                crate::mcp::Called::Unusable(_) => {
-                    failed += 1;
-                    skipped.extend(shown.dependants(at));
-                }
+                crate::mcp::Called::Unusable(_) => applying.failed(at),
                 crate::mcp::Called::Problem(problem) => {
-                    show_what_came(policy, reporter, alias, &resolved, &came);
+                    show_what_came(policy, reporter, alias, &resolved, applying.came());
                     return Err(problem);
                 }
             }
         }
-        show_what_came(policy, reporter, alias, &resolved, &came);
+        let (kept, made, failed, skipped) = applying.tally();
+        show_what_came(policy, reporter, alias, &resolved, applying.came());
         Ok((
             format!(
-                "made {made} of {} calls to {alias}; {failed} failed, {} skipped as depending on \
-                 one that failed{}",
-                kept.len(),
-                skipped.len(),
+                "made {made} of {kept} calls to {alias}; {failed} failed, {skipped} skipped as \
+                 depending on one that failed{}",
                 dropped_note(&shown)
             ),
             usage,
@@ -783,20 +753,7 @@ impl Servers {
     }
 }
 
-/// What became of one call of an approved list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Came {
-    /// The server answered with no failure reported.
-    Made,
-    /// The server reported a failure, or its reply could not be used.
-    Failed,
-    /// It depended on a call that failed, so it was not made.
-    Skipped,
-    /// The person left it out, or a call it depended on.
-    LeftOut,
-    /// The run stopped before it, or at it.
-    Unmade,
-}
+use bravebot_core::apply::Came;
 
 /// Draw every call of the list with what became of it, so the person sees what the step did as a
 /// turn's calls show it. The values are the ones the question showed, released for display there,
