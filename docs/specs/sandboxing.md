@@ -4171,8 +4171,9 @@ file. A new spawn that looks a name up through
   sandbox. Neither `~/.config/mimeapps.list` nor `~/.local/share/applications` is among the
   persistence locations named in this clause as refused for writing. A person avoids it by opening
   sessions on a project directory and not on the home directory, and by not adding `~/.config` or
-  `~/.local/share/applications` as a session directory. `gio open` and `xdg-open` on Linux with
-  `HOME` removed were not run, and the opener was not run through Electron under a GNOME session.
+  `~/.local/share/applications` as a session directory. What `gio open` and `xdg-open` on Linux do
+  with `HOME` removed is taken from the GLib source and is not observed, and the opener's start
+  through Electron under a GNOME session is not observed either.
   [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME` and
   [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
