@@ -4482,6 +4482,30 @@ mod tests {
         assert!(!RunDecision::reject().remember);
     }
 
+    /// CMDLINE-17: the command inside `NAME="$(cmd)"` is a step that runs, so the prompt counts it
+    /// with the rest and the number agrees with the rows the prompt draws. Rejects a count taken
+    /// from the outer commands alone, which would tell a person one step where two run.
+    #[test]
+    fn a_summary_counts_the_command_inside_a_substitution() {
+        let mut request = a_run();
+        let inner = request.plan.steps.steps()[0].clone();
+        let mut outer = inner.clone();
+        outer.program = "curl".to_string();
+        outer.expansions = vec![bravebot_core::command::Expansion {
+            name: "TOKEN".to_string(),
+            parts: vec![bravebot_core::command::ValuePart::Substitution {
+                source: "git log".to_string(),
+                steps: Box::new(bravebot_core::command::Steps::Pipeline(vec![inner])),
+            }],
+        }];
+        request.plan.steps = bravebot_core::command::Steps::Pipeline(vec![outer]);
+        assert!(
+            request.summary().starts_with("run 2 steps in "),
+            "{}",
+            request.summary()
+        );
+    }
+
     /// Approving once is not approving always: the two answers are different and the difference is
     /// the whole point of offering both.
     #[test]

@@ -280,7 +280,9 @@ as `\u{..}`, so a name holding one does not draw as another name.
 The directory the line ran in and the file each redirection names are told in the words the planner
 wrote, with a `..` that lands in an added directory told as the workspace spells it for the file
 tools. Where a link in that tree led is a name whoever wrote the tree chose, so it is drawn for the
-person and never spelled into a sentence for the planner.
+person and never spelled into a sentence for the planner. That holds for a file a substitution's own
+line could not open as well ([CMDLINE-17](#CMDLINE-17)): it is named once, under the directory as
+typed.
 
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
@@ -327,6 +329,12 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_credential_refusal_names_the_redirection_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_refused_redirection_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::an_unopened_redirection_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
+`verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
+`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
@@ -382,6 +390,30 @@ destination is held to its definition's `writes:` limit as a tool's write is
 `verified-by: bravebot_agent::turn::a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused`
 `verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target`
+
+The rules written in advance are asked again at the same moments, and not the confinement alone. The
+permission rules ([PERM-7](../permissions.md#PERM-7)) and a delegate's `writes:` limit
+([DELEGATE-28](../delegation.md#DELEGATE-28)) are asked about a destination immediately before each
+open, including one the line has already opened once, and whether or not the line has a profile.
+They are asked about the file the name lands on at that moment and about each other name that file
+has, a hard link included, as they were asked when the line was compiled. A link or a hard link that
+an earlier part of the line left at the name approved therefore reaches the same refusal as the file
+named directly. A rule or limit that covers the file refuses the open and the line stops there. The
+planner is told what the check before the line would have told it, under the destination as the line
+spelled it under the directory as typed and not under the file it landed on. A destination inside a
+command substitution is opened by the same run and takes the same check. A `<` source takes the
+`Read` rules again in the same way. The asks are made at every open and are not remembered, so the
+search for a file's other names is repeated for each; that cost is accepted. The check compares
+names, settings and file-system identity, never the bytes of a file.
+
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_hard_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_that_reads_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_destination_reopened_after_an_earlier_part_linked_it_to_the_file`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_when_the_sandbox_is_off`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_inside_a_substitution_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_limited_delegate_cannot_redirect_through_a_link_its_own_line_made_out_of_its_files`
+`verified-by: bravebot_agent::tools::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
 
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
@@ -1009,13 +1041,24 @@ variable set to `v-\xff` is refused as not valid text; one set to `v-\u{FFFD}` i
 reaches the program unchanged.
 
 **A failure says what ran and how it ended, not what it printed.** A substitution that fails to
-start, is stopped, exits non-zero or prints bytes that are not valid Unicode fails the line before
-the stage that uses it, naming the source text and the exit status. A substitution that prints more
-than 65536 bytes (64 KiB) fails the line the same way, naming the source and that limit. Neither its
-standard output nor its standard error is in the message. What it printed is judged as the bytes the
-pipe delivered, so a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text
-holding a NUL byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
-start, and that error names the program and the operating system's words, never the value.
+start, is stopped or exits non-zero fails the line before the stage that uses it, naming the source
+text and the exit status. Neither its standard output nor its standard error is in the message.
+A substitution whose own line fails to open a file, a redirection's source or destination, says so
+with the file named once, under the directory the line was run in as the planner wrote it. The
+message never carries the place a link in that tree led, which whoever wrote the tree chose
+([CMDLINE-4](#CMDLINE-4)).
+
+**The output is the value, and the driver decides nothing from it.** `cmd` may be a program nobody
+vouched for, so what it printed is untrusted ([RUN-4](run.md#RUN-4)). Its length and its encoding
+are not looked at: 65537 bytes and a `\xff` reach the program as they were printed, and a U+FFFD
+arrives as its own three bytes. The bytes are the ones the pipe delivered, not the lossy text made
+of them for display. The one change made to them is that trailing `\n` and `\r\n` are cut, as a shell
+does, and that cut depends on the line ends and on nothing else. A value the operating system will
+not put in an environment, a NUL byte or more than it holds, fails the start of the stage that would
+receive it, and that error names the program and the operating system's words, never the value. On
+Windows an environment value is text, so the bytes are read as UTF-8 and each sequence that is not
+valid is replaced by U+FFFD. That is a change to the value that depends on no outcome the driver
+takes, where a refusal would be a decision taken from what an unvouched program printed.
 
 **Nothing remembered covers such a line.** A line carrying an expansion is treated as a line with an
 environment assignment is: a remembered answer, a grant or an allow rule is not matched against it,
@@ -1040,11 +1083,20 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::an_unset_variable_is_refused_naming_the_variable_and_nothing_runs`
 `verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
 `verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
+`verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
+`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
+`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
-`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_reaches_the_program_byte_for_byte`
+`verified-by: bravebot_agent::exec::the_trailing_line_ends_of_a_substitution_are_cut_from_its_bytes_and_nothing_else`
 `verified-by: bravebot_agent::exec::a_background_start_is_cancelled_while_its_substitution_runs`
 `verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
-`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_65536_bytes_reaches_the_program_whole`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_system_takes_fails_the_start_naming_the_program`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
 `verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
 `verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
 `verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
@@ -1063,6 +1115,24 @@ it reaches one.)
 `verified-by: bravebot_core::policy::an_expansion_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key`
 `verified-by: bravebot_core::policy::an_expansion_leaves_a_step_unproven`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start`
+`verified-by: bravebot_agent::tools::an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call`
+`verified-by: bravebot_core::command::an_expansion_is_drawn_from_its_source`
+`verified-by: bravebot_core::command::a_step_with_an_expansion_draws_it_in_front_of_its_program`
+`verified-by: bravebot_core::command::the_steps_of_a_plan_list_a_substituted_command_before_the_step_using_it`
+`verified-by: bravebot_core::command::two_plans_differing_only_in_an_expansion_never_encode_alike`
+`verified-by: bravebot_agent::cmdline::a_plan_holding_a_substituted_command_is_still_paired_with_the_operands_of_the_line`
+`verified-by: bravebot_agent::confirm::a_summary_counts_the_command_inside_a_substitution`
+
+The command inside `NAME="$(cmd)"` is a step of the plan, so the prompt's step count and its rows
+include it, in the order it runs. The operands the planner is told are paired with the commands of
+the line's shape, which the substituted command is not one of.
+
+The guarantee covers what bravebot shows or writes. It does not cover a program that prints the
+value it was handed: bravebot cannot tell that it did, so that output is the line's output, which
+is `(U,priv)` under an expansion, and the planner reads it only where it may read such output.
+`verified-by: bravebot_agent::exec::a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_expansion_is_untrusted`
 
 ## Amendments to existing specs
 

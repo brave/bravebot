@@ -2179,6 +2179,10 @@ impl Confinement {
         let sandbox = bravebot_sandbox::for_current_platform()
             .map_err(|error| not_confined(error.to_string()))?;
         let capabilities = sandbox.capabilities();
+        // The strings the policy reads: the names it keys on are ASCII scope variables and
+        // `SSH_AUTH_SOCK`. A value a substitution printed that is not text is left out, which reads
+        // as the variable being unset and so lends nothing; the bytes are decided on by no one, and
+        // the step still receives them as they are through `command`.
         let readable: Vec<(String, String)> = environment
             .iter()
             .filter_map(|(name, value)| {
@@ -5074,6 +5078,87 @@ mod tests {
         let target = target.display().to_string();
         assert!(!reads(&policy, &target) && !writes(&policy, &target));
         assert!(refused_for_the_scratch_directory(&confinement).is_some());
+        let _ = std::fs::remove_file(session.path());
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// CMDLINE-17: nothing a confinement writes into a policy row, or into the reason it refuses a
+    /// stage, depends on the directory the stage starts in. That directory is where a link in a
+    /// tree nobody vouched for led, so a row or a refusal built from it would tell the planner the
+    /// landing. The regression it rejects: a row or a refusal that names `directory`, which the
+    /// planner would then read as the spelling of a directory it did not type.
+    #[cfg(unix)]
+    #[test]
+    fn neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in() {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the directory as made");
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            Some(&made),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let first = Path::new("/people/person/project/landing-one");
+        let second = Path::new("/people/person/project/landing-two");
+
+        let rows = |directory: &Path| {
+            let policy = confinement.policy(&step("/bin/cat", &["f"]), directory, &[]);
+            let writable: Vec<PathBuf> =
+                policy.writable.iter().map(|row| row.path.clone()).collect();
+            (
+                policy.readable,
+                policy.unreadable,
+                policy.unwritable,
+                writable,
+                policy.starting_in,
+            )
+        };
+        let (readable, unreadable, unwritable, writable, starts_in) = rows(first);
+        let other = rows(second);
+        assert_eq!(starts_in.as_deref(), Some(first));
+        assert_eq!(
+            (&readable, &unreadable, &unwritable, &writable),
+            (&other.0, &other.1, &other.2, &other.3),
+            "a row follows the directory the stage starts in"
+        );
+        assert_eq!(other.4.as_deref(), Some(second));
+        for row in readable
+            .iter()
+            .chain(&unreadable)
+            .chain(&unwritable)
+            .chain(&writable)
+        {
+            assert!(
+                !row.starts_with(first),
+                "{} is the landing or beneath it",
+                row.display()
+            );
+        }
+
+        // A refusal for the scratch directory having become a link is built with the
+        // directory the stage would start in at hand, and says the same for either.
+        let target = somewhere_to_link_to("confine-refusal-landing")
+            .join("elsewhere")
+            .canonicalize()
+            .expect("a canonical target");
+        let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+            std::os::unix::fs::symlink(&target, name).expect("link")
+        });
+        let refused = |directory: &Path| match confinement.prepared(
+            &Command::new("/bin/cat"),
+            &step("/bin/cat", &[]),
+            directory,
+        ) {
+            Err(ExecError::NotConfined { detail, .. }) => detail,
+            Err(other) => panic!("refused as {other}, not as a confinement"),
+            Ok(_) => panic!("a link where the scratch directory was is not refused"),
+        };
+        let told = refused(first);
+        assert_eq!(told, refused(second));
+        assert!(
+            !told.contains("landing-"),
+            "the refusal names the landing: {told}"
+        );
         let _ = std::fs::remove_file(session.path());
         let _ = std::fs::remove_dir_all(&aside);
     }
@@ -8474,6 +8559,67 @@ mod tests {
 
         assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
         assert!(!writes(&policy, agent.name()));
+    }
+
+    /// CMDLINE-17, LAYER-2: an assignment worked out when the step is spawned carries no scope, so
+    /// the socket does not follow it, and nothing the policy reads depends on a value a
+    /// substitution printed. The regression it rejects: a scope chosen from the argv alone for a
+    /// step whose environment is not known yet, which lends `known_hosts` and the agent socket to
+    /// a step whose `SSH_AUTH_SOCK` or `GIT_SSH_COMMAND` a program's output may name. The control
+    /// is the same push with no assignment.
+    #[test]
+    #[cfg(unix)]
+    fn an_assignment_worked_out_at_spawn_in_front_of_a_push_removes_its_scope() {
+        let confined = confinement(&["/work/project"]);
+        let agent = AgentSocket::at("worked-out");
+        let environment = agent.environment();
+        let push = step("/usr/bin/git", &["push"]);
+        let mut worked_out = push.clone();
+        worked_out.expansions = vec![bravebot_core::command::Expansion {
+            name: "GIT_SSH_COMMAND".to_string(),
+            parts: vec![bravebot_core::command::ValuePart::Variable(
+                "HOME".to_string(),
+            )],
+        }];
+
+        let control = confined.policy(&push, Path::new("/work"), &environment);
+        let policy = confined.policy(&worked_out, Path::new("/work"), &environment);
+
+        assert!(reads(&control, &format!("{HOME}/.ssh/known_hosts")));
+        assert!(writes(&control, agent.name()));
+        assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
+        assert!(!writes(&policy, agent.name()));
+    }
+
+    /// CMDLINE-17, LAYER-2: a value that is not text reaches the process as the bytes it is. The
+    /// strings the policy reads leave it out, and it is the environment handed to the process that
+    /// carries it. The regression it rejects: the process environment built from the strings the
+    /// policy reads, which drops the variable or hands the next program U+FFFD in place of the
+    /// bytes a program printed. `None` where this machine cannot prepare a stage under its
+    /// platform's sandbox.
+    #[test]
+    #[cfg(unix)]
+    fn a_value_that_is_not_text_reaches_the_process_as_its_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            return;
+        }
+        let (session, confined) = a_session("raw-environment");
+        let bytes = vec![b'a', 0xff, 0xfe, b'b'];
+        let mut command = Command::new("/bin/cat");
+        command.env("BB_RAW", std::ffi::OsString::from_vec(bytes.clone()));
+
+        let prepared = confined
+            .prepared(&command, &step("/bin/cat", &[]), &session)
+            .expect("a stage this platform can confine");
+
+        let held = prepared
+            .variables
+            .iter()
+            .find(|(name, _)| name == "BB_RAW")
+            .map(|(_, value)| value.clone().into_vec());
+        assert_eq!(held, Some(bytes));
     }
 
     /// SANDBOX-18: a session that names no home directory has no location to compare the socket

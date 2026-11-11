@@ -4582,9 +4582,10 @@ fn refuse_denied_path_as<S: Sink>(
     // A hard link opens the file under a name no rule spells, and nothing in the name says which.
     // Where the walk for the file's other names gave up, a rule about a path may be about
     // this file, so it is refused rather than passed.
-    match workspace.hard_links(path) {
+    let hard_links = workspace.hard_links(path);
+    match &hard_links {
         Some(names) => {
-            for name in &names {
+            for name in names {
                 ask(policy, name)?;
             }
         }
@@ -4622,6 +4623,20 @@ fn refuse_denied_path_as<S: Sink>(
             policy
                 .refuse_write_outside_limits(name)
                 .map_err(|_| outside_write_limit(shown))?;
+        }
+        // A hard link inside the limit to a file outside it is the same file, so every name the
+        // file has is judged and one outside refuses the write. Where the walk for the names gave
+        // up, a name outside may exist, so a limit in force refuses (DELEGATE-28).
+        match &hard_links {
+            Some(names) => {
+                for name in names {
+                    policy
+                        .refuse_write_outside_limits(name)
+                        .map_err(|_| outside_write_limit(shown))?;
+                }
+            }
+            None if policy.has_write_limits() => return Err(outside_write_limit(shown)),
+            None => {}
         }
     }
     Ok(())
@@ -9136,6 +9151,41 @@ fn told_destination(
     }
 }
 
+/// A failed run as the planner is told it. A file exec could not open is named by the path it
+/// joined onto where the directory landed, so it is respelled under the directory as typed. That
+/// holds for a file the line opens and for one a `$(...)` in its assignments opens, which exec
+/// keeps inside the substitution's error. A name the closures that make a
+/// [`crate::exec::ExecError::Redirection`] already spelled that way, or an absolute one the
+/// planner wrote, is not under the landing and is left as it is. The decision is made on the
+/// `PathBuf` exec held and the string is built from the directory the planner typed, so nothing is
+/// read from a file (PATH-001, LABEL-3, TOOL-4).
+fn told_failure(
+    workspace: &Workspace,
+    error: crate::exec::ExecError,
+    landing: &std::path::Path,
+    typed: Option<&str>,
+) -> crate::exec::ExecError {
+    use crate::exec::{ExecError, SubstitutionFailure};
+    match error {
+        ExecError::Unopened { path, detail } if path.strip_prefix(landing).is_ok() => {
+            ExecError::Redirection {
+                path: told_destination(workspace, &path, landing, typed),
+                detail,
+            }
+        }
+        ExecError::Substitution {
+            source,
+            failure: SubstitutionFailure::Inside(inner),
+        } => ExecError::Substitution {
+            source,
+            failure: SubstitutionFailure::Inside(Box::new(told_failure(
+                workspace, *inner, landing, typed,
+            ))),
+        },
+        other => other,
+    }
+}
+
 /// What a line left at the destinations it opened.
 struct Left<'a> {
     /// Every finding across every destination, so one note names them all and one test of it
@@ -9992,30 +10042,47 @@ fn check_the_plan_before_asking<S: Sink>(
         (&plan.reads, Purpose::Read),
     ] {
         for path in paths {
-            let named = tools.workspace.relative_display(path);
             // The rules are asked under the landing-based name, and the refusal says the name
             // under the directory as typed (LABEL-3, TOOL-4).
             let shown = told(path);
             if let Err(refusal) =
-                refuse_denied_path_as(policy, tools.workspace, purpose, &named, &shown)
+                refuse_redirection_target_by_rules(policy, tools.workspace, purpose, path, &shown)
             {
                 return Err(Box::new(Produced::problem(refusal)));
-            }
-            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
-            // from a `directory`), which no rule's segments match across and which the landing
-            // asked about above does not resolve, so the file's other names are asked about too.
-            for reached in tools.workspace.names_reached(path) {
-                if reached != named
-                    && let Err(refusal) =
-                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &shown)
-                {
-                    return Err(Box::new(Produced::problem(refusal)));
-                }
             }
         }
     }
 
     Ok(reaches_anywhere)
+}
+
+/// Ask the rules written in advance about a redirection's file, as the plan names it and under the
+/// other names it reaches. Asked when the line is compiled and again immediately before the run
+/// opens the file, so a link or hard link an earlier part of the line left at the name is judged
+/// by the file it reaches (CMDLINE-5, PERM-7, DELEGATE-28). Both asks are this one function, so
+/// they cannot differ in what they cover or in what they say.
+///
+/// `shown` is the name the refusal gives, which is the destination under the directory as the
+/// planner typed it and never under where the workspace landed it (LABEL-3, TOOL-4). Only rules,
+/// settings and file-system names decide: no byte of a file is read.
+fn refuse_redirection_target_by_rules<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    purpose: Purpose,
+    path: &std::path::Path,
+    shown: &str,
+) -> Result<(), String> {
+    let named = workspace.relative_display(path);
+    refuse_denied_path_as(policy, workspace, purpose, &named, shown)?;
+    // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env` from a
+    // `directory`), which no rule's segments match across and which the landing asked about above
+    // does not resolve, so the file's other names are asked about too.
+    for reached in workspace.names_reached(path) {
+        if reached != named {
+            refuse_denied_path_as(policy, workspace, purpose, &reached, shown)?;
+        }
+    }
+    Ok(())
 }
 
 /// What `run` decides about how a line is held before the person is asked: the confinement it
@@ -11249,6 +11316,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             Err(error) => Err(error),
         }
     } else {
+        // Both open-time hooks ask the policy, and each is called between the other's calls.
+        let asked = std::cell::RefCell::new(&mut *policy);
         crate::exec::run_plan_observed_reading(
             &plan,
             tools.cancel,
@@ -11257,6 +11326,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
             confinement.as_ref(),
             &mut |path| {
+                let mut asking = asked.borrow_mut();
+                let policy = &mut **asking;
                 // Confined again where it lands now, since the parts of the line before this one
                 // have run since the check above and may have left a link at this name. At every
                 // open and not only the first, because a part run between two opens of one
@@ -11273,6 +11344,31 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
                         detail,
+                    });
+                }
+                // The rules written in advance, asked again about the file the destination lands
+                // on now. A link or hard link an earlier part of the line left at this name
+                // reaches a file the check before the line did not see, and a rule covers the
+                // file and not the name it was approved under. At every open, a destination
+                // already entered included, and whether or not the line has a profile: the
+                // person's deny rules and a delegate's `writes` limit refuse a path either way
+                // (CMDLINE-5, PERM-7, DELEGATE-28).
+                let target = told_destination(
+                    tools.workspace,
+                    path,
+                    &plan.directory,
+                    (!at_the_root).then_some(told_directory.as_str()),
+                );
+                if let Err(refusal) = refuse_redirection_target_by_rules(
+                    policy,
+                    tools.workspace,
+                    Purpose::Effect,
+                    path,
+                    &target,
+                ) {
+                    return Err(crate::exec::ExecError::Redirection {
+                        path: target,
+                        detail: refusal,
                     });
                 }
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
@@ -11329,18 +11425,36 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 // Read again where it lands now, for the reason a destination is confined again
                 // above: an earlier part of the line may have left a link at this name that leads
                 // into the stores, which the check before the line could not see (RECALL-8).
+                let target = told_destination(
+                    tools.workspace,
+                    path,
+                    &plan.directory,
+                    (!at_the_root).then_some(told_directory.as_str()),
+                );
                 let lands = crate::workspace::destination(path);
                 if lands.is_some_and(|lands| tools.workspace.in_the_stores(&lands)) {
                     return Err(crate::exec::ExecError::Redirection {
-                        path: told_destination(
-                            tools.workspace,
-                            path,
-                            &plan.directory,
-                            (!at_the_root).then_some(told_directory.as_str()),
-                        ),
+                        path: target,
                         detail: "refused: kept facts, rules and session records are not read by \
                                  a command line"
                             .to_string(),
+                    });
+                }
+                // And the rules written in advance, asked about the file the source lands on now,
+                // as for a destination: a `Read` deny rule covers the file and not the name the
+                // line was approved under (CMDLINE-5, PERM-7).
+                let mut asking = asked.borrow_mut();
+                let policy = &mut **asking;
+                if let Err(refusal) = refuse_redirection_target_by_rules(
+                    policy,
+                    tools.workspace,
+                    Purpose::Read,
+                    path,
+                    &target,
+                ) {
+                    return Err(crate::exec::ExecError::Redirection {
+                        path: target,
+                        detail: refusal,
                     });
                 }
                 Ok(())
@@ -11557,26 +11671,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // got to (GROUND-1).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
-            // A file exec could not open is named by the path it joined onto where the directory
-            // landed. Respelled under the directory as typed; a name the closures above already
-            // spelled that way, or an absolute one the planner wrote, is not under the landing and
-            // is left as it is. Both are paths the driver holds, and nothing is read from a file.
-            let error = match error {
-                crate::exec::ExecError::Unopened { path, detail }
-                    if path.strip_prefix(&plan.directory).is_ok() =>
-                {
-                    crate::exec::ExecError::Redirection {
-                        path: told_destination(
-                            tools.workspace,
-                            &path,
-                            &plan.directory,
-                            (!at_the_root).then_some(told_directory.as_str()),
-                        ),
-                        detail,
-                    }
-                }
-                other => other,
-            };
+            let error = told_failure(
+                tools.workspace,
+                error,
+                &plan.directory,
+                (!at_the_root).then_some(told_directory.as_str()),
+            );
             let text = failed_line_text(&said, &error);
             let mut produced = Produced::problem(text);
             produced.changed_a_file = changed_a_file;
@@ -15020,6 +15120,83 @@ mod tests {
             gone.contains("no longer exists") && !gone.contains("may have run in part"),
             "{gone}"
         );
+    }
+
+    /// CMDLINE-17, PATH-001: a file a substitution could not open is told under the directory as
+    /// typed, one level or two down, and an error that is not an open failure comes back as it
+    /// was. The regression it rejects is respelling only the top-level error, which leaves the
+    /// landing in the text of the nested one.
+    #[test]
+    fn a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed() {
+        use crate::exec::{ExecError, SubstitutionFailure};
+        let root =
+            std::env::temp_dir().join(format!("bravebot-told-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("landed")).expect("scratch");
+        let root = root.canonicalize().expect("canonical");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let landing = root.join("landed");
+        let nested = |inner: ExecError| ExecError::Substitution {
+            source: "outer".into(),
+            failure: SubstitutionFailure::Inside(Box::new(ExecError::Substitution {
+                source: "inner".into(),
+                failure: SubstitutionFailure::Inside(Box::new(inner)),
+            })),
+        };
+
+        let opened = told_failure(
+            &workspace,
+            nested(ExecError::Unopened {
+                path: landing.join("nofile"),
+                detail: "no such file".into(),
+            }),
+            &landing,
+            Some("docs"),
+        )
+        .to_string();
+        assert!(
+            opened.contains("'docs/nofile' could not be opened") && !opened.contains("landed"),
+            "{opened}"
+        );
+
+        let other = told_failure(
+            &workspace,
+            nested(ExecError::Io("broken pipe".into())),
+            &landing,
+            Some("docs"),
+        )
+        .to_string();
+        assert!(other.contains("broken pipe"), "{other}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CMDLINE-4: a `Redirection` an open-time hook made is already spelled under the directory as
+    /// typed, so it passes through a substitution unchanged and is not spelled a second time. The
+    /// regression it rejects is a helper that respells every nested open failure, which would turn
+    /// `docs/out` into `docs/docs/out`.
+    #[test]
+    fn a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again() {
+        use crate::exec::{ExecError, SubstitutionFailure};
+        let root = std::env::temp_dir().join(format!("bravebot-told-hook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("landed")).expect("scratch");
+        let root = root.canonicalize().expect("canonical");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let landing = root.join("landed");
+        let made = ExecError::Substitution {
+            source: "inner".into(),
+            failure: SubstitutionFailure::Inside(Box::new(ExecError::Redirection {
+                path: "docs/out".into(),
+                detail: "refused".into(),
+            })),
+        };
+        let before = made.to_string();
+
+        let told = told_failure(&workspace, made, &landing, Some("docs")).to_string();
+
+        assert_eq!(told, before);
+        assert!(told.contains("'docs/out' could not be opened"), "{told}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     use crate::exec::Deadlines;
@@ -28539,6 +28716,54 @@ mod tests {
             }
         }
 
+        /// RECALL-8, CMDLINE-5: the run opens a redirection's destination itself, so a write into
+        /// the stores is refused when it is opened, through a link an earlier part of the line
+        /// left, from a workspace that holds the stores and from one that does not. The check
+        /// before the line cannot see the link. The regression it rejects is a kept fact or the
+        /// home rules file overwritten by `>`, which no sandbox profile sees.
+        #[cfg(unix)]
+        #[test]
+        fn a_redirection_writing_into_the_stores_is_refused_when_it_is_opened() {
+            let scratch = Scratch::new("run-write-store");
+            let state = scratch.path.join("state");
+            std::fs::create_dir_all(state.join("facts")).expect("facts");
+            std::fs::write(state.join("facts/x.md"), "kept fact").expect("fact");
+            std::fs::write(state.join("AGENTS.md"), "kept rule").expect("rules");
+            std::fs::create_dir_all(scratch.path.join("project")).expect("project");
+            for root in [scratch.path.clone(), scratch.path.join("project")] {
+                let workspace = Workspace::new(&root).expect("workspace").with_state(&state);
+                for (file, kept) in [("facts/x.md", "kept fact"), ("AGENTS.md", "kept rule")] {
+                    let mut sink = RecordingSink::new();
+                    let mut policy = policy(&mut sink);
+                    let command = format!(
+                        "ln -sf {} through; echo overwritten > through",
+                        state.join(file).display()
+                    );
+                    let produced = with_tools(&workspace, |tools| {
+                        run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut crate::report::IgnoreReports,
+                            &json!({ "command": command }),
+                        )
+                    });
+                    let said = told(&mut policy, &produced.text);
+                    assert!(
+                        said.contains("refused") || said.contains("resolves outside"),
+                        "{command} from {}: {said}",
+                        root.display()
+                    );
+                    assert_eq!(
+                        std::fs::read_to_string(state.join(file)).unwrap(),
+                        kept,
+                        "{command} from {}: the store was written",
+                        root.display()
+                    );
+                }
+            }
+        }
+
         /// CMDLINE-17: only bypass mode lets `NAME=$VAR` in front of a program through `run`. The
         /// regressions it rejects: the choice inverted (bypass refused, the others let through) and
         /// the choice made once for every mode (the line always accepted, or always refused). The
@@ -28589,6 +28814,111 @@ mod tests {
                     !runs,
                     "{mode:?}: the `$` refusal is not what the mode allows: {said}"
                 );
+            }
+        }
+
+        /// CMDLINE-17: a value a substitution printed reaches the program that uses it and nothing
+        /// bravebot records or tells about the call. `run` is called in bypass mode, in the
+        /// foreground and as a background job, with a substitution that works, one that fails after
+        /// printing the value to both streams, and one whose value the environment cannot hold. What
+        /// is formatted for the value is the result the planner is told, the origin and note shown
+        /// to the person, the events of the session trail, everything the reporter was told (the
+        /// history a front end draws from) and the debug form of the jobs the turn holds. The
+        /// program that works leaves a file only when it was handed the value, so the absence of the
+        /// value from those texts is not an absence of the run. The regressions it rejects are a
+        /// failure or start-error sentence that quotes the output, a trail or reporter event that
+        /// carries the value, and a `Debug` of the job that holds it.
+        #[cfg(unix)]
+        #[test]
+        fn an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call() {
+            use crate::PermissionMode::Bypass;
+            use std::os::unix::fs::PermissionsExt;
+
+            let secret = "tools-secret-4b7e19c3";
+            let scratch = Scratch::new("run-expansion-leak");
+            for (name, body) in [
+                (
+                    "check.sh",
+                    format!(
+                        "#!/bin/sh\n[ \"$BRAVEBOT_TEST_GOT\" = \"{secret}\" ] && touch matched\n\
+                         echo done\n"
+                    ),
+                ),
+                ("emit.sh", format!("#!/bin/sh\nprintf '%s\\n' {secret}\n")),
+                (
+                    "fail.sh",
+                    format!(
+                        "#!/bin/sh\nprintf '%s\\n' {secret}\nprintf '%s\\n' {secret} >&2\nexit 3\n"
+                    ),
+                ),
+                (
+                    "nul.sh",
+                    format!("#!/bin/sh\nprintf '%s\\000\\n' {secret}\n"),
+                ),
+            ] {
+                let program = scratch.path.join(name);
+                std::fs::write(&program, body).expect("a program");
+                std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                    .expect("executable");
+            }
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for (source, handed) in [("emit.sh", true), ("fail.sh", false), ("nul.sh", false)] {
+                for background in [false, true] {
+                    let _ = std::fs::remove_file(scratch.path.join("matched"));
+                    let mut sink = RecordingSink::new();
+                    let mut reporter = crate::report::RecordingReporter::default();
+                    let mut policy = policy(&mut sink);
+                    let (produced, jobs) = with_tools(&workspace, |tools| {
+                        tools.permission_mode = crate::LiveMode::new(Bypass);
+                        let produced = run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut reporter,
+                            &json!({
+                                "command": format!("BRAVEBOT_TEST_GOT=$(./{source}) ./check.sh"),
+                                "background": background,
+                            }),
+                        );
+                        if handed {
+                            for _ in 0..200 {
+                                if scratch.path.join("matched").exists() {
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                            }
+                        }
+                        (produced, format!("{:?}", tools.jobs))
+                    });
+                    let said = told(&mut policy, &produced.text);
+                    let case = format!("{source}, background={background}");
+
+                    assert_eq!(
+                        scratch.path.join("matched").exists(),
+                        handed,
+                        "{case}: the program's having been handed the value is not what the \
+                         substitution allows: {said}"
+                    );
+                    let trail = format!("{:?}", sink.events());
+                    assert!(
+                        !sink.events().is_empty(),
+                        "{case}: nothing was recorded, so its absence proves nothing"
+                    );
+                    for (where_, text) in [
+                        ("the result", said),
+                        ("the origin", produced.origin.clone()),
+                        ("the note", produced.note.clone()),
+                        ("the trail", trail),
+                        ("the reporter", format!("{reporter:?}")),
+                        ("the jobs", jobs),
+                    ] {
+                        assert!(
+                            !text.contains(secret),
+                            "{case}: the value reached {where_}: {text}"
+                        );
+                    }
+                }
             }
         }
 

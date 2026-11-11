@@ -238,6 +238,7 @@ A fact is trusted. Its confidentiality is the planner context's at the moment of
 `verified-by: bravebot_agent::tools::a_redirection_reading_from_the_stores_is_refused_before_it_runs`
 `verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
 `verified-by: bravebot_agent::tools::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
 `verified-by: bravebot_agent::workspace::git_leaves_the_stores_out_of_a_repository_that_tracks_them`
 `verified-by: bravebot_agent::rewind::undo_removes_a_fact_a_turn_made`
 `verified-by: bravebot_agent::rewind::undo_puts_back_a_fact_a_turn_replaced`

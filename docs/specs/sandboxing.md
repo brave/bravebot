@@ -3630,7 +3630,8 @@ none to add to.
   workspace and the directories opened beside it ([CMDLINE-5](tools/command-line.md#CMDLINE-5))
   stands for a line that has a profile, since this process opens the destination in place of a
   confined stage; a line with none has nothing for it to hold back. The prompt lists the
-  destination, a `deny` rule on it still refuses the line, and the file tools stay confined
+  destination, a `deny` rule on it still refuses the line, including through a link an earlier part
+  of the line left ([CMDLINE-5](tools/command-line.md#CMDLINE-5)), and the file tools stay confined
   ([TRUST-10](trust-map.md#TRUST-10)). Under `off` the same holds for every line, since the mode has
   no profile to remove and so cannot accept this request.
 - **The planner is told, where the session accepts it.** A write the file tools refuse for leaving

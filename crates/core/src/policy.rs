@@ -2261,6 +2261,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(())
     }
 
+    /// Whether a limit this run's definition, or one above it, put on the files it may write is in
+    /// force (DELEGATE-28).
+    ///
+    /// For a caller that cannot say which names a file has, and so refuses a write where a limit
+    /// is in force rather than judging a name it did not find. Settings only: no path is given.
+    pub fn has_write_limits(&self) -> bool {
+        !self.write_limits.is_empty()
+    }
+
     /// Whether the user should be offered the chance to vouch for this path.
     ///
     /// True once per path per turn, and only where the path is quarantined and so the offer would

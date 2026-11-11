@@ -450,7 +450,10 @@ the same lookup for the other names of a file ([TRUST-4](trust-map.md#TRUST-4)),
 the map cannot disagree about which names a file has. On Windows a name
 that reads as something other than the file it spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's. A `run` redirection's
-target, read or written, is held to the same refusal as a file tool's path. A short name is
+target, read or written, is held to the same refusal as a file tool's path, and the refusal is made
+again immediately before the run opens it, under the file the name lands on then and under each other
+name that file has, so a link or hard link an earlier part of the line left at the name is refused as
+the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A short name is
 accepted only in the spelling of the open directory the target lands in, which names that one
 directory; in a target that reaches no open directory through an ancestor of its own it is refused
 wherever it appears.
@@ -544,6 +547,10 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_opens`
 `verified-by: bravebot_agent::turn::a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_hard_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_that_reads_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_destination_reopened_after_an_earlier_part_linked_it_to_the_file`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
