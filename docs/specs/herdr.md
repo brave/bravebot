@@ -41,6 +41,7 @@ socket, and a session must not write to one on the strength of a stray variable.
 session there is not shown by herdr.
 
 `verified-by: bravebot_herdr::tests::a_reporter_outside_herdr_is_inactive_and_connects_to_nothing`
+`verified-by: bravebot_herdr::tests::a_herdr_variable_that_is_not_utf8_leaves_the_reporter_inactive`
 `verified-by: bravebot_herdr::tests::a_reporter_asks_the_environment_for_the_three_herdr_variables_alone`
 
 <a id="HERDR-2"></a>

@@ -22,16 +22,21 @@ struct FakeHerdr {
 
 impl FakeHerdr {
     fn answering() -> FakeHerdr {
-        FakeHerdr::start(false)
+        FakeHerdr::start("herdr.sock", false)
+    }
+
+    /// A herdr listening at `name` in a directory of its own.
+    fn answering_at(name: &str) -> FakeHerdr {
+        FakeHerdr::start(name, false)
     }
 
     fn holding_its_first_answer() -> FakeHerdr {
-        FakeHerdr::start(true)
+        FakeHerdr::start("herdr.sock", true)
     }
 
-    fn start(hold_first: bool) -> FakeHerdr {
+    fn start(name: &str, hold_first: bool) -> FakeHerdr {
         let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("herdr.sock");
+        let socket = directory.path().join(name);
         let listener = UnixListener::bind(&socket).unwrap();
         let (recorded, requests) = channel();
         let (let_go, held) = channel::<()>();
@@ -135,6 +140,46 @@ fn a_reporter_outside_herdr_is_inactive_and_connects_to_nothing() {
         reporter.release();
     }
     assert!(herdr.quiet());
+}
+
+/// A pane id or socket path that is not valid UTF-8 leaves the reporter inactive. The regression
+/// it rejects is a lossy reading: the socket path would become its lookalike with U+FFFD, where
+/// something else could be listening, and the pane id one herdr never gave.
+#[test]
+fn a_herdr_variable_that_is_not_utf8_leaves_the_reporter_inactive() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let lookalike = FakeHerdr::answering_at("herdr\u{FFFD}.sock");
+    let mut socket = lookalike
+        .socket
+        .parent()
+        .unwrap()
+        .as_os_str()
+        .as_bytes()
+        .to_vec();
+    socket.extend_from_slice(b"/herdr\xff.sock");
+    let socket = OsString::from_vec(socket);
+    assert_eq!(
+        PathBuf::from(socket.to_string_lossy().into_owned()),
+        lookalike.socket,
+        "the lossy reading of the variable is where the fake herdr listens"
+    );
+    let reporter = Reporter::from_variables(|name| match name {
+        "HERDR_SOCKET_PATH" => Some(socket.clone()),
+        other => inside_herdr(&lookalike.socket)(other),
+    });
+    assert!(!reporter.is_active(), "a socket path that is not UTF-8");
+    reporter.report(State::Working, None);
+    assert!(lookalike.quiet(), "a socket path that is not UTF-8");
+
+    let herdr = FakeHerdr::answering();
+    let reporter = Reporter::from_variables(|name| match name {
+        "HERDR_PANE_ID" => Some(OsStr::from_bytes(b"w1:p\xff").to_owned()),
+        other => inside_herdr(&herdr.socket)(other),
+    });
+    assert!(!reporter.is_active(), "a pane id that is not UTF-8");
+    reporter.report(State::Working, None);
+    assert!(herdr.quiet(), "a pane id that is not UTF-8");
 }
 
 /// The reporter takes nothing else from the environment, so nothing else in it can reach herdr.
