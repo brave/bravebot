@@ -473,6 +473,12 @@ class ImplementIssues(unittest.TestCase):
         self.assertIn("#12 is labelled develop-on/windows and this host is linux", refused.err)
         forced = self.run_script("10, 12", flags=["--force", "--platform", "linux"])
         self.assertEqual(forced.code, 0, forced.err)
+        self.assertIn("working past another assignee, as asked:\r\n#10 is assigned to alice", forced.out)
+        self.assertIn("working past the platform labels, as asked:\r\n#12 is labelled develop-on/windows", forced.out)
+        line = self.told()[1]
+        self.assertIn("(FORCE=1): somebody else is also assigned to #10. That is no reason", line)
+        self.assertIn("past the platform labels (FORCE=1): #12 is labelled develop-on/windows. That is no reason", line)
+        self.assertNotIn("alice", self.sent())
 
     def test_bypass_opens_the_client_with_the_flag_for_no_prompts_and_no_sandbox(self):
         """`--dangerously-skip-permissions` alone leaves the sandbox on, and the flag after `-i` would be part of

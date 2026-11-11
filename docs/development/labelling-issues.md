@@ -124,9 +124,9 @@ issue that survives a run, and takes the meanings from here.
 
 `develop-on/linux`, `develop-on/macos` and `develop-on/windows` say the issue can only be developed
 and tested on that platform: the code is gated to it (`cfg(target_os = ...)`, the Linux sandbox
-backend, the Windows installer), or the defect reproduces only there. An issue with none of them can
-be developed anywhere, and most issues have none. The label says where the work is done and not
-where the defect shows up: a bug that appears on Windows because of shared code is not
+backend, the Windows installer), or the fix cannot be checked on another host. An issue with none of
+them can be developed anywhere, and most issues have none. The label says where the work is done and
+not where the defect shows up: a bug that appears on Windows because of shared code is not
 `develop-on/windows`. An issue that needs two platforms carries both labels, and a host of either
 satisfies it.
 
