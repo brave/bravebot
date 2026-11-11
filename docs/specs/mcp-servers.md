@@ -631,15 +631,39 @@ an approval prompt.
 
 The runners are `npx`, `bunx`, `npm exec`, `pnpm dlx` and `yarn dlx` for Node, and `uvx`,
 `uv tool run` and `pipx run` for Python, recognised by the name of the declared program whatever
-directory it is given in. The package is the one a `--package` or `-p` flag names for Node, or
-`--from` or `--spec` for Python, and otherwise the first word that is not a flag or the value of a
-flag known to take one, such as `--registry` or `--with`. A flag the reading does not know may take
-the next word, so where one comes before the package the prompt says which package runs is not
-known, rather than name a word that may not be it. A Node package is pinned where the version after
-its last `@` is one exact release, `@scope/name@1.4.2`, and a Python one where `==` or `@` is
-followed by one; a tag such as `latest`, a range, and no version at all are each unpinned. An exact
-release is numbers joined by dots, with a pre-release or build suffix allowed after them, and for
-Node it is three numbers, since npm reads `@1.2` as every `1.2.x`.
+directory it is given in. `npm exec` is also read under the spellings npm resolves to it, `exe` and
+`x`; `ex` is not one, since npm reads it as `explain` or `explore`. The word that names the
+sub-command (`exec`, `dlx`, `tool` then `run`, `run`) is looked for after the program's own options,
+which are skipped with the value each takes: `npm --loglevel=silent exe`, `npm --loglevel silent x`
+and `pnpm --dir app dlx` are runners. Those options are listed per program. An option the list does
+not know, in front of a word that could be the sub-command, may take that word as its value, so the
+prompt says which package runs is not known; with no such word after it the line is not a runner.
+An option written with an `=` is skipped whatever it is, since its value is attached. For Node, an
+option written `--no-` and a name is skipped as a switch when the program has switches listed. The
+`--package` of `npm`, given before the sub-command, is a package flag as it is after it: `npm
+--package=evil@latest x bin` installs `evil@latest` and runs `bin` in it. `yarn` has no options
+listed, so an option before `dlx` that has no `=` is one the reading does not know.
+
+The packages are every one the line installs. A `--package` or `-p` flag for Node, and a `--from` or
+`--spec` flag for Python, names one each time it is given, with the value after a space or an `=`.
+Once such a flag is given, the first word after the flags is the command to run in it and is not a
+package, and the words after that command are the command's own and are not read. With no such flag
+that first word is the package. For Python, each `--with` or `-w` also names a package and leaves
+the first word where it was, because `uvx` installs and runs what `--with` names as it does the main
+package. The reading over-names where it is unsure: a word that turns out not to be a package costs
+one more line at the question, and a package left out would be drawn as pinned. Other flags before
+the command are skipped with the value each takes, such as `--registry`. A flag the reading does not
+know may take the next word, so where one comes before the command the prompt says which package
+runs is not known, after naming the packages read before it, rather than name a word that may not
+be one.
+
+A Node package is pinned where the version after its last `@` is one exact release,
+`@scope/name@1.4.2`, and a Python one where `==` or `@` is followed by one; a tag such as `latest`,
+a range, and no version at all are each unpinned. An exact release is numbers joined by dots, with a
+pre-release or build suffix allowed after them, and for Node it is three numbers, since npm reads
+`@1.2` as every `1.2.x`. A line is unpinned where any one of its packages is, and the prompt draws
+one line for each package that is, in the order the words name them, so `npx -y -p good@1.2.3 -p
+evil bin` is drawn with `evil` unpinned and `good@1.2.3` not.
 
 Both questions draw these lines: the one `bravebot mcp add` and `approve` ask, and the one a session
 asks. What is read is the words the person declared and nothing else, so this says what the line asks
@@ -649,6 +673,10 @@ calls one, is drawn as a plain program.
 `verified-by: bravebot_agent::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
 `verified-by: bravebot_agent::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
 `verified-by: bravebot_agent::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
+`verified-by: bravebot_agent::servers::every_package_a_runner_line_installs_is_read_and_each_unpinned_one_is_named`
+`verified-by: bravebot_agent::servers::a_runner_line_that_installs_two_packages_draws_the_one_that_floats`
+`verified-by: bravebot_agent::servers::a_runner_line_with_two_packages_draws_the_unpinned_one_at_the_question`
+`verified-by: bravebot_agent::servers::an_npm_alias_is_drawn_as_the_npm_exec_runner_it_is_and_install_is_not`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
 `verified-by: bravebot_ui_bridge::wire::a_server_question_carries_the_declaration_and_no_stored_value`
 
@@ -1982,6 +2010,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
   better. For the distribution form nearly every server uses, the digest binds the argv and the argv
   names a package whose contents change. The only real fix is pinning with an integrity hash, which
   the package ecosystems support and this declaration format does not yet express.
+- **A runner's options are listed, not discovered.** [SERVERS-6](#SERVERS-6) skips the options a
+  runner takes before its sub-command from a list kept here for each program. The `npm` list is
+  taken from npm's own option definitions and the `pnpm` list from its help text. The `uv` and
+  `pipx` lists are written from the options those tools document and are not read from an installed
+  tool, and `yarn` has none. An option missing from a list is read as one the reading does not know,
+  so the prompt says which package runs is not known, and a line is never drawn as pinned for want
+  of an entry. The short `-w` of `uvx --with` is read as `--with` on that documentation; if a uv
+  release gives `-w` another meaning, `uvx -w x pkg==1.0.0` is drawn with `x` as one more package.
+- **A runner outside the list is drawn as a plain program.** `pnpx`, `bun x` and `pnpm create`, which
+  fetch a package and run it, are not among the runners SERVERS-6 reads, so a server declared with
+  one gets no runner line and no unpinned-package line. Pinning is the person's to check there.
 - **A person who approves a server has approved a program.** Beyond the confinement
   [MCP-3](mcp.md#MCP-3) requires and the capability [SERVERS-9](#SERVERS-9) grants, there is no audit
   of what it does once it runs. A confined process with a network capability is still a program

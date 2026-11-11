@@ -341,6 +341,7 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
 `verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::confine::a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given`
 `verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`
 `verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
@@ -2443,3 +2444,14 @@ show that a model follows them.
   advice is pinned by
   `bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
   and `bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`.
+- **`LandlockSandbox::spawn` does not require an absolute program.** A caller that passed a bare
+  name would have it searched on the person's `PATH` after confinement is applied. The agent's own
+  path always passes an absolute one: it starts each step from the absolute path it resolved
+  (`command_for` in `crates/agent/src/exec.rs`), re-checks that path before any step starts, and
+  hands the program and arguments to the Landlock backend byte for byte. The backend
+  (`crates/sandbox/src/linux.rs`, `confining`) spawns that program directly with `Command::args`
+  and `current_dir`, with no wrapper or helper process, so no argument is read as an option and a NUL
+  byte fails the spawn. A step that starts after an earlier step has begun can find the file at its
+  path replaced by that earlier step, when the earlier step can write the directory
+  ([RUN-2](#RUN-2)). The environment a stage inherits, including `LD_PRELOAD`, is the person's own
+  or what the plan assigned ([SANDBOX-30](../sandboxing.md#SANDBOX-30)).

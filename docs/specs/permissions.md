@@ -358,12 +358,29 @@ lines. A `*` covers any text in every list, spaces and gaps included, so `Bash(l
 `Bash(python3 my script.py)` names three words, and only a `*` in the space's place covers
 `python3 "my script.py"`.
 
+A `deny` or `ask` rule compares the program word without regard to case and with a trailing `.exe`
+or `.com` taken off, so `Bash(touch *)` covers `TOUCH x`, `Touch x`, `touch.exe x` and
+`TOUCH.EXE x`. A rule written `touch.exe` does not cover `touch x`: the rule is matched as written
+against the line, and the line is read both as written and with the suffix off. Every other word is
+compared as written, so an argument keeps its case. The reading is the same on every host, because
+the rule has to hold for a line whichever machine runs it, and a host that folds case or starts a
+program by a name without its suffix runs the respelling as the program the rule names. A program
+given by a path (`/usr/bin/touch x`) is not read this way and is not covered by `Bash(touch *)`. An
+`allow` rule is matched as written and grants none of the respellings.
+
 **Why.** Matched against the words run together into one line, `"ls /x"` read as `ls` given `/x`,
 so `Bash(ls *)` stopped the prompt and a script nobody had seen ran unasked. The asymmetry is
 [PERM-4](#PERM-4)'s: a rule that restricts covers everything it covered when the words were run
-together, and a rule that grants covers what it names.
+together, and a rule that grants covers what it names. A deny rule that a respelling of the program
+defeats is a statement that is not true, and an answer that depended on the host the rule was
+evaluated on would make the same settings file refuse a line on one machine and run it on another.
 
 `verified-by: bravebot_core::permissions::a_command_pattern_matches_where_the_documented_table_says`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_of_each_documented_shape_reads_only_the_program_word_without_case`
+`verified-by: bravebot_core::permissions::a_restricting_rule_reads_only_the_program_word_without_regard_to_case`
+`verified-by: bravebot_core::permissions::an_allow_rule_matches_the_program_word_as_written`
+`verified-by: bravebot_core::policy::a_denied_program_respelled_is_refused_at_both_gates`
+`verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_core::permissions::a_trailing_colon_star_is_a_trailing_wildcard_and_a_colon_elsewhere_is_not`
 `verified-by: bravebot_core::permissions::a_space_in_an_allow_rule_covers_only_the_gap_between_two_words`
 `verified-by: bravebot_core::permissions::a_space_in_a_deny_or_ask_rule_covers_a_space_inside_a_word_too`
@@ -1147,10 +1164,12 @@ optional `--` that ends the options only, then every word containing `=` as an a
 its name (`A-B=1`, `1A=x` and `=1` included, and `-X=1` after the `--` or after another
 assignment), then the program. `env` is read as having its options anywhere before the program, so
 an option after an assignment is skipped too, which can only make a deny or ask rule match more. A
-wrapper with an option the table does not list, a `command -v`, a wrapper with nothing after it to
-run, a wrapper named by a path, and a program that only runs another one by another way (`xargs`,
-`npx`, `devbox run`, `docker exec`) are left whole, so a rule is matched against the words that were
-written and never against a reading of them.
+wrapper is named without regard to case and with a trailing `.exe` or `.com` taken off, as the
+program word is ([PERM-5](#PERM-5)), on every host, so `TIMEOUT 30 git push` and `env.exe git push`
+are read as `timeout` and `env` are. A wrapper with an option the table does not list, a
+`command -v`, a wrapper with nothing after it to run, a wrapper named by a path, and a program that
+only runs another one by another way (`xargs`, `npx`, `devbox run`, `docker exec`) are left whole,
+so a rule is matched against the words that were written and never against a reading of them.
 
 An `allow` rule is matched as written. `Bash(git push *)` in `allow` does not grant
 `timeout 30 git push`, which is a program the rule never named, and a deny rule written for the
@@ -1162,7 +1181,18 @@ otherwise. It is [PERM-4](#PERM-4)'s asymmetry: a rule that restricts covers mor
 grants covers what it names, and [RUN-20](tools/run.md#RUN-20) declines the same widening for a
 vouch for the same reason. The decision reads the argv and nothing else.
 
+[CRED-5](credential-protection.md#CRED-5) reads the same table to name the ambient authority of the
+program under a wrapper, and [RUN-5](tools/run.md#RUN-5) reads it to decide whether a program runs
+the file it is handed. The table is one list in `bravebot_core::permissions`. This clause and the
+ambient-authority reading of [CRED-5](credential-protection.md#CRED-5) read the entries whose
+options it describes, and the check on a file a plan wrote ([RUN-5](tools/run.md#RUN-5)) asks the
+entries that run an operand, through `is_wrapper`. `xargs`, `exec`, `setsid` and `busybox` are in
+the table as programs that run an operand and whose options are not read, so a rule is matched
+against them whole. A wrapper added to the table is a decision about both questions.
+
+`verified-by: bravebot_core::permissions::the_wrapper_table_answers_each_question_for_exactly_the_programs_it_lists`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_however_it_is_cased_or_suffixed`
 `verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
 `verified-by: bravebot_core::permissions::a_wrapper_the_table_cannot_read_is_left_whole`
 `verified-by: bravebot_core::permissions::env_reads_no_option_after_a_double_dash`
@@ -1171,6 +1201,23 @@ vouch for the same reason. The decision reads the argv and nothing else.
 
 ## Known costs
 
+- **A wrapper the table leaves whole is a second rule for the person, which PERM-20's Why says the
+  table exists to avoid.** The Why gives the cost of not looking through a wrapper as a second rule
+  for each one. The text leaves `xargs`, `npx`, `devbox run`, `docker exec`, a wrapper named by a
+  path (`/usr/bin/env git push`), a wrapper with an option the table does not list
+  (`timeout --kill-after-x 1 git push`, `env -S 'git push'`) and `command -v` whole, so
+  `Bash(git push *)` in `deny` does not refuse them. This is chosen because a reading of an option
+  the table does not know could name the wrong program, and a deny rule that matched it would be a
+  guess about a command line. Whether the table should read more (a path-named `env`, `env -S`) is
+  undecided, and so is whether the Why should say "for the wrappers in the table", which is what
+  the behaviour is.
+- **`env` is read with a looser grammar than the program's own.** PERM-20 reads every word of `env`
+  containing `=` as an assignment, so `env =1 git push` is read as `env` running `git push`. BSD
+  `env` on macOS refuses `=1` (`setenv =1: Invalid argument`) and runs nothing. What GNU and uutils
+  `env` do with an empty name is unchecked. The reading names a command that may not be the one
+  that runs. A `deny` or `ask` rule then matches more than the program does, which is the safe
+  direction, and an `allow` rule does not look through a wrapper at all, so no rule is weaker for
+  it.
 - **How many questions a session opens with is the file's to choose.** Every name in
   `additionalDirectories` is one box, so a file naming thirty directories is thirty of them before
   the first prompt can be typed, and the way out of a list somebody does not want to answer is
@@ -1220,13 +1267,26 @@ vouch for the same reason. The decision reads the argv and nothing else.
   somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
   That is the point of asking separately, and it is also the odd case: a person who has just said
   they did not write this code has said something about whoever wrote the rules too.
+- **A program word is read by its typed spelling, which Windows reads more loosely.** The case and
+  the `.exe` or `.com` of a program word are folded ([PERM-5](#PERM-5)), and nothing else the
+  Windows loader ignores is: a trailing dot or space (`git.exe. push`), a `::$DATA` suffix, an 8.3
+  short name (`POWERS~1`), and another PATHEXT extension (`npm.cmd`, `az.bat`) name a program that
+  `Bash(git push *)` or `Bash(npm *)` in `deny` or `ask` does not cover. Only a host that runs the
+  stage unconfined or reaches the file by another route is exposed to the `.cmd` and `.bat` forms,
+  since the AppContainer backend refuses a batch file. What `CreateProcessW` and `canonicalize` do
+  with each spelling is read from the code and unchecked on Windows. The fold is Unicode lowercase,
+  and NTFS folds names by its own table, so a character the two fold differently (`\u{17f}`,
+  `\u{131}`) can name the program in one and not in the other; that is unchecked as well.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers
   of [PERM-20](#PERM-20) and no further, so `devbox run git push` and `npx git push` are not
-  covered by `Bash(git push *)`. A pattern constraining arguments is weaker
-  than it looks, and a `deny` list is not a sandbox: [sandboxing.md](sandboxing.md) is what
-  confines a process, and the label on a program's output is what holds regardless.
+  covered by `Bash(git push *)`. The program word and the wrapper names are read without regard to
+  case and without a `.exe` or `.com` ([PERM-5](#PERM-5)), so `TOUCH x` and `touch.exe x` are covered
+  by `Bash(touch *)`; the form of the path is not read, so `/usr/bin/touch x` is not. A pattern
+  constraining arguments is weaker than it looks, and a `deny` list is not a sandbox:
+  [sandboxing.md](sandboxing.md) is what confines a process, and the label on a program's output is
+  what holds regardless.
 - **A path rule does not reach a program's own file access.** `Read` and `Edit` rules govern the
   tools that read and write files. A program is argv to this agent, so `run cat .env` is checked
   against the `Bash` rules and against the run prompt, not against a `Read` rule covering `.env`.

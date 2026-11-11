@@ -15063,6 +15063,51 @@ five
         );
     }
 
+    /// PERM-5, PERM-20 and MODE-6. A program word respelled in case, with a `.exe` or under a
+    /// wrapper is refused by the same `deny` rule as the plain one, at both gates that rule the
+    /// line and wherever the step sits in it. Neither gate takes a permission mode, so the refusal
+    /// is the same in bypass mode, which only decides the prompts that follow a line the rules let
+    /// through.
+    #[test]
+    fn a_denied_program_respelled_is_refused_at_both_gates() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["Bash(touch *)"], &[], &[]));
+
+        for (program, args) in [
+            ("touch", &["x"][..]),
+            ("TOUCH", &["x"]),
+            ("Touch", &["x"]),
+            ("touch.exe", &["x"]),
+            ("ENV", &["touch", "x"]),
+            ("env.exe", &["FOO=bar", "TOUCH.exe", "x"]),
+            ("TIMEOUT", &["5", "touch", "x"]),
+        ] {
+            let args_owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+            assert!(
+                policy.before_command_rules(program, &args_owned).is_err(),
+                "{program} {args:?} was not refused before the program was looked for"
+            );
+            let step = step_named(program, args);
+            assert!(
+                policy
+                    .before_plan_rules(&plan_of(vec![step.clone()]))
+                    .is_err(),
+                "{program} {args:?} was not refused on the compiled plan"
+            );
+            assert!(
+                policy
+                    .before_plan_rules(&plan_of(vec![step_named("echo", &["hi"]), step]))
+                    .is_err(),
+                "{program} {args:?} as a later step was not refused"
+            );
+        }
+        assert!(
+            policy.before_command_rules("toucher", &[]).is_ok(),
+            "a program that only starts with the rule's name was refused"
+        );
+    }
+
     /// The line an allow rule must not cross. A pattern covers commands nobody has read, so it
     /// cannot carry the claim that what they print is trustworthy: that claim is what pressing `a`
     /// at a prompt makes, about one command a person had in front of them. If a rule could make

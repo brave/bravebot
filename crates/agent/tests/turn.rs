@@ -18869,27 +18869,36 @@ fn an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_wr
 /// An authority nothing here holds is recorded where it is spent, and nowhere else.
 ///
 /// The trail is the one record of a session that outlives the process, so a person accounting
-/// for what an agent did with their cloud role has nothing else to read. Two lines run: the
-/// first reaches nothing and the second names the metadata service, so a record made on every
-/// run and a record made on none are both distinguishable from the one record owed.
+/// for what an agent did with their cloud role has nothing else to read. Three lines run: the
+/// first reaches nothing, the second names the metadata service, and the third is `git push` under
+/// `env`, which reaches what `git push` does without it. A record made on every run, a record made
+/// on none and a record that stops at a wrapper are each distinguishable from the records owed.
 ///
-/// `echo` is the program in both, because it resolves on any machine and reaches nothing itself.
+/// `echo` is the program in the first two, because it resolves on any machine and reaches nothing
+/// itself.
 /// What names the service is the address in the argument, which is how a line names it whichever
 /// client it uses, and what is recorded is that address rather than the argument holding it: the
-/// trail holds no content, and the path of that URL is content.
+/// trail holds no content, and the path of that URL is content. The third asks git for its usage
+/// text, which opens no connection. The third runs on Unix hosts, which have an `env` program.
 #[test]
 fn spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not() {
     let scratch = Scratch::new("ambient-trail");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_sequence(vec![
+    // `env` is a program on Unix hosts only, so the wrapper line is part of the turn there.
+    let wrapped = cfg!(unix);
+    let mut calls = vec![
         tool_request("run", r#"{"command":"echo ordinary"}"#),
         tool_request(
             "run",
             r#"{"command":"echo http://169.254.169.254/latest/meta-data/iam/"}"#,
         ),
-        reply_with("done"),
-    ]);
+    ];
+    if wrapped {
+        calls.push(tool_request("run", r#"{"command":"env git push -h"}"#));
+    }
+    calls.push(reply_with("done"));
+    let (endpoint, _received) = serve_sequence(calls);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -18925,8 +18934,8 @@ fn spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_i
         .collect();
     assert_eq!(
         recorded.len(),
-        1,
-        "one of the two lines spends an ambient authority: {:?}",
+        if wrapped { 2 } else { 1 },
+        "the metadata line spends an ambient authority, and so does `git push` under `env`: {:?}",
         sink.events()
     );
     assert!(
@@ -18939,6 +18948,12 @@ fn spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_i
         "the record kept the argument rather than the address in it: {}",
         recorded[0]
     );
+    if wrapped {
+        assert_eq!(
+            recorded[1], "logged-in-tool (git)",
+            "a program under a wrapper is recorded as it is without one"
+        );
+    }
 }
 
 /// A write the person refused leaves nothing to build, so neither party is told a change went out

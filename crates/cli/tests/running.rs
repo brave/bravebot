@@ -20253,6 +20253,59 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
     }
 }
 
+/// CLI-30, PERM-5 and PERM-20: the report agrees with what a session does with a respelled program.
+/// A `deny` or `ask` rule is read without regard to case and a `.exe` or `.com` on the program
+/// word and the wrapper names, so the report names the same rule as for the plain spelling. An
+/// `allow` rule is read as written, so the respelling is not reported as allowed, and a program
+/// given by its path is covered by none.
+#[test]
+fn permissions_check_reads_a_respelled_program_as_a_session_does() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check-respelled");
+    let home = scratch.settings().display().to_string();
+    let project = checkout
+        .join(".bravebot")
+        .join("settings.json")
+        .display()
+        .to_string();
+
+    for call in [
+        &["Bash", "GIT", "push", "origin", "main"][..],
+        &["Bash", "git.exe", "push", "origin", "main"],
+        &["Bash", "Git.COM", "push", "origin", "main"],
+        &["Bash", "ENV", "git", "push", "origin", "main"],
+        &["Bash", "timeout.exe", "5", "GIT.EXE", "push", "origin"],
+    ] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, call),
+            [
+                "decision: deny".to_string(),
+                "rule: Bash(git push *)".to_string(),
+                format!("file: {home}"),
+            ],
+            "{call:?}"
+        );
+    }
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "GIT", "commit", "-m", "x"]),
+        [
+            "decision: ask".to_string(),
+            "rule: Bash(git commit *)".to_string(),
+            format!("file: {project}"),
+        ]
+    );
+    for call in [
+        &["Bash", "GIT", "status"][..],
+        &["Bash", "git.exe", "status"],
+        &["Bash", "/usr/bin/git", "push", "origin", "main"],
+    ] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, call),
+            ["decision: no rule matches, so the ordinary gates decide"],
+            "{call:?}"
+        );
+    }
+}
+
 /// CLI-30: an `allow` rule a checkout wrote is not in force until it is granted, so the call is
 /// reported as decided by no rule and the checkout's rule is named as waiting. Reporting it as the
 /// deciding allow rule would tell a person the prompt they hit was a fault.
