@@ -211,7 +211,9 @@ for bots, so each terminal function is in the bots layout.
      was, two writers at once lose no row, a lock held by a program that stopped is released, and a
      write that waits past the limit for a held lock is refused naming the lock file. The form refuses a name or purpose with a null character,
      the form's Save button and the details pane's save on leaving a field are unchanged, a turn that
-     ends in the GUI records its conversation and the archive's length through the bridge, a
+     ends in the GUI records its conversation and the archive's length through the bridge, a turn
+     that ends in the home folder at a numbered prompt sets `lastHome` and a turn that ends
+     elsewhere leaves it, a
      search of `ui/src/main` finds no write of the rows outside the bridge, and a test pins that the
      methods are absent from the window's list.
 4. **The terminal makes, edits, archives, restores and deletes a bot.**
@@ -262,9 +264,10 @@ for bots, so each terminal function is in the bots layout.
      again first when it was removed by hand ([BOT-4](specs/bots.md#BOT-4)). A bot made before
      definitions is migrated before its first turn.
    - Record the conversation in the row at the end of each turn, and of a turn that failed when the
-     agent's answer carries an identifier ([BOT-11](specs/bots.md#BOT-11)), list the row's
-     conversations in the layout and continue one. A fork of a bot's conversation is a session with no
-     bot.
+     agent's answer carries an identifier ([BOT-11](specs/bots.md#BOT-11)). A turn that ends in the
+     home folder at a numbered prompt sets `lastHome`. A turn that ends elsewhere, and a failed turn,
+     leaves it. List the row's conversations in the layout and continue one. A fork of a bot's
+     conversation is a session with no bot.
    - Add to the form of slice 4 what needs a session: a model field that is absent while a turn of the
      bot runs, a delete refused while a turn of the bot is in progress in the terminal, and archiving
      the bot whose session is open closes that session.

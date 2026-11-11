@@ -247,13 +247,15 @@ process calls them today with no dialog.
 the whole file non-atomically with `writeFileSync`. `parseState` keeps the fields it knows and drops
 the rest, so a field added by another writer is erased the next time the GUI writes. The `Bot` row
 has the fields slug, name, purpose, avatar, model, home, definition, session, conversations (each an
-identifier and a directory), archived, remembered, quiet, retired, created and updated. The limits are
+identifier and a directory), lastHome (a conversation identifier and a prompt ordinal, or none),
+archived, remembered, quiet, retired, created and updated. The limits are
 `BOTS_MAX = 100` with archived rows counted (`ui/src/shared/bots.ts:168`), a slug matching
 `/^[a-z0-9]+(?:-[a-z0-9]+)*$/` of at most 64 characters (`:182`), `slugFor` cutting to 48 characters and
 appending `-2`, `-3`, a model of at most 512 characters with no null character (`:134`), and an avatar
 of at most 128 (`ui/src/main/bots.ts:180`). `noteBotSession` appends the
-conversation and sets `session`, `noteBotArchived` only raises `archived`, and `releaseBotSession`
-sets `session` to none and `archived` to zero.
+conversation and sets `session`, and sets `lastHome` when the turn ends in the home folder at a
+numbered prompt. A failed turn records the conversation and leaves `lastHome`. `noteBotArchived`
+only raises `archived`, and `releaseBotSession` sets `session` to none and `archived` to zero.
 
 **What a turn does.** Every turn of a bot's conversation names the row's definition (MEMORY-10). A turn
 is sent only in the home folder, a folder chosen with the picker in this run, or a folder recorded for the

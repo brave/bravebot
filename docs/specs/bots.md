@@ -59,6 +59,7 @@ A row has:
 | definition | the name of the definition written for it, or none for a bot made before definitions |
 | session | the identifier its next turn continues, or none until it has spoken |
 | conversations | each conversation it has had, with the folder it ran in |
+| lastHome | the last turn that ended in the home folder: that conversation's identifier and the prompt's ordinal, or none before one has |
 | archived | the length of the conversation's compaction archive when a consolidation was last decided ([BOT-16](#BOT-16)) |
 | retired | when the bot was archived, or zero for a bot in use |
 | created, updated | when it was made and when anything about it last changed |
@@ -142,6 +143,8 @@ An entry is kept with a field repaired, and not dropped, when:
   that is neither that nor a pair of an identifier and an absolute path is dropped, and so is a
   second entry with the same folder and identifier. A `session` that no entry names is added as an
   entry, paired the same way.
+- `lastHome` is absent, or is not an identifier paired with a non-negative whole-number prompt
+  ordinal. It becomes none.
 
 Reading stops after the 100th row kept. The rows are returned in file order and are not sorted. The
 read also returns what it dropped, which is each entry dropped by the rules above with its slug when
@@ -535,6 +538,13 @@ to `conversations` once. A turn that fails records the identifier too, when the 
 failure carries one, as the GUI records it on `turn.error` as well as `turn.done`. The identifier
 is read off what the agent answered, never off anything the person typed. A session continued in the bots layout is the row's `session` or one chosen from the
 row's `conversations`, each shown with its folder.
+
+A turn that ends in the home folder, and whose answer from the agent carries a prompt ordinal that is
+a non-negative whole number, sets `lastHome` to that conversation's identifier and that ordinal. A
+turn that ends in any other folder leaves `lastHome` as it was, and so does a turn that fails. A
+summon copies `lastHome` when it is sent, as where the summoned bot's own conversation stood
+([MEMORY-14](definition-memory.md#MEMORY-14)). The summons record keeps that copy, and the card is
+drawn from the record.
 
 A fork of a bot's conversation is a session with no bot, as the GUI makes it. It is not recorded
 in any row, it is not addressed to a definition, since the record names none ([BOT-10](#BOT-10)), and it asks for no consolidation. It is listed in
