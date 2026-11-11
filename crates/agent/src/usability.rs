@@ -1861,7 +1861,15 @@ mod tests {
         ] {
             assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
-        let bytes = OsString::from_vec(b"CC_\xff".to_vec());
+        // The name is not text, and its lossy rendering is a name the family matches, so a match on
+        // the lossy rendering removes it. The rendering written out is text and is removed.
+        let bytes = OsString::from_vec(b"CC_aarch64\xff".to_vec());
+        let lookalike = OsString::from("CC_aarch64\u{fffd}");
+        assert_eq!(bytes.to_string_lossy(), lookalike.to_string_lossy());
+        assert!(removed(
+            &stage_with(&lookalike, genuine.as_os_str(), &session),
+            &lookalike
+        ));
         assert!(!removed(
             &stage_with(&bytes, genuine.as_os_str(), &session),
             &bytes
