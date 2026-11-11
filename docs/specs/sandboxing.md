@@ -5276,12 +5276,12 @@ shown by running the program, or not entirely:
   (`<desktop>-mimeapps.list`, `<prefix>defaults.list`, `<prefix>mimeinfo.cache`) and
   `KDE_SESSION_VERSION` as a suffix of program names (`kde-open5`, `kbuildsycoca<version>`,
   `ktraderclient<version>`, `kde<version>-config`). `xdg-mime` does not validate either prefix, so a
-  value containing `/` selects a file outside the directories the opener judged. The earlier
-  reading here, that such a file supplies only a desktop-entry id looked up in those directories,
-  was wrong: the id may itself contain `../`, and a run against the real scripts started a handler
-  planted in a stage-writable directory through `XDG_CURRENT_DESKTOP=../../stage/evil` and through
-  `XDG_MENU_PREFIX=../../../stage/` (see the entry above). The opener therefore removes both when
-  the value contains a `/`. `KDE_SESSION_VERSION` is not in the list. The program names built from `KDE_SESSION_VERSION` are
+  value containing `/` selects a file outside the directories the opener judged. The desktop-entry
+  id such a file supplies may itself contain `../`, so the file can start a handler planted in a
+  stage-writable directory: a run against the real scripts did so through
+  `XDG_CURRENT_DESKTOP=../../stage/evil` and through `XDG_MENU_PREFIX=../../../stage/` (see the
+  entry above). The opener therefore removes both when the value contains a `/`.
+  `KDE_SESSION_VERSION` is not in the list. The program names built from `KDE_SESSION_VERSION` are
   resolved on the reduced `PATH`. The `eval` at `xdg-mime.in` line 37 and the `kde<version>-config`
   start at line 832 are reached only by the install, uninstall and makedefault actions, and
   `xdg-open` runs `xdg-mime query` only. These readings are from the source and were not run.
