@@ -771,6 +771,10 @@ pub fn save_usage_ping(on: bool) {
         true => "on",
         false => "off",
     };
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a switch that cannot be written stays as it was, which the toggle reads back"
+    )]
     let _ =
         bravebot_agent::home::replace(&dir.join(USAGE_PING_FILE), format!("{word}\n").as_bytes());
 }
@@ -814,6 +818,10 @@ pub fn mark_usage_ping_notice_shown() {
     if bravebot_agent::home::create_directory(&dir).is_err() {
         return;
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a marker that cannot be written leaves the notice due, so it is shown again"
+    )]
     let _ = bravebot_agent::home::replace(&dir.join(USAGE_PING_NOTICE_FILE), b"shown\n");
 }
 

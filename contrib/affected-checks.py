@@ -195,7 +195,11 @@ def classify_by_area(path, desktop, fuzz):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
-    if path in ("contrib/check-lint-increase.py", "contrib/check-code-selectors.py"):
+    if path in (
+        "contrib/check-lint-increase.py",
+        "contrib/check-code-selectors.py",
+        "contrib/drive_tui.py",
+    ):
         return frozenset({"rust"})
     if path == "contrib/Dockerfile.cross":
         return frozenset({"build"})
@@ -487,6 +491,7 @@ CASES = (
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("contrib/check-lint-increase.py", {"rust"}),
     ("contrib/check-code-selectors.py", {"rust"}),
+    ("contrib/drive_tui.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("extension-trusted/manifest.json", {"rust", "ui"}),

@@ -865,6 +865,10 @@ pub(crate) fn say_usage_ping_notice() {
     if let Some(notice) = bravebot_session::store::take_usage_ping_notice() {
         use std::io::Write;
         // Not `eprintln!`, which panics where whoever started the run closed stderr (CLI-35).
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a closed stderr leaves the notice unsaid, and the run goes on"
+        )]
         let _ = writeln!(std::io::stderr().lock(), "{notice}");
     }
 }
