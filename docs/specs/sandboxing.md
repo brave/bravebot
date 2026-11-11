@@ -5312,9 +5312,9 @@ shown by running the program, or not entirely:
   (hooks, `core.fsmonitor`) has not been traced. It depends on the read grants of the sandbox
   backend, which were not followed for this case. [#3901](https://github.com/brave/bravebot/issues/3901)
   tracks it.
-- The lookups and the check of a `--settings` file on Windows have not been run, since no Windows
-  host was available. The checkout is found with the same function there, and `programs::program_name`
-  reads a Windows executable name, but no test of this clause ran on Windows.
+- The lookups and the check of a `--settings` file on Windows have no test and no run.
+  The checkout is found with the same function there, and `programs::program_name`
+  reads a Windows executable name, but no test of this clause runs on Windows.
   [#3901](https://github.com/brave/bravebot/issues/3901) tracks it.
 - A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not found by
   `with_checkout`, and neither is a layout with no `.git` above the working directory. The directory
