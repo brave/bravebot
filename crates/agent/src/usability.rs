@@ -73,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 83] = [
+const CODE_SELECTORS: [(&str, Names); 85] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -107,6 +107,10 @@ const CODE_SELECTORS: [(&str, Names); 83] = [
     ("LDFLAGS", Names::Options),
     ("LDLIBS", Names::Options),
     ("TARGET_ARCH", Names::Options),
+    // make 4.4.1 on Linux: the program of the rule that preprocesses assembler, and the machine
+    // flag of the assembler rule.
+    ("CPP", Names::Options),
+    ("TARGET_MACH", Names::Options),
     // make: the program or flags of the rules for Objective-C, TeX and literate programs, and the
     // option that places a compiler's output. `MAKE_COMMAND` is the name `$(MAKE)` expands from in
     // a recipe line marked `+`. Flag variables of the languages a built-in rule compiles.
@@ -202,14 +206,16 @@ const CODE_SELECTORS: [(&str, Names); 83] = [
 /// `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`, `CARGO_CREDENTIAL_ALIAS_<name>`, which cargo
 /// reads as a credential provider command, and make's rule variables with a dot in the name:
 /// `COMPILE.<suffix>`, `LINK.<suffix>`, `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and
-/// `LINT.<suffix>`. The triple, the registry, the alias or the suffix is part of the name, so
+/// `LINT.<suffix>`, and `.SHELLFLAGS`, which GNU Make 4.4.1 on Linux runs a program from when it
+/// is given one. The triple, the registry, the alias or the suffix is part of the name, so
 /// these are matched as a family and not listed.
 fn names_a_target_program(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
-        (name.starts_with("CARGO_TARGET_")
-            && ["_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS"]
-                .iter()
-                .any(|end| name.ends_with(end)))
+        name == ".SHELLFLAGS"
+            || (name.starts_with("CARGO_TARGET_")
+                && ["_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS"]
+                    .iter()
+                    .any(|end| name.ends_with(end)))
             || (name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_CREDENTIAL_PROVIDER"))
             || name.starts_with("CARGO_CREDENTIAL_ALIAS_")
             || ["COMPILE.", "LINK.", "PREPROCESS.", "LEX.", "YACC.", "LINT."]
@@ -1722,6 +1728,9 @@ mod tests {
             "LEX.l",
             "YACC.y",
             "LINT.c",
+            "CPP",
+            "TARGET_MACH",
+            ".SHELLFLAGS",
         ] {
             assert!(withheld(name, &genuine, &session), "{name}");
         }
@@ -1735,7 +1744,15 @@ mod tests {
             assert!(withheld(name, &planted, &session), "{name} was kept");
             assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
-        for name in ["COMPILE", "COMPILE.", "LINKER", "CARGO_CREDENTIAL_ALIA"] {
+        for name in [
+            "COMPILE",
+            "COMPILE.",
+            "LINKER",
+            "CARGO_CREDENTIAL_ALIA",
+            ".SHELL",
+            "SHELLFLAGS",
+            "X.SHELLFLAGS",
+        ] {
             assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
         for name in [
