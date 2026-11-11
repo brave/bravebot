@@ -261,7 +261,7 @@ settings and the person's answer and never from what a stage wrote or printed:
   as it settles the terminal, with the answer about confined lines where its entry says so;
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
   with no stage keeping the network ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
-  on a platform that holds a `.git` back from every stage, which is macOS and not Linux or Windows
+  on a platform that holds the protected names back from every stage, which is macOS and not Linux or Windows
   ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
 - nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
@@ -291,7 +291,8 @@ more ([PERM-14](../permissions.md#PERM-14)).
 
 **Why.** Without it, nearly every line in a trusted worktree asks, builds and tests included, though they
 run inside the sandbox and need nothing beyond it. The sandbox is what makes the answer safe to
-give: a confined stage with no network and no way to write a `.git` cannot send what it reads anywhere or
+give: a confined stage with no network and no way to write a `.git`, `.husky`, `.pre-commit-config.yaml` or any other
+protected name ([PERM-9](../permissions.md#PERM-9)) cannot send what it reads anywhere or
 plant a hook that runs unconfined, and a line that asks for more than that is asked about as before.
 The conditions are the ones the paragraph above lists because each is a way a line gets past what the person
 was told, and none can be decided by anything a stage did.

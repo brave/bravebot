@@ -897,35 +897,56 @@ Desktop's `~/.docker/bin`.
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_look_at_any_path_and_read_or_list_only_its_grants`
 
 <a id="SANDBOX-14"></a>
-### SANDBOX-14: on macOS a write row does not reach a `.git` beneath it
+### SANDBOX-14: on macOS a write row does not reach a `.git` or any other protected name beneath it
 
 On macOS a policy that grants any write refuses a write to every path with a `.git` component, in
 any case: creating, changing, renaming into or removing a file or directory named `.git` or inside
 one, under a row the policy writes as under any other. That covers a repository's hooks and
 configuration, a submodule's under `.git/modules`, a linked work tree's under `.git/worktrees`, and a
-`.git` that is a file naming a gitdir. Every other write a row grants is granted.
+`.git` that is a file naming a gitdir.
+
+The refusal also covers every other name [PERM-9](permissions.md#PERM-9) puts to the person for a
+write: a `.bravebot` or `.husky` directory and what is inside it, and a `.gitmodules`, `.gitconfig`
+or `.pre-commit-config.yaml` file. These are read beneath each write row and not in the row's own
+path, so a row that is itself inside such a directory, such as a server's home under
+`~/.bravebot/mcp-home`, is written as any other, and a protected name beneath it is refused. A name
+matches in any letter case, with `\u{17f}` read as `s`, `\u{131}` as `i` and the Kelvin sign as `k`,
+as `is_protected` reads it. A name spelled with a trailing dot or space, or with a `\` separator,
+is another name on macOS and is granted. One list in `bravebot_sandbox` supplies the names, and a test
+in `bravebot-agent` holds it equal to the list `is_protected` reads.
+
+Every other write a row grants is granted.
 A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
-reaches a `.git` as it does on Linux. Every other stage keeps the refusal. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+reaches a `.git` and each other protected name as it does on Linux. Every other stage keeps the
+refusal. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
 [mcp-servers.md](mcp-servers.md)'s known cost and a known cost of `run` ([SANDBOX-18](#SANDBOX-18)).
 The Windows backend withholds nothing of the kind, and no server is started there
 ([SERVERS-10](mcp-servers.md#SERVERS-10)).
 
 **Why.** git runs the commands a repository's configuration and hooks name, with nothing confining
-them, the next time anybody runs git in it. A confined process that may write a `.git` may
-therefore run code outside its confinement. Seatbelt lets the last rule matching a path decide, so
-the refusal follows the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
+them, the next time anybody runs git in it. A hook that `core.hooksPath` or `.pre-commit-config.yaml`
+names, a `.husky` script and the project's own `.bravebot` settings are run or loaded with the
+person's rights the same way. A confined process that may write one of these may therefore run code
+outside its confinement. Seatbelt lets the last rule matching a path decide, so the refusal follows
+the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
 the case of the name does not matter.
 
 **What it costs.** A gitdir that is not named `.git`, such as one `--separate-git-dir` made, is
 written as any other directory, and so is a directory a process lays out as a repository itself, a
-`HEAD` file beside `objects` and `refs` directories, which git started inside it opens.
+`HEAD` file beside `objects` and `refs` directories, which git started inside it opens. A stage
+that has to write a `.husky` or `.bravebot` file under a row, such as an installer of hooks, is
+refused, and the person makes that edit through a tool that asks.
 
 A person's trust of a directory lets a plain line run there without asking only where every stage of it
-is held back from a `.git` by this clause, so on macOS and for a stage that is not git ([RUN-5](tools/run.md#RUN-5)).
+is held back from a protected name by this clause, so on macOS and for a stage that is not git ([RUN-5](tools/run.md#RUN-5)).
 
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
+`verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
+`verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
+`verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`

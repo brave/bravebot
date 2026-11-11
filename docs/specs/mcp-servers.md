@@ -1194,7 +1194,9 @@ itself, a `HEAD` file beside `objects` and `refs` directories. `add` refuses it 
 writes nothing, and a session refuses a declaration that names one before anybody is asked, with a
 line naming the directory and the repository it is in. On macOS a row the server may write does
 not reach a `.git` beneath it either, whatever its case ([SANDBOX-14](sandboxing.md#SANDBOX-14)),
-so a server cannot make one in its own home or the temporary directory and write into it.
+so a server cannot make one in its own home or the temporary directory and write into it. The same
+holds for a `.husky` or `.bravebot` beneath a row and for `.gitmodules`, `.gitconfig` and
+`.pre-commit-config.yaml`, which git or a hook runner reads as code to run.
 
 **A server has a home directory of its own**, and `HOME` names it unless the declaration names
 `HOME`, in which case the person's value is handed over as any other named variable is. A runner
@@ -2106,7 +2108,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   before the server started or the server made it, and git run there later runs what the server
   wrote. On every platform a directory a server lays out as a repository itself, with no `.git` in
   its path, is not refused once the server is running.
-- **On macOS a server cannot make a work tree.** No `.git` is writable to it, so a server or a
+- **On macOS a server cannot make a work tree.** No protected name is writable to it, so a server or a
   runner that clones a repository into its home or the temporary directory fails there, and on
   every platform a server meant to work on a git repository cannot be given one.
 - **A person whose home directory is a git work tree** has every directory in it refused as a
@@ -2192,9 +2194,9 @@ callable that the person turned off.
 At the end of its report, `/status` has a `Server policy` line naming each local server the session
 started, and under it one line each for what the policy holds of egress (none, this machine only,
 any address, or only the proxy that applies the session's host list), whether the server may start
-subprocesses, and the directory it starts in. Where the platform refuses a write to a `.git` beneath
-a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a `.git` line
-says so, since a row that reads `write` does not reach one. Then comes one line for each path the
+subprocesses, and the directory it starts in. Where the platform refuses a write to a protected name
+beneath a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a
+`protected names` line says so, since a row that reads `write` does not reach one. Then comes one line for each path the
 policy names, labelled `read`, `write` or `read, write` for what the row grants, and the paths that
 were wanted and are in no row because this platform names no path that is not on disk
 ([SANDBOX-9](sandboxing.md#SANDBOX-9)), under a `left out` line giving that reason. A write row

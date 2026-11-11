@@ -745,7 +745,7 @@ against:
   egress         any address
   subprocesses   allowed
   starts in      /Users/you/work
-  .git           not written under a write row
+  protected names  not written under a write row
   read           /usr/lib
   read           /usr/bin
   read, write    /dev/null
@@ -755,7 +755,7 @@ against:
   read, write    /Users/you/work
 ```
 
-On Linux the `.git` line is absent, and the base lists the system directories of that platform.
+On Linux the `protected names` line is absent, and the base lists the system directories of that platform.
 `left out` heads the paths that were wanted for the server and are not on disk, on a platform that
 grants no path that is not, with the reason beside it. A server reached over HTTP runs no process
 here and has no such lines.
