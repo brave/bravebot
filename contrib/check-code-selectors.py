@@ -43,7 +43,8 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    or a folder to the system, so a name added to the Rust list and not there is passed on by the
    application. One difference is written down: `HOME` is in the Rust list and is not in the
    others, because the application and the agent it starts read `HOME`, so it is not deleted
-   there (the comment at the top of external-open.ts says so). `APPLICATION_EXCEPTIONS` holds it.
+   there (the comment at the top of external-open.ts says so). The nine Windows names of the
+   rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -66,11 +67,27 @@ APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
 # application and the agent it starts read `HOME`, so deleting it from the application's
 # environment would change both; the opener removes it from its own start instead. Electron finds
 # the session bus from `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager,
-# portal and notification calls, so deleting them would break those.
+# portal and notification calls, so deleting them would break those. The nine Windows
+# names (brave/bravebot#3860) are also left out of the application's list and removed by the
+# opener from its own start. Electron's own Windows start is not covered by that removal: it is
+# given those names as the application's process holds them.
+WINDOWS_REASON = (
+    "the opener removes this Windows variable from its own start; the desktop application's list "
+    "does not hold it"
+)
 APPLICATION_EXCEPTIONS = {
     "HOME": "the desktop application and the agent it starts read HOME, so it is not deleted there",
     "XDG_RUNTIME_DIR": "Electron and the agent it starts find the session bus and their runtime files here",
     "DBUS_SESSION_BUS_ADDRESS": "Electron connects to the session bus it names, so it is not deleted there",
+    "PATHEXT": WINDOWS_REASON,
+    "COMSPEC": WINDOWS_REASON,
+    "SystemRoot": WINDOWS_REASON,
+    "windir": WINDOWS_REASON,
+    "ProgramFiles": WINDOWS_REASON,
+    "ProgramW6432": WINDOWS_REASON,
+    "LOCALAPPDATA": WINDOWS_REASON,
+    "APPDATA": WINDOWS_REASON,
+    "USERPROFILE": WINDOWS_REASON,
 }
 
 # The file that holds the generic list and the shared names.
@@ -731,13 +748,22 @@ mod tests {
 # The opener's list as opener.rs writes it, with a name taken from the shared module, and the
 # application's two lists of the names the application deletes.
 OPENER_LIST = """\
-const CODE_SELECTORS: [(&str, Names); 6] = [
+const CODE_SELECTORS: [(&str, Names); 15] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_RUNTIME_DIR", Names::Directory),
     ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),
     ("GIO_LAUNCH_DESKTOP", Names::File),
     ("XDG_DATA_HOME", Names::Directory),
+    ("PATHEXT", Names::Options),
+    ("COMSPEC", Names::File),
+    ("SystemRoot", Names::Directory),
+    ("windir", Names::Directory),
+    ("ProgramFiles", Names::Directory),
+    ("ProgramW6432", Names::Directory),
+    ("LOCALAPPDATA", Names::Directory),
+    ("APPDATA", Names::Directory),
+    ("USERPROFILE", Names::Directory),
 ];
 """
 TS_LIST = """\

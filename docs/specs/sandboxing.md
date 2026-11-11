@@ -4084,7 +4084,7 @@ file. A new spawn that looks a name up through
   The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
   the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP`, `HOME`,
   `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
-  and the GIO, Qt and KDE names in its table below. `GIO_LAUNCH_DESKTOP` is one file
+  and the GIO, Qt, KDE and Windows names in its table below. `GIO_LAUNCH_DESKTOP` is one file
   (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
   3100, read only when the process is not setuid), so a value is removed unless it is an existing
@@ -4467,6 +4467,9 @@ file. A new spawn that looks a name up through
   | `QT_QPA_PLATFORM_PLUGIN_PATH` | a directory | where Qt loads the platform plug-in from |
   | `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM`, `QT_STYLE_OVERRIDE` | options | name the plug-in Qt loads from the directories above |
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
+  | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
+  | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
+  | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds; whether the start needs it was not run |
 
   What was run and what was read for these names is in "What a checked start does not cover".
 
@@ -4986,8 +4989,26 @@ shown by running the program, or not entirely:
   disk. What `gio` does with `HOME` removed was not run: the test removes nothing it can see
   `gio` fall back from, and does not run on a host where the account has handlers of its own.
   These were not run: a D-Bus service that answers `gio open` after the portal call it receives, so
-  that what it can make `gio open` start is unobserved; the Windows `rundll32` start, which was read, which no test on another
-  system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
+  that what it can make `gio open` start is unobserved. The Windows `rundll32 url.dll,FileProtocolHandler` start's list was read from public source:
+  Wine's `url.dll` hands the address to `ShellExecuteA`, Wine's `shlexec.c` expands
+  `%name%` in a handler's command template from the process's environment, Wine's `rundll32`
+  searches `PATH` for the library, and Wine's `kernelbase` starts a batch file through `COMSPEC`;
+  ReactOS's `shlexec.cpp` handles `SEE_MASK_DOENVSUBST` the same way; Microsoft's `ShellExecute`
+  pages name no variable; Microsoft's `rundll32` page and the rest of the ReactOS tree were not
+  read, and no source read shows `PATHEXT` being read by this start. No Windows run of this start
+  is recorded here. No Wine or ReactOS version is recorded for the source named. The opener
+  removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
+  `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
+  `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
+  `comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`, and on
+  Windows by `a_windows_name_is_removed_in_whatever_case_it_is_set`. The `sandbox-windows` job in
+  `.github/workflows/ci.yml` runs
+  `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`, which sets
+  the nine names in a child run of the test binary, asserts that the opener's start removes all
+  nine and that a stage-written batch file does not run, and prints for each name, and for
+  `PSModulePath`, whether a start with only that name put back ran the batch file. The printed
+  record is not asserted. #3860 owns the Windows run; #3822 owns the rest of the opener list.
+  These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
   unobserved; a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
@@ -5353,13 +5374,17 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the fifteen names set and the same calls on Electron's shell start it with all fifteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS, which the application keeps)`
 `verified-by: bravebot_sandbox::programs::a_bus_address_holds_only_when_every_entry_is_a_socket_outside_the_stage`
 `verified-by: bravebot_tui::opener::the_opener_removes_the_runtime_directory_and_bus_address_that_lead_to_a_socket_a_stage_may_write`
 `verified-by: bravebot_tui::opener::a_bus_socket_is_judged_by_where_it_leads_on_the_disk`
 `verified-by: bravebot_tui::opener::a_bus_address_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write`
+`verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
+`verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
+`verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the fifteen names set and the same calls on Electron's shell start it with all fifteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the nine Windows names, which the application keeps)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`

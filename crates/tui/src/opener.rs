@@ -61,7 +61,25 @@ use std::process::Stdio;
 /// `unix:path=` with an absolute path outside every directory a stage may write, or
 /// `unix:runtime=yes`. A path is judged where it leads on the disk, a path that does not exist is
 /// removed, and the file at it is not required to be a socket.
-const CODE_SELECTORS: [(&str, Names); 18] = [
+///
+/// The last nine names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
+/// (brave/bravebot#3860). The sources are Wine's and ReactOS's source and Microsoft's
+/// `ShellExecute` page. No run on a Windows host shows that a name chooses the program. Wine's
+/// `url.dll` passes the address to `ShellExecuteA` with no verb, and its `shlexec.c` reads
+/// `%name%` in the command template of the handler it runs from the process's environment
+/// (`GetEnvironmentVariableW`), so a handler whose command is written with `%ProgramFiles%` or
+/// `%LOCALAPPDATA%` runs whatever those variables name. The directory names listed are those
+/// handlers and profiles are written under: `SystemRoot`, `windir`, `ProgramFiles`,
+/// `ProgramW6432`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, each one directory
+/// ([`Names::Directory`]). Wine's `kernelbase/process.c` starts a batch file through the program
+/// `COMSPEC` names, so it is one file ([`Names::File`]). `PATHEXT` is the list of extensions a
+/// command processor tries for a bare name; none of those sources reads it for this start, and it
+/// is removed whatever it holds ([`Names::Options`]). Whether the start needs it was not run.
+/// `PSModulePath` is not listed: nothing read shows `rundll32` or `ShellExecute` reading it, and the
+/// opener does not start PowerShell. The Windows run test sets it on a control start and records
+/// whether it reaches the helper. `ProgramFiles(x86)` is not listed because
+/// `contrib/check-code-selectors.py` reads names of letters, digits and underscores only.
+const CODE_SELECTORS: [(&str, Names); 27] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
@@ -80,6 +98,15 @@ const CODE_SELECTORS: [(&str, Names); 18] = [
     ("QT_QPA_PLATFORM", Names::Options),
     ("QT_STYLE_OVERRIDE", Names::Options),
     ("KDESYCOCA", Names::File),
+    ("PATHEXT", Names::Options),
+    ("COMSPEC", Names::File),
+    ("SystemRoot", Names::Directory),
+    ("windir", Names::Directory),
+    ("ProgramFiles", Names::Directory),
+    ("ProgramW6432", Names::Directory),
+    ("LOCALAPPDATA", Names::Directory),
+    ("APPDATA", Names::Directory),
+    ("USERPROFILE", Names::Directory),
 ];
 
 /// Whether `address` may be handed to the opener, which is the one test every caller shares.
@@ -1098,6 +1125,12 @@ mod tests {
                 std::fs::write(place.join("bus"), "").unwrap();
                 format!("unix:path={}", place.join("bus").display())
             }
+            // `COMSPEC` is a Windows name, so its file is only a file here: the stand-in
+            // `kde-open` is what the child is checked through.
+            "COMSPEC" => {
+                std::fs::write(place.join("comspec"), "").unwrap();
+                place.join("comspec").display().to_string()
+            }
             _ => {
                 std::fs::create_dir_all(place.join("selected")).unwrap();
                 place.join("selected").display().to_string()
@@ -1240,6 +1273,308 @@ mod tests {
             given,
             [OsStr::new("url.dll,FileProtocolHandler"), OsStr::new(url)]
         );
+    }
+
+    /// SANDBOX-30, the Windows start (#3860): each directory name the start's list holds is removed
+    /// when it names a directory a stage may write and kept when it names one outside them, and
+    /// `PATHEXT` is removed whatever it holds. The regression it rejects: a name left out of the
+    /// list, so a handler command written with `%LOCALAPPDATA%` or `%ProgramFiles%` that
+    /// `ShellExecute` expands from the environment runs what a stage wrote; a name judged as an
+    /// option, which removes a safe value; and `PATHEXT` kept or judged as a path. Checked on the
+    /// hosts with Unix paths, since the values are `/stage/dir` and `/safe/dir`, which are not
+    /// absolute paths on Windows; the case rule is checked on Windows by
+    /// `a_windows_name_is_removed_in_whatever_case_it_is_set`. That the names choose the program
+    /// was read in Wine and ReactOS source and not run; see [`CODE_SELECTORS`].
+    #[cfg(unix)]
+    #[test]
+    fn the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write() {
+        assert!(withheld("SystemRoot", "/stage/dir"));
+        assert!(withheld("SystemRoot", "relative"));
+        assert!(!withheld("SystemRoot", "/safe/dir"));
+        assert!(withheld("windir", "/stage/dir"));
+        assert!(withheld("windir", "relative"));
+        assert!(!withheld("windir", "/safe/dir"));
+        assert!(withheld("ProgramFiles", "/stage/dir"));
+        assert!(withheld("ProgramFiles", "relative"));
+        assert!(!withheld("ProgramFiles", "/safe/dir"));
+        assert!(withheld("ProgramW6432", "/stage/dir"));
+        assert!(withheld("ProgramW6432", "relative"));
+        assert!(!withheld("ProgramW6432", "/safe/dir"));
+        assert!(withheld("LOCALAPPDATA", "/stage/dir"));
+        assert!(withheld("LOCALAPPDATA", "relative"));
+        assert!(!withheld("LOCALAPPDATA", "/safe/dir"));
+        assert!(withheld("APPDATA", "/stage/dir"));
+        assert!(withheld("APPDATA", "relative"));
+        assert!(!withheld("APPDATA", "/safe/dir"));
+        assert!(withheld("USERPROFILE", "/stage/dir"));
+        assert!(withheld("USERPROFILE", "relative"));
+        assert!(!withheld("USERPROFILE", "/safe/dir"));
+
+        assert!(withheld("PATHEXT", ".COM;.EXE;.BAT;.CMD"));
+        assert!(withheld("PATHEXT", ".CMD"));
+        assert!(withheld("PATHEXT", "/safe/anything"));
+        assert!(withheld("PATHEXT", ""));
+    }
+
+    /// SANDBOX-30, the Windows start (#3860), on the disk: `COMSPEC` names the program a batch file
+    /// is started through, so it is one file. It is removed when it is a file in a directory a stage
+    /// may write, a directory, a path that does not exist or a bare name, and kept when it is an
+    /// existing file outside every such directory. The regression it rejects: `COMSPEC` left out of
+    /// the list, judged as a directory or as an option, or judged by its name alone. It also pins
+    /// `PATHEXT` as an option: an existing file outside the stage's directories is removed for it,
+    /// which a `PATHEXT` judged as a file would keep.
+    #[test]
+    fn comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one() {
+        let session = crate::testutil::scratch_dir("opener-comspec-session");
+        let safe = crate::testutil::scratch_dir("opener-comspec-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let planted = session.join("cmd.exe");
+        let genuine = safe.join("cmd.exe");
+        std::fs::write(&planted, "").unwrap();
+        std::fs::write(&genuine, "").unwrap();
+        let session = session.canonicalize().unwrap();
+        let safe = safe.canonicalize().unwrap();
+
+        // Shadows the helper above, which judges by the name `/safe` and cannot see a file on disk.
+        let withheld = |name: &str, value: &Path| {
+            opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from(name), value.as_os_str().to_os_string())],
+                &|path: &Path| !path.starts_with(&session),
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+
+        assert!(withheld("COMSPEC", &session.join("cmd.exe")));
+        assert!(withheld("COMSPEC", &session.join("not-yet.exe")));
+        assert!(withheld("COMSPEC", Path::new("cmd.exe")));
+        assert!(withheld("COMSPEC", &safe));
+        assert!(!withheld("COMSPEC", &safe.join("cmd.exe")));
+        assert!(withheld("PATHEXT", &safe.join("cmd.exe")));
+
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+    }
+
+    /// SANDBOX-30, the Windows start (#3860): Windows holds a variable's name without regard to
+    /// case, so `Windir` and `ComSpec` are the variables `windir` and `COMSPEC` are, and are
+    /// removed. The regression it rejects: the names compared as written, which a process that
+    /// spells `ComSpec` as Windows tools often do slips past.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_name_is_removed_in_whatever_case_it_is_set() {
+        // The command is told to remove the spelling the list holds, so the name is compared
+        // without regard to case. Only a path under `C:\safe` is outside a stage's directories.
+        let withheld = |name: &str, value: &str| {
+            opening_against(
+                &Resolved::found_earlier("rundll32"),
+                &[],
+                [(OsString::from(name), OsString::from(value))],
+                &|path: &Path| path.starts_with(r"C:\safe"),
+            )
+            .get_envs()
+            .any(|(set, now)| set.eq_ignore_ascii_case(name) && now.is_none())
+        };
+
+        assert!(withheld("Windir", r"C:\stage\dir"));
+        assert!(withheld("LocalAppData", r"C:\stage\dir"));
+        assert!(withheld("ProgramFiles", r"C:\stage\dir"));
+        assert!(withheld("ComSpec", r"C:\stage\cmd.exe"));
+        assert!(withheld("PathExt", ".CMD"));
+        assert!(!withheld("Windir", r"C:\safe\dir"));
+    }
+
+    /// The directory a stage may write, in the environment of a child of
+    /// [`the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`].
+    #[cfg(windows)]
+    const WINDOWS_START_STAGE: &str = "BRAVEBOT_TEST_WINDOWS_START_STAGE";
+    /// The `rundll32` the child starts.
+    #[cfg(windows)]
+    const WINDOWS_START_PROGRAM: &str = "BRAVEBOT_TEST_WINDOWS_START_PROGRAM";
+    /// The one name the child sets on the command again after the opener took it off, when it is
+    /// the control.
+    #[cfg(windows)]
+    const WINDOWS_START_PUT_BACK: &str = "BRAVEBOT_TEST_WINDOWS_START_PUT_BACK";
+
+    /// Whether this process is the child of the test below, which has made the start it was asked
+    /// for. The child makes the opener's start against its own environment, which the parent set,
+    /// prints `removed <name>` for each name the command takes off and `start ended: ..` for how
+    /// `rundll32` ended, and runs it.
+    #[cfg(windows)]
+    fn is_the_child_of_the_windows_start() -> bool {
+        let (Some(stage), Some(program)) = (
+            std::env::var_os(WINDOWS_START_STAGE),
+            std::env::var_os(WINDOWS_START_PROGRAM),
+        ) else {
+            return false;
+        };
+        let stage = std::path::PathBuf::from(stage);
+        let (_, arguments) = opener("windows", "https://example.invalid/");
+        let mut command = opening_against(
+            &Resolved::found_earlier(std::path::PathBuf::from(program)),
+            &arguments,
+            std::env::vars_os(),
+            &|path: &Path| !path.starts_with(&stage),
+        );
+        if let Some(name) = std::env::var_os(WINDOWS_START_PUT_BACK) {
+            // The control: the command removed the name, and this sets it again, which also
+            // overrides the removal of `PATHEXT`.
+            let value = std::env::var_os(&name).expect("the name to put back is not set");
+            command.env(&name, value);
+        }
+        for name in withheld_from(&command) {
+            println!("removed {name}");
+        }
+        println!("start ended: {:?}", command.status());
+        true
+    }
+
+    /// SANDBOX-30, the Windows start (#3860), run on Windows. `rundll32 url.dll,FileProtocolHandler`
+    /// is started through the opener with each of the nine names of the Windows list set to a path
+    /// in a directory a stage may write, `COMSPEC` to a batch file that only creates a marker file
+    /// and `PATHEXT` to `.CMD`. The start is made in a child run of this test binary, because the
+    /// command takes its environment from the process and a test cannot set one: the parent gives
+    /// the child those names with `Command::env`, and the child calls the opener's start against
+    /// its own environment, prints the names the command takes off and runs it. The test asserts
+    /// that the child printed every one of the nine and that the marker was not created. The
+    /// helper is shown to create the marker when run directly through `cmd`, so an absent marker
+    /// is not a helper that cannot run.
+    ///
+    /// For each of the nine names and for `PSModulePath`, which the list leaves out, the test then
+    /// makes the same start with only that name set, and the child sets it on the command again
+    /// after the opener took it off. It prints whether the marker appeared and how the start
+    /// ended. That record is printed and not asserted: a start that does not run the helper is
+    /// the result for a name `rundll32` does not read, and it ending badly with `SystemRoot` put
+    /// back at a stage's directory says nothing about the opener. A green run therefore shows
+    /// that the opener removes the nine names from the real start and that the marker did not
+    /// appear, and shows nothing about which names select code; the printed record does.
+    ///
+    /// The regression it rejects: a name of the list that the command does not take off, such as
+    /// `ProgramFiles` dropped from [`CODE_SELECTORS`], or a start that does not remove a name
+    /// under the case the environment holds it in. It does not reject a name that selects code
+    /// and is in neither the list nor this test, which is found by reading the program. It has
+    /// not been run: no Windows host ran it for this change.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it() {
+        if is_the_child_of_the_windows_start() {
+            return;
+        }
+        let test = "opener::tests::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it";
+        let appeared = |marker: &Path| {
+            (0..20).any(|_| {
+                if marker.exists() {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                false
+            })
+        };
+        let session = crate::testutil::scratch_dir("opener-windows-session");
+        let _ = std::fs::remove_dir_all(&session);
+        std::fs::create_dir_all(&session).unwrap();
+        let session = session.canonicalize().unwrap();
+        // `cmd` does not read a `\\?\` path, which `canonicalize` returns.
+        let plain = |path: &Path| {
+            std::path::PathBuf::from(path.to_string_lossy().trim_start_matches(r"\\?\"))
+        };
+        let marker = plain(&session.join("marker.txt"));
+        let helper = plain(&session.join("helper.cmd"));
+        std::fs::write(
+            &helper,
+            format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display()),
+        )
+        .unwrap();
+        let stage = plain(&session);
+        let directory = stage.clone().into_os_string();
+        let listed = [
+            ("PATHEXT", OsString::from(".CMD")),
+            ("COMSPEC", helper.clone().into_os_string()),
+            ("SystemRoot", directory.clone()),
+            ("windir", directory.clone()),
+            ("ProgramFiles", directory.clone()),
+            ("ProgramW6432", directory.clone()),
+            ("LOCALAPPDATA", directory.clone()),
+            ("APPDATA", directory.clone()),
+            ("USERPROFILE", directory.clone()),
+        ];
+        // Not in the list, so only the control sets it.
+        let not_listed = [("PSModulePath", directory)];
+
+        // The helper creates the marker when it is run, and the wait sees it.
+        let environment: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let cmd = Resolved::find(OsStr::new("cmd")).expect("cmd is not found");
+        let direct = opening_against(
+            &cmd,
+            &["/c".to_string(), helper.to_string_lossy().into_owned()],
+            environment,
+            &|_| true,
+        )
+        .status()
+        .unwrap();
+        assert!(direct.success(), "{direct}");
+        assert!(appeared(&marker), "the helper did not create the marker");
+        std::fs::remove_file(&marker).unwrap();
+
+        let program = Resolved::find(OsStr::new("rundll32")).expect("rundll32 is not found");
+        // What the child printed when it made the start with `names` set over this process's
+        // environment, putting `put_back` on the command again when that is given.
+        let made = |names: &[(&str, OsString)], put_back: Option<&str>| {
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let mut run = std::process::Command::new(std::env::current_exe().unwrap());
+            run.args(["--exact", test, "--test-threads=1", "--nocapture"])
+                .env(WINDOWS_START_STAGE, &stage)
+                .env(WINDOWS_START_PROGRAM, program.as_path())
+                .env_remove(WINDOWS_START_PUT_BACK);
+            for (name, value) in names {
+                run.env(name, value);
+            }
+            if let Some(name) = put_back {
+                run.env(WINDOWS_START_PUT_BACK, name);
+            }
+            let output = run.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+
+        let printed = made(&listed, None);
+        println!("{printed}");
+        for (name, _) in &listed {
+            assert!(
+                printed
+                    .lines()
+                    .any(|line| line.trim().eq_ignore_ascii_case(&format!("removed {name}"))),
+                "{name} was not removed from the start: {printed}"
+            );
+        }
+        assert!(
+            !appeared(&marker),
+            "the helper was run by the checked start"
+        );
+
+        for (name, value) in listed.iter().chain(&not_listed) {
+            let one = [(*name, value.clone())];
+            let printed = made(&one, Some(name));
+            let ended = printed
+                .lines()
+                .find(|line| line.starts_with("start ended"))
+                .unwrap_or("the child did not print how the start ended");
+            println!(
+                "unchecked start with only {name} set: {ended}, helper run {}",
+                appeared(&marker)
+            );
+            let _ = std::fs::remove_file(&marker);
+        }
+        let _ = std::fs::remove_dir_all(&session);
     }
 
     /// SANDBOX-30. The regression it rejects: the opener started with `Checked(&[])`, or with the
