@@ -1088,11 +1088,42 @@ mod tests {
         format!("'{}'", text.replace('\'', "'\\''"))
     }
 
+    /// Whether `name` is a valid name of a shell variable: a letter or `_`, then letters, digits
+    /// and `_`. A shell other than `bash` (`dash`, which is `/bin/sh` on Debian and Ubuntu) drops an
+    /// environment entry whose name is not one when it starts, so a script run by `sh` cannot see
+    /// such a name, such as `ProgramFiles(x86)`, whatever the process that started it set.
+    #[cfg(unix)]
+    fn is_shell_identifier(name: &str) -> bool {
+        let mut characters = name.chars();
+        characters
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && characters.all(|next| next.is_ascii_alphanumeric() || next == '_')
+    }
+
+    /// The regression it rejects: `is_shell_identifier` accepting a name `dash` drops (one with a
+    /// parenthesis or a leading digit, or none), so a test would expect `sh` to show it, or
+    /// refusing a plain name, so a test would skip the assertion that it is kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_with_a_parenthesis_a_leading_digit_or_no_characters_is_not_a_shell_identifier() {
+        assert!(!is_shell_identifier("ProgramFiles(x86)"));
+        assert!(!is_shell_identifier("1ABC"));
+        assert!(!is_shell_identifier(""));
+        assert!(!is_shell_identifier("A-B"));
+        assert!(is_shell_identifier("ProgramFiles"));
+        assert!(is_shell_identifier("QT_PLUGIN_PATH"));
+        assert!(is_shell_identifier("_x1"));
+    }
+
     /// The regression it rejects: a name of [`CODE_SELECTORS`] written into the stand-in `kde-open`
     /// unquoted, so a name holding `(` makes the script a syntax error for `sh`, the stand-in writes
     /// no log, and the test that places it first on `PATH` fails on a host with `xdg-open`. It
-    /// checks the generated script with `sh -n`, then runs it with `ProgramFiles(x86)` set and
-    /// reads the name back from the log, which needs no `xdg-open` and so runs on every unix host.
+    /// checks the generated script with `sh -n`, then runs it with `ProgramFiles(x86)` and a plain
+    /// name set and reads both back from the log, which needs no `xdg-open`. The plain name is read
+    /// back whichever shell runs the script. `ProgramFiles(x86)` is read back only where `bash` is
+    /// installed, which is run with the script, because `dash` drops it from the environment
+    /// ([`is_shell_identifier`]); where `bash` is absent only the parse is checked for it.
     #[cfg(unix)]
     #[test]
     fn the_kde_open_stand_in_script_parses_and_logs_a_name_holding_a_parenthesis() {
@@ -1116,10 +1147,15 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&parsed.stderr)
         );
-        let ran = std::process::Command::new("sh")
+        let bash = std::process::Command::new("bash")
+            .args(["-c", "exit 0"])
+            .status()
+            .is_ok_and(|status| status.success());
+        let ran = std::process::Command::new(if bash { "bash" } else { "sh" })
             .arg(&script)
             .arg("https://example.invalid/")
             .env("ProgramFiles(x86)", "/safe/dir")
+            .env("XDG_DATA_HOME", "/safe/dir")
             .output()
             .unwrap();
         let seen = std::fs::read_to_string(&log).unwrap_or_default();
@@ -1136,9 +1172,18 @@ mod tests {
         );
         assert!(
             seen.lines()
-                .any(|line| line == "SET ProgramFiles(x86)=/safe/dir"),
+                .any(|line| line == "SET XDG_DATA_HOME=/safe/dir"),
             "{seen}"
         );
+        if bash {
+            assert!(
+                seen.lines()
+                    .any(|line| line == "SET ProgramFiles(x86)=/safe/dir"),
+                "{seen}"
+            );
+        } else {
+            println!("skipped the ProgramFiles(x86) read-back: no bash on this host");
+        }
         assert_eq!(single_quoted("a'b c"), "'a'\\''b c'");
     }
 
@@ -1246,6 +1291,14 @@ mod tests {
     /// whatever it holds, so the real `kde-open` would read it from the environment the opener
     /// passed.
     ///
+    /// Both the installed `xdg-open` and the stand-in are `sh` scripts, and `dash` drops a name that
+    /// is not a shell identifier ([`is_shell_identifier`]) from the environment it starts with. For
+    /// such a name (`ProgramFiles(x86)`) the stand-in cannot show that a safe value was kept, or
+    /// that a planted one was removed. The kept value is checked on the command the opener builds
+    /// instead (it is not removed), the address is still required to open in both runs, and the
+    /// removal of a planted value is pinned by
+    /// `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write`.
+    ///
     /// The stand-in shows what the opener hands on, not what `kde-open` reads: that is from the source
     /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). It prints `skipped` and passes
     /// where there is no `xdg-open`, as on macOS, and where the installed one does not start the
@@ -1291,8 +1344,14 @@ mod tests {
                     sets(&installed).is_empty(),
                     "{variable} reached kde-open: {installed}"
                 );
-            } else {
+            } else if is_shell_identifier(variable) {
                 assert_eq!(sets(&installed), [variable], "{variable} was not kept");
+            } else {
+                // `sh` may not pass the name on, so the kept value is read from the command.
+                assert!(
+                    !withheld(variable, "/safe/dir"),
+                    "{variable} was removed from the opener's command with a safe value"
+                );
             }
             let planted = kde_open_saw(test, variable, &opener, true)
                 .unwrap_or_else(|| panic!("{variable}: the address was not opened"));
