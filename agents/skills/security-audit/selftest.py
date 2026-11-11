@@ -5371,8 +5371,9 @@ def test_a_new_program_lookup_is_not_unlisted():
     """A lookup in a file `LOOKUPS_LISTED` does not count, and a `main` that records late, are errors.
 
     The faults rejected: a check that lists nothing and so lets a new lookup in a command with no
-    session pass, one that counts files and not lookups, and one that accepts a `main` which
-    records the directory after it has matched the command.
+    session pass, one that counts files and not lookups, one that accepts a `main` which records the
+    directory after it has matched the command, and one that drops the check for a listed file that
+    holds no lookup, which leaves the list admitting a lookup nobody wrote.
     """
     recorded = (
         "fn keep_out_where_this_ran() {}\nfn main() {\n    keep_out_where_this_ran();\n    match args.first() {}\n}\n"
@@ -5381,6 +5382,13 @@ def test_a_new_program_lookup_is_not_unlisted():
     one = "fn a() {\n    let r = Resolved::find(\"aws\", &path);\n}\n"
     found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one})
     check("a listed file with its counted lookup is clean", found == [], str(kinds(found)))
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: "fn a() {}\n"})
+    check(
+        "a listed file that holds no lookup is an error",
+        kinds(found) == ["program-lookup-allowance-unused"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
 
     found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": one})
     check(
