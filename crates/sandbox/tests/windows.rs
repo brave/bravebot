@@ -76,19 +76,24 @@ fn run(
     args: &[&str],
     policy: &SandboxPolicy,
 ) -> Result<(Option<i32>, String), SandboxError> {
+    run_with(sandbox, program, args, policy, Environment::Inherited)
+}
+
+/// [`run`] with the environment the stage starts with named.
+fn run_with(
+    sandbox: &AppContainerSandbox,
+    program: &str,
+    args: &[&str],
+    policy: &SandboxPolicy,
+    environment: Environment,
+) -> Result<(Option<i32>, String), SandboxError> {
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
     let streams = Streams {
         stdin: Stream::Null,
         stdout: Stream::Piped,
         stderr: Stream::Piped,
     };
-    let mut child = sandbox.spawn(
-        program.as_ref(),
-        &args,
-        policy,
-        streams,
-        Environment::Inherited,
-    )?;
+    let mut child = sandbox.spawn(program.as_ref(), &args, policy, streams, environment)?;
     let mut printed = Vec::new();
     child
         .take_stdout()
@@ -288,6 +293,130 @@ fn a_grant_does_not_reach_through_a_junction_to_where_it_leads() {
         let (code, printed) = read(&path);
         assert_ne!(code, Some(0), "{} was read", path.display());
         assert!(!printed.contains("outside"), "{printed}");
+    }
+}
+
+/// The access list of `path` as `icacls` prints it, which names every account with an entry, so a
+/// list that gained one compares unequal to the list before.
+fn access_list_of(path: &Path) -> String {
+    let listed = spawned(
+        Command::new("icacls")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("icacls ends");
+    assert!(
+        listed.status.success(),
+        "the access list was not read: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    String::from_utf8_lossy(&listed.stdout).into_owned()
+}
+
+/// SANDBOX-6 for a junction a stage made. The regression it rejects: a later stage's grant being
+/// written through a junction an earlier stage left inside the granted directory, which hands the
+/// later container the directory the junction leads to. The earlier test makes its junction from
+/// this process, outside any container; this one makes it from a stage that had write access to
+/// the directory, which is what an attacker's program would do.
+///
+/// A grant is taken off when its stage ends, so a list read after the second stage has run shows
+/// nothing whichever way the grant went. The target's access list is therefore read while a second
+/// stage is still running with the directory granted, and compared whole with the list before, so
+/// an entry for any account counts and not only one this test could name. The observation is
+/// printed whichever way it goes, as `junction grant crossed` or `junction grant did not cross`,
+/// so a log of the Windows job settles whether a grant reaches through a junction a stage made
+/// (R15, R17) and does not depend on the assertion that follows. The assertion is the property the
+/// spec promises: a later stage granted the directory cannot read the target, by either path.
+#[test]
+fn a_grant_does_not_reach_through_a_junction_a_stage_made() {
+    let granted = scratch("stage-junction-granted");
+    let withheld = scratch("stage-junction-withheld");
+    std::fs::write(withheld.join("note.txt"), "outside\n").expect("a file");
+    let link = granted.join("link");
+    let before = access_list_of(&withheld);
+
+    {
+        let making = sandbox();
+        let policy = the_base("stage-junction-making").allow_write(&granted);
+        let line = format!("mklink /J {} {}", link.display(), withheld.display());
+        let (code, printed) = cmd(&making, &line, &policy).expect("the first stage starts");
+        if code != Some(0) {
+            // Observed on the Windows runner: a container with write access to the directory is
+            // refused `mklink /J` ("Access is denied"). With no junction made by a stage there is
+            // no grant to cross it, which settles nothing about a junction a stage could make
+            // some other way.
+            eprintln!("junction not made by a stage: {printed}");
+            return;
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(link.join("note.txt")).expect("the junction leads to the target"),
+        "outside\n",
+        "the junction is not one that leads to the target"
+    );
+
+    let reading = sandbox();
+    let policy = the_base("stage-junction-reading").allow_write(&granted);
+
+    // The observation: a stage that stays running, so its grants are in place when the target's
+    // list is read.
+    let during = {
+        let streams = Streams {
+            stdin: Stream::Piped,
+            stdout: Stream::Null,
+            stderr: Stream::Null,
+        };
+        let mut waiting = reading
+            .spawn(
+                "cmd.exe".as_ref(),
+                &[OsString::from("/c"), OsString::from("cmd")],
+                &policy,
+                streams,
+                Environment::Inherited,
+            )
+            .expect("the second stage starts");
+        let input = waiting.take_stdin().expect("a stdin that was piped");
+        let during = access_list_of(&withheld);
+        drop(input);
+        let _ = waiting.kill();
+        let _ = waiting.wait();
+        during
+    };
+    let crossed = during != before;
+    eprintln!(
+        "{}: the access list of {} {} while a stage granted {} ran\n--- before ---\n{before}\n--- during ---\n{during}",
+        if crossed {
+            "junction grant crossed"
+        } else {
+            "junction grant did not cross"
+        },
+        withheld.display(),
+        if crossed {
+            "gained entries"
+        } else {
+            "was unchanged"
+        },
+        granted.display(),
+    );
+
+    for path in [withheld.join("note.txt"), link.join("note.txt")] {
+        let (code, printed) = cmd(&reading, &format!("type {}", path.display()), &policy)
+            .expect("the second stage starts");
+        assert_ne!(
+            code,
+            Some(0),
+            "{} was read; observed: junction grant {}",
+            path.display(),
+            if crossed { "crossed" } else { "did not cross" }
+        );
+        assert!(
+            !printed.contains("outside"),
+            "{printed}; observed: junction grant {}",
+            if crossed { "crossed" } else { "did not cross" }
+        );
     }
 }
 
@@ -785,6 +914,286 @@ fn a_stage_is_not_attached_to_the_console_this_process_runs_in() {
     );
 }
 
+/// The regression it rejects: a job whose process limit counts more than the stage itself, so a
+/// stage under a policy that denies subprocesses, which starts no child, is refused its own start
+/// or is ended with it (the console host a stage without a window is given is the process the
+/// limit might count). The stage runs a `cmd.exe` built-in, which starts no process, so the only
+/// processes in the job are the stage and what the platform adds for its console. Whether a child
+/// is refused is pinned in the tests that follow it, not here.
+#[test]
+fn a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses() {
+    let sandbox = sandbox();
+    let policy = the_base("no-children");
+    let denied = SandboxPolicy {
+        allow_subprocesses: false,
+        ..policy
+    };
+    assert!(!denied.allow_subprocesses);
+
+    let (code, printed) = cmd(&sandbox, "echo hello", &denied)
+        .expect("a policy denying subprocesses is applied by the job and not refused");
+
+    assert_eq!(code, Some(0), "{printed}");
+    assert_eq!(printed, "hello");
+}
+
+/// The line the next two tests hand `cmd.exe`: it starts a second `cmd.exe`, which is a program
+/// the first creates rather than a built-in it runs itself, and prints a word only that second
+/// one can print.
+const STARTING_A_CHILD: &str = "cmd /c echo child-ran";
+
+/// SANDBOX-17 on Windows: a policy that denies subprocesses holds a stage to the program it
+/// started. The regression it rejects: a job with no process limit, which is what a policy
+/// denying subprocesses had before the limit existed and what a limit set but never applied
+/// leaves, so the stage's `cmd.exe` starts the second one and prints its word. The paired test
+/// below runs the same line under a policy that allows subprocesses, so a child that failed to
+/// start for another reason (the program missing, a path not granted) is not mistaken for one the
+/// limit refused.
+#[test]
+fn a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses() {
+    let sandbox = sandbox();
+    let denied = SandboxPolicy {
+        allow_subprocesses: false,
+        ..the_base("child-denied")
+    };
+
+    let (code, printed) = cmd(&sandbox, STARTING_A_CHILD, &denied)
+        .expect("a policy denying subprocesses is applied by the job and not refused");
+
+    assert_ne!(code, Some(0), "the stage started a child: {printed}");
+    assert!(
+        !printed.contains("child-ran"),
+        "the stage started a child: {printed}"
+    );
+}
+
+/// The paired half of the test above. The regression it rejects: a process limit applied to every
+/// policy, which would stop a stage starting the programs its policy allows (the base allows them,
+/// so a build or a `git` run from a shell would fail).
+#[test]
+fn a_stage_starts_a_child_where_its_policy_allows_subprocesses() {
+    let sandbox = sandbox();
+    let allowed = the_base("child-allowed");
+    assert!(allowed.allow_subprocesses);
+
+    let (code, printed) = cmd(&sandbox, STARTING_A_CHILD, &allowed).expect("cmd.exe starts");
+
+    assert_eq!(code, Some(0), "{printed}");
+    // `cmd /c` leaves the closing quote of its own line on what the second `cmd` echoes.
+    assert_eq!(printed.trim_end_matches('"'), "child-ran");
+}
+
+/// The name this binary is copied to when it is started again inside a stage to say what its job
+/// limits. The stage is started with this process's environment. Starting it with only a named
+/// `SystemRoot` and one more variable failed on the Windows runner with error 203, and why is
+/// not known (#3883).
+const PROBE_FILE: &str = "bravebot-job-probe.exe";
+
+/// The word a probe prints before what it found, so the test that started it picks the line out of
+/// what the test harness prints around it.
+const PROBED: &str = "job-probe";
+
+/// What the job the calling process is in limits, as the process itself reads it, or why it
+/// cannot.
+fn the_job_this_process_is_in() -> Result<(u32, u32, u32), std::io::Error> {
+    use std::mem::size_of;
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    };
+
+    let mut interface = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+    // SAFETY: a null job names the job of the calling process. `interface` is a local of exactly
+    // the size passed, alive for the call, and the call writes at most that many bytes into it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let queried = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_mut(&mut interface).cast(),
+            size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if queried == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut extended = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    // SAFETY: as above, with `extended` the local of the size passed.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let queried = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_mut(&mut extended).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if queried == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        interface.UIRestrictionsClass,
+        extended.BasicLimitInformation.LimitFlags,
+        extended.BasicLimitInformation.ActiveProcessLimit,
+    ))
+}
+
+/// Run only inside a stage that [`the_job_a_stage_is_in`] started, where it prints what the stage's
+/// job limits. Started any other way it does nothing, so the ordinary run of this binary passes
+/// it without reading the job of the terminal or runner it is in.
+#[test]
+fn probe_the_job_this_stage_is_in() {
+    let is_the_copy = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name == PROBE_FILE))
+        .unwrap_or(false);
+    if !is_the_copy {
+        return;
+    }
+    match the_job_this_process_is_in() {
+        Ok((interface, flags, processes)) => {
+            println!("{PROBED} interface={interface} flags={flags} processes={processes}");
+        }
+        Err(error) => println!("{PROBED} error={error}"),
+    }
+}
+
+/// What a stage's job limits, as a program in the stage reads it.
+struct JobSeen {
+    /// The `JOB_OBJECT_UILIMIT_*` flags.
+    interface: u32,
+    /// The `JOB_OBJECT_LIMIT_*` flags.
+    flags: u32,
+    /// The active process limit, which means nothing unless `flags` holds the limit.
+    processes: u32,
+}
+
+/// Start this test binary as a stage under `policy` and read its job from inside it.
+///
+/// The binary is copied into a directory of its own that the stage is granted, since the
+/// directory it was built in holds every other artefact of the build and a grant is written onto
+/// each file beneath it.
+fn the_job_a_stage_is_in(name: &str, policy: SandboxPolicy) -> JobSeen {
+    let sandbox = sandbox();
+    let directory = scratch(&format!("{name}-probe"));
+    let probe = directory.join(PROBE_FILE);
+    std::fs::copy(std::env::current_exe().expect("this test binary"), &probe)
+        .expect("the test binary is copied");
+    let policy = policy.allow_read(&directory);
+
+    let (code, printed) = run(
+        &sandbox,
+        &probe.display().to_string(),
+        &[
+            "--exact",
+            "probe_the_job_this_stage_is_in",
+            "--nocapture",
+            "--quiet",
+            "--test-threads=1",
+        ],
+        &policy,
+    )
+    .expect("the probe starts");
+
+    assert_eq!(code, Some(0), "the probe failed: {printed}");
+    let found = printed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(PROBED))
+        .unwrap_or_else(|| panic!("the probe printed no {PROBED} line: {printed}"));
+    assert!(!found.contains("error="), "the job was not read: {found}");
+    let field = |key: &str| {
+        found
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix(key))
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or_else(|| panic!("the probe line has no {key}: {found}"))
+    };
+    JobSeen {
+        interface: field("interface="),
+        flags: field("flags="),
+        processes: field("processes="),
+    }
+}
+
+/// SANDBOX-17 on Windows: the job a stage is in carries the UI limits and ends its programs when
+/// it is closed, whatever the policy. The regressions it rejects: a flag left out of the set (the
+/// clipboard read or write, the atom table, desktops, USER handles), and a job made without them
+/// that a request for them would have to be refused for. The flags are read by a program in the
+/// stage from its own job, and compared with the platform's constants and not this crate's.
+#[test]
+fn a_stage_is_in_a_job_carrying_every_ui_limit() {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
+        JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+        JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    };
+
+    for (name, policy) in [
+        ("ui-allowing", the_base("ui-allowing")),
+        (
+            "ui-denying",
+            SandboxPolicy {
+                allow_subprocesses: false,
+                ..the_base("ui-denying")
+            },
+        ),
+    ] {
+        let seen = the_job_a_stage_is_in(name, policy);
+
+        for (limit, flag) in [
+            ("clipboard read", JOB_OBJECT_UILIMIT_READCLIPBOARD),
+            ("clipboard write", JOB_OBJECT_UILIMIT_WRITECLIPBOARD),
+            ("global atoms", JOB_OBJECT_UILIMIT_GLOBALATOMS),
+            ("desktop", JOB_OBJECT_UILIMIT_DESKTOP),
+            ("USER handles", JOB_OBJECT_UILIMIT_HANDLES),
+        ] {
+            assert_eq!(
+                seen.interface & flag,
+                flag,
+                "the {limit} limit is not in the job of the {name} stage"
+            );
+        }
+        assert_eq!(
+            seen.flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            "the job of the {name} stage does not end its programs when closed"
+        );
+    }
+}
+
+/// SANDBOX-17 on Windows: the job's process limit is present for a policy that denies
+/// subprocesses, is one, and is absent for a policy that allows them. The regressions it rejects:
+/// no limit where the policy denies subprocesses, a limit above one, which lets a child start, and
+/// a limit on every policy. Read by a program in the stage from its own job, so it is the limit in
+/// force and not the one this crate meant to set.
+#[test]
+fn a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses() {
+    use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+
+    let denied = the_job_a_stage_is_in(
+        "processes-denying",
+        SandboxPolicy {
+            allow_subprocesses: false,
+            ..the_base("processes-denying")
+        },
+    );
+    let allowed = the_job_a_stage_is_in("processes-allowing", the_base("processes-allowing"));
+
+    assert_eq!(
+        denied.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        "the job of a stage denied subprocesses has no process limit"
+    );
+    assert_eq!(denied.processes, 1);
+    assert_eq!(
+        allowed.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        0,
+        "the job of a stage allowed subprocesses has a process limit"
+    );
+}
+
 /// The regression it rejects: a refusal of a read or a write that this backend cannot apply being
 /// dropped, so the program starts and reaches the path the person meant to hold back. The write
 /// is the one observable from outside: the file must not be there afterwards.
@@ -841,4 +1250,251 @@ fn cmd_with_an_argument_holding_an_ampersand_starts_nothing() {
         .expect("the scratch directory")
         .collect();
     assert!(made.is_empty(), "cmd.exe made {made:?}");
+}
+
+/// SANDBOX-4 with a real process: `cmd.exe` spelled with a trailing dot, a trailing space or a
+/// stream suffix is refused before anything starts, so the directory is not made, whether or not
+/// `CreateProcessW` would have started the interpreter for that name. The regression it rejects is
+/// the refusals reading the name as written, which finds no `cmd.exe` in these spellings and starts
+/// them with arguments `cmd.exe` reads as its own.
+#[test]
+fn cmd_spelled_with_a_trailing_dot_a_space_or_a_stream_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("cmd-spellings");
+    let policy = the_base("cmd-spellings").allow_write(&directory);
+    let named = directory.join("R&D");
+    let named = named.display().to_string();
+    let system = r"C:\Windows\System32";
+
+    for program in [
+        format!(r"{system}\cmd.exe."),
+        format!(r"{system}\cmd.exe "),
+        format!(r"{system}\cmd.exe::$DATA"),
+        format!(r"{system}\cmd.exe:stream"),
+    ] {
+        let refused = run(&sandbox, &program, &["/c", "mkdir", &named], &policy);
+
+        assert!(
+            matches!(refused, Err(SandboxError::SetupFailed { .. })),
+            "{program} started: {refused:?}"
+        );
+    }
+    let made: Vec<_> = std::fs::read_dir(&directory)
+        .expect("the scratch directory")
+        .collect();
+    assert!(made.is_empty(), "a spelling of cmd.exe made {made:?}");
+}
+
+/// SANDBOX-4 with a real process: a batch file spelled with a trailing dot is refused before
+/// anything starts, so the file it would write is not there. The regression it rejects is the
+/// extension test reading `build.bat.` as having none.
+#[test]
+fn a_batch_file_spelled_with_a_trailing_dot_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("batch-dot");
+    let policy = the_base("batch-dot").allow_write(&directory);
+    let batch = directory.join("build.bat");
+    let marker = directory.join("ran");
+    std::fs::write(&batch, format!("@echo ran> {}\r\n", marker.display()))
+        .expect("the batch file is written");
+    let spelled = format!("{}.", batch.display());
+
+    let refused = run(&sandbox, &spelled, &[], &policy);
+
+    assert!(
+        matches!(refused, Err(SandboxError::SetupFailed { .. })),
+        "{spelled} started: {refused:?}"
+    );
+    assert!(!marker.exists(), "the batch file ran");
+}
+
+/// SANDBOX-4 with a real process, pinning the cost the spec records: a copy of `cmd.exe` called
+/// `tool.exe` is recognised by no test of its file, so it is not refused as `cmd.exe` is and the
+/// backend starts it. The regression it rejects is a change to `is_cmd` that refuses or accepts
+/// differently without the spec's account changing with it. Which of the two the copy then does
+/// with `R&D` is not asserted, since it has not been observed on Windows.
+#[test]
+fn a_copy_of_cmd_under_another_name_is_started_as_a_program() {
+    let sandbox = sandbox();
+    let directory = scratch("cmd-copy");
+    let policy = the_base("cmd-copy")
+        .allow_read(&directory)
+        .allow_write(&directory);
+    let copy = directory.join("tool.exe");
+    std::fs::copy(r"C:\Windows\System32\cmd.exe", &copy).expect("a copy of cmd.exe");
+    let named = directory.join("R&D");
+
+    let started = run(
+        &sandbox,
+        &copy.display().to_string(),
+        &["/c", "mkdir", &named.display().to_string()],
+        &policy,
+    );
+
+    assert!(
+        started.is_ok(),
+        "the copy was refused, so SANDBOX-4's account of what it costs is out of date: {started:?}"
+    );
+}
+
+/// The long file name of the copy of `whoami.exe` the spelling tests start by its 8.3 short name.
+const LONG_PROGRAM: &str = "a_long_program_name.exe";
+
+/// Start `program` with no arguments, outside any container, and say how it ended and what it
+/// printed, or that it did not start.
+fn started_as(program: &Path) -> std::io::Result<(Option<i32>, String)> {
+    let child = {
+        let _spawning = spawning();
+        bravebot_sandbox::process::starting_a_program(|| {
+            Command::new(program)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        })?
+    };
+    let ended = child.wait_with_output()?;
+    Ok((
+        ended.status.code(),
+        String::from_utf8_lossy(&ended.stdout).trim().to_owned(),
+    ))
+}
+
+/// `base` with `suffix` added to the end of its name, without any normalisation of the result.
+fn spelled(base: &Path, suffix: &str) -> PathBuf {
+    let mut name = base.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// A directory holding a copy of `whoami.exe` as `tool.exe` and as `LONG_PROGRAM`, and a `t.cmd`
+/// and a `t.bat` that end with status 0. Returns the directory and what `whoami.exe` prints, which
+/// a copy prints too.
+fn a_directory_of_programs(name: &str) -> (PathBuf, String) {
+    let directory = scratch(name);
+    let root = std::env::var_os("SystemRoot").expect("the system directory is named");
+    let whoami = Path::new(&root).join("System32").join("whoami.exe");
+    std::fs::copy(&whoami, directory.join("tool.exe")).expect("a copy of whoami.exe");
+    std::fs::copy(&whoami, directory.join(LONG_PROGRAM)).expect("a copy of whoami.exe");
+    std::fs::write(directory.join("t.cmd"), "@exit /b 0\r\n").expect("a .cmd file");
+    std::fs::write(directory.join("t.bat"), "@exit /b 0\r\n").expect("a .bat file");
+    let (code, printed) = started_as(&whoami).expect("whoami.exe starts under its own name");
+    assert_eq!(code, Some(0), "whoami.exe failed: {printed}");
+    assert!(!printed.is_empty(), "whoami.exe printed nothing");
+    (directory, printed)
+}
+
+/// The 8.3 short name of `path`, as `cmd.exe` prints it with `%~s`, or `None` where the volume made
+/// none and `cmd.exe` printed the long name back.
+fn short_name_of(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+
+    let line = format!("for %I in (\"{}\") do @echo %~sI", path.display());
+    let ended = spawned(
+        Command::new("cmd.exe")
+            .arg("/c")
+            .raw_arg(line)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("cmd.exe ends");
+    assert!(
+        ended.status.success(),
+        "the short name was not read: {}",
+        String::from_utf8_lossy(&ended.stderr)
+    );
+    let printed = String::from_utf8_lossy(&ended.stdout).trim().to_owned();
+    assert!(!printed.is_empty(), "cmd.exe printed no short name");
+    let short = PathBuf::from(printed);
+    (!short.as_os_str().eq_ignore_ascii_case(path.as_os_str())).then_some(short)
+}
+
+/// #3926, PERM-5 and PERM-20: the spellings a `deny` or `ask` command rule reads as the program
+/// they name do start that program. This checks the platform assumption the fold relies on and
+/// never calls the fold, so a regression in the fold cannot fail it; the tests in
+/// `bravebot-core` pin the fold. The fault it rejects is a spelling the fold treats as the program
+/// that Windows does not start as that program, which would refuse or misattribute a line. Each
+/// spelling is started by this process through the standard library, outside any container, and a
+/// failure names the spelling. The failure of this test was not demonstrated, since it runs only
+/// on Windows.
+#[test]
+fn the_spellings_a_command_rule_folds_start_the_program_they_name() {
+    let (directory, expected) = a_directory_of_programs("spellings-fold");
+    let tool = directory.join("tool.exe");
+    let mut spellings: Vec<(String, PathBuf, bool)> = vec![
+        (
+            "tool.exe. (a trailing dot)".to_owned(),
+            spelled(&tool, "."),
+            true,
+        ),
+        (
+            "TOOL.EXE (another case)".to_owned(),
+            directory.join("TOOL.EXE"),
+            true,
+        ),
+        ("t.cmd".to_owned(), directory.join("t.cmd"), false),
+        ("t.bat".to_owned(), directory.join("t.bat"), false),
+    ];
+    match short_name_of(&directory.join(LONG_PROGRAM)) {
+        Some(short) => spellings.push((
+            format!("{} (an 8.3 short name)", short.display()),
+            short,
+            true,
+        )),
+        None => eprintln!(
+            "no 8.3 short name for {LONG_PROGRAM} on this volume; that spelling was not tried"
+        ),
+    }
+
+    let mut failures = Vec::new();
+    for (spelling, program, prints) in &spellings {
+        match started_as(program) {
+            Ok((Some(0), printed)) if !*prints || printed == expected => {
+                eprintln!("{spelling}: started the program and it ended with 0");
+            }
+            other => failures.push(format!("{spelling}: {other:?} (expected {expected:?})")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(
+        failures.is_empty(),
+        "a spelling the fold reads as the program did not start it:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// #3926: for the spellings whose result is not asserted, a trailing space and a `::$DATA` stream
+/// suffix, only that Windows never starts a different program under them. The fold reads both as
+/// the program they name, so the claim a rule needs is that a spelling either starts the program
+/// named or starts nothing. Which of the two it is gets printed for each; an outcome that is
+/// neither fails and names the spelling. Like the test above, this checks the platform assumption
+/// and never calls the fold.
+#[test]
+fn a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing() {
+    let (directory, expected) = a_directory_of_programs("spellings-observed");
+    let tool = directory.join("tool.exe");
+    let mut failures = Vec::new();
+    for (spelling, program) in [
+        ("tool.exe  (a trailing space)", spelled(&tool, " ")),
+        (
+            "tool.exe::$DATA (a stream suffix)",
+            spelled(&tool, "::$DATA"),
+        ),
+    ] {
+        match started_as(&program) {
+            Ok((Some(0), printed)) if printed == expected => {
+                eprintln!("{spelling}: started the program named");
+            }
+            Err(error) => eprintln!("{spelling}: did not start anything ({error})"),
+            other => failures.push(format!("{spelling}: {other:?} (expected {expected:?})")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(
+        failures.is_empty(),
+        "a spelling started something other than the program named:\n{}",
+        failures.join("\n")
+    );
 }

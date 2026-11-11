@@ -259,6 +259,7 @@ fn home_only_line(key: &str, path: String) -> String {
                 path = path
             )
         }
+        "retrieval" => t!(doctor_settings_retrieval_ignored, path = path),
         "language" => t!(doctor_settings_language_ignored, path = path),
         "retentionDays" => t!(doctor_settings_retention_ignored, path = path),
         "references" => t!(doctor_settings_references_ignored, path = path),

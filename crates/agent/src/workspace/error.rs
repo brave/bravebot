@@ -74,7 +74,8 @@ pub enum WorkspaceError {
     /// A file that is there and is a regular file could not be read: permission was refused or the
     /// disk reported an error. [`WorkspaceError::Io`] is the path that is absent or is not a file.
     Unreadable { path: String, detail: String },
-    /// The file changed after it was read, so the approved change no longer applies.
+    /// The file may have changed since the approval was drawn, because it was written or because a
+    /// `run` line started meanwhile (TRUST-4), so the approved change no longer applies.
     Stale { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
     Contended { path: String },
@@ -235,7 +236,11 @@ impl WorkspaceError {
                 format!("'{named}': {detail}")
             }
             Self::Stale { .. } => {
-                format!("'{named}' changed after it was read; read it again before editing")
+                format!(
+                    "'{named}' may have changed while the user was being asked about it, because \
+                     the file was written or a command started, so nothing was written; read it \
+                     again if its contents matter, then repeat the call"
+                )
             }
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")

@@ -2859,6 +2859,20 @@ fn event_loop(
         // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
         session.settle_suggestion();
         needs_draw |= take_suggestion(&mut session, &mut stored, &mut suggesting);
+        // A question asked beside a turn that has ended since, answered on the pass it arrives. Its
+        // row is in the record, so a session left after it resumes with the answer (CMD-8).
+        if settle_aside_between_turns(&mut session) {
+            let title = stored.title().to_string();
+            with_standing(
+                &session,
+                &conversation,
+                &answers.trust,
+                &answers.programs,
+                &workspace,
+                |standing| stored.save(&title, standing),
+            );
+            needs_draw = true;
+        }
         // Before the frame rather than after it, so the first frame of an open panel names the
         // session, and a name that changed by any path reaches the panel without waiting for a key.
         needs_draw |= session.identify(
@@ -2984,7 +2998,10 @@ fn event_loop(
                         }
                         // Short while a suggestion is on its way, so it is drawn as it arrives
                         // rather than at the next key.
-                        if suggesting.is_some() || session.picking_is_loading() {
+                        if suggesting.is_some()
+                            || session.picking_is_loading()
+                            || session.aside_in_flight()
+                        {
                             wait = wait.min(FRAME);
                         }
                         // And until a click that waits is due.
@@ -29289,6 +29306,14 @@ mod tests {
             .collect()
     }
 
+    /// What typing a `/btw` beside a turn says back, naming the key that opens the answer.
+    fn asked_note(session: &Session) -> String {
+        t!(
+            btw_asked_beside_a_turn,
+            chord = session.bindings().watch_name()
+        )
+    }
+
     fn waiting_prompts(session: &Session) -> Vec<&str> {
         session
             .queued
@@ -29450,10 +29475,19 @@ mod tests {
         assert!(session.queued.is_empty(), "/btw waited for the turn");
         assert_eq!(session.interjections().take(), None, "the turn took it");
         assert_eq!(session.status, Status::Working, "the turn stopped working");
+        // One line, saying the question went out, and nothing of the question itself: the answer is
+        // a row of the agents list and the planner has read neither half (WATCH-18).
+        assert_eq!(session.transcript.len(), transcript + 1);
         assert_eq!(
-            session.transcript.len(),
-            transcript,
-            "it reached the transcript"
+            said_under_the_turn(&session),
+            vec![asked_note(&session).as_str()],
+            "nothing said the question had gone out, or it said more than that"
+        );
+        assert!(
+            !said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains("parser.py")),
+            "the question reached the transcript"
         );
         assert_eq!(session.input(), "", "/btw was left in the box");
         end_aside_beside_a_turn(&mut session);
@@ -29512,7 +29546,11 @@ mod tests {
 
         typed_beside_a_turn(&mut session, "/btw two");
 
-        assert_eq!(said_under_the_turn(&session), vec![t!(btw_one_at_a_time)]);
+        let asked = asked_note(&session);
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![asked.as_str(), t!(btw_one_at_a_time)]
+        );
         assert!(session.queued.is_empty(), "the second question waited");
         end_aside_beside_a_turn(&mut session);
     }
@@ -29665,10 +29703,18 @@ mod tests {
         assert_eq!(session.asides().len(), 1, "no row was kept");
         assert_eq!(session.asides()[0].question, "what is in parser.py");
         assert!(session.watching().is_none(), "the view took the screen");
-        assert_eq!(
-            session.transcript.len(),
-            transcript,
-            "it reached the transcript"
+        // The one line that says the row is there and which key opens it, and none of its words.
+        let answered = t!(
+            btw_answered_beside_a_turn,
+            chord = session.bindings().watch_name()
+        );
+        assert_eq!(session.transcript.len(), transcript + 1);
+        assert_eq!(said_under_the_turn(&session), vec![answered.as_str()]);
+        assert!(
+            !said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains("parser.py") || said.contains("a stub")),
+            "a half of the aside reached the transcript"
         );
     }
 
@@ -29705,24 +29751,156 @@ mod tests {
         settle_aside_beside_a_turn(&mut session, &cancel);
 
         assert!(!session.aside_in_flight(), "the question outlived the stop");
-        assert_eq!(said_under_the_turn(&session), vec![t!(btw_stopped)]);
+        let asked = asked_note(&session);
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![asked.as_str(), t!(btw_stopped)]
+        );
         assert!(session.asides().is_empty(), "a stopped question left a row");
     }
 
-    /// A question still out when the turn ends is stopped and said to be. Rejects leaving a worker
-    /// running after the person is back at the box.
+    /// A question still out when the turn is stopped is stopped with it and said to be. Rejects
+    /// leaving a worker running after the person asked for the work to end.
     #[test]
-    fn a_question_still_out_when_the_turn_ends_is_stopped() {
+    fn a_question_still_out_when_the_turn_is_stopped_is_stopped() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        typed_beside_a_turn(&mut session, "/btw one");
+        let stop = Cancel::new();
+        stop.cancel();
+
+        leave_the_aside_at_the_end_of_a_turn(&mut session, &stop);
+
+        assert!(!session.aside_in_flight());
+        let asked = asked_note(&session);
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![asked.as_str(), t!(btw_stopped)]
+        );
+    }
+
+    /// CMD-8. A question still out when the turn ends by itself stays out, to be answered between
+    /// turns. Rejects ending it with the turn, which threw away an answer the person had asked for
+    /// and said only that the question was stopped.
+    #[test]
+    fn a_question_still_out_when_the_turn_ends_by_itself_stays_out() {
         if !crate::test_profile::in_isolated_profile() {
             return;
         }
         let mut session = a_turn_that_has_sent_a_request();
         typed_beside_a_turn(&mut session, "/btw one");
 
+        leave_the_aside_at_the_end_of_a_turn(&mut session, &Cancel::new());
+
+        assert!(
+            session.aside_in_flight(),
+            "the question ended with the turn"
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![asked_note(&session).as_str()]
+        );
         end_aside_beside_a_turn(&mut session);
+    }
+
+    /// A flight whose worker returns `done` once the test drops the sender it is given back, so the
+    /// worker is out until the test says it has ended.
+    fn a_question_out_beside_a_turn(
+        session: &mut Session,
+        done: crate::state::AsideDone,
+    ) -> std::sync::mpsc::Sender<crate::remote_confirm::ToMain> {
+        let (sender, from_worker) = std::sync::mpsc::channel();
+        session.begin_aside_beside_a_turn(crate::state::AsideFlight {
+            asked: "what is in parser.py".to_string(),
+            cancel: Cancel::new(),
+            from_worker,
+            worker: std::thread::spawn(move || done),
+        });
+        sender
+    }
+
+    /// CMD-8. An answer that arrives after the turn has ended is kept as a row and said, at the box.
+    /// Rejects `settle_aside_beside_a_turn`'s `answer_while_working`, which counts the note as
+    /// something a turn's command said and moves the transcript to its tail under a person reading
+    /// it back; rejects opening the view, which would take the next prompt they type.
+    #[test]
+    fn a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view() {
+        let mut session = a_turn_running_on("first");
+        let sender = a_question_out_beside_a_turn(
+            &mut session,
+            Ok(bravebot_agent::aside::Answered {
+                shown: "parse() is a stub".to_string(),
+                kept: None,
+                usage: bravebot_aichat::protocol::Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: 20,
+                    ..Default::default()
+                },
+            }),
+        );
+        session.settle_what_was_said();
+        let spent = session.tokens;
+
+        assert!(
+            !settle_aside_between_turns(&mut session),
+            "a question whose worker had not ended was taken"
+        );
+        assert!(session.aside_in_flight());
+        assert!(session.asides().is_empty());
+
+        drop(sender);
+        assert!(settle_aside_between_turns(&mut session));
 
         assert!(!session.aside_in_flight());
-        assert_eq!(said_under_the_turn(&session), vec![t!(btw_stopped)]);
+        assert_eq!(session.asides().len(), 1, "no row was kept");
+        assert_eq!(session.asides()[0].question, "what is in parser.py");
+        assert!(session.watching().is_none(), "the view took the screen");
+        assert_eq!(
+            session.tokens,
+            spent + 120,
+            "what the question cost was not charged to the turn it was asked beside"
+        );
+        let answered = t!(
+            btw_answered_beside_a_turn,
+            chord = session.bindings().watch_name()
+        );
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(answered.as_str())
+        );
+        assert!(
+            session.said_while_working().is_empty(),
+            "the note was counted as something the finished turn's commands said"
+        );
+    }
+
+    /// A question that failed after the turn ended says so at the box, as one beside the turn does.
+    #[test]
+    fn a_btw_that_failed_after_the_turn_ended_says_why() {
+        let mut session = a_turn_running_on("first");
+        let sender = a_question_out_beside_a_turn(&mut session, Err("offline".to_string()));
+        drop(sender);
+
+        assert!(settle_aside_between_turns(&mut session));
+
+        assert!(session.asides().is_empty(), "a failed question left a row");
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(t!(btw_failed, problem = "offline").as_str())
+        );
+    }
+
+    /// With nothing out there is nothing to settle, and the loop that asks on every pass learns it.
+    #[test]
+    fn settling_with_no_question_out_does_nothing() {
+        let mut session = a_turn_running_on("first");
+        let lines = session.transcript.len();
+
+        assert!(!settle_aside_between_turns(&mut session));
+
+        assert_eq!(session.transcript.len(), lines);
     }
 
     /// A scratch directory for a transcript to be written into, with a record begun under it.
@@ -36638,6 +36816,56 @@ mod tests {
         (workspace, trust, session)
     }
 
+    /// TRUST-9: `/add-dir` goes through the workspace's one opening, so a directory that is another
+    /// path to the working directory is refused with a note that names it and says why, nothing is
+    /// vouched for, and a directory that is not is added. The identity is injected so the pair exists
+    /// on any host. Rejects a UI door that opens the directory itself and skips the check, which
+    /// adds it and vouches for it.
+    #[cfg(unix)]
+    #[test]
+    fn add_dir_refuses_another_path_to_the_working_directory() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-second-path-test");
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["twin-a", "twin-b", "other"] {
+            std::fs::create_dir_all(root.join(name)).expect("scratch");
+        }
+        let root = root.canonicalize().expect("canonical");
+        let mut workspace = Workspace::new(root.join("twin-a"))
+            .expect("workspace")
+            .with_directory_identity(Some(|directory| {
+                use std::os::unix::fs::MetadataExt;
+                match directory.file_name().and_then(|name| name.to_str()) {
+                    Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+                    _ => std::fs::metadata(directory)
+                        .ok()
+                        .map(|found| (found.dev(), found.ino())),
+                }
+            }));
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+
+        let twin = root.join("twin-b").display().to_string();
+        add_directory(&mut session, &mut workspace, &mut trust, &twin);
+        let said = last_note(&session);
+        assert!(
+            said.starts_with(&format!("could not add {twin}")) && said.contains("another path"),
+            "{said}"
+        );
+        assert!(workspace.added_directories().is_empty());
+        assert!(trust.is_empty(), "a refused directory was vouched for");
+
+        let other = root.join("other").display().to_string();
+        add_directory(&mut session, &mut workspace, &mut trust, &other);
+        assert_eq!(
+            workspace.added_directories(),
+            [root.join("other")],
+            "{}",
+            last_note(&session)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// TRUST-9: `/add-dir` takes a path relative to the working directory, and opens, trusts and
     /// names the directory the absolute spelling of it opens, trusts and names.
     ///
@@ -40702,7 +40930,7 @@ mod tests {
         let sources = RuleSources {
             state: Some(state.to_path_buf()),
             named: named.map(std::path::Path::to_path_buf),
-            started: root.to_path_buf(),
+            left: vec![root.to_path_buf()],
             managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(root);
@@ -40748,7 +40976,7 @@ mod tests {
         let sources = RuleSources {
             state: Some(root.join("state")),
             named: None,
-            started: root.clone(),
+            left: vec![root.clone()],
             managed: bravebot_config::Managed::at(&file),
         };
         let elsewhere = root.join("elsewhere");
@@ -41189,6 +41417,59 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// PERM-14: every directory `/cd` leaves is remembered, not only the first. A `--settings`
+    /// file in the second directory stays the checkout's after the third is entered.
+    #[test]
+    fn a_named_file_in_a_directory_moved_through_is_still_asked_about_after_moving_on() {
+        use bravebot_core::permissions::Decision;
+        let root = crate::testutil::scratch_dir("bravebot-cd-named-through-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
+        // Each is a checkout of its own, so the repository the scratch directory sits in is not
+        // what makes the file one of a checkout's.
+        for directory in [&a, &b, &c] {
+            std::fs::create_dir_all(directory.join(".git")).expect("scratch");
+        }
+        let tooling = b.join("tooling.json");
+        std::fs::write(&tooling, CHECK).expect("the named file");
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules_naming(
+            &mut session,
+            &root.join("state"),
+            workspace.root(),
+            Some(&tooling),
+        );
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+
+        for directory in [&b, &c] {
+            assert_eq!(
+                change_directory(
+                    &mut session,
+                    &mut workspace,
+                    &mut answers,
+                    "a-session",
+                    directory.to_str().expect("utf-8 path"),
+                    |_, _| Some(false),
+                ),
+                Changed::Moved
+            );
+        }
+
+        assert_eq!(
+            answers
+                .rules
+                .permissions
+                .for_command(&["bash", "scripts/check.sh"]),
+            Decision::Unmatched,
+            "moving on from the directory the file is in made it the person's"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// PERM-15: reading the rules again where the session is, as `/clear` does, asks nothing about
     /// a rule the person granted there and puts in force what the file says now.
     #[test]
@@ -41245,7 +41526,7 @@ mod tests {
         let sources = RuleSources {
             state: Some(state.clone()),
             named: None,
-            started: checkout.clone(),
+            left: vec![checkout.clone()],
             managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(&checkout);

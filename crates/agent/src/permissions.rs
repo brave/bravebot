@@ -1191,6 +1191,15 @@ mod tests {
             permissions.for_command(&["make", "all"]),
             Decision::Ruled(Ruling::Ask)
         );
+        // PERM-20: the managed rules are matched through the same wrapper reading.
+        assert_eq!(
+            permissions.for_command(&["env", "--", "FOO=bar", "git", "push"]),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_command(&["env", "A-B=1", "make", "all"]),
+            Decision::Ruled(Ruling::Ask)
+        );
         assert_eq!(
             permissions.for_command(&["ls"]),
             Decision::Ruled(Ruling::Deny),

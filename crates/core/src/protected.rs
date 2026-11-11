@@ -9,10 +9,13 @@
 //! after links are followed, and never a file's contents.
 
 /// A directory whose every entry is protected, matched on any component of the path.
-const DIRECTORIES: [&str; 3] = [".git", ".bravebot", ".husky"];
+///
+/// `bravebot_sandbox::policy::PROTECTED_DIRECTORIES` holds the same names for the macOS profile
+/// (SANDBOX-14), and a test in `bravebot-agent` pins the two equal.
+pub const DIRECTORIES: [&str; 3] = [".git", ".bravebot", ".husky"];
 
-/// A file protected wherever it is.
-const FILES: [&str; 3] = [".gitmodules", ".gitconfig", ".pre-commit-config.yaml"];
+/// A file protected wherever it is. See [`DIRECTORIES`].
+pub const FILES: [&str; 3] = [".gitmodules", ".gitconfig", ".pre-commit-config.yaml"];
 
 /// Whether a write to `path` is one that nothing but a person answers.
 ///

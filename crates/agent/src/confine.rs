@@ -18,6 +18,7 @@ use crate::scratch::ScratchDirectory;
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
+use bravebot_core::permissions::{WrapperQuestion, is_wrapper};
 use bravebot_core::policy::Containment;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
@@ -49,6 +50,15 @@ enum RequestPath {
     Unlisted,
 }
 
+/// Whose directory stages are given to write temporary files in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemporaryOwner {
+    /// The account's temporary directory.
+    Account,
+    /// A directory of the session's own inside its scratch directory ([`stage_temporary`]).
+    Session,
+}
+
 /// What the proxies decided for one foreground run (SANDBOX-24).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostsSeen {
@@ -68,6 +78,11 @@ pub const MOST_HOSTS_ASKED: usize = 8;
 pub struct Confinement {
     prelude: Prelude,
     temporary: PathBuf,
+    /// Whether `temporary` is a directory of the session's own inside its scratch directory and not
+    /// the account's temporary directory, which is so on Windows where the session has a scratch
+    /// directory ([`stage_temporary`]). Then every stage is told it as `TEMP` and `TMP`, and no
+    /// stage is granted the account's directory.
+    temporary_owner: TemporaryOwner,
     home: Option<PathBuf>,
     /// The state directory in force where `BRAVEBOT_HOME` puts it elsewhere than `~/.bravebot`
     /// ([`Confinement::with_state_directory`]), refused to every stage as `~/.bravebot` is.
@@ -78,6 +93,10 @@ pub struct Confinement {
     /// A directory is a row in `roots` only while its name leads to the directory recorded, and
     /// each stage is refused as it starts once the name leads to a link or a file (SANDBOX-18).
     roots_made: Vec<ScratchDirectory>,
+    /// The directories the session opened or added and has since left or closed
+    /// ([`Confinement::with_left_directories`]). They are no row of any stage now, but a stage wrote
+    /// in them while they were open, and closing one does not remove what was written (SANDBOX-20).
+    left: Vec<PathBuf>,
     scratch: Option<PathBuf>,
     /// The directory `scratch` was made as. `scratch` is a row only while its name leads to this
     /// directory, and each stage is refused as it starts once the name leads to a link or a file
@@ -192,6 +211,53 @@ impl Confinement {
         self
     }
 
+    /// This confinement with the directories the session has left or closed, which a file is the
+    /// plan's under as it is under one still open (SANDBOX-20).
+    #[must_use]
+    pub fn with_left_directories(mut self, directories: &[PathBuf]) -> Self {
+        self.left = directories.iter().map(|left| canonical(left)).collect();
+        self
+    }
+
+    /// The directories beyond the session's rows under which a file is the plan's (SANDBOX-14,
+    /// SANDBOX-16, SANDBOX-20): the checkout holding each session directory, and each directory the
+    /// session left with the checkout that held it.
+    ///
+    /// A file in the `bin` of a checkout, above the directory the session opened in, is as much a
+    /// contributor's or a stage's as one inside it, and can be first on `PATH`. The checkout is the
+    /// nearest ancestor with a `.git` ([`bravebot_sandbox::programs::with_checkout`]), the finder
+    /// that records the directories SANDBOX-30 keeps out of the search for bravebot's own programs.
+    /// A checkout that is the home directory or holds it is not counted: it is a dotfiles
+    /// repository or the whole machine, and counting it would take the reason from every program
+    /// the account installed, `~/.local/bin` and `/opt/homebrew` among them. Read from the file
+    /// system as it is asked, so a `.git` made since the session opened is counted.
+    fn beyond_the_session(&self) -> Vec<PathBuf> {
+        let mut held: Vec<PathBuf> = Vec::new();
+        for directory in self.roots.iter().chain(&self.left) {
+            for found in bravebot_sandbox::programs::with_checkout(directory) {
+                let a_checkout = found != *directory;
+                if a_checkout
+                    && self
+                        .home
+                        .as_deref()
+                        .is_some_and(|home| home.starts_with(&found))
+                {
+                    continue;
+                }
+                let found = canonical(&found);
+                if !held.contains(&found) {
+                    held.push(found);
+                }
+            }
+        }
+        held
+    }
+
+    /// The temporary directory, where it is the session's own.
+    fn sessions_temporary(&self) -> Option<&Path> {
+        (self.temporary_owner == TemporaryOwner::Session).then_some(self.temporary.as_path())
+    }
+
     /// The confinement for a session on this machine, or `None` where the platform has no base to
     /// build one on. Every platform the agent runs on has one.
     ///
@@ -257,9 +323,16 @@ impl Confinement {
         let scratch = scratch.filter(|row| {
             reaching_credentials(prelude, home.as_deref(), None, std::iter::once(row)).is_none()
         });
+        let (temporary, temporary_owner) = stage_temporary(prelude, temporary, scratch.as_deref());
+        if temporary_owner == TemporaryOwner::Session {
+            // A directory that cannot be made leaves the row naming a path nothing can be written
+            // in, which is a stage with no temporary directory and not one with the account's.
+            std::fs::create_dir_all(&temporary).ok();
+        }
         Self {
             prelude,
             temporary,
+            temporary_owner,
             home,
             state: None,
             place: signing::Place {
@@ -269,6 +342,7 @@ impl Confinement {
             },
             roots,
             roots_made: Vec::new(),
+            left: Vec::new(),
             scratch,
             scratch_made: None,
             user_cache: None,
@@ -609,10 +683,11 @@ impl Confinement {
     }
 
     /// Whether `file` is under a directory the plan may write to, so that its name is one the plan
-    /// could have chosen (SANDBOX-16, SANDBOX-20): the session's directories, the scratch and
-    /// temporary directories, and every row some stage of this session may be given for writing,
-    /// whatever its program. A file another stage could have written is as much the plan's as one
-    /// this stage could.
+    /// could have chosen (SANDBOX-16, SANDBOX-20): the session's directories, the checkout holding
+    /// each of them and each one the session left ([`Confinement::beyond_the_session`]), the
+    /// scratch and temporary directories, and every row some stage of this session may be given
+    /// for writing, whatever its program. A file another stage could have written is as much the
+    /// plan's as one this stage could.
     fn writable_by_the_plan(&self, file: &Path) -> bool {
         let file = canonical(file);
         if self
@@ -622,6 +697,10 @@ impl Confinement {
             .any(|dir| file.starts_with(dir))
             || file.starts_with(&self.temporary)
             || file.starts_with(canonical(&self.temporary))
+            || self
+                .beyond_the_session()
+                .iter()
+                .any(|dir| file.starts_with(dir))
         {
             return true;
         }
@@ -1374,7 +1453,9 @@ impl Confinement {
         {
             policy = with_security_cache(policy, cache);
         }
-        if self.temporary_held_back {
+        // Where the temporary directory is the session's own there is no row of the account's to
+        // drop, and the session's stays like the scratch directory's.
+        if self.temporary_held_back && self.temporary_owner == TemporaryOwner::Account {
             policy.writable.retain(|row| row.path != self.temporary);
         }
         policy
@@ -1533,6 +1614,7 @@ impl Confinement {
         // directory is one of, so holding it back there is a refusal inside a row and not a row
         // left out (SANDBOX-22).
         if self.temporary_held_back
+            && self.temporary_owner == TemporaryOwner::Account
             && !unasked.is_empty()
             && !policy.unwritable.contains(&self.temporary)
         {
@@ -1563,11 +1645,13 @@ impl Confinement {
             .collect();
         // The rows bypass gives without a request are the whole machine, so counting them would
         // leave no git anywhere; a git under one of them alone keeps the lift (SANDBOX-18).
+        let beyond = self.beyond_the_session();
         let planted: Vec<&Path> = policy
             .writable
             .iter()
             .filter(|row| !machine.contains(&row.path))
             .map(|row| row.path.as_path())
+            .chain(beyond.iter().map(PathBuf::as_path))
             .collect();
         let policy = match is_git(self.prelude, resolved, &planted) {
             true => policy.allow_git_directory_writes(),
@@ -2043,7 +2127,23 @@ impl Confinement {
             .map(ScratchDirectory::path)
     }
 
-    /// Why a stage cannot be started because of the session or scratch directory, if it cannot.
+    /// The session's own temporary directory, if its name now leads to a link or a file.
+    ///
+    /// It is made inside the scratch directory, which every stage may write, so a stage can put a
+    /// link at its name and the row written from it would then grant wherever it leads. Judged as
+    /// [`Confinement::scratch_linked`] judges the scratch directory: the name is not followed, and
+    /// a name that is gone or is a directory is not this. On Windows `symlink_metadata` reports a
+    /// junction as a link as well; that case is reasoned from the standard library and has not
+    /// been run there.
+    fn temporary_linked(&self) -> Option<&Path> {
+        let temporary = self.sessions_temporary()?;
+        std::fs::symlink_metadata(temporary)
+            .is_ok_and(|found| !found.is_dir())
+            .then_some(temporary)
+    }
+
+    /// Why a stage cannot be started because of a session, scratch or temporary directory, if it
+    /// cannot (SANDBOX-18).
     fn directory_refusal(&self) -> Option<String> {
         if let Some((root, location)) = self.root_reaching_credentials() {
             return Some(match self.prelude {
@@ -2070,11 +2170,19 @@ impl Confinement {
                 linked.display()
             ));
         }
-        self.scratch_linked().map(|linked| {
-            format!(
+        if let Some(linked) = self.scratch_linked() {
+            return Some(format!(
                 "the session's scratch directory `{}` has been replaced by a link or a file, so a \
                  stage given it to write could reach wherever its name now leads; start a new \
                  session to be given another",
+                linked.display()
+            ));
+        }
+        self.temporary_linked().map(|linked| {
+            format!(
+                "the session's temporary directory `{}` has been replaced by a link or a file, \
+                 so a stage given it to write could reach wherever its name now leads; start a \
+                 new session to be given another",
                 linked.display()
             )
         })
@@ -2102,7 +2210,12 @@ impl Confinement {
         let identified = self.identified(step);
         let chosen = identified.as_ref().and_then(Identified::command);
         let environment = overlay(
-            effective_environment(command),
+            temporary_defaults(
+                std::env::vars_os().collect(),
+                self.sessions_temporary(),
+                command.get_envs(),
+                FOLD_CASE,
+            ),
             proxied
                 .iter()
                 .map(|(name, value)| (OsStr::new(name), Some(OsStr::new(value))))
@@ -2120,6 +2233,10 @@ impl Confinement {
         let sandbox = bravebot_sandbox::for_current_platform()
             .map_err(|error| not_confined(error.to_string()))?;
         let capabilities = sandbox.capabilities();
+        // The strings the policy reads: the names it keys on are ASCII scope variables and
+        // `SSH_AUTH_SOCK`. A value a substitution printed that is not text is left out, which reads
+        // as the variable being unset and so lends nothing; the bytes are decided on by no one, and
+        // the step still receives them as they are through `command`.
         let readable: Vec<(String, String)> = environment
             .iter()
             .filter_map(|(name, value)| {
@@ -2467,15 +2584,22 @@ pub fn change_notice(
 }
 
 /// `said` with the sentence that the person holds the temporary directory back, where a platform
-/// confines and the person did.
+/// confines, the person did and the setting does what the sentence says.
+///
+/// On Windows a session with a directory of its own is given a `temp` directory inside it in place
+/// of the account's temporary directory, and the setting changes nothing for that, so the sentence
+/// would be untrue and nothing is said. A Windows session with no directory of its own does have
+/// the account's directory held back and is not told so, which is less than is true.
 fn with_temporary_held_back_said(
     said: String,
     prelude: Option<Prelude>,
     held_back: bool,
 ) -> String {
-    match prelude.is_some() && held_back {
-        true => format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}"),
-        false => said,
+    match prelude {
+        Some(prelude) if held_back && prelude != Prelude::Windows => {
+            format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}")
+        }
+        _ => said,
     }
 }
 
@@ -3225,10 +3349,47 @@ const FOLD_CASE: bool = cfg!(windows);
 
 type Pair = (std::ffi::OsString, std::ffi::OsString);
 
-/// The variables `command` will start with: this process's, less the names removed and with the
-/// ones set.
-fn effective_environment(command: &Command) -> Vec<Pair> {
-    overlay(std::env::vars_os().collect(), command.get_envs(), FOLD_CASE)
+/// The names Windows programs read for where to put a temporary file.
+const TEMPORARY_NAMES: [&str; 2] = ["TEMP", "TMP"];
+
+/// The variables a command starts with: `held`, less the names `changes` removes and with the ones
+/// it sets, and `TEMP` and `TMP` naming `temporary` where there is one. They are set before
+/// `changes`, so a stage's own assignment of either wins, as `TMPDIR` is left to the line on the
+/// other platforms ([TRUST-14](../../../docs/specs/trust-map.md)). A name differing only in case is
+/// replaced, not kept beside them, where `fold_case` says variable names are compared that way.
+fn temporary_defaults<'a>(
+    held: Vec<Pair>,
+    temporary: Option<&'a Path>,
+    changes: impl Iterator<Item = (&'a std::ffi::OsStr, Option<&'a std::ffi::OsStr>)>,
+    fold_case: bool,
+) -> Vec<Pair> {
+    let held = match temporary {
+        Some(temporary) => overlay(
+            held,
+            TEMPORARY_NAMES
+                .iter()
+                .map(|name| (OsStr::new(name), Some(temporary.as_os_str()))),
+            fold_case,
+        ),
+        None => held,
+    };
+    overlay(held, changes, fold_case)
+}
+
+/// The directory stages are given to write temporary files in, and whose it is. On Windows with a
+/// scratch directory it is a directory inside that, so the account's temporary directory, which
+/// holds other programs' files and is not the session's, is a grant to no stage and no entry is
+/// written onto what is in it (SANDBOX-12). Everywhere else, and with no scratch directory, it is
+/// the account's `temporary`.
+fn stage_temporary(
+    prelude: Prelude,
+    temporary: PathBuf,
+    scratch: Option<&Path>,
+) -> (PathBuf, TemporaryOwner) {
+    match (prelude, scratch) {
+        (Prelude::Windows, Some(scratch)) => (scratch.join("temp"), TemporaryOwner::Session),
+        _ => (temporary, TemporaryOwner::Account),
+    }
 }
 
 /// `held` less every name `changes` removes or sets, plus the values it sets.
@@ -3353,10 +3514,6 @@ fn canonical(path: &Path) -> PathBuf {
 /// Whether a program, known by the file name it resolved to, starts a file or a program its
 /// arguments name: a shell, a language's interpreter, or a wrapper that runs its operand.
 fn runs_what_it_is_given(name: &str) -> bool {
-    const WRAPPERS: &[&str] = &[
-        "env", "xargs", "exec", "nohup", "time", "timeout", "nice", "setsid", "stdbuf", "command",
-        "busybox",
-    ];
     const INTERPRETERS: &[&str] = &[
         "sh",
         "bash",
@@ -3395,7 +3552,7 @@ fn runs_what_it_is_given(name: &str) -> bool {
     let versioned = name
         .strip_prefix("python")
         .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.'));
-    versioned || WRAPPERS.contains(&name) || INTERPRETERS.contains(&name)
+    versioned || is_wrapper(name, WrapperQuestion::RunsItsOperand) || INTERPRETERS.contains(&name)
 }
 
 /// Whether `found` accepts one of the names an argument could be a file under: the argument
@@ -3766,11 +3923,18 @@ mod tests {
                 .expect("executable");
         }
         let path = std::env::join_paths([&granted]).expect("path");
+        // Only the rows inside the fixture: a workspace opened by another test in this process
+        // records the checkout holding `target/`, which would hide the planted program from the
+        // search whatever this policy records.
         let search = || {
+            let recorded: Vec<PathBuf> = bravebot_sandbox::programs::registered()
+                .into_iter()
+                .filter(|row| row.starts_with(&granted))
+                .collect();
             bravebot_sandbox::programs::find_in(
                 OsStr::new("bravebot-confine-probe"),
                 &path,
-                &bravebot_sandbox::programs::registered(),
+                &recorded,
             )
         };
         assert!(search().is_some(), "found before any policy is built");
@@ -3809,6 +3973,153 @@ mod tests {
         assert!(!kept_out(), "kept out by describing the line");
         confined.policy(&cat, &described, &[]);
         assert!(kept_out(), "the line's own run kept nothing out");
+    }
+
+    /// SANDBOX-12 and the stage `$TMPDIR` clause of TRUST-14, on Windows: where the session has a
+    /// scratch directory, a stage is granted a `temp` directory inside it and not the account's
+    /// temporary directory, so no entry is written onto what other programs keep there. The
+    /// regressions it rejects are the account's directory still granted, the session's directory
+    /// not granted, and the directory chosen the same way on the other platforms, whose temporary
+    /// directory is the account's. A Windows confinement with no scratch directory is the control
+    /// that the account's directory is what is used when there is no session directory.
+    #[test]
+    fn a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts() {
+        // Nothing but a name is made here, in a directory this test removes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let scratch =
+            std::env::temp_dir().join(format!("bravebot-temp-row-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let scratch = canonical(&scratch);
+        let program = step("/usr/bin/make", &[]);
+        let written = |prelude: Prelude, scratch: Option<&Path>| -> Vec<PathBuf> {
+            Confinement::new(
+                prelude,
+                PathBuf::from("/account/temp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/work/project")],
+                scratch,
+            )
+            .policy(&program, Path::new("/work"), &[])
+            .writable
+            .iter()
+            .map(|row| row.path.clone())
+            .collect()
+        };
+
+        let own = written(Prelude::Windows, Some(&scratch));
+        assert!(own.contains(&scratch.join("temp")), "{own:?}");
+        assert!(scratch.join("temp").is_dir(), "the directory is made");
+        assert!(!own.contains(&PathBuf::from("/account/temp")), "{own:?}");
+
+        let without = written(Prelude::Windows, None);
+        assert!(
+            without.contains(&PathBuf::from("/account/temp")),
+            "{without:?}"
+        );
+
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let other = written(prelude, Some(&scratch));
+            assert!(
+                other.contains(&PathBuf::from("/account/temp")),
+                "{prelude:?}: {other:?}"
+            );
+            assert!(
+                !other.contains(&scratch.join("temp")),
+                "{prelude:?}: {other:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// SANDBOX-22 on Windows: where the session has a directory of its own, holding the temporary
+    /// directory back changes nothing for a stage, so its `temp` directory is written in every
+    /// mode and nothing refuses it, and the account's directory stays granted to no stage. The
+    /// regression it rejects is the setting dropping the session's row, as it drops the account's
+    /// on Linux and macOS, which leaves a Windows stage with no place to write a temporary file.
+    /// Run on a Windows prelude from any host, since the rows are decided by code every platform
+    /// runs. The bypass refusal of the directory is not reached on Windows, where no row is given
+    /// without a request, and the test asserts that nothing is refused there as well.
+    #[test]
+    fn holding_the_temporary_directory_back_leaves_a_windows_sessions_own_written() {
+        // Nothing but a name is made here, in a directory this test removes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let scratch =
+            std::env::temp_dir().join(format!("bravebot-temp-held-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let scratch = canonical(&scratch);
+        let session_temp = scratch.join("temp");
+        let program = step("/usr/bin/make", &[]);
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
+            for held_back in [false, true] {
+                let policy = Confinement::new(
+                    Prelude::Windows,
+                    PathBuf::from("/account/temp"),
+                    Some(Path::new(HOME)),
+                    vec![PathBuf::from("/work/project")],
+                    Some(&scratch),
+                )
+                .with_mode(mode)
+                .with_unasked_writes(true)
+                .with_temporary_held_back(held_back)
+                .policy(&program, Path::new("/work"), &[]);
+                let written: Vec<&PathBuf> = policy.writable.iter().map(|row| &row.path).collect();
+                assert!(
+                    written.contains(&&session_temp),
+                    "{mode:?} held back {held_back}: the session's temp is not written: {written:?}"
+                );
+                assert!(
+                    !written.contains(&&PathBuf::from("/account/temp")),
+                    "{mode:?} held back {held_back}: {written:?}"
+                );
+                assert!(
+                    !policy.unwritable.contains(&session_temp)
+                        && !policy.unwritable.contains(&PathBuf::from("/account/temp")),
+                    "{mode:?} held back {held_back}: a temporary directory is refused: {:?}",
+                    policy.unwritable
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// TRUST-14: on Windows a stage is told the session's temporary directory as `TEMP` and `TMP`,
+    /// whatever case the process holds them in, and a name the line itself sets is the line's. The
+    /// regressions it rejects are one of the two names not set, the held `Temp` kept beside the
+    /// new one, and the line's own value overwritten. With no directory, nothing is added.
+    #[test]
+    fn a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins() {
+        let held = || -> Vec<Pair> {
+            vec![
+                ("Temp".into(), "C:\\Users\\a\\AppData\\Local\\Temp".into()),
+                ("PATH".into(), "C:\\Windows".into()),
+            ]
+        };
+        let session = Path::new("C:\\scratch\\temp");
+        let value = |pairs: &[Pair], name: &str| -> Vec<String> {
+            pairs
+                .iter()
+                .filter(|(own, _)| own.to_string_lossy().eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.to_string_lossy().into_owned())
+                .collect()
+        };
+
+        let told = temporary_defaults(held(), Some(session), std::iter::empty(), true);
+        for name in ["TEMP", "TMP"] {
+            assert_eq!(value(&told, name), ["C:\\scratch\\temp"], "{name}");
+        }
+        assert_eq!(value(&told, "PATH"), ["C:\\Windows"]);
+
+        let own = [(OsStr::new("TMP"), Some(OsStr::new("D:\\mine")))];
+        let told = temporary_defaults(held(), Some(session), own.into_iter(), true);
+        assert_eq!(value(&told, "TMP"), ["D:\\mine"]);
+        assert_eq!(value(&told, "TEMP"), ["C:\\scratch\\temp"]);
+
+        let told = temporary_defaults(held(), None, std::iter::empty(), true);
+        assert_eq!(told, held());
     }
 
     /// A confinement on a platform that reads the machine except the credential locations.
@@ -3921,6 +4232,265 @@ mod tests {
             held(&confined, &[&step("/usr/bin/make", &[])]),
             Containment::Held
         );
+    }
+
+    /// A checkout on disk, since the finder asks the file system for the `.git`: `repo/.git`, the
+    /// session directory `repo/sub`, and files named for the programs the tests below ask about in
+    /// `repo/bin`, which lies above the session directory in its checkout and which a contributor's
+    /// commit can fill. Returns the checkout and the session directory, both canonical.
+    fn checked_out(name: &str) -> (PathBuf, PathBuf) {
+        let top = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("repo/.git")).expect("repository");
+        std::fs::create_dir_all(top.join("repo/sub")).expect("session directory");
+        std::fs::create_dir_all(top.join("repo/bin")).expect("bin");
+        for program in [
+            "git", "aws", "gh", "kubectl", "curl", "ssh", "cargo", "make",
+        ] {
+            std::fs::write(top.join("repo/bin").join(program), "").expect("program");
+        }
+        let top = top.canonicalize().expect("canonical");
+        (top.join("repo"), top.join("repo/sub"))
+    }
+
+    fn named(directory: &Path) -> &str {
+        directory.to_str().expect("a UTF-8 path")
+    }
+
+    /// SANDBOX-14, SANDBOX-18: a file named `git` in the checkout holding the session directory,
+    /// above that directory, could have been put there by a stage of the plan or by a commit it
+    /// pulled, so it earns no `.git` write lift by its name, as one inside the session directory
+    /// does not. A `git` outside every session directory keeps it. The regression it rejects: the
+    /// session directory alone counted as the plan's, so `repo/bin/git`, first on `PATH`, was the
+    /// lift's.
+    #[test]
+    fn a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory() {
+        let (repo, session) = checked_out("confine-above-root-git");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let confined = reading_confinement(prelude, &[named(&session)]);
+            let lifted = |program: &Path| {
+                confined
+                    .policy(&step(named(program), &["commit"]), &session, &[])
+                    .git_directories_writable
+            };
+            assert!(
+                !lifted(&repo.join("bin/git")),
+                "{prelude:?}: repo/bin/git above the session directory"
+            );
+            assert!(
+                !lifted(&session.join("git")),
+                "{prelude:?}: the guard inside the session directory"
+            );
+            assert!(
+                lifted(Path::new("/usr/bin/git")),
+                "{prelude:?}: the system's git"
+            );
+        }
+    }
+
+    /// SANDBOX-16: a file in the checkout above the session directory carries no credential scope
+    /// by being named `aws`, `kubectl`, `gh` or `git`, and the prompt lists none for it. The same
+    /// names installed outside the checkout keep theirs.
+    #[test]
+    fn a_program_above_the_session_directory_in_its_checkout_carries_no_scope_by_its_name() {
+        let (repo, session) = checked_out("confine-above-root-scope");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let confined = reading_confinement(prelude, &[named(&session)]);
+            for (name, args) in [
+                ("aws", vec!["s3", "ls"]),
+                ("kubectl", vec!["get", "pods"]),
+                ("gh", vec!["pr", "list"]),
+                ("git", vec!["push"]),
+            ] {
+                let planted = step(named(&repo.join("bin").join(name)), &args);
+                assert_eq!(confined.scope_of(&planted), None, "{prelude:?} {name}");
+                assert!(
+                    confined.describe(&[&planted]).carried.is_empty(),
+                    "{prelude:?} {name}"
+                );
+                assert!(
+                    confined.profile(&[&planted]).contains("scopes: none)"),
+                    "{prelude:?} {name}"
+                );
+                let installed = step(&format!("/usr/bin/{name}"), &args);
+                assert!(
+                    confined.scope_of(&installed).is_some(),
+                    "{prelude:?} /usr/bin/{name}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-20: under a closed setting a file in the checkout above the session directory keeps
+    /// no network by being named `curl`, `ssh` or `cargo`, on every platform, and `/usr/bin/curl`
+    /// keeps it.
+    #[test]
+    fn a_program_above_the_session_directory_in_its_checkout_keeps_no_network_by_its_name() {
+        let (repo, session) = checked_out("confine-above-root-network");
+        for (what, confined) in [
+            ("windows", confinement(&[named(&session)])),
+            (
+                "linux",
+                reading_confinement(Prelude::Linux, &[named(&session)]),
+            ),
+            (
+                "macos",
+                reading_confinement(Prelude::MacOs, &[named(&session)]),
+            ),
+        ] {
+            let closed = confined.with_network(Network::Closed);
+            for (name, args) in [
+                ("curl", vec!["https://a.example"]),
+                ("ssh", vec!["host"]),
+                ("cargo", vec!["build"]),
+            ] {
+                let planted = step(named(&repo.join("bin").join(name)), &args);
+                assert!(!closed.egress(&planted), "{what}: {name}");
+                assert!(
+                    !closed.policy(&planted, &session, &[]).allow_network,
+                    "{what}: {name}"
+                );
+            }
+            assert!(
+                closed.egress(&step("/usr/bin/curl", &["https://a.example"])),
+                "{what}: the system's curl"
+            );
+        }
+    }
+
+    /// RUN-5: a program in the checkout above the session directory is a line nobody saw, so it is
+    /// not held, and a program under an install directory is.
+    #[test]
+    fn a_program_above_the_session_directory_in_its_checkout_is_not_held() {
+        let (repo, session) = checked_out("confine-above-root-held");
+        let confined =
+            reading_confinement(Prelude::MacOs, &[named(&session)]).with_network(Network::Closed);
+        assert_eq!(
+            held(&confined, &[&step(named(&repo.join("bin/make")), &[])]),
+            Containment::Unknown
+        );
+        assert_eq!(
+            held(&confined, &[&step("/usr/bin/make", &[])]),
+            Containment::Held
+        );
+    }
+
+    /// SANDBOX-20: a directory the session left keeps the checkout that held it, since a stage
+    /// wrote there while it was open and closing it removes nothing. The regression it rejects:
+    /// only the directories still open counted, so closing the session's directory made the
+    /// `bin` of its checkout the system's again.
+    #[test]
+    fn a_directory_the_session_left_keeps_its_checkout_in_the_set_the_plan_writes() {
+        let (repo, session) = checked_out("confine-above-root-left");
+        let elsewhere = crate::testutil::scratch_dir("confine-above-root-left-now");
+        std::fs::create_dir_all(elsewhere.join(".git")).expect("directory with its own checkout");
+        let elsewhere = elsewhere.canonicalize().expect("canonical");
+        let program = step(named(&repo.join("bin/aws")), &["s3", "ls"]);
+
+        let open = reading_confinement(Prelude::MacOs, &[named(&elsewhere)]);
+        assert!(
+            open.scope_of(&program).is_some(),
+            "the control: nothing of the session holds the checkout"
+        );
+        let left = open.with_left_directories(&[session]);
+        assert_eq!(left.scope_of(&program), None);
+    }
+
+    /// Only the nearest `.git` holds the session directory (SANDBOX-30): a repository that merely
+    /// contains the checkout, and a dotfiles repository at the home directory, do not make the
+    /// installs beside them the plan's. The regressions it rejects: every ancestor with a `.git`
+    /// taken, and a home directory that holds a `.git` taken for the checkout of a project under it
+    /// that has none, which would take `~/.local/bin` from the programs installed there.
+    #[test]
+    fn an_outer_repository_or_a_home_that_is_a_repository_is_not_the_checkout_of_a_session_directory()
+     {
+        let top = crate::testutil::scratch_dir("confine-above-root-outer");
+        let _ = std::fs::remove_dir_all(&top);
+        for directory in [
+            "outer/.git",
+            "outer/repo/.git",
+            "outer/repo/sub",
+            "outer/bin",
+            "home/.git",
+            "home/proj",
+            "home/.local/bin",
+        ] {
+            std::fs::create_dir_all(top.join(directory)).expect("directory");
+        }
+        let top = top.canonicalize().expect("canonical");
+        let at = |directory: &str, program: &str| {
+            let file = top.join(directory).join(program);
+            std::fs::write(&file, "").expect("program");
+            file
+        };
+        let lifted = |confined: &Confinement, file: &Path| {
+            confined
+                .policy(&step(named(file), &["commit"]), &top, &[])
+                .git_directories_writable
+        };
+
+        let nested = reading_confinement(Prelude::MacOs, &[named(&top.join("outer/repo/sub"))]);
+        assert!(
+            !lifted(&nested, &at("outer/repo", "git")),
+            "the checkout's own file"
+        );
+        assert!(
+            lifted(&nested, &at("outer/bin", "git")),
+            "a file beside the repository that holds the checkout"
+        );
+        assert!(
+            nested
+                .scope_of(&step(named(&at("outer/bin", "aws")), &["s3", "ls"]))
+                .is_some()
+        );
+
+        let dotfiles = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(&top.join("home")),
+            vec![top.join("home/proj")],
+            Some(Path::new("/var/scratch")),
+        );
+        assert!(
+            lifted(&dotfiles, &at("home/.local/bin", "git")),
+            "an install in a home directory that is a repository"
+        );
+        assert!(
+            dotfiles
+                .scope_of(&step(named(&at("home/.local/bin", "aws")), &["s3", "ls"]))
+                .is_some()
+        );
+        assert!(
+            !lifted(&dotfiles, &at("home/proj", "git")),
+            "the session directory itself"
+        );
+    }
+
+    /// RUN-5: which programs start the file they are handed is answered by the table of wrappers
+    /// in `bravebot_core::permissions` and the interpreters here, and a program that runs nothing
+    /// it is handed is neither.
+    #[test]
+    fn a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given() {
+        for name in [
+            "env",
+            "xargs",
+            "exec",
+            "nohup",
+            "time",
+            "timeout",
+            "nice",
+            "setsid",
+            "stdbuf",
+            "command",
+            "busybox",
+            "sh",
+            "python3.12",
+        ] {
+            assert!(runs_what_it_is_given(name), "{name}");
+        }
+        for name in ["cat", "ls", "builtin", "noglob", "ENV", "git"] {
+            assert!(!runs_what_it_is_given(name), "{name}");
+        }
     }
 
     /// RUN-5: an interpreter or a wrapper handed a file under a directory the plan may write is
@@ -4663,6 +5233,66 @@ mod tests {
         }
     }
 
+    /// SANDBOX-18, SANDBOX-12: a Windows stage is refused once the session's own `temp` directory,
+    /// made inside the scratch directory a stage may write, leads to a link or a file, and not
+    /// when it is a directory or gone. The regression it rejects: a link put at `temp` by a stage
+    /// being granted as the directory it leads to. Run with a symlink on a Unix host; a junction on
+    /// Windows is the same name judged by `symlink_metadata`, and that case is reasoned only. The
+    /// same change on a platform whose temporary directory is the account's is the control that
+    /// the check does not apply there.
+    #[cfg(unix)]
+    #[test]
+    fn a_stage_is_refused_once_the_sessions_temporary_directory_leads_to_a_link_or_a_file() {
+        let refused_for_temporary = |confinement: &Confinement| match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. })
+                if detail.contains("session's temporary directory") =>
+            {
+                Some(detail)
+            }
+            _ => None,
+        };
+        let outside = somewhere_to_link_to("confine-temporary-linked");
+        for (change, put_there) in what_leads_elsewhere(&outside) {
+            let (session, confinement) = made_scratch(Prelude::Windows);
+            let temp = confinement.temporary.clone();
+            assert_eq!(confinement.temporary_owner, TemporaryOwner::Session);
+            assert!(temp.is_dir(), "the directory is made");
+            assert_eq!(
+                refused_for_temporary(&confinement),
+                None,
+                "refused before it was changed"
+            );
+
+            let aside = crate::testutil::moved_aside_and_replaced(&temp, put_there);
+            let refused = refused_for_temporary(&confinement)
+                .unwrap_or_else(|| panic!("{change} was not refused"));
+            assert!(refused.contains(&temp.display().to_string()), "{refused}");
+
+            let _ = std::fs::remove_file(&temp);
+            let _ = std::fs::remove_dir_all(&aside);
+            drop(session);
+        }
+        for (change, put_there) in what_leads_nowhere_else() {
+            let (session, confinement) = made_scratch(Prelude::Windows);
+            let temp = confinement.temporary.clone();
+            let aside = crate::testutil::moved_aside_and_replaced(&temp, put_there);
+            assert_eq!(
+                refused_for_temporary(&confinement),
+                None,
+                "{change} was refused"
+            );
+            let _ = std::fs::remove_dir_all(&aside);
+            drop(session);
+        }
+        let (session, confinement) = made_scratch(Prelude::Linux);
+        std::os::unix::fs::symlink(&outside, session.path().join("temp")).expect("a link");
+        assert_eq!(
+            refused_for_temporary(&confinement),
+            None,
+            "a platform whose temporary directory is the account's was refused for a link in the scratch directory"
+        );
+    }
+
     /// SANDBOX-18: a scratch directory that was removed, or replaced by another directory, is no
     /// longer the one the session made and gets no row, and the stage still starts. The
     /// regressions it rejects: the row kept for a directory that is not the one made, which grants
@@ -4741,6 +5371,87 @@ mod tests {
         let target = target.display().to_string();
         assert!(!reads(&policy, &target) && !writes(&policy, &target));
         assert!(refused_for_the_scratch_directory(&confinement).is_some());
+        let _ = std::fs::remove_file(session.path());
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// CMDLINE-17: nothing a confinement writes into a policy row, or into the reason it refuses a
+    /// stage, depends on the directory the stage starts in. That directory is where a link in a
+    /// tree nobody vouched for led, so a row or a refusal built from it would tell the planner the
+    /// landing. The regression it rejects: a row or a refusal that names `directory`, which the
+    /// planner would then read as the spelling of a directory it did not type.
+    #[cfg(unix)]
+    #[test]
+    fn neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in() {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the directory as made");
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            Some(&made),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let first = Path::new("/people/person/project/landing-one");
+        let second = Path::new("/people/person/project/landing-two");
+
+        let rows = |directory: &Path| {
+            let policy = confinement.policy(&step("/bin/cat", &["f"]), directory, &[]);
+            let writable: Vec<PathBuf> =
+                policy.writable.iter().map(|row| row.path.clone()).collect();
+            (
+                policy.readable,
+                policy.unreadable,
+                policy.unwritable,
+                writable,
+                policy.starting_in,
+            )
+        };
+        let (readable, unreadable, unwritable, writable, starts_in) = rows(first);
+        let other = rows(second);
+        assert_eq!(starts_in.as_deref(), Some(first));
+        assert_eq!(
+            (&readable, &unreadable, &unwritable, &writable),
+            (&other.0, &other.1, &other.2, &other.3),
+            "a row follows the directory the stage starts in"
+        );
+        assert_eq!(other.4.as_deref(), Some(second));
+        for row in readable
+            .iter()
+            .chain(&unreadable)
+            .chain(&unwritable)
+            .chain(&writable)
+        {
+            assert!(
+                !row.starts_with(first),
+                "{} is the landing or beneath it",
+                row.display()
+            );
+        }
+
+        // A refusal for the scratch directory having become a link is built with the
+        // directory the stage would start in at hand, and says the same for either.
+        let target = somewhere_to_link_to("confine-refusal-landing")
+            .join("elsewhere")
+            .canonicalize()
+            .expect("a canonical target");
+        let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+            std::os::unix::fs::symlink(&target, name).expect("link")
+        });
+        let refused = |directory: &Path| match confinement.prepared(
+            &Command::new("/bin/cat"),
+            &step("/bin/cat", &[]),
+            directory,
+        ) {
+            Err(ExecError::NotConfined { detail, .. }) => detail,
+            Err(other) => panic!("refused as {other}, not as a confinement"),
+            Ok(_) => panic!("a link where the scratch directory was is not refused"),
+        };
+        let told = refused(first);
+        assert_eq!(told, refused(second));
+        assert!(
+            !told.contains("landing-"),
+            "the refusal names the landing: {told}"
+        );
         let _ = std::fs::remove_file(session.path());
         let _ = std::fs::remove_dir_all(&aside);
     }
@@ -8143,6 +8854,67 @@ mod tests {
         assert!(!writes(&policy, agent.name()));
     }
 
+    /// CMDLINE-17, LAYER-2: an assignment worked out when the step is spawned carries no scope, so
+    /// the socket does not follow it, and nothing the policy reads depends on a value a
+    /// substitution printed. The regression it rejects: a scope chosen from the argv alone for a
+    /// step whose environment is not known yet, which lends `known_hosts` and the agent socket to
+    /// a step whose `SSH_AUTH_SOCK` or `GIT_SSH_COMMAND` a program's output may name. The control
+    /// is the same push with no assignment.
+    #[test]
+    #[cfg(unix)]
+    fn an_assignment_worked_out_at_spawn_in_front_of_a_push_removes_its_scope() {
+        let confined = confinement(&["/work/project"]);
+        let agent = AgentSocket::at("worked-out");
+        let environment = agent.environment();
+        let push = step("/usr/bin/git", &["push"]);
+        let mut worked_out = push.clone();
+        worked_out.expansions = vec![bravebot_core::command::Expansion {
+            name: "GIT_SSH_COMMAND".to_string(),
+            parts: vec![bravebot_core::command::ValuePart::Variable(
+                "HOME".to_string(),
+            )],
+        }];
+
+        let control = confined.policy(&push, Path::new("/work"), &environment);
+        let policy = confined.policy(&worked_out, Path::new("/work"), &environment);
+
+        assert!(reads(&control, &format!("{HOME}/.ssh/known_hosts")));
+        assert!(writes(&control, agent.name()));
+        assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
+        assert!(!writes(&policy, agent.name()));
+    }
+
+    /// CMDLINE-17, LAYER-2: a value that is not text reaches the process as the bytes it is. The
+    /// strings the policy reads leave it out, and it is the environment handed to the process that
+    /// carries it. The regression it rejects: the process environment built from the strings the
+    /// policy reads, which drops the variable or hands the next program U+FFFD in place of the
+    /// bytes a program printed. `None` where this machine cannot prepare a stage under its
+    /// platform's sandbox.
+    #[test]
+    #[cfg(unix)]
+    fn a_value_that_is_not_text_reaches_the_process_as_its_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            return;
+        }
+        let (session, confined) = a_session("raw-environment");
+        let bytes = vec![b'a', 0xff, 0xfe, b'b'];
+        let mut command = Command::new("/bin/cat");
+        command.env("BB_RAW", std::ffi::OsString::from_vec(bytes.clone()));
+
+        let prepared = confined
+            .prepared(&command, &step("/bin/cat", &[]), &session)
+            .expect("a stage this platform can confine");
+
+        let held = prepared
+            .variables
+            .iter()
+            .find(|(name, _)| name == "BB_RAW")
+            .map(|(_, value)| value.clone().into_vec());
+        assert_eq!(held, Some(bytes));
+    }
+
     /// SANDBOX-18: a session that names no home directory has no location to compare the socket
     /// with, so it lends no agent socket whichever way a stage carries a scope, and the sentences
     /// say that none was lent. The regression it rejects: judging the socket against no locations
@@ -9611,7 +10383,17 @@ mod tests {
                 ("/work/project/target/cargo".to_string(), vec!["build"]),
                 ("/var/scratch/ssh".to_string(), vec!["host"]),
                 ("/work/project/git".to_string(), vec!["push"]),
-                ("/tmp/curl".to_string(), vec![]),
+                // The directory stages write temporary files in: the account's, except on Windows
+                // with a session directory, where it is the session's own (SANDBOX-12).
+                (
+                    if what == "windows" {
+                        "/var/scratch/temp/curl"
+                    } else {
+                        "/tmp/curl"
+                    }
+                    .to_string(),
+                    vec![],
+                ),
                 (
                     format!("{HOME}/.cargo/registry/curl"),
                     vec!["https://a.example"],
@@ -11417,9 +12199,12 @@ mod tests {
     }
 
     /// SANDBOX-22: the description of `run` says the person held the temporary directory back,
-    /// on every platform that confines, and says nothing where they did not or nothing confines.
-    /// The regression it rejects is a description that still tells the planner the temporary
-    /// directory is written, which sends it to `mktemp` and heredocs that are then refused.
+    /// on Linux and macOS, and says nothing where they did not, where nothing confines or on
+    /// Windows. A Windows session with a directory of its own is given a `temp` directory in place
+    /// of the account's, and the setting changes nothing there, so the sentence would be untrue.
+    /// The regressions it rejects are a description that still tells the planner the temporary
+    /// directory is written, which sends it to `mktemp` and heredocs that are then refused, and
+    /// one that tells a Windows planner the directory is read-only when its own stays written.
     #[test]
     fn the_planner_is_told_the_temporary_directory_a_person_held_back() {
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
@@ -11432,11 +12217,19 @@ mod tests {
             )
             .expect("a statement");
             let held = with_temporary_held_back_said(said.clone(), Some(prelude), true);
-            assert!(
-                held.contains("holds the temporary directory back"),
-                "{held}"
-            );
-            assert!(held.starts_with(&said), "{held}");
+            match prelude {
+                Prelude::Windows => {
+                    assert_eq!(held, said, "{held}");
+                    assert!(!held.contains("read and not written"), "{held}");
+                }
+                _ => {
+                    assert!(
+                        held.contains("holds the temporary directory back"),
+                        "{held}"
+                    );
+                    assert!(held.starts_with(&said), "{held}");
+                }
+            }
             assert_eq!(
                 with_temporary_held_back_said(said.clone(), Some(prelude), false),
                 said

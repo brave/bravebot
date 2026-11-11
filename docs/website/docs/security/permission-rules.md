@@ -31,7 +31,8 @@ name can add a refusal or a question and never removes one. A listing, a search 
 their entries to the same rules: an entry is left out when a rule covers any name its file has, so a hard
 link to a denied file is not reported, and neither is an entry whose name beneath a second path to an
 open tree a rule covers. Where the search for the other names cannot finish while a `Read` deny rule is
-in force, an entry with more than one name is left out. A `deny` or `ask` rule written through a
+in force, an entry with more than one name is left out. The trust map is asked under the same names
+([Trust](trust.md)). A `deny` or `ask` rule written through a
 link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
 `real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
 project also covers the file under the relative name the file tools ask by, so in a session opened in
@@ -62,6 +63,10 @@ spelling you approved.
   `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
   An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
   through by any list.
+  On every host a program word is also read without a trailing dot or space, a `::$DATA` suffix and one
+  `.exe`, `.com`, `.cmd` or `.bat`, so `Bash(git *)` covers `git.exe.` and `git.cmd`. While a `deny` or
+  `ask` command rule is in force, a program written as an 8.3 short name such as `POWERS~1` is
+  refused, since the rule cannot be matched against it.
 - **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
   write. It holds when the redirection reaches the file through `..`, as `config/sub/../app.env`
   does, whether or not a link is on the path.

@@ -54,6 +54,7 @@ permissions-check-deny = deny
 permissions-check-ask = ask
 permissions-check-allow = allow
 permissions-check-none = no rule matches, so the ordinary gates decide
+permissions-check-short-name = refused, since a command rule is in force and an 8.3 short name cannot be matched against it
 permissions-check-rule = rule
 permissions-check-file = file
 permissions-check-reason = reason
@@ -490,6 +491,24 @@ cli-resume-moved = This session moved to { $directory }. Resume it from there wi
 
 ## Reporting configuration and confinement
 
+# The retrieval lines of `doctor` (RETRIEVE-26): whether recall is on and the file that decided it,
+# the service it sends to, and what one test call to it found.
+doctor-retrieval = retrieval
+doctor-retrieval-on = on, from { $path }
+doctor-retrieval-off = off
+doctor-retrieval-off-from = off, from { $path }
+doctor-embeddings = embeddings
+doctor-embeddings-brave-development = Brave (development), { $host }
+doctor-embeddings-brave = Brave, { $host }
+doctor-embeddings-openai = OpenAI, { $host }
+doctor-embeddings-openrouter = OpenRouter, { $host }
+doctor-embeddings-custom = an endpoint of your own, { $host }
+doctor-embeddings-unconfigured = not set up: { $why }
+doctor-embeddings-model = embeddings model
+doctor-embeddings-answered = { $model }, { $dimensions } dimensions, answered in { $ms } ms
+doctor-embeddings-failed = { $model }, { $dimensions } dimensions, the test call failed: { $why }
+doctor-embeddings-skipped = { $model }, { $dimensions } dimensions, not called: the network section says why no request can be made
+
 doctor-configuration-ok = configuration OK
 doctor-endpoint = endpoint
 doctor-premium = premium
@@ -768,6 +787,8 @@ doctor-settings-language-ignored =
     language in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
 doctor-settings-language-unmatched =
     language { $language } in ~/.bravebot/settings.json names no catalog, so it chooses { $reference }; the catalogs are { $available }
+doctor-settings-retrieval-ignored =
+    retrieval in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-ask-idle-ignored =
     askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-references-ignored =
@@ -2760,8 +2781,8 @@ status-server-policy-subprocesses = subprocesses
 status-server-policy-subprocesses-allowed = allowed
 status-server-policy-subprocesses-refused = refused
 status-server-policy-starts-in = starts in
-# macOS refuses a write to a .git beneath a write row, so a row labelled write does not reach one.
-status-server-policy-git = .git
+# macOS refuses a write to a protected name beneath a write row (.git, .bravebot, .husky, .gitmodules, .gitconfig, .pre-commit-config.yaml), so a row labelled write does not reach one.
+status-server-policy-git = protected names
 status-server-policy-git-held-back = not written under a write row
 status-server-policy-read = read
 status-server-policy-write = write
@@ -3001,6 +3022,9 @@ indicator-hook = Running hook: { $program } ({ $moment })
 # The same, over a picture or a PDF, which has no lines to count.
 indicator-checking-picture = Checking a picture
 indicator-checking-pdf = Checking a PDF
+# Said while a /btw question asked with no turn running waits for its answer, which is the only thing
+# the session is doing and would otherwise be called by the turn's own word.
+indicator-answering = Answering your /btw question
 # Said while a turn is being stopped, from the press that asks for it until the turn ends. The turn
 # ends once its worker and every delegate it started have returned, which can take seconds, and a
 # screen still saying what it said before the press reads as a press nobody heard.
@@ -4562,6 +4586,13 @@ btw-no-files-beside-a-turn = /btw does not read dropped files while a turn runs;
 btw-one-at-a-time = a question is already being answered beside the turn; ask again when it has
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
+# Said when a question typed during a turn goes out. Its answer is a row of the agents list and not
+# a line among the turn's, so this is the only place that says the question is out. The chord is the
+# one that opens the list.
+btw-asked-beside-a-turn = answering your /btw question beside the turn; { $chord } opens the answer when it is ready
+# Said when that answer is in, whether the turn is still running or has ended. The row it became is
+# otherwise announced only by a count on the bottom line, which a narrow terminal drops.
+btw-answered-beside-a-turn = your /btw question is answered; { $chord } opens it
 
 handoff-needs-a-goal = /handoff takes the next piece of work, which the brief is written for
 handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record until its first turn ends
@@ -5642,6 +5673,53 @@ ui-unconfigured-body = Sign in to an account, or set up a gateway or AWS Bedrock
 ui-unconfigured-open-settings = Open Agent settings
 ui-unconfigured-continue = Continue browsing
 ui-unconfigured-details = Technical details
+
+# The line under a reply whose turn recalled earlier messages, and its rows (RETRIEVE-27)
+ui-recalled-title = { $count ->
+    [one] Used { $count } earlier message
+   *[other] Used { $count } earlier messages
+    }
+ui-recalled-you = You
+ui-recalled-reply = Reply
+ui-recalled-tool = Tool
+ui-recalled-exchange = Same exchange
+ui-recalled-missing = Not in this transcript
+ui-recalled-reveal = Show in the conversation
+# What a recalled row opens to: the words that were sent (RETRIEVE-32)
+ui-recalled-reading = Reading what was sent…
+ui-recalled-unread = Couldn't read what was sent.
+ui-recalled-retry = Retry
+ui-recalled-nothing = Nothing of this message was sent in this turn.
+ui-recalled-running = Shown once the turn ends
+ui-recalled-replaced = Sent in an earlier request of this turn, then replaced
+ui-recalled-part = Part { $part }
+ui-recalled-context = Context, cut to { $bytes } bytes
+ui-recalled-from-file = File
+ui-recalled-from-skill = Skill
+ui-recalled-from-session = Session
+ui-recalled-from-other = Earlier
+ui-recalled-copy = Copy excerpt
+# A clause of the context meter's tooltip (RETRIEVE-28)
+ui-context-out-of-request = { $count ->
+    [one] { $count } earlier message kept out of the request, recalled when relevant
+   *[other] { $count } earlier messages kept out of the request, recalled when relevant
+    }
+# The Recall block on a bot's details (RETRIEVE-29)
+ui-recall-heading = Recall
+ui-recall-indexing = Indexing { $indexed } of { $eligible } earlier messages
+ui-recall-rebuilding = Rebuilding · { $indexed } of { $eligible } earlier messages
+ui-recall-until = Until it finishes, this bot summarises long conversations as before.
+ui-recall-ready = { $count ->
+    [one] Ready · { $count } earlier message can be recalled
+   *[other] Ready · { $count } earlier messages can be recalled
+    }
+ui-recall-not-available = Not available · this conversation holds content that is not trusted
+ui-recall-unavailable-key = Unavailable · key refused
+ui-recall-unavailable-unreachable = Unavailable · the service could not be reached
+ui-recall-unavailable-failed = Unavailable · the service returned an error
+ui-recall-unavailable-out-of-time = Unavailable · the service did not answer in time
+ui-recall-fix-key = Check the embeddings key in Settings. Until then, this bot summarises long conversations as before.
+ui-recall-unconfigured = Not set up · choose an embeddings service in Settings
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

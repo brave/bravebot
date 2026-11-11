@@ -129,7 +129,7 @@ impl Emitter {
         };
         let snapshot = view.snapshot();
         hand_over()?;
-        let answer = (snapshot.state.sequence, snapshot.omitted);
+        let answer = (snapshot.sequence, snapshot.omitted);
         (output.sink)(Event::new(
             "session.view.snapshot",
             session,

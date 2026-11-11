@@ -4,8 +4,8 @@ description:
   'Review a HackerOne report against the code and the tracker, decide whether it should be
   awarded, and when it is a valid problem nobody knew about, sweep the tree for the same class of
   defect and draft an issue for the report and for every other site that fails, assigned to the
-  configured git author, filing them once the user agrees. Known, fixed, or already-posted
-  problems are not awarded. Triggers on:
+  configured git author, filing them once the user agrees. Known, fixed, already-posted, and
+  unreleased problems are not awarded. Triggers on:
   /hackerone-triage <paste>, HackerOne report, H1 report, bug bounty report, should this be
   awarded, review this bounty submission.'
 argument-hint: '<paste>'
@@ -23,10 +23,11 @@ $ARGUMENTS
 substitute `$ARGUMENTS`, it is the report text the user gave with the request.
 
 Review it to determine whether it should be awarded. **A problem that is already known about,
-already fixed, or already posted on GitHub is not awarded.** A valid problem that needs fixing
-and is none of those gets an issue, assigned to the configured git author, and is awarded. The
-issue is drafted and shown to the user, and nothing is posted to GitHub until they agree. Either
-way, tell the user the verdict.
+already fixed, already posted on GitHub, or in no release is not awarded.** A valid problem that
+needs fixing and is none of those gets an issue, assigned to the configured git author, and is
+awarded. A valid problem that only the unreleased `main` holds gets the same issues and is not
+awarded. The issue is drafted and shown to the user, and nothing is posted to GitHub until they
+agree. Either way, tell the user the verdict.
 
 ---
 
@@ -145,7 +146,32 @@ Size the finding with the `severity` table in
 hold on this path, `medium` where a precondition the attacker does not control is needed, `low`
 where nothing fails today.
 
-## Step 6: the verdict
+## Step 6: is it in a released build?
+
+An award needs the reported code to be in a release. Code that only `<remote>/main` holds has
+reached nobody who runs bravebot, and is fixed before it does. A release is a `v<version>` tag that
+`make github-release` pushes and GitHub lists as a published release
+([releasing.md](../../../docs/development/releasing.md)). What the report says about the affected
+version is a claim to check, like the rest of it.
+
+```bash
+git fetch <remote> --tags
+gh release list --repo brave/bravebot --exclude-drafts --limit 5
+git log <remote>/main --oneline -S '<symbol>' -- <path>
+git tag --contains <sha>
+git grep -n '<symbol>' <newest tag> -- crates/
+```
+
+Take `<sha>` from the commit that added the behaviour, found with the search from step 3. Read the
+code path on the newest tag as well, because a commit that moved the code can leave `--contains`
+listing nothing for code a release holds. The code is in a release when a tag lists the commit or
+the newest tag holds the path as the report describes it. Name the tag, or name the newest release
+and the commit that came after it.
+
+A tag whose binaries and npm package are not published yet is a release the process has named and
+not shipped. Say which it is and leave the award to the user.
+
+## Step 7: the verdict
 
 | Verdict | When | Awarded | Action |
 |---|---|---|---|
@@ -153,20 +179,24 @@ where nothing fails today.
 | **FIXED** | Does not happen on `<remote>/main` | No | Cite the commit |
 | **KNOWN** | Written down as a known cost or a deliberate behaviour | No | Cite the document and section |
 | **INVALID** | Does not reproduce, misreads the rule, or needs a precondition that is the attacker's goal already | No | Say which claim fails, with a file and line |
-| **VALID** | Reproduces on `<remote>/main`, needs fixing, and none of the above | Yes | Sweep the class, draft the issues, ask, then file them (step 7) |
+| **UNRELEASED** | Would be VALID, and no release holds the code (step 6) | No | Cite the commit and the newest release, then sweep, draft and file as for VALID, since the defect is fixed before the next release |
+| **VALID** | Reproduces on `<remote>/main`, is in a release, needs fixing, and none of the above | Yes | Sweep the class, draft the issues, ask, then file them (step 8) |
+
+UNRELEASED applies only to a report that would otherwise be VALID. A report that is a duplicate,
+fixed, known or invalid is that, whether or not a release holds the code.
 
 Where the evidence is split, for instance valid but only partly overlapping an existing issue,
 say so and leave the award to the user rather than rounding either way. Where the report is valid
 but the existing issue only covers part of it, draft the part that is new and name the existing
 issue in the body.
 
-## Step 7: sweep the class, draft the issues, then file them once the user agrees (VALID only)
+## Step 8: sweep the class, draft the issues, then file them once the user agrees (VALID and UNRELEASED only)
 
 ### Sweep the class
 
 A fix closes the input that was reported, and a check added with it stops a later diff from adding
 another. Neither covers the code that already exists, and the next report is usually another place
-in it. Every VALID report is therefore followed by a sweep of the tree for the same class of
+in it. Every VALID or UNRELEASED report is therefore followed by a sweep of the tree for the same class of
 defect. The sweep is finished before the issues are drafted, and every site it finds is filed in
 the same pass.
 
@@ -279,6 +309,8 @@ The body, written in the repository's own words rather than the reporter's:
 - What happens, and what it costs a person using bravebot.
 - The clause it breaks, quoted, where there is one.
 - The code path on `<remote>/main`, as file and symbol, with the line you read.
+- Which release tags hold the code, or that none does, with the newest release and the date it was
+  published (step 6).
 - Where the bytes come from and what the code does with them.
 - How to reproduce it from the tree.
 - The fix, where it is clear. It covers every variant of the class on this site, and names the
@@ -301,6 +333,7 @@ Write the body to a file. Then explain the finding to the user in plain words be
 they can decide without reading the body first:
 
 - what the report claims, and what you checked and reproduced;
+- whether a release holds the code, and so whether it is awarded (step 6);
 - who has to do what for it to matter, and what it buys an attacker;
 - why the severity is what you chose, and what else you considered;
 - whether it is a defect to fix or a behaviour that could be documented instead.
@@ -344,8 +377,9 @@ In this conversation, not on GitHub:
 
 1. **Award: yes, no, or your call**, on the first line.
 2. The verdict from the table and the one-sentence reason.
-3. The evidence: the issue number, the commit, the document section, or the file and line.
-4. For VALID: the explanation of the finding, the draft issues and the question whether to file
+3. The evidence: the issue number, the commit, the document section, or the file and line. For
+   UNRELEASED, the commit that added the code and the newest release that predates it.
+4. For VALID and UNRELEASED: the explanation of the finding, the draft issues and the question whether to file
    them (see "Ask before posting"). After they agree and they are filed, the URL of the issue,
    its labels, and who it is assigned to, and the severity with its reason, and the same for each
    sibling issue and the tracking issue filed with it.

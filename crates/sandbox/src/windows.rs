@@ -15,14 +15,17 @@
 //! profile is this run's alone, so what is left is an entry for a container that no
 //! longer exists rather than a standing grant to something still running.
 //!
-//! Subprocess denial is not enforceable here: a container bounds what a process reaches,
-//! not whether it creates children, and a child of a confined process is in the same
-//! container rather than outside it. A policy asking for that denial is refused
-//! ([`refusal_for`]) rather than applied without it.
+//! A container bounds what a process reaches, not whether it creates children, and a child of a
+//! confined process is in the same container rather than outside it. Subprocess denial is the job's:
+//! a policy that denies subprocesses puts a limit on the job of one active process, which is the
+//! process itself ([`job_limits`]).
 //!
 //! What a process starts is in its job as well. The process is created in a job of its own, which
 //! the creation call names, so it is in the job before it runs, and killing it ends every process it
 //! started. So does closing the job, which dropping the process and this process ending both do.
+//! The job also keeps the process from the clipboard, the global atom table, other desktops and the
+//! USER handles of processes outside the job. A job the platform will not limit that way is not
+//! made, and the process is not started ([`job_refusal`]).
 //!
 //! Compiled under test on every platform as well as on the one it confines, so what this
 //! backend decides before a process starts is pinned by every job that runs the suite:
@@ -174,17 +177,63 @@ pub(crate) fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
         });
     }
 
-    if !policy.allow_subprocesses {
-        return Some(SandboxError::SetupFailed {
-            mechanism: "appcontainer",
-            detail: "a container bounds what a process reaches and not whether it creates \
-                     children, so subprocess denial is not enforced here; refusing rather \
-                     than reporting confinement that is not applied"
-                .into(),
-        });
-    }
-
     None
+}
+
+/// `JOB_OBJECT_UILIMIT_HANDLES`: the job's processes may not use USER handles of processes
+/// outside the job.
+const UILIMIT_HANDLES: u32 = 0x1;
+/// `JOB_OBJECT_UILIMIT_READCLIPBOARD`.
+const UILIMIT_READCLIPBOARD: u32 = 0x2;
+/// `JOB_OBJECT_UILIMIT_WRITECLIPBOARD`.
+const UILIMIT_WRITECLIPBOARD: u32 = 0x4;
+/// `JOB_OBJECT_UILIMIT_GLOBALATOMS`: the job's processes get an atom table of their own.
+const UILIMIT_GLOBALATOMS: u32 = 0x20;
+/// `JOB_OBJECT_UILIMIT_DESKTOP`: no creating or switching desktops.
+const UILIMIT_DESKTOP: u32 = 0x40;
+
+/// What the job a process is created in limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JobLimits {
+    /// The `JOB_OBJECT_UILIMIT_*` flags in force.
+    ui: u32,
+    /// How many processes the job holds at once, the process itself counted, where it is bounded.
+    active_processes: Option<u32>,
+}
+
+/// What the job a process for `policy` is created in limits.
+///
+/// The UI limits are the same for every policy, since no program a stage runs is given the
+/// clipboard, another process's USER objects, a shared atom table or a desktop to switch to. The
+/// process limit is the whole of subprocess denial: it is one, the process itself, where the
+/// policy denies subprocesses, and absent where it allows them.
+fn job_limits(policy: &SandboxPolicy) -> JobLimits {
+    JobLimits {
+        ui: UILIMIT_HANDLES
+            | UILIMIT_READCLIPBOARD
+            | UILIMIT_WRITECLIPBOARD
+            | UILIMIT_GLOBALATOMS
+            | UILIMIT_DESKTOP,
+        active_processes: (!policy.allow_subprocesses).then_some(1),
+    }
+}
+
+/// The refusal for a job that could not be made or limited as [`job_limits`] says, where `cause` is
+/// what the platform reported.
+///
+/// A job that carries fewer limits than the policy asked for is the degradation SANDBOX-1 forbids,
+/// so the process is not started under it. That holds when this process is itself in a job whose
+/// rules the platform will not nest the limits under.
+fn job_refusal(cause: &dyn std::fmt::Display) -> SandboxError {
+    SandboxError::SetupFailed {
+        mechanism: "appcontainer",
+        detail: format!(
+            "the job that ends a process with everything it starts, and keeps it from the clipboard, \
+             the atom table, other desktops and other processes' USER handles, could not be made \
+             with its limits ({cause}); refusing rather than starting a program whose children \
+             would outlive it or that is not held to them"
+        ),
+    }
 }
 
 /// The paths `policy` names that `on_disk` says are not there, each named once.
@@ -288,7 +337,22 @@ fn grants_to_write(policy: &SandboxPolicy, readable_roots: &[PathBuf]) -> Vec<(P
 /// wherever they are left unquoted. It is started only where its reading and the line
 /// [`command_line`] writes agree: no argument holds a character in [`CMD_READS`], and the first
 /// argument after the switch is written quoted only when it is the last one.
+///
+/// Both decisions go by the file name as written, and Windows does not: it drops a dot or a space
+/// that ends a name, and reads what follows a `:` in it as a stream of the file. A program whose
+/// file name is spelled that way ([`is_normalised_by_windows`]) is refused outright, so the
+/// extension and `cmd.exe` tests are never made on a name other than the one that is started.
 pub fn refusal_for_program(program: &str, args: &[String]) -> Option<SandboxError> {
+    if is_normalised_by_windows(program) {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: format!(
+                "{program} ends its file name in a dot or a space or names a stream with a colon, \
+                 and Windows reads such a name as another file, so whether it is a batch file or \
+                 `cmd.exe` cannot be told from the name; refusing rather than starting it"
+            ),
+        });
+    }
     let is_a_batch_file = Path::new(program)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -355,8 +419,27 @@ const CMD_READS: [char; 15] = [
     '"', '&', '|', '<', '>', '^', '(', ')', '%', '!', '\n', '\r', ',', ';', '=',
 ];
 
+/// Whether the file name of `program`, the part after its last separator, ends in a dot or a space
+/// or holds a colon.
+///
+/// Windows drops the dot or space that ends a name and reads what follows a colon as a stream of
+/// the file, so `build.bat.`, `cmd.exe ` and `cmd.exe::$DATA` can each start the file the name
+/// without them names. A colon in a drive-relative `C:cmd.exe` is in the final component too. Only
+/// that component is judged: a drive's colon and a directory ending in a dot are in the part
+/// before it.
+fn is_normalised_by_windows(program: &str) -> bool {
+    let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+    name.ends_with(['.', ' ']) || name.contains(':')
+}
+
 /// Whether `program` is the command interpreter, spelled with or without its extension and in
-/// any directory.
+/// any directory. A name [`is_normalised_by_windows`] has been refused before this is asked, so
+/// the name compared is the one that is started.
+///
+/// The answer is the file name and nothing read from disk. A copy of `cmd.exe` under another name
+/// is not recognised, because no test of the file holds against the stage that wrote the copy
+/// (SANDBOX-4, "What it costs"). Reading no file also means the answer does not depend on what is
+/// on disk when the stage is prepared or when `CreateProcessW` runs.
 fn is_cmd(program: &str) -> bool {
     let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
     name.eq_ignore_ascii_case("cmd") || name.eq_ignore_ascii_case("cmd.exe")
@@ -388,12 +471,13 @@ pub fn text_of(program: &OsStr, args: &[OsString]) -> Result<(String, Vec<String
 /// What an AppContainer enforces here.
 fn capabilities() -> Capabilities {
     Capabilities {
-        // The filesystem and the network are both the kernel's decision: a lowbox token
-        // is denied every object whose list does not name the container, and egress needs
-        // a capability the token either carries or does not. Subprocess denial is not
-        // enforced, which is why this is not reported as full kernel confinement, and a
-        // policy asking for it is refused rather than run under this level.
-        level: ConfinementLevel::Partial,
+        // The filesystem, the network and the creation of children are all the kernel's decision: a
+        // lowbox token is denied every object whose list does not name the container, egress needs
+        // a capability the token either carries or does not, and a job holding a limit of one
+        // active process refuses a second. What this backend cannot do it reports in the fields
+        // below and refuses a policy that needs it, so the level is the one the other kernel
+        // backend reports.
+        level: ConfinementLevel::Kernel,
         mechanisms: vec!["appcontainer"],
         network_denial_enforced: true,
         egress_limited_to_a_port: false,
@@ -739,6 +823,94 @@ mod tests {
         }
     }
 
+    /// Windows drops a trailing dot or space from a file name and reads `:` in it as a stream,
+    /// so `build.bat.`, `cmd.exe ` and `cmd.exe::$DATA` can name the file the batch-file and
+    /// `cmd.exe` refusals are about. A final component spelled that way is refused whatever the
+    /// arguments are. The regression it rejects is a refusal decided on the name as written,
+    /// which finds no extension in `build.bat.` and no `cmd.exe` in the other two.
+    #[test]
+    fn a_program_name_windows_would_normalise_is_refused() {
+        for program in [
+            r"C:\tools\build.bat.",
+            r"C:\tools\build.bat ",
+            r"C:\tools\build.bat::$DATA",
+            r"C:\tools\build.bat:stream",
+            r"C:\tools\build.cmd.",
+            r"C:\Windows\System32\cmd.exe.",
+            r"C:\Windows\System32\cmd.exe ",
+            r"C:\Windows\System32\cmd.exe::$DATA",
+            r"C:\Windows\System32\cmd.exe:stream",
+            r"C:\Windows\System32\CMD.EXE...",
+            r"C:\Windows\System32\cmd.exe. .",
+            "cmd.exe.",
+            "cmd.",
+            "cmd ",
+            "C:/Windows/cmd.exe.",
+            r"C:cmd.exe",
+            r"C:\tools\x.exe.",
+            r"C:\tools\x.exe::$DATA",
+            r"C:\tools\.",
+        ] {
+            for args in [strings(&[]), strings(&["/c", "echo", "hello"])] {
+                assert!(
+                    matches!(
+                        refusal_for_program(program, &args),
+                        Some(SandboxError::SetupFailed {
+                            mechanism: "appcontainer",
+                            ..
+                        })
+                    ),
+                    "{program} {args:?}"
+                );
+            }
+        }
+    }
+
+    /// Only the final component is judged: a dot or a space ending a directory, and the colon of
+    /// a drive, name nothing Windows reads differently. The regression it rejects is a refusal
+    /// of every path holding a colon or a dot, which leaves no absolute program to start.
+    #[test]
+    fn a_program_path_whose_file_name_is_ordinary_is_not_refused_for_its_directories() {
+        for program in [
+            r"C:\tools\x.exe",
+            r"C:\dir.\x.exe",
+            r"C:\dir \x.exe",
+            r"\\?\C:\tools\x.exe",
+            r"\\server\share\x.exe",
+            "C:/tools/x.exe",
+            r"C:\tools\a.b.c",
+            r"C:\tools\build.bat.exe",
+            "git",
+            "x.exe",
+            r".\x.exe",
+            r"..\x.exe",
+        ] {
+            assert!(refusal_for_program(program, &[]).is_none(), "{program}");
+        }
+    }
+
+    /// `cmd.exe` is recognised by its final file name only. A program under another name gets the
+    /// quoting a program is given, whatever it is a copy of, and a directory called `cmd.exe` or a
+    /// name that merely holds `cmd` does not make its program `cmd.exe`. The regression it rejects
+    /// is a recognition that looks at the whole path or at part of a name, which refuses programs
+    /// that read their line through `CommandLineToArgvW`.
+    #[test]
+    fn only_the_final_file_name_makes_a_program_cmd() {
+        let args = strings(&["/c", "echo", "a&b"]);
+        for program in [
+            r"C:\tools\tool.exe",
+            r"C:\cmd.exe\x.exe",
+            r"C:\cmd\x.exe",
+            r"C:\tools\mycmd.exe",
+            r"C:\tools\cmd2.exe",
+            r"C:\tools\cmd.exe.bak",
+            "tool",
+        ] {
+            assert!(refusal_for_program(program, &args).is_none(), "{program}");
+        }
+        assert!(refusal_for_program(r"C:\Windows\System32\cmd.exe", &args).is_some());
+    }
+
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
@@ -1027,16 +1199,69 @@ mod tests {
         assert!(refusal.to_string().contains("one port"));
     }
 
-    /// A container does not stop a process creating children, so a policy asking for that
-    /// denial is refused. Applying the rest would run the program with the record saying
-    /// children were denied.
+    /// A policy denying subprocesses is applied rather than refused, because the job it is run in
+    /// holds a process limit. The regression it rejects is the refusal that stood in for the
+    /// missing mechanism, which would leave every stage of a policy without subprocesses
+    /// unstartable here.
     #[test]
-    fn a_policy_requiring_subprocess_denial_is_refused() {
+    fn a_policy_requiring_subprocess_denial_is_applied() {
         let policy = SandboxPolicy::strict().allow_read("/workspace");
+        assert!(!policy.allow_subprocesses);
 
-        let refusal = refusal_for(&policy).expect("subprocess denial is not enforceable here");
+        assert!(refusal_for(&policy).is_none());
+    }
+
+    /// A policy denying subprocesses puts the process limit on the job and one allowing them does
+    /// not. The regressions it rejects: a limit applied to every policy, which would stop a stage
+    /// starting the programs its policy allows, and a limit larger than one, which would let the
+    /// stage start a child. One is the process itself.
+    #[test]
+    fn the_job_bounds_processes_only_where_the_policy_denies_subprocesses() {
+        let denied = job_limits(&SandboxPolicy::strict().allow_read("/workspace"));
+        let allowed = job_limits(&a_policy_this_backend_applies());
+
+        assert_eq!(denied.active_processes, Some(1));
+        assert_eq!(allowed.active_processes, None);
+    }
+
+    /// Every policy's job keeps the clipboard (read and write), the global atom table, desktops and
+    /// USER handles of processes outside the job out of reach. The regression it rejects is a flag
+    /// left out of the set, which a stage would then use. Each is checked by name and by the value
+    /// the platform gives it, so a flag cannot be swapped for another one.
+    #[test]
+    fn the_job_carries_every_ui_limit_whatever_the_policy() {
+        for policy in [
+            SandboxPolicy::strict().allow_read("/workspace"),
+            a_policy_this_backend_applies(),
+        ] {
+            let ui = job_limits(&policy).ui;
+            for (name, flag) in [
+                ("handles", 0x01),
+                ("read clipboard", 0x02),
+                ("write clipboard", 0x04),
+                ("global atoms", 0x20),
+                ("desktop", 0x40),
+            ] {
+                assert_eq!(ui & flag, flag, "the {name} limit is not in the job");
+            }
+            // Limits that would stop a program running at all are not among them: the display
+            // settings, system parameters and exit-windows limits are left to the platform's
+            // default for a process that has no desktop to change.
+            assert_eq!(ui, 0x01 | 0x02 | 0x04 | 0x20 | 0x40);
+        }
+    }
+
+    /// A job the platform will not limit is a refusal that says what could not be had, so a stage
+    /// is not started under a job that holds fewer limits than the policy asked for. The regression
+    /// it rejects is a start that carries on without the limits, which would be silent.
+    #[test]
+    fn a_job_that_cannot_be_limited_refuses_the_stage_naming_the_cause() {
+        let refusal = job_refusal(&"access denied");
+
         assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
-        assert!(refusal.to_string().contains("refusing"));
+        let text = refusal.to_string();
+        assert!(text.contains("access denied"), "{text}");
+        assert!(text.contains("refusing"), "{text}");
     }
 
     /// The denial this backend does enforce must not be refused with the one it does not:
@@ -1233,7 +1458,7 @@ mod tests {
     #[test]
     fn capabilities_report_what_a_container_enforces() {
         let reported = capabilities();
-        assert_eq!(reported.level, ConfinementLevel::Partial);
+        assert_eq!(reported.level, ConfinementLevel::Kernel);
         assert!(reported.network_denial_enforced);
         assert!(!reported.egress_limited_to_a_port);
         assert!(!reported.grants_paths_that_do_not_exist);

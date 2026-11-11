@@ -495,9 +495,10 @@ The editor, a hook, the AWS CLI, the clipboard tools and `osascript` are also st
 those same entries only, in the order written, so a program any of them starts by name (an `env`
 shebang, an `$EDITOR` of `env vim`, or a bare `credential_process` command) is not found in a
 directory a stage may write. A program the editor, a hook, the CLI or a clipboard tool needs that lives only in such a directory,
-for example a tool run from a project's `node_modules/.bin`, is not found by it. `bravebot doctor --push-identity` looks up
-`ssh-keygen`, `ssh` and `git` the same way, leaving out the directory it ran in and the checkout
-holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials and
+for example a tool run from a project's `node_modules/.bin`, is not found by it. Every command leaves out the directory it ran in and the checkout
+holding it, so `bravebot schedule`, `bravebot auth login` and `bravebot auth status` start no program found only there.
+`bravebot doctor --push-identity` looks up
+`ssh-keygen`, `ssh` and `git` the same way, reports one found only there as absent, and starts them without Brave Bot's own credentials and
 with a `PATH` of those same entries only, so a `ProxyCommand` in your ssh configuration that names a bare
 program does not find one a stage wrote. The inhibitor `/caffeinate` starts is given a `PATH` of those
 same entries only as well, so a program `systemd-inhibit` starts by name is not found in a directory a
@@ -593,6 +594,10 @@ how Brave Bot quotes it. That is when an argument holds a quotation mark, `&`, `
 `(`, `)`, `%`, `!`, `,`, `;`, `=` or a line end, or when the first argument after `/c`, `/k` or
 `/r` is quoted and another follows it. Run the program directly instead. One argument after the
 switch still starts.
+
+A program whose file name ends in a dot or a space, or holds a colon, is refused, since Windows reads
+such a name as another file. `cmd.exe` is recognised by its file name, so a copy of it under another
+name is started like any program.
 
 ## Data collection, usage, and retention
 

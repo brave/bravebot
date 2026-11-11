@@ -51,7 +51,8 @@ export function startView(initial: ViewUpdate): ViewState {
  * Apply the next update: replace each listed row at its existing position (or append a new one)
  * and replace every status field. A sequence that is not the next one ends the view. Row ids
  * count from 1, so a row whose id is within `omitted` is one the view does not hold and is left
- * out. At most `retained` rows are kept. A view that is resyncing ignores updates: the snapshot it
+ * out. An update's `omitted` is the runtime's count of rows it no longer keeps; the view follows
+ * it, so it holds what a snapshot at the same sequence would. At most `retained` rows are kept. A view that is resyncing ignores updates: the snapshot it
  * waits for includes them.
  */
 export function applyUpdate(view: ViewState, update: ViewUpdate, retained = Infinity): ViewState {
@@ -59,11 +60,12 @@ export function applyUpdate(view: ViewState, update: ViewUpdate, retained = Infi
   if (update.sequence !== view.sequence + 1) {
     return endView(view, 'sequence_gap', `expected sequence ${view.sequence + 1}, received ${update.sequence}`)
   }
-  const rows = [...view.rows]
+  const omitted = Math.max(view.omitted, update.omitted ?? 0)
+  const rows = view.rows.filter((row) => row.id > omitted)
   const positions = new Map<number, number>()
   rows.forEach((row, at) => positions.set(row.id, at))
   for (const row of update.rows) {
-    if (row.id <= view.omitted) continue
+    if (row.id <= omitted) continue
     const at = positions.get(row.id)
     if (at === undefined) {
       positions.set(row.id, rows.length)
@@ -78,7 +80,7 @@ export function applyUpdate(view: ViewState, update: ViewUpdate, retained = Infi
     target: update.target,
     status: update.status,
     pending: update.pending,
-    ...bound(rows, view.omitted, retained),
+    ...bound(rows, omitted, retained),
     resyncing: false,
     ended: null,
   }

@@ -63,6 +63,7 @@ permissions-check-deny = refuser
 permissions-check-ask = demander
 permissions-check-allow = autoriser
 permissions-check-none = aucune règle ne correspond, les contrôles ordinaires décident
+permissions-check-short-name = refusé, car une règle de commande est en vigueur et un nom court 8.3 ne peut pas lui être comparé
 permissions-check-rule = règle
 permissions-check-file = fichier
 permissions-check-reason = raison
@@ -656,6 +657,9 @@ doctor-settings-language-ignored =
     language dans { $path } n'est pas appliqué : il n'est lu que depuis ~/.bravebot/settings.json
 doctor-settings-language-unmatched =
     language { $language } dans ~/.bravebot/settings.json ne désigne aucun catalogue, il choisit donc { $reference } ; les catalogues sont { $available }
+doctor-settings-retrieval-ignored =
+    retrieval dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -2391,7 +2395,7 @@ status-server-policy-subprocesses = sous-processus
 status-server-policy-subprocesses-allowed = autorisés
 status-server-policy-subprocesses-refused = refusés
 status-server-policy-starts-in = démarre dans
-status-server-policy-git = .git
+status-server-policy-git = noms protégés
 status-server-policy-git-held-back = non écrit sous une ligne en écriture
 status-server-policy-read = lecture
 status-server-policy-write = écriture
@@ -2574,6 +2578,7 @@ indicator-reconnecting-until = Reconnexion, prochain essai dans { $wait }, aband
 indicator-hook = Exécution du hook : { $program } ({ $moment })
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
+indicator-answering = Réponse à votre question /btw
 indicator-stopping = Arrêt en cours
 indicator-stopping-delegates = { $count ->
     [one] Arrêt en cours, en attente de { $count } délégué
@@ -3728,6 +3733,8 @@ btw-needs-a-question = /btw prend la question à poser, que la conversation ne l
 btw-stopped = la question a été arrêtée
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
+btw-asked-beside-a-turn = réponse à votre question /btw en cours à côté du tour ; { $chord } ouvre la réponse quand elle est prête
+btw-answered-beside-a-turn = votre question /btw a reçu une réponse ; { $chord } l'ouvre
 
 # Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
 # réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où

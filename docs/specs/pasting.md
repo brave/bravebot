@@ -19,6 +19,7 @@ governs:
   - ui/src/preload/index.ts
   - ui/src/renderer/staging.ts
   - ui/src/shared/pastes.ts
+  - ui/scripts/pastes.test.mjs
 guards:
   - symbol: Policy::admit_pasted_image
 documented-by: docs/website/docs/using/context.md

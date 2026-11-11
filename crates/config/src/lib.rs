@@ -29,6 +29,8 @@ pub mod env_var {
 
 pub mod brave_key;
 pub mod connectors;
+pub mod embeddings;
+pub mod embeddings_key;
 pub mod git_identities;
 pub mod hooks;
 pub mod install;
@@ -2390,6 +2392,9 @@ mod tests {
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&home).expect("scratch home");
         std::fs::create_dir_all(&cwd).expect("scratch cwd");
+        // A checkout of its own, so the scratch root's own place under the repository the tests
+        // run in does not make the named file the checkout's.
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
         let own = home.join("settings.json");
         std::fs::write(
             &own,
@@ -5518,6 +5523,71 @@ mod tests {
             "https://baked.invalid"
         );
         assert_eq!(endpoint(None, None), "https://from-the-file.invalid");
+    }
+
+    /// BACKEND-33 and BACKEND-35 through the composition: on a build that bakes nothing in, the
+    /// endpoints a checkout's files name reach neither the free endpoint nor the premium host, and
+    /// the person's own file, an exported value and the build still do. Read through
+    /// [`Settings::layered`], because [`Settings::parse`] is one root and never withholds a name
+    /// from a checkout.
+    #[test]
+    fn a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do() {
+        let root = testutil::scratch_dir("endpoints-through-the-composition");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = settings::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            &project_file,
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://checkout.invalid",
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.checkout.invalid"}}"#,
+        )
+        .expect("project file");
+        let keys_only = |name: &str| match name {
+            env_var::SIGNING_KEY => Some("test-signing-key".into()),
+            env_var::KEY_ID => Some("test-key-id".into()),
+            _ => None,
+        };
+
+        let checkout = Settings::layered(Some(home.clone()), Some(&cwd), None);
+        let err = resolved(&checkout, |_| None, keys_only).unwrap_err();
+        assert_eq!(err, ConfigError::Missing(env_var::ENDPOINT));
+        let config = resolved(&checkout, |_| None, complete_env).expect("configured");
+        assert_eq!(config.endpoint, "https://example.invalid");
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some(compiled_in_premium_endpoint("https://example.invalid"))
+        );
+
+        std::fs::write(
+            settings::user_settings_file(&home),
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://person.invalid",
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.person.invalid"}}"#,
+        )
+        .expect("user file");
+        let own = Settings::layered(Some(home), Some(&cwd), None);
+        let config = resolved(&own, |_| None, keys_only).expect("configured");
+        assert_eq!(config.endpoint, "https://person.invalid");
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some("https://premium.person.invalid")
+        );
+
+        // An exported value still outranks the person's file, and the build outranks the file.
+        let exported = |name: &str| match name {
+            env_var::ENDPOINT => Some("https://exported.invalid".to_string()),
+            _ => None,
+        };
+        let config = resolved(&own, exported, keys_only).expect("configured");
+        assert_eq!(config.endpoint, "https://exported.invalid");
+        let baked = |name: &str| match name {
+            env_var::ENDPOINT => Some("https://baked.invalid".to_string()),
+            other => keys_only(other),
+        };
+        let config = resolved(&own, |_| None, baked).expect("configured");
+        assert_eq!(config.endpoint, "https://baked.invalid");
     }
 
     /// BACKEND-35: where the build carries nothing, a name exported blank is what the configuration

@@ -16,6 +16,8 @@ governs:
   - ui/src/preload/index.ts
   - ui/src/renderer/staging.ts
   - ui/src/shared/drops.ts
+  - ui/scripts/sanitise.test.mjs
+  - ui/scripts/drops.test.mjs
 documented-by: docs/website/docs/using/context.md
 ---
 

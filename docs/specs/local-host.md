@@ -50,7 +50,7 @@ The host starts the client over a new channel when it starts. The client ending 
 <a id="HOST-3"></a>
 ### HOST-3: a client may ask only what is named
 
-The host answers the methods in `allowlist::OFFERED` with the parameters listed for each, and refuses every other method with `not_allowed`, including a method the bridge answers and one it does not. A parameter that the method's entry does not name is refused too: `turn.send` takes `session`, `prompt` and `messageId`, `run.reply` takes no `remember`, and `trust.reply` takes no `remember`. `trust.reply` is the one widening answer that is offered: the client is the program the person named, over a channel it shares with the host alone, so its answer is the person's own. A client that is not that is not offered it. Refused requests reach no bridge method.
+The host answers the methods in `allowlist::OFFERED` with the parameters listed for each, and refuses every other method with `not_allowed`, including a method the bridge answers and one it does not. A parameter that the method's entry does not name is refused too: `turn.send` takes `session`, `prompt` and `messageId`, `turn.lookup` takes `session` and `messageId`, `run.reply` takes no `remember`, and `trust.reply` takes no `remember`. `trust.reply` is the one widening answer that is offered: the client is the program the person named, over a channel it shares with the host alone, so its answer is the person's own. A client that is not that is not offered it. Refused requests reach no bridge method.
 
 Every method the bridge answers is either offered or listed in `allowlist::DENIED`. A test reads the bridge's dispatch and fails while it answers a method that neither list names, and while either list names one it does not answer, so a method added to the bridge is not reachable through the host until someone classifies it.
 
@@ -127,7 +127,7 @@ When the controller's connection ends the session stays open with no controller.
 <a id="HOST-8"></a>
 ### HOST-8: a request line has a limit
 
-The host queues each line for a connection, and a thread of the connection's own writes them, so a client that reads slowly holds up no turn and no other event. A queue of 1024 lines that is full ends the connection, as a client that far behind is treated as gone. It takes its sessions over again with `session.attach` to be sent where they stand ([HOST-11](#HOST-11)). A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
+The host queues each line for a connection, and a thread of the connection's own writes them, so a client that reads slowly holds up no turn and no other event. A queue of 1024 lines that is full, or one holding more than 16 MiB of lines the writer has not yet taken, ends the connection, as a client that far behind is treated as gone. A line of any length is queued while the lines waiting are within 16 MiB, so a long event and its view update, written back to back, do not end a connection that is keeping up. Only each line's length is counted; nothing in it is read. It takes its sessions over again with `session.attach` to be sent where they stand ([HOST-11](#HOST-11)). A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
 
 A request line is at most 8 MiB, newline excluded. A line that reaches the limit without ending ends the connection without being answered or dispatched. A line of exactly the limit is read. Bytes that arrive without their end of line before the client closes its end are not a request and are not run.
 
@@ -135,6 +135,9 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 `verified-by: bravebot_ui_bridge::host::a_request_at_the_limit_is_read`
 `verified-by: bravebot_ui_bridge::host::a_last_line_with_no_newline_is_not_run`
 `verified-by: bravebot_ui_bridge::host::a_client_that_never_reads_does_not_wedge_the_host`
+`verified-by: bravebot_ui_bridge::host::a_queue_past_its_byte_budget_ends_the_connection_and_one_long_line_alone_does_not`
+`verified-by: bravebot_ui_bridge::host::a_client_that_keeps_up_is_sent_more_than_the_byte_budget`
+`verified-by: bravebot_ui_bridge::host::a_long_event_and_its_view_update_are_queued_together`
 `verified-by: bravebot_ui_bridge::host::a_write_that_gives_up_ends_the_connection_the_host_is_reading`
 `verified-by: bravebot_ui_bridge::host::a_slow_client_holds_up_no_event_and_a_full_queue_ends_its_connection`
 `verified-by: bravebot_ui_bridge::host_process::quit_stops_the_host_while_a_client_is_connected`

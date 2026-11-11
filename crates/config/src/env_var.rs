@@ -23,6 +23,12 @@ pub const PREMIUM_ENDPOINT: &str = "BRAVE_AI_CHAT_PREMIUM_ENDPOINT";
 /// with whatever else wanted the name.
 pub const DEFAULT_MODEL: &str = "BRAVEBOT_DEFAULT_MODEL";
 
+/// Set to `1` to offer Brave's embeddings service to retrieval, which is otherwise left out until
+/// its endpoint is public.
+///
+/// Absent from ALL, so no build bakes it in: it is for whoever is working on that service.
+pub const BRAVE_EMBEDDINGS: &str = "BRAVEBOT_BRAVE_EMBEDDINGS";
+
 /// How many prompt tokens a conversation may reach before it is compacted.
 ///
 /// Deliberately absent from ALL, so it is never baked into a binary. The others are credentials
@@ -116,14 +122,28 @@ pub const BEDROCK: [&str; 6] = [
     BEDROCK_HAIKU_MODEL,
 ];
 
-/// Whether `name` is one of the network, Google or Bedrock names, which a checkout's files decide
-/// nothing for.
-pub fn is_person_only(name: &str) -> bool {
+/// The two names that choose which host receives a conversation and which host the premium
+/// credential is presented to (BACKEND-33), read from the person's own layers alone as [`NETWORK`]
+/// is: a checkout that named them would choose where the conversation and the credential go. On a
+/// build that bakes them in, the baked value outranks a file already (BACKEND-35); this covers a
+/// build from source, which bakes nothing.
+pub const ENDPOINTS: [&str; 2] = [ENDPOINT, PREMIUM_ENDPOINT];
+
+/// Every name a checkout's files decide nothing for: the network, Google, Bedrock and endpoint
+/// names. The one list the settings reader and [`is_person_only`] both use, so a set added here is
+/// withheld, reported and kept out of the merged `env` block everywhere at once.
+pub fn person_only() -> impl Iterator<Item = &'static str> {
     NETWORK
-        .iter()
-        .chain(&GOOGLE)
-        .chain(&BEDROCK)
-        .any(|listed| *listed == name)
+        .into_iter()
+        .chain(GOOGLE)
+        .chain(BEDROCK)
+        .chain(ENDPOINTS)
+}
+
+/// Whether `name` is one of the network, Google, Bedrock or endpoint names, which a checkout's
+/// files decide nothing for.
+pub fn is_person_only(name: &str) -> bool {
+    person_only().any(|listed| listed == name)
 }
 
 /// Every name a build may bake in, in the order `doctor` reports them.

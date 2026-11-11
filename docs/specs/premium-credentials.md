@@ -71,9 +71,11 @@ in front of an `@` is userinfo, not the host. An override holding a query or a f
 by the configuration, which keeps the host compiled in ([PREM-11](#PREM-11)), so the string requests
 are sent to and the string the decision reads are never two different hosts.
 
-**Why.** The Brave suffix test is what keeps a key off other hosts. A settings file in a checkout
-can set the premium endpoint override ([BACKEND-35](backends.md#BACKEND-35)), so the test has to hold
-for every value that file can hold. A key that reaches a host other than Brave's can be read there,
+**Why.** The Brave suffix test is what keeps a key off other hosts. The override is read from the
+person's own layers, the environment and the build, and not from a settings file in a checkout
+([BACKEND-33](backends.md#BACKEND-33)), so the test is not what keeps a cloned repository from
+choosing the host. It stays as the check on every value those sources can hold, a person's own
+included. A key that reaches a host other than Brave's can be read there,
 and it stays usable until Brave revokes it. A host that is not Brave's is a local model server or a
 private deployment somebody chose, and no key belongs near one.
 
@@ -213,9 +215,10 @@ in.
 
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is an optional override of the host. It is resolved by the order
 every other name is ([BACKEND-35](backends.md#BACKEND-35)): an exported variable, then the build,
-then a settings file's `env` block. It is a base the request path is appended to. A value that is
-not an `http://` or `https://` address, or that holds a query or a fragment, is not used, and the
-host compiled in stands. A port and a path are part of the base and are kept.
+then the `env` block of the person's own settings file. A project or local file in a checkout is not
+read for it ([BACKEND-33](backends.md#BACKEND-33)). It is a base the request path is appended to. A
+value that is not an `http://` or `https://` address, or that holds a query or a fragment, is not
+used, and the host compiled in stands. A port and a path are part of the base and are kept.
 
 The configuration holds the stored key ([PREM-14](#PREM-14)) only together with a premium host. On a
 build with none, a key that is stored is dropped rather than held, and a build with a host and no key
@@ -238,6 +241,7 @@ the free endpoint is a deployment the key does not belong to.
 `verified-by: bravebot_config::lib::a_malformed_premium_endpoint_is_not_used`
 `verified-by: bravebot_config::lib::a_premium_endpoint_with_a_query_or_a_fragment_is_discarded`
 `verified-by: bravebot_config::lib::a_premium_endpoint_with_a_port_and_a_path_is_kept`
+`verified-by: bravebot_config::lib::a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do`
 `verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
 `verified-by: bravebot_agent::subscription::a_key_is_presented_only_to_a_premium_host_that_is_braves`
 

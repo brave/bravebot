@@ -342,12 +342,25 @@ be argued upward is a tier that will be.
 Where nothing is handed over and nobody can refuse a use, the credential is on no tier. It is named
 where the capability is granted and recorded when it is used.
 
+A program run under one of the wrappers a deny or ask rule looks through (see
+[permissions.md](permissions.md#PERM-20)) is read as it is without one: `timeout 30 docker ps` and
+`env git push` name the container daemon and the logged-in `git` that `docker ps` and `git push`
+do. Each program the wrappers leave is read with the arguments it is given, so the words of the
+wrapper do not decide whether a tool is spent. The wrapper table is the one that rule matches
+through, read case-insensitively and as the permission rules read a program word
+([PERM-5](permissions.md#PERM-5)): without trailing dots and spaces, a `::$DATA` suffix and one
+`.exe`, `.com`, `.cmd` or `.bat`, on the wrapper names and on the program word alike.
+
 **Why.** A logged-in tool, a live socket and a metadata endpoint have no custody to rank and no
 bound to enforce, so placing them on the scale would put unbounded authority at the top of it. The
 one thing available before confinement is that nobody grants it thinking they granted less.
 
 `verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
 `verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
+`verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_named_as_it_is_without_one`
+`verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_judged_by_its_own_arguments`
+`verified-by: bravebot_core::ambient::a_wrapper_is_read_in_any_case_and_with_an_extension`
+`verified-by: bravebot_core::ambient::a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them`
 `verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`
@@ -1256,6 +1269,13 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   writes, so a client nobody listed is granted with only the blanket line about confinement said
   of it. Nothing is refused on the list, so what a gap costs is a sentence rather than a boundary,
   and the direction to be wrong in is naming something a line was not going to spend.
+
+- **A wrapper the table does not read hides the program under it from CRED-5.** The ambient reading
+  looks through the wrappers in the table and no further. A wrapper named by a path
+  (`/usr/bin/timeout 30 docker ps`) is not looked through, the file a wrapper resolved to is not
+  looked through, and `xargs` and `npx` are read by their own names alone, so `xargs docker ps`
+  names no container daemon. The line is granted with only the blanket sentence about confinement
+  said of it.
 
 - **The scan misses things, and silence proves nothing.** The rarity layer is advisory, history
   beyond the working tree is off by default, and a credential nobody has a pattern for is a

@@ -260,6 +260,67 @@ fn a_turn_is_refused_until_trust_has_been_answered() {
     );
 }
 
+/// A refusal is recorded under the send's id as an acceptance is. Sent again once the trust question
+/// is answered, the send is refused the same way, and a lookup says it was refused.
+#[test]
+fn a_send_refused_under_an_id_is_refused_again_under_it() {
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+    let send = json!({ "session": &handle, "prompt": "hello", "messageId": "early" });
+
+    assert_eq!(
+        call(&mut bridge, "turn.send", send.clone()),
+        Err(ErrorCode::BadRequest)
+    );
+    call(
+        &mut bridge,
+        "trust.reply",
+        json!({ "session": &handle, "trusted": false }),
+    )
+    .expect("answered");
+    assert_eq!(
+        call(&mut bridge, "turn.send", send),
+        Err(ErrorCode::BadRequest)
+    );
+    let looked = call(
+        &mut bridge,
+        "turn.lookup",
+        json!({ "session": &handle, "messageId": "early" }),
+    )
+    .expect("looked up");
+    assert_eq!(looked["state"], "refused", "{looked}");
+    assert_eq!(looked["error"]["code"], "bad_request", "{looked}");
+    assert_eq!(
+        call(
+            &mut bridge,
+            "turn.lookup",
+            json!({ "session": "s-none", "messageId": "early" })
+        ),
+        Err(ErrorCode::NoSuchSession)
+    );
+
+    // A tag the bridge refuses is a refusal of the send like any other, and recorded.
+    let tagged =
+        json!({ "session": &handle, "prompt": "hello", "messageId": "tagged", "composed": 7 });
+    assert_eq!(
+        call(&mut bridge, "turn.send", tagged),
+        Err(ErrorCode::BadRequest)
+    );
+    let looked = call(
+        &mut bridge,
+        "turn.lookup",
+        json!({ "session": &handle, "messageId": "tagged" }),
+    )
+    .expect("looked up");
+    assert_eq!(looked["state"], "refused", "{looked}");
+}
+
 #[test]
 fn trust_reply_needs_an_actual_boolean() {
     let (mut bridge, _) = harness();

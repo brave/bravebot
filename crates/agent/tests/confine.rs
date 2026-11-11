@@ -53,8 +53,23 @@ fn touch(file: impl std::fmt::Display) -> String {
     }
 }
 
+/// Where the directories of this suite are made, relative to this crate.
+///
+/// It holds nothing but this suite's directories. A stage that is given what a request would be
+/// granted (SANDBOX-28) holds a write row and a socket row for every entry of `/`, of each
+/// directory above the home and of the home, and Seatbelt takes longer than linearly to compile
+/// those rows: a profile of about 2000 rows takes seconds, and one run starts a stage for every
+/// line. `target/test-scratch` is shared by every test binary and keeps what each of them made, so
+/// a home beneath it takes a row for each of those entries, which took a run of this suite from
+/// seconds to minutes on a checkout that had run many tests.
+const SCRATCH: &str = "../../target/confine-scratch";
+
+/// The directory the other test binaries keep their scratch directories in.
+#[cfg(unix)]
+const SHARED_SCRATCH: &str = "../../target/test-scratch";
+
 /// A session directory, a second one beside it that the session was not opened on, and a home
-/// directory holding a credential of each kind, all under the build directory.
+/// directory holding a credential of each kind, all under [`SCRATCH`].
 struct Places {
     session: PathBuf,
     beside: PathBuf,
@@ -111,7 +126,7 @@ impl Places {
         #[cfg(windows)]
         hold_path_to_what_every_container_reads();
         let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
+            .join(SCRATCH)
             .join(format!("confine-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let session = top.join("session");
@@ -1161,6 +1176,45 @@ fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
     }
 }
 
+/// SANDBOX-28 under bypass: the rows a stage is given for the directories above the home do not
+/// include an entry of the directory every test binary keeps its scratch in. The regression it
+/// rejects is a home made under `target/test-scratch`, where each entry another test left becomes
+/// a write row and a socket row, and a stage takes minutes to start once a few thousand are
+/// there. The decoys stand for those entries, so the check does not depend on what has run before.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_holds_no_row_for_what_other_tests_keep_in_the_shared_scratch_directory() {
+    let shared = Path::new(env!("CARGO_MANIFEST_DIR")).join(SHARED_SCRATCH);
+    let decoys: Vec<PathBuf> = (0..40)
+        .map(|number| shared.join(format!("confine-decoy-{}-{number}", std::process::id())))
+        .collect();
+    for decoy in &decoys {
+        std::fs::create_dir_all(decoy).expect("a decoy directory");
+    }
+    let places = Places::new("scratch-rows");
+    let rows = bravebot_sandbox::rules::writable_without_a_request(&places.home, None);
+    for decoy in &decoys {
+        let _ = std::fs::remove_dir_all(decoy);
+    }
+
+    let shared = resolved(&shared);
+    let inside: Vec<&PathBuf> = rows.iter().filter(|row| row.starts_with(&shared)).collect();
+    assert!(
+        inside.len() <= 1,
+        "{} rows lie in {}, the first {:?}",
+        inside.len(),
+        shared.display(),
+        inside.iter().take(3).collect::<Vec<_>>()
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with(&places.beside)
+            || row.starts_with(&places.session)
+            || places.home.starts_with(row)),
+        "no row reaches the directories of the suite itself, {} rows",
+        rows.len()
+    );
+}
+
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
 /// regression it rejects is a row wide enough to cover a credential location, a file a shell or
 /// git runs later, a per-user job, the home directory's own entries, or the directory above it.
@@ -1979,6 +2033,70 @@ fn a_denied_entry_under_the_session_stops_the_stage() {
     assert!(
         matches!(&refused, Err(exec::ExecError::NotConfined { .. })),
         "the stage started: {refused:?}"
+    );
+}
+
+/// SANDBOX-12 and TRUST-14 through the agent, on Windows: with a session directory of its own, the
+/// stage can make a directory in the session's `temp` directory, and it cannot make one in the
+/// account's temporary directory, which its `TEMP` and `TMP` do not name. The regression it rejects
+/// is a stage that still gets the account's `%TEMP%` (granting it, and writing an entry onto
+/// everything in it). The write in the session's directory is the control that the refusal in the
+/// account's is not made for every temporary directory. Whether the stage's `TEMP` names the
+/// session's directory is not asserted, since a container was seen to be given its own.
+#[cfg(windows)]
+#[test]
+fn a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("session-temp");
+    let made = bravebot_agent::scratch::SessionScratch::create().expect("a session directory");
+    let directory = made
+        .directory()
+        .expect("a directory that can be told again");
+    let confinement = Confinement::here(
+        vec![places.session.clone()],
+        Some(&directory),
+        Some(&places.home),
+    )
+    .expect("a platform with a base");
+    let own = resolved(made.path()).join("temp");
+    let account_temp = resolved(&std::env::temp_dir());
+
+    // Observed on the Windows runner: `set TEMP` in a container names the container's own
+    // `AC\Temp`, not the directory the agent passed. The property that matters is that the name
+    // is not the account's temporary directory, so that is what is asserted, and the name seen is
+    // printed (#3883).
+    for name in ["TEMP", "TMP"] {
+        let ran = places.run(&format!("cmd /c set {name}"), Some(&confinement));
+        eprintln!("{name} in the stage: {}", ran.stdout.trim());
+        assert!(
+            ran.stdout.contains('='),
+            "{name} is not set in the stage: {}",
+            ran.stdout
+        );
+        assert!(
+            !ran.stdout
+                .to_lowercase()
+                .contains(&format!("{name}={}", account_temp.display()).to_lowercase()),
+            "{name} names the account's temporary directory: {}",
+            ran.stdout
+        );
+    }
+    let inside = own.join("made-by-a-stage");
+    let ran = places.run(&touch(inside.display()), Some(&confinement));
+    assert!(ran.ended_well, "the session's temp was not writable");
+    assert!(inside.is_dir());
+
+    // Nothing but a name is made here, and the stage is expected to be refused it.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let account = std::env::temp_dir().join(format!("bravebot-refused-{}", std::process::id()));
+    let refused = places.try_run_given(&touch(account.display()), Some(&confinement), None);
+    let reached = account.exists();
+    let _ = std::fs::remove_dir_all(&account);
+    assert!(
+        !reached && !refused.is_ok_and(|ran| ran.ended_well),
+        "a stage wrote the account's temporary directory"
     );
 }
 

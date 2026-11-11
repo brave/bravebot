@@ -79,6 +79,15 @@ test('a view update whose target is not a count is refused, and an absent one re
   assert.equal(decodeUpdate(update).target, 0)
 })
 
+test('a view update whose omitted count is not a count is refused, and an absent one is left absent', () => {
+  for (const omitted of ['3', -1, 1.5, null]) {
+    assert.throws(() => decodeUpdate({ ...(contract.update as object), omitted }), ProtocolError, String(omitted))
+  }
+  const update = structuredClone(contract.update) as Record<string, unknown>
+  delete update.omitted
+  assert.equal('omitted' in decodeUpdate(update), false)
+})
+
 test('an absent capability, or one that is not version 1, is not read as supported', () => {
   assert.equal(readSessionViewCapability({}), null)
   assert.equal(readSessionViewCapability({ capabilities: {} }), null)

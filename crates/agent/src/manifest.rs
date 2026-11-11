@@ -601,12 +601,15 @@ fn template(plan: &Manifest) -> String {
 /// question that has to be answered before anything runs, and the record left behind. A step
 /// described one way in the question and another in the record leaves nobody able to say afterwards
 /// what was approved.
+///
+/// The files a step names are drawn through [`crate::confirm::shown_name`], as every other prompt
+/// draws a file. Which fields those are is the tool's contract, never the value.
 fn numbered(plan: &Manifest, index: usize) -> String {
     format!(
         "{}. [{}] {}",
         index + 1,
         plan.steps()[index].tier(),
-        plan.describe_step(index)
+        plan.describe_step_spelled(index, &crate::confirm::shown_name)
     )
 }
 
@@ -1401,9 +1404,14 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 step.tool()
             )));
         };
-        let activity = Activity::running(entry.capability, step.describe())
-            .for_call(crate::report::CallId::next())
-            .of_tool(step.tool());
+        // Spelled as the summary, the question and the record spell it. The activity does not say
+        // it names a file, so its screen does not spell the line a second time.
+        let activity = Activity::running(
+            entry.capability,
+            plan.describe_step_spelled(index, &crate::confirm::shown_name),
+        )
+        .for_call(crate::report::CallId::next())
+        .of_tool(step.tool());
         reporter.tool_started(activity.clone());
 
         // Wrapped per step for the same reason the turn loop wraps per call: the borrow has to go
@@ -2299,7 +2307,7 @@ fn write<S: Sink, C: Confirmer>(
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
-    let (existing, pre_image, other_encoding, replaces, approved_revision) =
+    let (existing, pre_image, other_encoding, replaces, approved_at) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&path);
             let peeks = workspace.peek_labelled_for_write(policy, &path);
@@ -2308,7 +2316,7 @@ fn write<S: Sink, C: Confirmer>(
                 peeks.1,
                 peeks.2,
                 workspace.names_a_file(&path),
-                capture.revision_of(&key),
+                capture.stamp_of(&key),
             )
         });
     // The same refusal a turn's write makes (WRITE-8): a vouched file in another encoding is not
@@ -2425,7 +2433,7 @@ fn write<S: Sink, C: Confirmer>(
             policy,
             &Labelled::trusted(path.clone()),
             &body,
-            Some(approved_revision),
+            Some(approved_at),
         )
         .map_err(|e| e.to_string())?;
 
@@ -2446,6 +2454,94 @@ fn write<S: Sink, C: Confirmer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::confirm::shown_name;
+
+    /// A plan whose only file-naming steps use `names` as the path of a read and a write.
+    fn plan_naming(names: &[&str]) -> Manifest {
+        let mut steps = Vec::new();
+        for (index, name) in names.iter().enumerate() {
+            steps.push(
+                DraftStep::new("read_file")
+                    .with_text("path", *name)
+                    .with_text("out_slot", format!("s{index}")),
+            );
+        }
+        steps.push(
+            DraftStep::new("write_file")
+                .with_text("path", names[0])
+                .with_text("contents", "body"),
+        );
+        adopted(Draft::new(steps))
+    }
+
+    /// A draft the policy accepts as a plan, trusted as a test's own words are.
+    fn adopted(draft: Draft) -> Manifest {
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+        policy
+            .adopt_manifest(&Labelled::trusted(draft))
+            .expect("a plan that validates")
+    }
+
+    /// PROMPT-1, MANIFEST-10: a step that names a file draws it as every other prompt does, so a
+    /// name with a space at its end, or with a bidirectional control in it, does not read as the
+    /// name it resembles, and an ordinary name reads as it always did. The spelling follows the
+    /// contract's `path` field, so the step's other words are drawn as they were.
+    #[test]
+    fn a_plan_step_draws_a_file_name_spelled() {
+        let plan = plan_naming(&["note.md ", "\u{202e}md.eton", "README.md"]);
+        let lines: Vec<String> = (0..plan.len())
+            .map(|index| numbered(&plan, index))
+            .collect();
+        assert_eq!(
+            lines[0],
+            format!("1. [fetch] read {} into s0", shown_name("note.md "))
+        );
+        assert!(lines[0].contains("\"note.md"), "{}", lines[0]);
+        assert!(!lines[0].contains("note.md "), "{}", lines[0]);
+        assert!(lines[1].contains("\\u{202e}"), "{}", lines[1]);
+        assert!(!lines[1].contains('\u{202e}'), "{}", lines[1]);
+        assert_eq!(lines[2], "3. [fetch] read README.md into s2");
+        assert!(
+            lines[3].contains(&shown_name("note.md ")) && lines[3].starts_with("4. [act] write "),
+            "{}",
+            lines[3]
+        );
+        assert_ne!(
+            numbered(&plan_naming(&["note.md "]), 0),
+            numbered(&plan_naming(&["note.md"]), 0)
+        );
+        assert_ne!(
+            numbered(&plan_naming(&["a  b.md"]), 0),
+            numbered(&plan_naming(&["a b.md"]), 0)
+        );
+        assert!(
+            numbered(&plan_naming(&["a  b.md"]), 0).contains("a  b.md"),
+            "{}",
+            numbered(&plan_naming(&["a  b.md"]), 0)
+        );
+    }
+
+    /// MANIFEST-10: the summary, the question and the record show a step alike, spelled the same,
+    /// so nobody can say afterwards that the line they were asked is not the line that was kept.
+    #[test]
+    fn the_summary_the_question_and_the_record_spell_a_step_alike() {
+        let plan = plan_naming(&["note.md "]);
+        let line = numbered(&plan, 0);
+        assert!(template(&plan).contains(&format!("  {line}\n")));
+        let mut attempt = Attempt::default();
+        attempt.stepped(&plan, 0, "read");
+        assert_eq!(attempt.steps, vec![format!("{line}: read")]);
+        assert!(line.contains(&shown_name("note.md ")), "{line}");
+    }
 
     /// The registry advertises what the schema validates. A capability offered here but unknown
     /// there would be refused after the planner had already used it, and a tool the schema knows
@@ -2715,19 +2811,7 @@ mod tests {
                 .with_text("out_slot", "b"),
             fetch("gmail", "c"),
         ]);
-        let mut sink = bravebot_core::event::RecordingSink::new();
-        let mut routing = bravebot_core::policy::Routing::new();
-        routing.insert_trusted("task", "test");
-        let mut policy = Policy::begin(
-            routing,
-            ReleasePlan::new(),
-            CapabilitySet::none(),
-            &mut sink,
-        )
-        .expect("policy");
-        let plan = policy
-            .adopt_manifest(&Labelled::trusted(draft))
-            .expect("a plan");
+        let plan = adopted(draft);
         assert_eq!(
             connector_grants(&plan),
             vec![
@@ -2735,5 +2819,181 @@ mod tests {
                 Capability::Connector(ConnectorName::new("gmail")),
             ]
         );
+    }
+
+    /// TRUST-4 at a planned write: the stamp is taken beside the pre-image and the yes is spent
+    /// only while the path still has it.
+    mod writing_after_a_question {
+        use super::*;
+        use crate::confirm::{
+            CallDecision, Confirmer, RunDecision, RunRequest, Unattended, WriteDecision,
+        };
+        use bravebot_core::file_authority::FileAuthority;
+
+        /// Answers a write yes, after starting a `run` line when it holds an authority to start
+        /// one on. A plan has no step that starts a program, so the line stands for one a
+        /// delegate started beside the run. Every other question is Unattended's.
+        struct SaysYes {
+            starts_a_program_on: Option<FileAuthority>,
+        }
+
+        impl Confirmer for SaysYes {
+            fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+                if let Some(authority) = self.starts_a_program_on.take() {
+                    authority.note_program_started();
+                }
+                WriteDecision::approve()
+            }
+            fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+                Unattended.confirm_run(request)
+            }
+            fn confirm_read_output(&mut self, request: &crate::confirm::OutputRequest) -> Decision {
+                Unattended.confirm_read_output(request)
+            }
+            fn confirm_vetted_read(&mut self, request: &crate::confirm::VetRequest) -> Decision {
+                Unattended.confirm_vetted_read(request)
+            }
+            fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+                Unattended.confirm_fetch(request)
+            }
+            fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+                Unattended.confirm_server(request)
+            }
+            fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+                Unattended.confirm_manifest(request)
+            }
+            fn confirm_vouch(&mut self, request: &crate::confirm::VouchRequest) -> Decision {
+                Unattended.confirm_vouch(request)
+            }
+            fn confirm_exposing_read(
+                &mut self,
+                request: &crate::confirm::ExposureRequest,
+            ) -> Decision {
+                Unattended.confirm_exposing_read(request)
+            }
+            fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+                Unattended.confirm_tool_list(request)
+            }
+            fn confirm_mcp_call(
+                &mut self,
+                request: &crate::confirm::McpCallRequest,
+            ) -> CallDecision {
+                Unattended.confirm_mcp_call(request)
+            }
+            fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+                Unattended.confirm_path(request)
+            }
+            fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+                Unattended.confirm_host(request)
+            }
+            fn confirm_message(
+                &mut self,
+                request: &crate::confirm::MessageRequest,
+            ) -> crate::confirm::MessageDecision {
+                Unattended.confirm_message(request)
+            }
+            fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+                Unattended.confirm_move(request)
+            }
+            fn ask_user(
+                &mut self,
+                asking: &bravebot_core::ask::Asking,
+            ) -> Vec<bravebot_core::ask::Answer> {
+                Unattended.ask_user(asking)
+            }
+            fn interjection(&mut self) -> Option<String> {
+                Unattended.interjection()
+            }
+        }
+
+        /// Runs a planned write over `a.txt`, which nobody vouched for, with a person who says
+        /// yes. Returns what the file holds afterwards and the step's error, if it had one.
+        fn write_step(starts_a_program: bool) -> (String, Option<String>) {
+            let root = crate::testutil::scratch_dir(&format!(
+                "bravebot-manifest-write-{starts_a_program}"
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("a.txt"), "original\n").unwrap();
+            let workspace = Workspace::new(&root).expect("workspace");
+
+            let draft = Draft::new(vec![
+                DraftStep::new("write_file")
+                    .with_text("path", "a.txt")
+                    .with_text("contents", "replaced\n"),
+            ]);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut planning_routing = Routing::new();
+            planning_routing.insert_trusted("task", "test");
+            let mut planning = Policy::begin(
+                planning_routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let plan = planning
+                .adopt_manifest(&Labelled::trusted(draft))
+                .expect("a plan");
+            drop(planning);
+
+            let mut routing = Routing::new();
+            for (key, value) in plan.routing() {
+                routing
+                    .insert(key, Labelled::new(value, Label::trusted_public()))
+                    .expect("routing");
+            }
+            let authority =
+                bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work"));
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_file_authority(authority.clone());
+            let mut person = SaysYes {
+                starts_a_program_on: starts_a_program.then_some(authority),
+            };
+            let outcome = write(
+                &mut policy,
+                &workspace,
+                crate::findings::Recording::default(),
+                &SlotStore::new(),
+                &mut person,
+                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                0,
+                &plan.steps()[0],
+            );
+            let kept = std::fs::read_to_string(root.join("a.txt")).unwrap();
+            drop(policy);
+            let _ = std::fs::remove_dir_all(&root);
+            (kept, outcome.err())
+        }
+
+        /// A `run` line that started while the person was asked about a planned write voids the
+        /// yes. Rejects a step that compares the path's revision alone, which a program that
+        /// opens files the line does not name leaves where it was, and one that takes the stamp
+        /// after the answer.
+        #[test]
+        fn a_run_that_started_while_a_planned_write_was_being_asked_voids_the_yes() {
+            let (kept, error) = write_step(true);
+            assert_eq!(kept, "original\n", "a voided yes overwrote the file");
+            assert!(
+                error.is_some_and(|error| error.contains("may have changed")),
+                "the step did not say the yes was voided"
+            );
+        }
+
+        /// The control: with no line started, the same yes is spent and the write lands, so a
+        /// test that never wrote could not pass the one above.
+        #[test]
+        fn a_planned_write_is_made_when_no_run_started_while_it_was_being_asked() {
+            let (kept, error) = write_step(false);
+            assert_eq!(error, None);
+            assert_eq!(kept, "replaced\n");
+        }
     }
 }

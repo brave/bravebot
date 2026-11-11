@@ -280,7 +280,9 @@ as `\u{..}`, so a name holding one does not draw as another name.
 The directory the line ran in and the file each redirection names are told in the words the planner
 wrote, with a `..` that lands in an added directory told as the workspace spells it for the file
 tools. Where a link in that tree led is a name whoever wrote the tree chose, so it is drawn for the
-person and never spelled into a sentence for the planner.
+person and never spelled into a sentence for the planner. That holds for a file a substitution's own
+line could not open as well ([CMDLINE-17](#CMDLINE-17)): it is named once, under the directory as
+typed.
 
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
@@ -327,6 +329,12 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_credential_refusal_names_the_redirection_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_refused_redirection_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::an_unopened_redirection_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
+`verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
+`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
@@ -383,6 +391,30 @@ destination is held to its definition's `writes:` limit as a tool's write is
 `verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target`
 
+The rules written in advance are asked again at the same moments, and not the confinement alone. The
+permission rules ([PERM-7](../permissions.md#PERM-7)) and a delegate's `writes:` limit
+([DELEGATE-28](../delegation.md#DELEGATE-28)) are asked about a destination immediately before each
+open, including one the line has already opened once, and whether or not the line has a profile.
+They are asked about the file the name lands on at that moment and about each other name that file
+has, a hard link included, as they were asked when the line was compiled. A link or a hard link that
+an earlier part of the line left at the name approved therefore reaches the same refusal as the file
+named directly. A rule or limit that covers the file refuses the open and the line stops there. The
+planner is told what the check before the line would have told it, under the destination as the line
+spelled it under the directory as typed and not under the file it landed on. A destination inside a
+command substitution is opened by the same run and takes the same check. A `<` source takes the
+`Read` rules again in the same way. The asks are made at every open and are not remembered, so the
+search for a file's other names is repeated for each; that cost is accepted. The check compares
+names, settings and file-system identity, never the bytes of a file.
+
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_hard_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_that_reads_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_destination_reopened_after_an_earlier_part_linked_it_to_the_file`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_when_the_sandbox_is_off`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_inside_a_substitution_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_limited_delegate_cannot_redirect_through_a_link_its_own_line_made_out_of_its_files`
+`verified-by: bravebot_agent::tools::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
+
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
 standard-input gate of [run.md](run.md#RUN-6) whichever file it names. `2>&1` renames a
@@ -405,6 +437,12 @@ no effect and changes no decision. A failed attempt to open a destination is con
 its possible effects; an approval alone changes nothing.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
+`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
+`verified-by: bravebot_agent::tools::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
+`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it`
+`verified-by: bravebot_agent::tools::a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
 
 **What the one direction costs.** A destination a vouched-for line overwrote stays untrusted until
 a person says otherwise, so reading it back is quarantined and costs a prompt. Recording a path as
@@ -525,21 +563,28 @@ claim as the other entries. `sort` spills to scratch files under `TMPDIR` holdin
 given, named by the program rather than by the call. BSD `cat` connects to a Unix socket named as an
 operand, which the table cannot see because it has no file types to look at.
 
-A stage whose program resolves to a file inside the workspace is not read-proven, and neither is one
-whose line named a path rather than a program, one carrying an environment assignment, or one opening
+A stage whose program resolves to a file inside the workspace, or inside any directory that is not
+the system's, is not read-proven, and neither is one whose line named a path rather than a program, one carrying an environment assignment, or one opening
 a file for a stream. The table's entries are claims about the programs a system provides under those
 names and are matched on the name a program resolved to, which identifies no file: so a file called
 `wc` in the tree being inspected would answer as the audited one, and it reaches that answer whether
 the line pointed at it or a name did. `$PATH` decides what a name means, so a project directory on it
 is enough for a file a contributor added to be what an audited name runs, and `PATH_add bin` in a
-project's own `.envrc` puts one there. The workspace test is therefore made against the path the
-driver resolved and will execute rather than against the spelling that reached it: those are two
-values, and only the first says where the file is. An assignment decides what a program loads and
+project's own `.envrc` puts one there. The directories that are not the system's are the working
+directory, the checkout holding it (a session begun in a subdirectory has the `bin` above it on
+`$PATH`), every directory added by name or left with `/cd`, a directory a stage was granted to write,
+and, for a delegate working in a checkout, the working directory the checkout was made from
+(see [checkouts](../checkouts.md)). The checkout is the nearest of the directory and its ancestors
+that holds a `.git`, found as [SANDBOX-30](../sandboxing.md#SANDBOX-30) finds the one it leaves out
+of the search for programs. The agent computes the set from the directories the person opened and
+hands it to the policy as it hands the root. The test is made against the path the driver resolved
+and will execute rather than against the spelling that reached it: those are two values, and only
+the first says where the file is. An assignment decides what a program loads and
 reads before its own arguments are looked at, and a redirection opens a file the argv does not name,
 so neither is covered by an audit of an option surface. Joining standard error to standard output
 renames a descriptor and opens nothing, so it is not a redirection for this purpose.
 
-A `$PATH` directory outside the workspace is honoured whatever the trust map holds about it, since
+A `$PATH` directory outside that set is honoured whatever the trust map holds about it, since
 the audited utilities live in one: Homebrew installs to its own prefix and Nix to a store path, and
 neither is a directory anybody wrote a rule about.
 
@@ -639,6 +684,17 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
 `verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_in_the_checkout_above_the_working_directory_is_not_proven`
+`verified-by: bravebot_core::policy::a_delegate_in_a_checkout_is_refused_programs_from_the_directory_it_was_made_from`
+`verified-by: bravebot_core::policy::a_program_in_a_directory_the_session_left_is_not_proven`
+`verified-by: bravebot_core::policy::the_set_leaves_the_results_for_the_directory_alone_as_they_were`
+`verified-by: bravebot_agent::workspace::the_directories_a_program_may_not_resolve_into_follow_the_session`
+`verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_may_not_resolve_a_program_into_the_working_directory`
+`verified-by: bravebot_agent::tools::a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set`
+`verified-by: bravebot_agent::proof_road_checkout::a_program_reached_through_a_link_into_the_checkout_above_the_directory_is_asked_about`
+`verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_directory_a_remembered_grant_lets_a_stage_write_is_asked_about`
+`verified-by: bravebot_agent::programs::a_relative_path_entry_is_read_under_the_working_directory`
 `verified-by: bravebot_core::policy::a_plan_with_no_steps_proves_nothing`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
 `verified-by: bravebot_core::policy::a_line_reading_a_directory_holding_the_project_answers_for_the_project`
@@ -666,7 +722,8 @@ from being asked, and if the table is wrong somewhere then something ran that no
 mitigations are that the table is small, hand-audited per program against its full option list, and
 fails closed on any argv it does not fully recognise. A file name match is not one of them and is not
 sufficient on its own: a name is not a program, so the file the name resolved to has to lie outside
-the workspace as well, and only where the line named a program rather than a path.
+the workspace and the rest of the set [CMDLINE-8](#CMDLINE-8) lists as well, and only where the line
+named a program rather than a path.
 [CMDLINE-8](#CMDLINE-8) stands on its own without this clause and still removes the second round
 trip; what this clause adds is the first prompt, not the readable output.
 
@@ -688,6 +745,8 @@ trip; what this clause adds is the first prompt, not the readable output.
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
 `verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_in_the_checkout_above_the_working_directory_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 
 <a id="CMDLINE-10"></a>
 ### CMDLINE-10: output comes back as text whenever the planner may read it
@@ -980,11 +1039,20 @@ written or printed.
 permission checks, redirection and write-set handling as any stage, and what it reads and writes is
 in the plan's sets. It runs as an earlier stage, in the same directory, under the same deadline,
 cancellation, confinement and scrubbed environment as the stage that uses it, with no standard
-input. A job started in the background works its substitutions out before its first stage starts,
-under the `run` call's own cancellation and deadline: a cancel ends the substitution and starts
-nothing, and one that outlasts the deadline is refused naming its source. The job it starts is not
-held to that deadline. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
+input. A job started in the background, where the line may be one ([RUN-15](run.md#RUN-15)), works
+its substitutions out before its first stage starts, under the `run` call's own cancellation and
+deadline: a cancel ends the substitution and starts nothing, and one that outlasts the deadline is
+refused naming its source. The job it starts is not held to that deadline. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
 `cmd` is reported as that refusal.
+
+**A redirection inside a substitution is a redirection of the line.** `cmd` opens its destinations
+and sources at the same moment the line's own stages do. The checks made when one is opened
+([CMDLINE-5](#CMDLINE-5)), the refusal to read a store ([RECALL-8](../recall.md#RECALL-8)) and the
+trust map's entry for a destination are made on the path a foreground line takes when it cannot be
+moved, and the path of a background job and of a movable line does not make them. A line with a `>`,
+`>>`, `<` or `2>&1` inside a substitution is therefore refused with `background: true` like a line
+with one of its own, and it is not offered to be moved to the background
+([RUN-25](run.md#RUN-25)). A substitution with no redirection changes neither answer.
 
 **A variable that is withheld is refused.** A name `bravebot_config::scrub::withheld()` returns,
 which includes this agent's own credentials and the names in `run.scrubEnv`, is refused when the
@@ -994,13 +1062,24 @@ variable set to `v-\xff` is refused as not valid text; one set to `v-\u{FFFD}` i
 reaches the program unchanged.
 
 **A failure says what ran and how it ended, not what it printed.** A substitution that fails to
-start, is stopped, exits non-zero or prints bytes that are not valid Unicode fails the line before
-the stage that uses it, naming the source text and the exit status. A substitution that prints more
-than 65536 bytes (64 KiB) fails the line the same way, naming the source and that limit. Neither its
-standard output nor its standard error is in the message. What it printed is judged as the bytes the
-pipe delivered, so a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text
-holding a NUL byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
-start, and that error names the program and the operating system's words, never the value.
+start, is stopped or exits non-zero fails the line before the stage that uses it, naming the source
+text and the exit status. Neither its standard output nor its standard error is in the message.
+A substitution whose own line fails to open a file, a redirection's source or destination, says so
+with the file named once, under the directory the line was run in as the planner wrote it. The
+message never carries the place a link in that tree led, which whoever wrote the tree chose
+([CMDLINE-4](#CMDLINE-4)).
+
+**The output is the value, and the driver decides nothing from it.** `cmd` may be a program nobody
+vouched for, so what it printed is untrusted ([RUN-4](run.md#RUN-4)). Its length and its encoding
+are not looked at: 65537 bytes and a `\xff` reach the program as they were printed, and a U+FFFD
+arrives as its own three bytes. The bytes are the ones the pipe delivered, not the lossy text made
+of them for display. The one change made to them is that trailing `\n` and `\r\n` are cut, as a shell
+does, and that cut depends on the line ends and on nothing else. A value the operating system will
+not put in an environment, a NUL byte or more than it holds, fails the start of the stage that would
+receive it, and that error names the program and the operating system's words, never the value. On
+Windows an environment value is text, so the bytes are read as UTF-8 and each sequence that is not
+valid is replaced by U+FFFD. That is a change to the value that depends on no outcome the driver
+takes, where a refusal would be a decision taken from what an unvouched program printed.
 
 **Nothing remembered covers such a line.** A line carrying an expansion is treated as a line with an
 environment assignment is: a remembered answer, a grant or an allow rule is not matched against it,
@@ -1025,13 +1104,27 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::an_unset_variable_is_refused_naming_the_variable_and_nothing_runs`
 `verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
 `verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
+`verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
+`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
+`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
-`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_reaches_the_program_byte_for_byte`
+`verified-by: bravebot_agent::exec::the_trailing_line_ends_of_a_substitution_are_cut_from_its_bytes_and_nothing_else`
 `verified-by: bravebot_agent::exec::a_background_start_is_cancelled_while_its_substitution_runs`
 `verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
-`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_65536_bytes_reaches_the_program_whole`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_system_takes_fails_the_start_naming_the_program`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
 `verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
 `verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
 `verified-by: bravebot_core::remembered::a_step_carrying_an_expansion_is_not_covered_by_an_entry`
@@ -1043,6 +1136,24 @@ it reaches one.)
 `verified-by: bravebot_core::policy::an_expansion_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key`
 `verified-by: bravebot_core::policy::an_expansion_leaves_a_step_unproven`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start`
+`verified-by: bravebot_agent::tools::an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call`
+`verified-by: bravebot_core::command::an_expansion_is_drawn_from_its_source`
+`verified-by: bravebot_core::command::a_step_with_an_expansion_draws_it_in_front_of_its_program`
+`verified-by: bravebot_core::command::the_steps_of_a_plan_list_a_substituted_command_before_the_step_using_it`
+`verified-by: bravebot_core::command::two_plans_differing_only_in_an_expansion_never_encode_alike`
+`verified-by: bravebot_agent::cmdline::a_plan_holding_a_substituted_command_is_still_paired_with_the_operands_of_the_line`
+`verified-by: bravebot_agent::confirm::a_summary_counts_the_command_inside_a_substitution`
+
+The command inside `NAME="$(cmd)"` is a step of the plan, so the prompt's step count and its rows
+include it, in the order it runs. The operands the planner is told are paired with the commands of
+the line's shape, which the substituted command is not one of.
+
+The guarantee covers what bravebot shows or writes. It does not cover a program that prints the
+value it was handed: bravebot cannot tell that it did, so that output is the line's output, which
+is `(U,priv)` under an expansion, and the planner reads it only where it may read such output.
+`verified-by: bravebot_agent::exec::a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_expansion_is_untrusted`
 
 ## Amendments to existing specs
 
@@ -1105,16 +1216,33 @@ nothing until you have opened that file.
   spelling agree on can be listed at all. An option after an operand is refused for the same reason,
   so `grep -r TODO src -n` asks where `grep -rn TODO src` does not. The cost is a prompt for a call
   that would have been fine, which is the right direction and is still work.
-- **A name is refused where it lands in the workspace, and no name is ever positively identified.**
+- **The audited table was read against the option lists of GNU, BSD, busybox and uutils, and run
+  against none of them but the BSD tools of macOS.** The matcher compares an option by its exact
+  spelling, so a GNU abbreviation (`--outp=x`, `--files0`) is refused whichever program would have
+  accepted it, and an attached value on an option that takes none, a cluster holding an option that
+  is not listed or that takes a value, and any option after an operand are refused as well. After
+  `--` a word is an operand, as it is for the programs. No listed option is known to write a file or
+  run a program in GNU, busybox or uutils. An option that one of them gives a meaning its BSD
+  namesake does not have is unchecked there, because the table is run against the BSD tools only.
+  `ls -l` and `ls -n` also read the user and group databases, which no answer names.
+- **A name is refused where it lands in the workspace or the rest of that set, and no name is ever positively identified.**
   The audited utilities are supplied by the operating system and differ by platform, distribution and
   package manager, so no hash or signature can be pinned for one: an entry is a claim about a program
   under a name, checked against one implementation's option surface, and what runs is whatever
-  `$PATH` reached. Refusing a resolution inside the workspace closes the route a file in the tree
-  takes to an entry. It leaves the case with no attacker in it: where `grep` means `ugrep`, an
+  `$PATH` reached. Refusing a resolution inside the workspace or the rest of that set closes the
+  route a file in the tree takes to an entry. It leaves the case with no attacker in it: where `grep` means `ugrep`, an
   implementation with a far larger option surface, the entry describes a different program than the
   one that runs and an option the two read differently is proven against the wrong audit. Refusing
   every `$PATH` directory the trust map is silent about would cover more of the category and would
   also refuse the genuine utilities under the layouts above, which is a prompt on every audited call.
+- **A checkout at the account home or at `/` puts every program under it in the set.** Where the
+  home directory holds a `.git`, such as a dotfiles repository, a session opened below the home with
+  no nearer `.git` has the home as its checkout. An audited name that resolves to a file anywhere
+  under the home, such as a `~/.cargo/bin` or a `~/bin`, then asks, and its output is untrusted. A
+  checkout at `/` does the same for every program, and the system's `/usr/bin` is then under it.
+  Only the nearest checkout is taken, so an outer repository that contains the checkout adds
+  nothing. A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not in
+  the set. The cost is a prompt for a call that would have been fine, which is the right direction.
 - **A proof is about paths, and the trust map answers about names.** A symlink inside a vouched-for
   directory pointing at a file outside it is a name the map covers and bytes it never saw, so a
   read-proven line reading through one comes back trusted. The table refuses the recursion flag that

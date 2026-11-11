@@ -48,6 +48,8 @@ bravebot-stamp = { path = "../stamp" }
 bravebot-update = { path = "../update" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The digest a send is recorded under, so a repeat can be told from other parameters under its id.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # The test of what the bridge sends and keeps for a failed ChatGPT turn signs in to a stand-in and

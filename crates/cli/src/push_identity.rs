@@ -207,34 +207,6 @@ fn origin_command(program: &Path) -> std::process::Command {
     command
 }
 
-/// The directories a confined stage opened here could have written: the one this command ran in
-/// and the checkout holding it, which is the nearest ancestor with a `.git`.
-///
-/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session. A checkout's
-/// `bin` first on `PATH` would otherwise be searched for the programs started below.
-fn checkout(cwd: &Path) -> Vec<PathBuf> {
-    let mut directories = vec![cwd.to_path_buf()];
-    if let Some(root) = cwd
-        .ancestors()
-        .find(|ancestor| ancestor.join(".git").exists())
-        && root != cwd
-    {
-        directories.push(root.to_path_buf());
-    }
-    directories
-}
-
-/// Leave out of the lookup for programs the directory this command ran in and the checkout holding
-/// it. A command that starts programs with no session of its own calls this before its first
-/// lookup.
-pub(crate) fn keep_out_where_this_ran() {
-    if let Ok(cwd) = std::env::current_dir() {
-        for directory in checkout(&cwd) {
-            bravebot_sandbox::programs::keep_out(&directory);
-        }
-    }
-}
-
 /// The variables `ssh-keygen`, `ssh` and `git` read to choose a program to run
 /// ([SANDBOX-30], [PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
 ///
@@ -399,7 +371,6 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
-    keep_out_where_this_ran();
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
@@ -994,30 +965,6 @@ mod tests {
         std::fs::create_dir_all(developer.join("usr/bin")).unwrap();
 
         assert!(!withheld("DEVELOPER_DIR", &developer, &session.path));
-    }
-
-    /// The directory the command ran in and the checkout holding it are both left out of the lookup.
-    /// Rejects a lookup that leaves out only the directory itself, which finds a repository's
-    /// `bin` when the command runs in a subdirectory.
-    #[test]
-    fn the_checkout_holding_the_directory_is_left_out_with_it() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/push-identity-checkout");
-        let _ = std::fs::remove_dir_all(&root);
-        let here = root.join("crates").join("cli");
-        std::fs::create_dir_all(&here).unwrap();
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-
-        assert_eq!(checkout(&here), [here.clone(), root]);
-    }
-
-    /// A directory under no checkout is left out by itself. Rejects a lookup that leaves out the
-    /// checkout alone, which finds the `bin` of a project that has no `.git`.
-    #[test]
-    fn a_directory_under_no_checkout_is_left_out_by_itself() {
-        let here = Path::new("/bravebot-no-such-directory/project");
-
-        assert_eq!(checkout(here), [here.to_path_buf()]);
     }
 
     /// SANDBOX-30: `ssh` reads the person's configuration, and a `ProxyCommand` there names a

@@ -68,6 +68,38 @@ pub fn keep_out(directory: &Path) {
     }
 }
 
+/// `directory` and the checkout holding it: the directory first, then the nearest ancestor that has
+/// a `.git`, if there is one. A directory that has a `.git` itself is the checkout, so nothing is
+/// added after it. A `.git` that is a file (a linked worktree or a submodule) counts as one that
+/// is a directory.
+///
+/// A confined stage opened in a subdirectory can write the `bin` of the checkout above it, and
+/// that `bin` can be first on `PATH`. Only the nearest `.git` is taken. Taking
+/// every one also leaves out an outer repository that merely contains the checkout: a dotfiles
+/// repository at the home directory, or the repository a worktree is nested in, and with it every
+/// installed `bin` under it. Nothing is recorded: [`keep_out_with_checkout`] does that.
+pub fn with_checkout(directory: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![directory.to_path_buf()];
+    directories.extend(
+        directory
+            .ancestors()
+            .find(|ancestor| ancestor.join(".git").exists())
+            .filter(|checkout| *checkout != directory)
+            .map(Path::to_path_buf),
+    );
+    directories
+}
+
+/// [`keep_out`] for `directory` and the checkout holding it ([`with_checkout`]).
+///
+/// A session calls this for the directory it opens, adds or moves to, and a command that opens
+/// no session calls it for the directory it ran in, so both leave out the same directories.
+pub fn keep_out_with_checkout(directory: &Path) {
+    for held in with_checkout(directory) {
+        keep_out(&held);
+    }
+}
+
 /// Record a path a stage may write wherever the account can, in both of its spellings.
 pub fn keep_out_where_writable(directory: &Path) {
     let mut held = WRITABLE_WHERE_THE_ACCOUNT_CAN
@@ -244,14 +276,47 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     ("LD_PRELOAD", Names::Directories),
     ("LD_LIBRARY_PATH", Names::Directories),
     ("LD_AUDIT", Names::Directories),
+    // The directory glibc's loader reads `$ORIGIN` as when it cannot read `/proc/self/exe`
+    // (glibc 2.40 `sysdeps/unix/sysv/linux/dl-origin.c`). A `RUNPATH` or `LD_LIBRARY_PATH` entry
+    // that holds `$ORIGIN` then names a library directory under it. One directory. musl reads no
+    // such variable (musl 1.2.5 `ldso/dynlink.c` reads only `LD_LIBRARY_PATH` and `LD_PRELOAD`).
+    ("LD_ORIGIN_PATH", Names::Directory),
     ("GCONV_PATH", Names::Directories),
+    // Data the C library parses and the program then uses. `LOCPATH` is a list of directories
+    // glibc's `setlocale` reads locale data from (glibc 2.40 `locale/newlocale.c`). `NLSPATH` is a
+    // list of templates (`%N`, `%L` and the like) `catopen` reads message catalogs from (glibc
+    // 2.40 `catgets/catgets.c`, musl 1.2.5 `src/locale/catopen.c`), so it is an option and is
+    // removed whatever it holds. `MUSL_LOCPATH` is musl's list of locale directories (musl 1.2.5
+    // `src/locale/locale_map.c`, read unless the process is secure). The other names in glibc's
+    // `unsecvars.h` are left out, with the reason, in SANDBOX-30 "What a checked start does not
+    // cover".
+    ("LOCPATH", Names::Directories),
+    ("NLSPATH", Names::Options),
+    ("MUSL_LOCPATH", Names::Directories),
     ("DYLD_INSERT_LIBRARIES", Names::Directories),
     // Language runtimes and shells: modules, startup files and tools the program runs.
     selectors::PYTHONPATH,
     selectors::PYTHONUSERBASE,
     selectors::PYTHONPYCACHEPREFIX,
     selectors::PYTHONHOME,
+    // Python joins this to `sys.prefix`, so a real value is a relative name such as `lib64` and a
+    // relative path that climbs out of the prefix selects a standard library elsewhere.
+    ("PYTHONPLATLIBDIR", Names::Options),
     ("BASH_ENV", Names::File),
+    // A program that is a bash script, which every shim and many wrappers are: `xtrace` with a
+    // `PS4` that holds a command substitution runs that command, whatever the script does.
+    ("SHELLOPTS", Names::Options),
+    ("PS4", Names::Options),
+    // Version-manager shims, found by the name of the program they stand for. pyenv's hook
+    // directories and root, and asdf's data directory and configuration file, name files the shim
+    // sources or runs. `PYENV_VERSION` is a version name that pyenv joins to its root, so
+    // `../../../x` selects a program outside it. `ASDF_<TOOL>_VERSION` is in
+    // `CODE_SELECTOR_PATTERNS`.
+    ("ASDF_DATA_DIR", Names::Directory),
+    ("ASDF_CONFIG_FILE", Names::File),
+    ("PYENV_ROOT", Names::Directory),
+    ("PYENV_HOOK_PATH", Names::Directories),
+    ("PYENV_VERSION", Names::Options),
     ("DEVELOPER_DIR", Names::Directory),
     ("GIT_EXEC_PATH", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
@@ -266,7 +331,18 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
 /// Prefixes of variable names that are all [`Names::Options`]. `GIT_CONFIG_COUNT`,
 /// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` write configuration, which can name a program
 /// to run, and `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name the files it is read from.
-pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_"];
+///
+/// `BASH_FUNC_<name>%%` is how bash passes an exported function to a program that is a bash
+/// script, which then runs it when the script calls `<name>`.
+pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_", "BASH_FUNC_"];
+
+/// Variable names built from a prefix and a suffix around a part the person or a tool chooses, each
+/// a [`Names::Options`] name, as `(prefix, suffix)`.
+///
+/// asdf reads `ASDF_<TOOL>_VERSION`, and a value `path:<directory>` makes the shim run
+/// `<directory>/bin/<tool>`. The name cannot be listed whole, and the prefix `ASDF_` alone would
+/// also remove `ASDF_DATA_DIR`, which is judged by its value.
+pub const CODE_SELECTOR_PATTERNS: &[(&str, &str)] = &[("ASDF_", "_VERSION")];
 
 /// Prefixes of the dynamic loader's variables, which load a library into a program before it runs:
 /// `DYLD_INSERT_LIBRARIES`, `LD_PRELOAD` and the rest of the `DYLD_` and `LD_` names.
@@ -335,9 +411,26 @@ fn begins_variable(held: &OsStr, prefix: &str) -> bool {
         })
 }
 
+/// Whether `held` begins with `prefix` and ends with `suffix` with at least one byte between them,
+/// with the case rule of [`is_variable`]. Read as bytes.
+fn is_patterned(held: &OsStr, prefix: &str, suffix: &str) -> bool {
+    let bytes = held.as_encoded_bytes();
+    let same = |start: &[u8], wanted: &str| {
+        if cfg!(windows) {
+            start.eq_ignore_ascii_case(wanted.as_bytes())
+        } else {
+            start == wanted.as_bytes()
+        }
+    };
+    bytes.len() > prefix.len() + suffix.len()
+        && same(&bytes[..prefix.len()], prefix)
+        && same(&bytes[bytes.len() - suffix.len()..], suffix)
+}
+
 /// What a [`CodeSelectors::Checked`] start takes off `command`: the names in `own` and in
 /// [`CODE_SELECTORS`] by [`withhold_code_selectors_with`], and every held name that begins with one
-/// of [`CODE_SELECTOR_PREFIXES`], which are [`Names::Options`] and so never pass.
+/// of [`CODE_SELECTOR_PREFIXES`] and every held name that matches one of
+/// [`CODE_SELECTOR_PATTERNS`], which are [`Names::Options`] and so never pass.
 ///
 /// A name in both `own` and [`CODE_SELECTORS`] is judged by both, so it is taken off when either
 /// says so. The prefix rule reads the names themselves, so it covers a name that is not text.
@@ -353,6 +446,14 @@ fn withhold_checked(
         CODE_SELECTOR_PREFIXES,
         held.iter().map(|(name, _)| name.clone()),
     );
+    for (name, _) in &held {
+        if CODE_SELECTOR_PATTERNS
+            .iter()
+            .any(|(prefix, suffix)| is_patterned(name, prefix, suffix))
+        {
+            command.env_remove(name);
+        }
+    }
     let listed: Vec<(&str, Names)> = own.iter().chain(CODE_SELECTORS).copied().collect();
     withhold_code_selectors_with(
         command,
@@ -425,9 +526,106 @@ pub fn start_against(
         restrict_path(&mut command);
     }
     if let CodeSelectors::Checked(own) = selectors {
-        withhold_checked(&mut command, own, held, outside_stage_writable);
+        let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+        let shim = is_version_manager_shim(program.as_path(), &held);
+        withhold_checked(
+            &mut command,
+            own,
+            held.iter().cloned(),
+            outside_stage_writable,
+        );
+        if shim {
+            withhold_home_a_stage_may_write(&mut command, &held, outside_stage_writable);
+        }
     }
     command
+}
+
+/// Directories under `HOME` where asdf and pyenv keep their data when `ASDF_DATA_DIR` and
+/// `PYENV_ROOT` are not set. Both hold the shims in a `shims` directory directly under them.
+const SHIM_ROOTS_UNDER_HOME: [&str; 2] = [".asdf", ".pyenv"];
+
+/// The variables that move those directories elsewhere.
+const SHIM_ROOT_VARIABLES: [&str; 2] = ["ASDF_DATA_DIR", "PYENV_ROOT"];
+
+/// Whether `program` is a shim of asdf or pyenv: a file in a `shims` directory that sits directly in
+/// `~/.asdf`, in `~/.pyenv`, or in the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names in `held`.
+///
+/// A shim stands for another program, so its own name says nothing about what it runs. It is
+/// recognised by where it is, which is the path the lookup returned and not anything read from a
+/// file. The directory names are compared without regard to case, which can only make more files
+/// shims, and the only thing a shim changes is that `HOME` is judged
+/// ([`withhold_home_a_stage_may_write`]).
+fn is_version_manager_shim(program: &Path, held: &[(OsString, OsString)]) -> bool {
+    let Some(directory) = program.parent() else {
+        return false;
+    };
+    let Some(root) = directory.parent().filter(|_| {
+        directory
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("shims"))
+    }) else {
+        return false;
+    };
+    SHIM_ROOTS_UNDER_HOME.iter().any(|under| {
+        root.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(under))
+    }) || SHIM_ROOT_VARIABLES.iter().any(|variable| {
+        held.iter()
+            .any(|(name, value)| is_variable(name, variable) && Path::new(value) == root)
+    })
+}
+
+/// Take `HOME` off `command` unless it names a directory outside every directory a stage may write
+/// and neither `.asdf` nor `.pyenv` under it leads into one ([`under_home_outside_stage_writable`]).
+///
+/// `HOME` chooses code for both managers: with a `.tool-versions`, asdf runs
+/// `~/.asdf/installs/<tool>/<version>/bin/<tool>`, and with `PYENV_ROOT` unset pyenv reads hooks
+/// from `$HOME/.pyenv`. A stage that may write what `HOME` reaches could make a shim started for
+/// `gcloud`, `ssh` or `git` run a file it wrote. `HOME` is not in [`CODE_SELECTORS`] because those
+/// programs need it, and so it is judged only for a shim ([SANDBOX-30]).
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md#SANDBOX-30
+fn withhold_home_a_stage_may_write(
+    command: &mut Command,
+    held: &[(OsString, OsString)],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) {
+    let Some((_, home)) = held.iter().find(|(name, _)| is_variable(name, "HOME")) else {
+        return;
+    };
+    let home = Path::new(home);
+    if !(may_be_run(Names::Directory, home, outside_stage_writable)
+        && under_home_outside_stage_writable(home, &SHIM_ROOTS_UNDER_HOME, outside_stage_writable))
+    {
+        command.env_remove("HOME");
+    }
+}
+
+/// Whether each of the paths `under` `home` is outside the directories a stage may write.
+///
+/// A session opened on `~/.config` or `~/.pyenv` has no row for `HOME` itself, so `HOME` alone
+/// passes while what a program reads under it can be written. Each path is judged as it is when it
+/// exists (a link counts and is followed by the judgment). One that does not exist is judged by the
+/// nearest existing directory above it below `home`, since whoever may write that directory can
+/// make the path. `home` itself is judged by the caller.
+fn under_home_outside_stage_writable(
+    home: &Path,
+    under: &[&str],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    under.iter().all(|under| {
+        let mut path = home.join(under);
+        while path != home {
+            if path.symlink_metadata().is_ok() {
+                return outside_stage_writable(&path);
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+        true
+    })
 }
 
 /// The program as an absolute path, or `None` when the only one `PATH` offers is in a directory
@@ -564,6 +762,10 @@ pub mod selectors {
     pub const BROWSER: (&str, Names) = ("BROWSER", Names::Commands);
     /// A configuration file of the OpenSSL a program loads, which can load a provider module.
     pub const OPENSSL_CONF: (&str, Names) = ("OPENSSL_CONF", Names::File);
+    /// The directory OpenSSL loads provider modules from.
+    pub const OPENSSL_MODULES: (&str, Names) = ("OPENSSL_MODULES", Names::Directory);
+    /// The directory OpenSSL loads dynamic engines from.
+    pub const OPENSSL_ENGINES: (&str, Names) = ("OPENSSL_ENGINES", Names::Directory);
     /// Directories Python imports from, including `sitecustomize.py`.
     pub const PYTHONPATH: (&str, Names) = ("PYTHONPATH", Names::Directories);
     /// The prefix Python finds its standard library under.
@@ -572,6 +774,12 @@ pub mod selectors {
     pub const PYTHONUSERBASE: (&str, Names) = ("PYTHONUSERBASE", Names::Directory);
     /// The tree Python reads compiled modules from, which can hold an unchecked `.pyc`.
     pub const PYTHONPYCACHEPREFIX: (&str, Names) = ("PYTHONPYCACHEPREFIX", Names::Directory);
+    /// Directories GLib scans for modules and loads each library of, in `gio open` and `gio info`.
+    pub const GIO_EXTRA_MODULES: (&str, Names) = ("GIO_EXTRA_MODULES", Names::Directories);
+    /// The one directory GLib scans for modules in addition to its compiled-in one.
+    pub const GIO_MODULE_DIR: (&str, Names) = ("GIO_MODULE_DIR", Names::Directory);
+    /// Directories Qt loads plug-ins from.
+    pub const QT_PLUGIN_PATH: (&str, Names) = ("QT_PLUGIN_PATH", Names::Directories);
 }
 
 /// Take each variable in `selectors` off the environment `command` is started with unless
@@ -2311,6 +2519,56 @@ mod tests {
         assert!(checked("GIT_CONFIG_COUNT", &planted, &session));
     }
 
+    /// The regression it rejects: `LD_ORIGIN_PATH` read as a list, so a value that joins a genuine
+    /// directory to one a stage may write is kept, or `MUSL_LOCPATH` read as one directory, so a
+    /// genuine list is removed, or either name kept when it names a place a stage may write.
+    #[cfg(unix)]
+    #[test]
+    fn ld_origin_path_is_one_directory_and_musl_locpath_is_a_list_of_them() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t1o");
+        let planted = planted.parent().unwrap().to_path_buf();
+        let genuine = genuine.parent().unwrap().to_path_buf();
+        let both = PathBuf::from(path_of(&[genuine.as_path(), planted.as_path()]));
+        let two_genuine = PathBuf::from(path_of(&[genuine.as_path(), safe.as_path()]));
+
+        assert!(checked("LD_ORIGIN_PATH", &planted, &session));
+        assert!(!checked("LD_ORIGIN_PATH", &genuine, &session));
+        assert!(checked("LD_ORIGIN_PATH", &two_genuine, &session));
+
+        assert!(checked("MUSL_LOCPATH", &planted, &session));
+        assert!(checked("MUSL_LOCPATH", &both, &session));
+        assert!(!checked("MUSL_LOCPATH", &genuine, &session));
+        assert!(!checked("MUSL_LOCPATH", &two_genuine, &session));
+    }
+
+    /// The regression it rejects: a list name judged only after a split on the path separator, so
+    /// a value the loader reads as two entries passes as one entry. glibc splits `LD_LIBRARY_PATH`
+    /// on `:` and `;` (2.40 `elf/dl-load.c` line 833), `LD_PRELOAD` on space and `:` (`elf/rtld.c`
+    /// line 879) and musl splits `LD_LIBRARY_PATH` on `:` and newline (1.2.5 `ldso/dynlink.c`
+    /// `path_open`) and `LD_PRELOAD` on whitespace and `:` (`load_preload`).
+    #[cfg(unix)]
+    #[test]
+    fn a_loader_list_that_joins_a_genuine_entry_to_a_planted_one_with_another_separator_is_removed()
+    {
+        let (session, _safe, planted, genuine) = planted_and_genuine("t1sep");
+        let planted_dir = planted.parent().unwrap().to_path_buf();
+        let genuine_dir = genuine.parent().unwrap().to_path_buf();
+        for separator in [";", "\n", " ", "\t"] {
+            let joined = PathBuf::from(format!(
+                "{}{separator}{}",
+                genuine_dir.display(),
+                planted_dir.display()
+            ));
+            for name in ["LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "MUSL_LOCPATH"] {
+                assert!(
+                    checked(name, &joined, &session),
+                    "{name} was kept with {separator:?} between a genuine entry and a planted one"
+                );
+            }
+        }
+        assert!(!checked("LD_LIBRARY_PATH", &genuine_dir, &session));
+    }
+
     /// The regression it rejects: a name dropped from the table, which the loop over the table
     /// cannot see. The names are the ones SANDBOX-30 lists, written out here.
     #[cfg(unix)]
@@ -2322,7 +2580,11 @@ mod tests {
             "LD_PRELOAD",
             "LD_LIBRARY_PATH",
             "LD_AUDIT",
+            "LD_ORIGIN_PATH",
             "GCONV_PATH",
+            "LOCPATH",
+            "NLSPATH",
+            "MUSL_LOCPATH",
             "DYLD_INSERT_LIBRARIES",
             "PYTHONPATH",
             "PYTHONUSERBASE",
@@ -2339,6 +2601,342 @@ mod tests {
             "CLOUDSDK_PYTHON_ARGS",
         ] {
             assert!(checked(name, &planted, &session), "{name} was kept");
+        }
+    }
+
+    /// The regression it rejects: a bash script, which every asdf and pyenv shim is, left to run a
+    /// command a stage planted through its trace prompt, an exported function or a version name.
+    /// Each of these was shown to run code in a bash script by a real run (SANDBOX-30).
+    #[cfg(unix)]
+    #[test]
+    fn the_table_holds_each_name_that_makes_a_bash_script_or_a_shim_run_code() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t1s");
+
+        for name in ["SHELLOPTS", "PS4", "PYENV_VERSION"] {
+            for value in ["../../../evil", "xtrace", ""] {
+                assert!(checked(name, Path::new(value), &session), "{name}={value}");
+            }
+            assert!(checked(name, &genuine, &session), "{name} kept a path");
+        }
+        for name in ["ASDF_DATA_DIR", "PYENV_ROOT"] {
+            assert!(checked(name, &planted, &session), "{name} was kept");
+            assert!(checked(name, &session, &session), "{name} was kept");
+            assert!(!checked(name, &safe, &session), "{name} was removed");
+        }
+        assert!(checked("ASDF_CONFIG_FILE", &planted, &session));
+        assert!(!checked("ASDF_CONFIG_FILE", &genuine, &session));
+        let list = |entries: &[&Path]| path_of(entries);
+        assert!(checked(
+            "PYENV_HOOK_PATH",
+            Path::new(&list(&[&safe, &session])),
+            &session
+        ));
+        assert!(!checked(
+            "PYENV_HOOK_PATH",
+            Path::new(&list(&[&safe, &genuine])),
+            &session
+        ));
+    }
+
+    /// Whether a start of `program` given `selectors` takes `HOME` off, when this process holds
+    /// `HOME` as `home` and the `extra` variables besides, and `session` is the one directory a stage
+    /// may write.
+    #[cfg(unix)]
+    fn home_removed(
+        selectors: CodeSelectors<'_>,
+        program: &Path,
+        home: &Path,
+        extra: &[(&str, &Path)],
+        session: &Path,
+    ) -> bool {
+        let row = session.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let mut held = vec![(OsString::from("HOME"), home.as_os_str().to_os_string())];
+        held.extend(
+            extra
+                .iter()
+                .map(|(name, value)| (OsString::from(*name), value.as_os_str().to_os_string())),
+        );
+        let command = start_against(
+            &Resolved::found_earlier(program),
+            Inherits::All,
+            SearchPath::Inherited,
+            selectors,
+            held,
+            &|file: &Path| outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new("HOME") && now.is_none())
+    }
+
+    /// SANDBOX-30. The regression it rejects: a checked start of an asdf or pyenv shim that leaves
+    /// `HOME` as it was given, so a `HOME` a stage may write makes the shim for `git`, `ssh` or
+    /// `gcloud` run `~/.asdf/installs/<tool>/<version>/bin/<tool>` or a hook under `~/.pyenv`
+    /// that the stage wrote. The shims are in the places the two managers keep them: under
+    /// `~/.asdf` and `~/.pyenv`, and under the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names.
+    /// The control is the same shim with a `HOME` outside every directory a stage may write.
+    #[cfg(unix)]
+    #[test]
+    fn home_is_removed_for_an_asdf_or_pyenv_shim_when_a_stage_may_write_it() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t1h");
+        let moved = safe.join("moved-root");
+        let shims = [
+            (
+                executable(&safe.join(".asdf").join("shims"), "git"),
+                Vec::new(),
+            ),
+            (
+                executable(&safe.join(".pyenv").join("shims"), "python3"),
+                Vec::new(),
+            ),
+            (
+                executable(&moved.join("shims"), "ssh"),
+                vec![("ASDF_DATA_DIR", moved.as_path())],
+            ),
+            (
+                executable(&moved.join("shims"), "gcloud"),
+                vec![("PYENV_ROOT", moved.as_path())],
+            ),
+        ];
+
+        for (shim, extra) in &shims {
+            assert!(
+                home_removed(CodeSelectors::Checked(&[]), shim, &session, extra, &session),
+                "HOME reached {}",
+                shim.display()
+            );
+            assert!(
+                !home_removed(CodeSelectors::Checked(&[]), shim, &safe, extra, &session),
+                "HOME was removed for {} though no stage may write it",
+                shim.display()
+            );
+        }
+    }
+
+    /// SANDBOX-30. The regression it rejects: judging `HOME` alone for a shim, so a `HOME` outside
+    /// every directory a stage may write passes while `~/.pyenv` or `~/.asdf` under it leads into
+    /// one, which is where the hooks and installed tools are read from. A directory that is not
+    /// there is judged by the one above it, which is `HOME`, so a `HOME` with neither is kept.
+    #[cfg(unix)]
+    #[test]
+    fn home_is_removed_for_a_shim_when_what_it_reads_under_home_leads_into_a_stage_directory() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t1u");
+        let shim = executable(&safe.join(".asdf").join("shims"), "git");
+        let home = scratch_dir("programs-selectors-t1u-home");
+        let checked_home =
+            |home: &Path| home_removed(CodeSelectors::Checked(&[]), &shim, home, &[], &session);
+
+        assert!(!checked_home(&home), "a HOME holding neither was removed");
+        std::fs::create_dir_all(home.join(".asdf")).unwrap();
+        assert!(
+            !checked_home(&home),
+            "a .asdf outside every stage directory"
+        );
+        std::fs::remove_dir_all(home.join(".asdf")).unwrap();
+        for name in [".pyenv", ".asdf"] {
+            std::os::unix::fs::symlink(&session, home.join(name)).unwrap();
+            assert!(checked_home(&home), "{name} led into a stage directory");
+            std::fs::remove_file(home.join(name)).unwrap();
+        }
+    }
+
+    /// SANDBOX-30. The regression it rejects: judging `HOME` for every checked start, which takes
+    /// it from gcloud, `ssh` and `git`, which need it, or for a program in a directory named
+    /// `shims` that is not a version manager's. The same `HOME` a stage may write is kept for a
+    /// program that is not a shim, and a shim started by a start that is kept is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn home_is_kept_for_a_program_that_is_not_an_asdf_or_pyenv_shim() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t1n2");
+        let programs = [
+            executable(&safe.join("bin"), "git"),
+            executable(&safe.join("other").join("shims"), "git"),
+            executable(&safe.join(".asdf").join("installs"), "git"),
+            executable(&safe.join(".asdf").join("shims").join("deeper"), "git"),
+        ];
+
+        for program in &programs {
+            assert!(
+                !home_removed(
+                    CodeSelectors::Checked(&[]),
+                    program,
+                    &session,
+                    &[],
+                    &session
+                ),
+                "HOME was removed for {}",
+                program.display()
+            );
+        }
+        let shim = executable(&safe.join(".asdf").join("shims"), "git");
+        assert!(!home_removed(
+            CodeSelectors::Kept,
+            &shim,
+            &session,
+            &[],
+            &session
+        ));
+    }
+
+    /// SANDBOX-30, PATH-003. A shim is in the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names only
+    /// where the value and the directory are the same bytes. The regression it rejects: comparing
+    /// them through `to_string_lossy`, which reads `moved-\xff` as `moved-\u{FFFD}`, so a variable
+    /// naming one directory makes a program in the other a shim and `HOME` is judged for the wrong
+    /// program, or is not judged for a shim.
+    #[cfg(unix)]
+    #[test]
+    fn a_shim_root_that_is_not_text_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = Path::new(OsStr::from_bytes(b"moved-\xff"));
+        let lookalike = Path::new("moved-\u{FFFD}");
+        let shim_in = |root: &Path| root.join("shims").join("git");
+        let held = |variable: &str, value: &Path| {
+            vec![(OsString::from(variable), value.as_os_str().to_os_string())]
+        };
+
+        for variable in SHIM_ROOT_VARIABLES {
+            assert!(
+                is_version_manager_shim(&shim_in(not_text), &held(variable, not_text)),
+                "{variable} naming the exact bytes"
+            );
+            assert!(
+                is_version_manager_shim(&shim_in(lookalike), &held(variable, lookalike)),
+                "{variable} naming the lookalike"
+            );
+            assert!(
+                !is_version_manager_shim(&shim_in(not_text), &held(variable, lookalike)),
+                "{variable} naming the lookalike made a shim of the bytes' directory"
+            );
+            assert!(
+                !is_version_manager_shim(&shim_in(lookalike), &held(variable, not_text)),
+                "{variable} naming the bytes made a shim of the lookalike's directory"
+            );
+        }
+    }
+
+    /// The regression it rejects: the prefix `BASH_FUNC_` or the pattern `ASDF_<TOOL>_VERSION`
+    /// dropped, matched on the start of the name alone, matched only for names the table spells
+    /// out, or widened so a neighbouring name is removed. `ASDF_DATA_DIR` is judged by its value, so
+    /// a prefix of `ASDF_` would remove it for a genuine setup.
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name() {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("t1p");
+
+        for name in [
+            "BASH_FUNC_pyenv-version-name%%",
+            "BASH_FUNC_readlink%%",
+            "BASH_FUNC_x",
+            "ASDF_FOO_VERSION",
+            "ASDF_NODEJS_VERSION",
+            "ASDF_A_B_VERSION",
+        ] {
+            assert!(checked(name, &genuine, &session), "{name} was kept");
+            assert!(checked(name, Path::new("path:/x"), &session), "{name}");
+            assert!(checked(name, Path::new(""), &session), "{name}");
+        }
+        for name in [
+            "ASDF_DATA_DIR",
+            "ASDF_VERSION",
+            "ASDF__VERSION",
+            "ASDF_FOO_VERSIONS",
+            "XASDF_FOO_VERSION",
+            "ASDF_FOO_VERSIO",
+            "BASH_FUNC",
+            "MY_BASH_FUNC_x",
+        ] {
+            assert!(!checked(name, &genuine, &session), "{name} was removed");
+        }
+    }
+
+    /// SANDBOX-30, run: a bash script, which every asdf and pyenv shim is, runs a command a
+    /// stage put in its trace prompt or in an exported function, and the checked start takes
+    /// both names off. The control (the names set on a plain command) must run the code, so the
+    /// check cannot pass because the script never reaches it. Prints `skipped` and passes where
+    /// `/bin/bash` is absent, and fails under `CI`.
+    #[cfg(unix)]
+    #[test]
+    fn a_bash_script_runs_the_code_in_shellopts_ps4_and_an_exported_function() {
+        let bash = Path::new("/bin/bash");
+        if !bash.exists() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "/bin/bash is absent under CI"
+            );
+            eprintln!("skipped: /bin/bash is absent");
+            return;
+        }
+        let (session, _safe, _planted, _genuine) = planted_and_genuine("t1r");
+        let marker = session.join("marker");
+        let script = session.join("shim.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\nbasename /x\n").unwrap();
+        let ps4 = format!("$(echo ps4 >> '{}')+ ", marker.display());
+        let function = format!("() {{ echo function >> '{}'; }}", marker.display());
+        let names = [
+            ("SHELLOPTS", "xtrace".to_string()),
+            ("PS4", ps4),
+            ("BASH_FUNC_basename%%", function),
+        ];
+
+        let control = Command::new(bash)
+            .arg(&script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .envs(names.iter().map(|(name, value)| (*name, value)))
+            .output()
+            .unwrap();
+        assert!(control.status.success(), "{control:?}");
+        let ran = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(
+            ran.contains("ps4") && ran.contains("function"),
+            "the control did not run both: {ran:?}"
+        );
+        std::fs::remove_file(&marker).unwrap();
+
+        for (name, value) in &names {
+            assert!(
+                removes(
+                    CodeSelectors::Checked(&[]),
+                    name,
+                    OsStr::new(value),
+                    &session
+                ),
+                "{name} was kept"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&session);
+    }
+
+    /// The regression it rejects: the prefix and pattern read as text, so a name that is not text
+    /// but has the shape stays with the program.
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_function_or_tool_version_whose_name_is_not_text_is_removed() {
+        use std::os::unix::ffi::OsStrExt;
+        let (session, _safe, _planted, genuine) = planted_and_genuine("t1b");
+
+        for name in [&b"BASH_FUNC_\xff%%"[..], &b"ASDF_\xff_VERSION"[..]] {
+            let command = start_against(
+                &Resolved::written_in_source("/usr/bin/env"),
+                Inherits::All,
+                SearchPath::Inherited,
+                CodeSelectors::Checked(&[]),
+                [(
+                    OsStr::from_bytes(name).to_os_string(),
+                    genuine.clone().into_os_string(),
+                )],
+                &|file: &Path| {
+                    outside_stage_writable_with(file, std::slice::from_ref(&session), &[])
+                },
+            );
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(set, now)| set.as_bytes() == name && now.is_none()),
+                "{} was kept",
+                String::from_utf8_lossy(name)
+            );
         }
     }
 
@@ -2462,6 +3060,51 @@ mod tests {
         assert!(!checked("LD_PRELOAD", &genuine, &session));
         assert!(!checked("PYTHONHOME", &safe, &session));
         assert!(!checked("GIT_EXEC_PATH", &safe, &session));
+    }
+
+    /// The regression it rejects: `PYTHONPLATLIBDIR` judged as a directory, so the relative name
+    /// `lib64` a real setting holds is refused as an unprovable path, or kept when it is a relative
+    /// path that climbs out of `sys.prefix` to a standard library a stage wrote. It is an option
+    /// and is removed whatever it holds.
+    #[cfg(unix)]
+    #[test]
+    fn pythonplatlibdir_is_removed_whatever_it_holds() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t5p");
+
+        assert!(checked("PYTHONPLATLIBDIR", Path::new("lib64"), &session));
+        assert!(checked(
+            "PYTHONPLATLIBDIR",
+            Path::new("../../x/lib"),
+            &session
+        ));
+        assert!(checked("PYTHONPLATLIBDIR", &planted, &session));
+        assert!(checked("PYTHONPLATLIBDIR", &genuine, &session));
+        assert!(checked("PYTHONPLATLIBDIR", &safe, &session));
+    }
+
+    /// The regression it rejects: the shared OpenSSL directory names kept when they name a place a
+    /// stage may write, which loads a provider module or an engine from it, or removed when they
+    /// name a directory outside every one.
+    #[cfg(unix)]
+    #[test]
+    fn the_openssl_module_and_engine_directories_are_judged_as_directories() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("t5o");
+        let planted = planted.parent().unwrap().to_path_buf();
+        let one = |(name, kind): (&str, Names), value: &Path| {
+            removes(
+                CodeSelectors::Checked(&[(name, kind)]),
+                name,
+                value.as_os_str(),
+                &session,
+            )
+        };
+
+        assert!(one(selectors::OPENSSL_MODULES, &planted));
+        assert!(!one(selectors::OPENSSL_MODULES, &safe));
+        assert!(one(selectors::OPENSSL_MODULES, Path::new("modules")));
+        assert!(one(selectors::OPENSSL_ENGINES, &planted));
+        assert!(!one(selectors::OPENSSL_ENGINES, &safe));
+        assert!(one(selectors::OPENSSL_ENGINES, Path::new("engines")));
     }
 
     /// The regression it rejects: skipping a value that cannot be converted to text, which keeps a

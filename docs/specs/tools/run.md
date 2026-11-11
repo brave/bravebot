@@ -261,13 +261,14 @@ settings and the person's answer and never from what a stage wrote or printed:
   as it settles the terminal, with the answer about confined lines where its entry says so;
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
   with no stage keeping the network ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
-  on a platform that holds a `.git` back from every stage, which is macOS and not Linux or Windows
+  on a platform that holds the protected names back from every stage, which is macOS and not Linux or Windows
   ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
 - nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
   or a rule that says ask ([permissions.md](../permissions.md));
-- no stage's program is a file under a directory the plan may write to, and no stage is given such a file
+- no stage's program is a file under a directory the plan may write to, the checkout holding a session
+  directory among them ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), and no stage is given such a file
   as an argument where the file is executable or the stage is an interpreter or wrapper (`sh`, `python3`,
   `node`, `env` and the like, known by the file its program resolved to). An argument is looked up whole,
   since a file name may hold a space or any character a word is cut at, and as the words in it, read with the
@@ -291,7 +292,8 @@ more ([PERM-14](../permissions.md#PERM-14)).
 
 **Why.** Without it, nearly every line in a trusted worktree asks, builds and tests included, though they
 run inside the sandbox and need nothing beyond it. The sandbox is what makes the answer safe to
-give: a confined stage with no network and no way to write a `.git` cannot send what it reads anywhere or
+give: a confined stage with no network and no way to write a `.git`, `.husky`, `.pre-commit-config.yaml` or any other
+protected name ([PERM-9](../permissions.md#PERM-9)) cannot send what it reads anywhere or
 plant a hook that runs unconfined, and a line that asks for more than that is asked about as before.
 The conditions are the ones the paragraph above lists because each is a way a line gets past what the person
 was told, and none can be decided by anything a stage did.
@@ -340,7 +342,9 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::a_plain_line_is_held_only_where_every_condition_of_the_answer_holds`
 `verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
+`verified-by: bravebot_agent::confine::a_program_above_the_session_directory_in_its_checkout_is_not_held`
 `verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::confine::a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given`
 `verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`
 `verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
@@ -516,7 +520,7 @@ A function may read a step field by field for something that is not a key, and t
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
 the words a rule is matched against, which are the program and its arguments and deliberately not the
 whole step. `read_proven` first refuses a step that carries an assignment or
-a route, is started from inside the project, or is started by a name other than its file's. The
+a route, is started from inside the project or the other directories the audited table's proof refuses (see [command-line.md](command-line.md)), or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
 The four in `confine.rs` each answer a question about one step and build nothing that is stored,
@@ -958,7 +962,9 @@ Being left running is not a reason to ask for less.
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting
 on the part before it, and nothing waits here; a redirection names a destination the background has
 no reader for. Both are refused rather than half-honoured, and so is a redirection that opens no
-file: what a background run cannot honour is a route, whether or not it names one.
+file: what a background run cannot honour is a route, whether or not it names one. A redirection
+inside a `$(...)` assignment value ([CMDLINE-17](command-line.md#CMDLINE-17)) is a route of the line:
+the checks made when a destination is opened are not made for a job, so the line is refused.
 
 **The turn owns it, or the session does.** Dropping the handle stops the pipeline as
 [RUN-11](#RUN-11) stops one at its deadline. A one-shot run, an incognito session and a delegate own
@@ -1045,6 +1051,12 @@ the job names the driver minted.
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::turn::a_refused_background_run_starts_nothing`
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
 `verified-by: bravebot_agent::turn::a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own`
@@ -2090,7 +2102,9 @@ nothing else about the line. A prompt the person sends while the line runs makes
 
 **Only a line a job can hold.** One pipeline with no redirection, which is RUN-15's shape and for
 the same reasons: a line with `&&` or `||` waits on its own first part to decide on the second, and
-a route, including `2>&1`, is something the background does not honour. A line fed a reference
+a route, including `2>&1`, is something the background does not honour. A route inside a `$(...)`
+assignment value counts as a route of the line ([CMDLINE-17](command-line.md#CMDLINE-17)), so such
+a line is not offered either. A line fed a reference
 through `stdin_ref` and a delegate's line are not offered either. The first would be writing a value
 into a job nobody waits for, and the second is not the line the screen shows running. Such a line
 is waited for as before, whatever key is pressed.
@@ -2141,6 +2155,8 @@ whenever it guessed wrong.
 `verified-by: bravebot_agent::turn::only_a_line_a_job_can_hold_is_offered_to_be_moved`
 `verified-by: bravebot_agent::turn::a_delegates_line_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::command::only_a_pipeline_without_a_route_is_one_a_job_can_hold`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
+`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::cancel::a_handoff_requested_on_one_thread_is_seen_on_another`
 `verified-by: bravebot_core::policy::moving_a_command_to_the_background_is_recorded_in_the_audit_trail`
 `verified-by: bravebot_tui::state::a_press_moves_the_turns_command_once`
@@ -2431,3 +2447,14 @@ show that a model follows them.
   advice is pinned by
   `bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
   and `bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`.
+- **`LandlockSandbox::spawn` does not require an absolute program.** A caller that passed a bare
+  name would have it searched on the person's `PATH` after confinement is applied. The agent's own
+  path always passes an absolute one: it starts each step from the absolute path it resolved
+  (`command_for` in `crates/agent/src/exec.rs`), re-checks that path before any step starts, and
+  hands the program and arguments to the Landlock backend byte for byte. The backend
+  (`crates/sandbox/src/linux.rs`, `confining`) spawns that program directly with `Command::args`
+  and `current_dir`, with no wrapper or helper process, so no argument is read as an option and a NUL
+  byte fails the spawn. A step that starts after an earlier step has begun can find the file at its
+  path replaced by that earlier step, when the earlier step can write the directory
+  ([RUN-2](#RUN-2)). The environment a stage inherits, including `LD_PRELOAD`, is the person's own
+  or what the plan assigned ([SANDBOX-30](../sandboxing.md#SANDBOX-30)).

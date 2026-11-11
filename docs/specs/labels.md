@@ -15,14 +15,14 @@ guards:
       - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
-      - crates/agent/src/manifest.rs: 3
+      - crates/agent/src/manifest.rs: 4
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 17
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 39
+      - crates/agent/tests/workspace.rs: 44
       - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
@@ -55,7 +55,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 65
+      - crates/agent/tests/workspace.rs: 67
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -73,7 +73,7 @@ guards:
       - crates/agent/src/connectors.rs: 1
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/tools/link.rs: 1
-      - crates/agent/src/manifest.rs: 12
+      - crates/agent/src/manifest.rs: 13
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
@@ -83,7 +83,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 287
+      - crates/agent/tests/workspace.rs: 289
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -232,6 +232,7 @@ guards:
     sites:
       - crates/agent/src/images.rs: 1
       - crates/aichat/src/anthropic.rs: 2
+      - crates/aichat/src/embeddings.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1
       - crates/aichat/src/lib.rs: 3
@@ -418,7 +419,7 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::reading_an_argument_is_recorded`
 `verified-by: bravebot_agent::turn::a_write_reads_the_file_it_replaces_through_a_gate_that_records_it`
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
-`verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref, AsRef and a conversion into the content, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest, every function of the type's own impl blocks against the seven the type has (new, trusted, label, declassify, into_trusted, relabel and shape), and every impl for another type that takes a Labelled as an argument of its trait, such as From<Labelled<String>> for String; it does not see an allowed name whose signature changed, shape widened to pub, a Labelled behind a Box or a type alias, or a raw string literal holding a brace (tracked by brave/bravebot#3875))`
+`verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref, AsRef and a conversion into the content, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest, every function of the type's own impl blocks against the seven the type has (new, trusted, label, declassify, into_trusted, relabel and shape) by name, visibility and signature, every impl whose subject is Labelled, a Box of it, a type alias of it or a wrapper declared beside it, an impl in that file whose subject is a generic parameter or a projection, and every impl for another type that takes a Labelled as an argument of its trait, such as From<Labelled<String>> for String, with comments, strings, raw strings and character literals blanked before any brace is counted; it does not see a wrapper declared in another file, which has no access to the private fields)`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
 `verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`

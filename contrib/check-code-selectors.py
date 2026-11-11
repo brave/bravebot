@@ -5,7 +5,8 @@ A program bravebot starts reads variables that name code to run (`LD_PRELOAD`, `
 `CLOUDSDK_PYTHON`, `NODE_OPTIONS`, and so on). `start` and `start_against` take a fourth argument,
 `CodeSelectors::Kept` or `CodeSelectors::Checked(&list)`, so a call site says whether those
 variables are taken off when their value names a path a stage may write. `gcloud`, `aws`,
-`ssh-keygen`, `ssh` and `git` each pass a CODE_SELECTORS list of their own, and the generic list
+`ssh-keygen`, `ssh`, `git`, `systemctl`, `systemd-inhibit` and `wl-copy` each pass a CODE_SELECTORS
+list of their own, and the generic list
 every checked start removes is in crates/sandbox/src/programs.rs. This script fails for:
 
 1. A `programs::start` or `programs::start_against` call outside crates/sandbox/src/programs.rs
@@ -17,7 +18,8 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
 3. A `CodeSelectors::Checked(&NAME)` call in a file that does not define `const CODE_SELECTORS`.
 4. A file that must hold a CODE_SELECTORS list (the generic list and the three above) and does
    not, or whose list this script reads as empty.
-5. A name in a `const CODE_SELECTORS` list, in any file, that lacks a test in the same file:
+5. A name in a `const CODE_SELECTORS` list, or in a `const <PROGRAM>_CODE_SELECTORS` list a file
+   keeps for one program, in any file, that lacks a test in the same file:
    - an assertion that the name is removed (`assert!(withheld("NAME", ...))` or
      `assert!(checked("NAME", ...))`), which a loop that keeps every value fails, and
    - for a name whose value is a path, program or list, an assertion that a safe value is kept
@@ -34,6 +36,14 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
 8. `LOADER_PREFIXES` in crates/sandbox/src/programs.rs, which the stored-login `gh` start of the
    usability suite removes, held to what docs/development/checks.md describes.
 9. `HOST_VARIABLES` in crates/agent/src/usability.rs, held to the same description.
+10. A difference between the browser opener's list in crates/tui/src/opener.rs and the two lists
+   of the same names in the desktop application: `OPENER_SELECTORS` in
+   ui/src/main/external-open.ts and `NAMES` in ui/scripts/external-open-electron.test.mjs. The
+   application deletes those names from its own environment before it hands an address, a file
+   or a folder to the system, so a name added to the Rust list and not there is passed on by the
+   application. One difference is written down: `HOME` is in the Rust list and is not in the
+   others, because the application and the agent it starts read `HOME`, so it is not deleted
+   there (the comment at the top of external-open.ts says so). `APPLICATION_EXCEPTIONS` holds it.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -46,6 +56,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
+
+# The browser opener's list and the two lists in the desktop application that repeat its names.
+OPENER = "crates/tui/src/opener.rs"
+APPLICATION = "ui/src/main/external-open.ts"
+APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
+
+# Names in the opener's list that the desktop application's lists leave out, and why. The
+# application and the agent it starts read `HOME`, so deleting it from the application's
+# environment would change both; the opener removes it from its own start instead.
+APPLICATION_EXCEPTIONS = {
+    "HOME": "the desktop application and the agent it starts read HOME, so it is not deleted there"
+}
 
 # The file that holds the generic list and the shared names.
 PROGRAMS = "crates/sandbox/src/programs.rs"
@@ -61,11 +83,14 @@ SOURCES = [
     "crates/agent/src/usability.rs",
     "crates/bedrock/src/credentials.rs",
     "crates/cli/src/push_identity.rs",
+    "crates/schedule/src/schedule.rs",
     "crates/tui/src/opener.rs",
     "crates/tui/src/powershell.rs",
 ]
 
-LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
+# A program's list is `const CODE_SELECTORS`, and a file that gives a second program a list of its own
+# names it `const <PROGRAM>_CODE_SELECTORS`. Every such list in a file is read.
+LIST = re.compile(r"const\s+(?:\w+_)?CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
 ENTRY = re.compile(
     r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)'
     r"|\bselectors::([A-Z0-9_]+)"
@@ -111,25 +136,87 @@ def listed_in_spec(spec, label):
 
 
 def selectors(text):
-    """The names in CODE_SELECTORS, or None where the list is not found.
+    """The names in every CODE_SELECTORS list of a file, or None where there is none.
 
     A parser that matches nothing would report every list covered, so an absent list and an empty
     one are both reported by the caller rather than passed.
     """
-    found = LIST.search(text)
+    found = list(LIST.finditer(text))
     if not found:
         return None
-    return [a or b for a, b in ENTRY.findall(found.group(1))]
+    return [a or b for match in found for a, b in ENTRY.findall(match.group(1))]
+
+
+APPLICATION_LIST = re.compile(
+    r"export\s+const\s+OPENER_SELECTORS\b[^=]*=\s*\[(.*?)\]", re.DOTALL
+)
+APPLICATION_TEST_LIST = re.compile(r"\bconst\s+NAMES\s*=\s*\[(.*?)\]", re.DOTALL)
+QUOTED = re.compile(r"""['"]([A-Za-z0-9_]+)['"]""")
+
+
+def quoted_names(pattern, text):
+    """The quoted names in the list `pattern` finds in `text`, or None where it finds no list."""
+    found = pattern.search(text)
+    return QUOTED.findall(found.group(1)) if found else None
+
+
+def application_complaints(opener_text, application_text, application_test_text):
+    """Every way the application's lists of opener names and the opener's own list differ.
+
+    The names must be the same set, apart from the ones in APPLICATION_EXCEPTIONS, which must be
+    in the opener's list and in neither of the application's. A list this script cannot find or
+    reads as empty is reported, since an absent list would otherwise agree with nothing.
+    """
+    rust = selectors(opener_text)
+    if not rust:
+        return [f"CODE_SELECTORS is not readable in {OPENER}, so it cannot be compared with {APPLICATION}."]
+    expected = set(rust) - set(APPLICATION_EXCEPTIONS)
+    complaints = []
+    for name in APPLICATION_EXCEPTIONS:
+        if name not in rust:
+            complaints.append(
+                f"{name} is an exception in APPLICATION_EXCEPTIONS and is not in CODE_SELECTORS "
+                f"in {OPENER}. Remove the exception from check-code-selectors.py."
+            )
+    for label, pattern, text, what in [
+        (APPLICATION, APPLICATION_LIST, application_text, "OPENER_SELECTORS"),
+        (APPLICATION_TEST, APPLICATION_TEST_LIST, application_test_text, "NAMES"),
+    ]:
+        found = quoted_names(pattern, text)
+        if not found:
+            complaints.append(
+                f"{what} is not readable in {label}. If its shape changed, teach "
+                "check-code-selectors.py."
+            )
+            continue
+        if len(found) != len(set(found)):
+            complaints.append(f"{what} in {label} names a variable twice: {found}.")
+        missing = sorted(expected - set(found))
+        extra = sorted(set(found) - expected)
+        if missing:
+            complaints.append(
+                f"{what} in {label} lacks {', '.join(missing)}, which CODE_SELECTORS in {OPENER} "
+                "lists, so the application passes it to the opener."
+            )
+        if extra:
+            complaints.append(
+                f"{what} in {label} names {', '.join(extra)}, which CODE_SELECTORS in {OPENER} "
+                "does not list. Add it there, or remove it here."
+            )
+    return complaints
 
 
 def options_in(text):
-    """The names in CODE_SELECTORS that take options and not a path.
+    """The names in the CODE_SELECTORS lists that take options and not a path.
 
     An option string names nothing outside a stage-writable directory, so it is removed whatever it
     holds and has no value that is kept. Such a name needs the removal assertion only.
     """
-    found = LIST.search(text)
-    return re.findall(r'"([A-Za-z0-9_]+)"\s*,\s*Names::Options\b', found.group(1)) if found else []
+    return [
+        name
+        for match in LIST.finditer(text)
+        for name in re.findall(r'"([A-Za-z0-9_]+)"\s*,\s*Names::Options\b', match.group(1))
+    ]
 
 
 def shared_mismatches(text):
@@ -516,6 +603,30 @@ fn command() -> Command {
 }
 """
 
+# A file with a list for one program beside the list for the rest.
+TWO_LISTS = """\
+const CODE_SELECTORS: [(&str, Names); 2] = [
+    ("A_PROGRAM", Names::Program),
+    ("A_FILE", Names::File),
+];
+const OSASCRIPT_CODE_SELECTORS: [(&str, Names); 2] = [
+    ("AN_OSASCRIPT_DIRECTORY", Names::Directory),
+    ("AN_OSASCRIPT_OPTION", Names::Options),
+];
+#[cfg(test)]
+mod tests {
+    fn t() {
+        assert!(withheld("A_PROGRAM", &planted, &session));
+        assert!(!withheld("A_PROGRAM", &genuine, &session));
+        assert!(withheld("A_FILE", &planted, &session));
+        assert!(!withheld("A_FILE", &genuine, &session));
+        assert!(withheld("AN_OSASCRIPT_DIRECTORY", &planted, &session));
+        assert!(!withheld("AN_OSASCRIPT_DIRECTORY", &genuine, &session));
+        assert!(withheld("AN_OSASCRIPT_OPTION", &planted, &session));
+    }
+}
+"""
+
 CALLER_AGAINST = """\
 fn command() -> Command {
     bravebot_sandbox::programs::start_against(
@@ -613,6 +724,25 @@ mod tests {
 }
 """
 
+# The opener's list as opener.rs writes it, with a name taken from the shared module, and the
+# application's two lists of the names the application deletes.
+OPENER_LIST = """\
+const CODE_SELECTORS: [(&str, Names); 4] = [
+    selectors::BROWSER,
+    ("HOME", Names::Directory),
+    ("GIO_LAUNCH_DESKTOP", Names::File),
+    ("XDG_DATA_HOME", Names::Directory),
+];
+"""
+TS_LIST = """\
+export const OPENER_SELECTORS = [
+  'BROWSER',
+  'GIO_LAUNCH_DESKTOP',
+  'XDG_DATA_HOME',
+] as const
+"""
+MJS_LIST = "const NAMES = ['BROWSER', 'GIO_LAUNCH_DESKTOP', 'XDG_DATA_HOME']\n"
+
 
 def selftest():
     """Prove the parse and the verdict on inputs whose answer is known.
@@ -689,6 +819,32 @@ def selftest():
         len(list_complaints(unlooped)) == 1,
         list_complaints(unlooped),
     )
+
+    # A second list in one file, kept for one program (`OSASCRIPT_CODE_SELECTORS`), is read too.
+    got = selectors(TWO_LISTS)
+    case(
+        "parse: a second list named for its program is read with the first",
+        got == ["A_PROGRAM", "A_FILE", "AN_OSASCRIPT_DIRECTORY", "AN_OSASCRIPT_OPTION"],
+        got,
+    )
+    got = options_in(TWO_LISTS)
+    case(
+        "parse: an options name in the second list is read as options",
+        got == ["AN_OSASCRIPT_OPTION"],
+        got,
+    )
+    got = list_complaints(TWO_LISTS)
+    case("verdict: two covered lists pass", got == [], got)
+    got = list_complaints(
+        TWO_LISTS.replace(
+            'assert!(!withheld("AN_OSASCRIPT_DIRECTORY"', 'assert!(withheld("AN_OSASCRIPT_DIRECTORY"'
+        )
+    )
+    case("verdict: the second list's name with no keep assertion fails once", len(got) == 1, got)
+    got = list_complaints(
+        TWO_LISTS.replace('assert!(withheld("AN_OSASCRIPT_OPTION"', 'let _ = ("AN_OSASCRIPT_OPTION"')
+    )
+    case("verdict: the second list's options name with no removal fails once", len(got) == 1, got)
 
     new_one = '("A_DIRECTORY", Names::Directory),\n    ("A_NEW_ONE", Names::Program),'
     new_options = '("A_OPTIONS", Names::Options),\n    ("A_NEW", Names::Options),'
@@ -1009,6 +1165,66 @@ def selftest():
         got,
     )
 
+    application_cases = [
+        ("the lists agree, apart from HOME", OPENER_LIST, TS_LIST, MJS_LIST, 0),
+        (
+            "a name only the opener lists fails in both application lists",
+            OPENER_LIST.replace('("HOME", Names::Directory),', '("HOME", Names::Directory),\n    ("NEW", Names::File),'),
+            TS_LIST,
+            MJS_LIST,
+            2,
+        ),
+        (
+            "a name missing from the application's list fails",
+            OPENER_LIST,
+            TS_LIST.replace("  'GIO_LAUNCH_DESKTOP',\n", ""),
+            MJS_LIST,
+            1,
+        ),
+        (
+            "a name missing from the test's list fails",
+            OPENER_LIST,
+            TS_LIST,
+            MJS_LIST.replace("'GIO_LAUNCH_DESKTOP', ", ""),
+            1,
+        ),
+        (
+            "a name only the application lists fails",
+            OPENER_LIST,
+            TS_LIST.replace("  'BROWSER',\n", "  'BROWSER',\n  'EXTRA',\n"),
+            MJS_LIST,
+            1,
+        ),
+        (
+            "HOME in the application's list fails",
+            OPENER_LIST,
+            TS_LIST.replace("  'BROWSER',\n", "  'BROWSER',\n  'HOME',\n"),
+            MJS_LIST,
+            1,
+        ),
+        (
+            "HOME missing from the opener's list fails the exception",
+            OPENER_LIST.replace('    ("HOME", Names::Directory),\n', ""),
+            TS_LIST,
+            MJS_LIST,
+            1,
+        ),
+        ("an application list that is not found fails", OPENER_LIST, "export const X = 1\n", MJS_LIST, 1),
+        ("a test list that is not found fails", OPENER_LIST, TS_LIST, "const OTHER = []\n", 1),
+        ("an empty application list fails", OPENER_LIST, "export const OPENER_SELECTORS = [] as const\n", MJS_LIST, 1),
+        ("an opener with no list fails", "fn main() {}\n", TS_LIST, MJS_LIST, 1),
+        (
+            "a name listed twice fails",
+            OPENER_LIST,
+            TS_LIST.replace("  'BROWSER',\n", "  'BROWSER',\n  'BROWSER',\n"),
+            MJS_LIST,
+            1,
+        ),
+    ]
+    for claim, opener_text, ts_text, mjs_text, expected in application_cases:
+        got = application_complaints(opener_text, ts_text, mjs_text)
+        case(f"application: {claim}", len(got) == expected, got)
+
     broke = [(claim, got) for claim, held, got in checks if not held]
     for claim, got in broke:
         print(f"selftest: {claim}, got {got!r}", file=sys.stderr)
@@ -1031,6 +1247,14 @@ def main():
     }
     spec = (ROOT / SPEC).read_text(encoding="utf-8")
     complaints = verdict(files, spec=spec)
+    application_texts = []
+    for label in (APPLICATION, APPLICATION_TEST):
+        if (ROOT / label).exists():
+            application_texts.append((ROOT / label).read_text(encoding="utf-8"))
+        else:
+            complaints.append(f"{label} is not there. If it moved, teach check-code-selectors.py.")
+            application_texts.append("")
+    complaints += application_complaints(files.get(OPENER, ""), *application_texts)
     for complaint in complaints:
         print(complaint, file=sys.stderr)
     if complaints:
@@ -1040,7 +1264,7 @@ def main():
     calls = sum(len(CALL.findall(text)) for label, text in files.items() if label != PROGRAMS)
     print(
         f"check-code-selectors: {calls} start calls classified, {names} names in {len(lists)} "
-        "lists, each with the tests it needs"
+        "lists, each with the tests it needs; the application's lists match the opener's"
     )
     return 0
 

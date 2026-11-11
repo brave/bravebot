@@ -46,7 +46,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [terminal-input.md](terminal-input.md) | `INPUT` | 51 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 43 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
-| [session-view.md](session-view.md) | `RPCVIEW` | 10 | the opt-in shared Rust view for fresh local bridge sessions and its bounded snapshot, the message id every send carries, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
+| [session-view.md](session-view.md) | `RPCVIEW` | 11 | the opt-in shared Rust view for fresh local bridge sessions and its bounded snapshot, the message id every send carries and the record and lookup of each send, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
 | [local-host.md](local-host.md) | `HOST` | 12 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, when a session is closed, and the development relay that hands it to an app on loopback |
 | [watching.md](watching.md) | `WATCH` | 24 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, the mode Ctrl-L opens over the delegates and the questions, and `/outputs` and Alt-L, which open it over what commands printed |
 | [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
@@ -54,7 +54,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | the key Brave's premium service authorises a request with: how a person stores it, where it is sent, what it is counted against and who may read it |
 | [chatgpt-sign-in.md](chatgpt-sign-in.md) | `CHATGPT` | 17 | signing in to OpenAI with a ChatGPT account through a browser, from a typed command or the window's own sign-in, and offering the account's models in the picker (proposed, built and exercised against a real account; whether OpenAI's terms allow it is undecided, and what that account did not show is listed in the spec) |
 | [xai-sign-in.md](xai-sign-in.md) | `XAI` | 22 | signing in to xAI with a SuperGrok subscription through a code a person enters on any device, from a typed command or the window's own sign-in, the file the tokens are kept in, replacing an access token before it expires, and how the account's models are named (proposed; the command, the turn's request and the account's models are built) |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 33 | operating-system confinement for processes running code we did not write |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 34 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 16 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 25 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
@@ -168,12 +168,15 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   symbol has to be defined where its qualifier owns it, in an `impl` naming the type or, for
   `home::write_file`, at the margin of the module of that name: a method another type happens to
   spell the same way is not this one, and a guard whose qualifier defines nothing counts no uses
-  at all rather than that type's. The count reads two spellings of a method, `.method(` on a
-  receiver and `Type::method`. An entry that says `every-spelling: yes` also fails `make check-spec`
-  on any other spelling of its method (`Type::<T>::method(`, `<Type<T>>::method(`, an alias after
-  `use Type as L`) and on a use inside a `macro_rules!` body, which would count once however often
-  the macro is invoked. Only `Labelled::declassify` says so, since the bare name of most guards is a
-  free function elsewhere. The count is of releases of the symbol, not of the decisions a caller
+  at all rather than that type's. The count reads `.method(` on a
+  receiver, `Type::method`, and `Type::<T>::method` and `<Type<T>>::method`, which carry the type's
+  generics and are the same call. A name for the guarded type (`use Type as L`, `type L = Type`) fails
+  `make check-spec` for every pinned guard whose qualifier is that type, since `L::method` is a call
+  no count reads and the qualifier is not written for other reasons. An entry that says
+  `every-spelling: yes` also fails `make check-spec` on any other spelling of its method: a use
+  inside a `macro_rules!` body, which would count once however often the macro is invoked, and the
+  method named in any form the count does not read. Only `Labelled::declassify` says so, since the
+  bare name of most guards is a free function elsewhere. The count is of releases of the symbol, not of the decisions a caller
   then takes from what was released. A count rather than a line number, so moving a call inside a
   file changes nothing, while adding or removing one is an edit to this spec that a reviewer
   sees. `make check-spec` prints the number it found, which is the number to record.
@@ -189,7 +192,12 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
   coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,
-  such as a crate having no dependencies, and says in brackets what makes it hold.
+  such as a crate having no dependencies, and says in brackets what makes it hold. A file the
+  bracket names by its path from a repository-root directory has to exist: the check fails a path
+  that does not, so a test file that is renamed or deleted fails here and not only in the job that
+  runs it. Write the path bare, because the reader of a `verified-by` line stops at a backtick. A
+  test file the bracket relies on is also listed in the spec's `governs`, so a change to it
+  re-reviews the spec.
   **A named test is a Rust test.** The check resolves a name against the `#[test]` functions in
   `crates/`, so a test written in anything else cannot be cited however it is spelled. A clause about
   behaviour only another language implements therefore has two honest forms and no third: a Rust test

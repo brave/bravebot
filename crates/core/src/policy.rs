@@ -564,6 +564,14 @@ pub struct Policy<'sink, S: Sink> {
     ///
     /// [RUN-5]: ../../../docs/specs/tools/run.md
     answered_by_directory_trust: bool,
+    /// The other names the caller found for each operand of the line now being judged, by the
+    /// operand as the line spelled it: the keys the map is asked under besides the operand's own,
+    /// and whether the lookup finished (TRUST-2, CMDLINE-8). Replaced whole by
+    /// [`Policy::learn_operand_names`] for each line, so an answer for one line is never read for
+    /// another. `None` where no caller has looked, and then an operand is judged by its spelling
+    /// alone; `Some` and an operand missing from it reads as untrusted, so a lookup that did not
+    /// cover every operand fails closed.
+    operand_names: Option<std::collections::HashMap<String, (Vec<String>, bool)>>,
     /// Which paths the user vouched for.
     trust: crate::file_authority::FileAuthority,
     /// The working directory this turn runs in.
@@ -573,6 +581,13 @@ pub struct Policy<'sink, S: Sink> {
     /// would have the gates comparing names to a map about another project's files. `None` where
     /// the caller has not said, and then nothing that needs it holds.
     root: Option<std::path::PathBuf>,
+    /// Directories besides [`Policy::root`] that a file the proof road would start may not lie in:
+    /// the checkout holding the working directory, the directories added by name, and the ones the
+    /// session left. Empty until [`Policy::set_unproven_directories`] is called.
+    ///
+    /// Worked out by the caller, which can look at the file system, from directories the person
+    /// opened. [`Policy::resolves_inside_the_project`] only compares paths against it.
+    unproven_directories: Vec<std::path::PathBuf>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable with no rule written about it, so a path under it that no rule covers answers as
@@ -799,12 +814,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
+            operand_names: None,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
             // every path whatever it is read under.
             trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
+            unproven_directories: Vec::new(),
             scratch: None,
             skill_reach: Vec::new(),
             backslash_separates: false,
@@ -1707,8 +1724,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
+            operand_names: None,
             trust: self.trust.clone(),
             root: self.root.clone(),
+            unproven_directories: self.unproven_directories.clone(),
             scratch: self.scratch.clone(),
             skill_reach: self.skill_reach.clone(),
             backslash_separates: self.backslash_separates,
@@ -1759,10 +1778,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The workspace root, which is also the directory the map handed to [`Policy::with_trust`]
     /// was made against. Without it, a gate that has to compare a directory it was handed against
-    /// the one the turn is in cannot, and refuses rather than guessing.
+    /// the one the turn is in cannot, and refuses rather than guessing. The proof road also refuses
+    /// a program that resolves under it, together with the directories
+    /// [`Policy::set_unproven_directories`] adds.
     pub fn with_root(mut self, root: &std::path::Path) -> Self {
         self.root = Some(root.to_path_buf());
         self
+    }
+
+    /// Say which directories besides the working directory a file started by an audited name may
+    /// not lie in, replacing what was said before ([`Policy::resolves_inside_the_project`]).
+    ///
+    /// The caller passes directories it found from the ones the person opened: the checkout holding
+    /// the working directory, the directories added by name, and the ones the session left, whose
+    /// `bin` may still be on `$PATH`. This crate does no I/O, so it cannot find them. A setter and
+    /// not a builder, because the caller says it again before each run: a directory added in the
+    /// middle of a turn is not known when the policy is built.
+    pub fn set_unproven_directories(&mut self, directories: &[std::path::PathBuf]) {
+        self.unproven_directories = directories.to_vec();
     }
 
     /// Say where the session's own directory outside the project is, where it has one.
@@ -2251,12 +2284,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(())
     }
 
+    /// Whether a limit this run's definition, or one above it, put on the files it may write is in
+    /// force (DELEGATE-28).
+    ///
+    /// For a caller that cannot say which names a file has, and so refuses a write where a limit
+    /// is in force rather than judging a name it did not find. Settings only: no path is given.
+    pub fn has_write_limits(&self) -> bool {
+        !self.write_limits.is_empty()
+    }
+
     /// Whether the user should be offered the chance to vouch for this path.
     ///
     /// True once per path per turn, and only where the path is quarantined and so the offer would
     /// change something. Records the asking, so a planner retrying a read does not put the same
     /// question up twice. A yes thrown away by [`Policy::vouch_if_unchanged`] does not count as the
     /// asking, so the path is offered again.
+    ///
+    /// A yes writes a rule about `path`, so it changes nothing for a file the map distrusts under
+    /// another of its names, or whose other names could not all be found (TRUST-2): the read stays
+    /// quarantined whatever was answered. Such a file is not offered, so nobody is asked a question
+    /// whose answer is thrown away. `other_names` and `names_complete` are those of
+    /// [`Policy::measure_path_under_names`].
     ///
     /// This offers the trust map's own decision at the moment it bites. It is not a second route
     /// to trusting content: what a yes writes is a rule in the map, the same rule `@` and the
@@ -2265,8 +2313,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Writes nothing to the trail itself. The caller writes the line for a person with
     /// [`Policy::note_vouch_offered`], and for a mode that answered with
     /// [`Policy::record_vouch_answered_by_mode`] (TRACE-7).
-    pub fn should_offer_vouch(&mut self, path: &str) -> bool {
-        if !self.read_is_quarantined(path) || self.vouch_asked.contains(path) {
+    pub fn should_offer_vouch(
+        &mut self,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> bool {
+        if !self.read_is_quarantined(path)
+            || !names_complete
+            || self.a_name_is_distrusted(other_names)
+            || self.vouch_asked.contains(path)
+        {
             return false;
         }
         self.vouch_asked.insert(path.to_string());
@@ -2522,6 +2579,51 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         })
     }
 
+    /// [`Policy::measure_path`] for a file that has other names than `path` (TRUST-2): the map is
+    /// asked under each of `other_names` as well, and the file reads as untrusted where the map
+    /// holds a distrust for any of them. A name the map has no rule for says nothing, so a vouch
+    /// recorded under the name typed is not taken back by a name that landed outside every rule
+    /// (TRUST-18). The answer under another name can lower the integrity and never raise it.
+    ///
+    /// `names_complete` is false where the lookup of the file's other names could not finish. The
+    /// file then reads as untrusted, since a name that was not found may carry a rule that says so.
+    /// The names are the file system's answer about a path the planner typed, and no file's
+    /// contents reach this; the trail names `path`.
+    pub fn measure_path_under_names(
+        &self,
+        capability: &Capability,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> Gated<PathObserved> {
+        let mut observed = self.measure_path(capability, path)?;
+        let mut integrity = observed.label.integrity;
+        if !names_complete || self.a_name_is_distrusted(other_names) {
+            integrity = Integrity::Untrusted;
+        }
+        observed.label = Label::new(integrity, observed.label.confidentiality);
+        Ok(observed)
+    }
+
+    /// Whether the map holds a distrust for any of `names`. A name with no rule says nothing.
+    fn a_name_is_distrusted(&self, names: &[String]) -> bool {
+        names
+            .iter()
+            .any(|name| self.integrity_in_force(name) == Some(Integrity::Untrusted))
+    }
+
+    /// Whether a read of `path` would be quarantined under `path`, or the map holds a distrust for
+    /// any of `other_names`, or `names_complete` is false (see
+    /// [`Policy::measure_path_under_names`]).
+    pub fn read_is_quarantined_under_names(
+        &self,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> bool {
+        !names_complete || self.read_is_quarantined(path) || self.a_name_is_distrusted(other_names)
+    }
+
     /// Emit the observation [`Policy::measure_path`] took, and return its label.
     ///
     /// Emits the same two lines [`Policy::observe_path`] does.
@@ -2609,6 +2711,51 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         label
+    }
+
+    /// [`Policy::measure_paths`] for files that have other names than the one each was reported
+    /// under (TRUST-2): each item is a path, the other names the file has, and whether the lookup
+    /// of those names finished, and is measured by [`Policy::measure_path_under_names`]. The
+    /// integrity of the result is the meet of the items, so one file that reads as untrusted
+    /// under any of its names takes the whole result with it. An empty `items` is the driver's own
+    /// empty answer and carries no taint.
+    pub fn measure_paths_under_names<'p>(
+        &self,
+        capability: &Capability,
+        items: impl IntoIterator<Item = (&'p str, &'p [String], bool)>,
+    ) -> Gated<PathsObserved> {
+        let base = capability.output_label().ok_or_else(|| Denial {
+            principle: Principle::Capability,
+            message: format!("'{capability}' produces no observation to label"),
+        })?;
+
+        let mut integrity = Integrity::Trusted;
+        let mut visited = 0usize;
+        for (path, other_names, names_complete) in items {
+            visited += 1;
+            let one =
+                self.measure_path_under_names(capability, path, other_names, names_complete)?;
+            integrity = integrity.meet(one.label.integrity);
+        }
+        if visited == 0 {
+            integrity = Integrity::Trusted;
+        }
+
+        Ok(PathsObserved {
+            label: Label::new(integrity, base.confidentiality),
+            visited,
+        })
+    }
+
+    /// Record an observation spanning several files that may have other names, taking the meet of
+    /// their integrity ([`Policy::measure_paths_under_names`]).
+    pub fn observe_paths_under_names<'p>(
+        &mut self,
+        capability: Capability,
+        items: impl IntoIterator<Item = (&'p str, &'p [String], bool)>,
+    ) -> Gated<Label> {
+        let measured = self.measure_paths_under_names(&capability, items)?;
+        Ok(self.record_paths(capability, measured))
     }
 
     /// Whether the map trusts `path` and every path beneath it.
@@ -3448,6 +3595,63 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "round {round}: {summarised} message(s) summarised, {kept} kept word for word, \
                  costing {cost} tokens{focus}"
+            ),
+        );
+    }
+
+    /// Record what one retrieval sent in place of the messages its cut stopped sending.
+    ///
+    /// Counts and nothing else, as [`Policy::record_compaction`] writes: the excerpts themselves
+    /// are already in the record, and the trail carries no content.
+    pub fn record_retrieval(
+        &mut self,
+        round: usize,
+        sent: usize,
+        considered: usize,
+        tokens: u64,
+        passed: usize,
+        latency_ms: u64,
+    ) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: {sent} excerpt(s) of {considered} chunk(s) sent, about {tokens} \
+                 tokens, {passed} message(s) no longer sent, the query took {latency_ms} ms"
+            ),
+        );
+    }
+
+    /// Record that a round could not retrieve, and so compacts instead.
+    ///
+    /// `why` is one of the driver's own fixed words for the failure, never anything a service
+    /// replied, so the trail carries no content.
+    pub fn record_retrieval_fallback(&mut self, round: usize, why: &'static str) {
+        self.allow(
+            "retrieve",
+            format!("round {round}: could not retrieve ({why}), so the conversation is summarised"),
+        );
+    }
+
+    /// Record that a round within its budget could not find excerpts for its prompt, and goes on
+    /// without them. Nothing is summarised: the request fits.
+    pub fn record_retrieval_skipped(&mut self, round: usize, why: &'static str) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: could not retrieve ({why}), so the prompt goes without excerpts"
+            ),
+        );
+    }
+
+    /// Record that a round over its budget moved the retrieval cut without excerpts because the
+    /// vectors are still being built, rather than summarising. `passed` is how many messages the
+    /// cut moved past. A later round finds the excerpts once the vectors are ready.
+    pub fn record_retrieval_deferred(&mut self, round: usize, passed: usize) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: the index is still being built, so {passed} earlier message(s) \
+                 are left out without excerpts until it is"
             ),
         );
     }
@@ -7226,8 +7430,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// built in one place and a caller cannot arrive with a different spelling of the same step.
     pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
         let words = rule_words(program, args);
+        self.refuse_a_short_name(&words)?;
         let decision = self.permissions.for_command(&words);
         self.refuse_if_denied("run", decision, &named_in_a_refusal(program))
+    }
+
+    /// Refuse a stage whose program is an 8.3 short name while a `deny` or `ask` command rule is
+    /// in force (PERM-5).
+    ///
+    /// A short name is a second spelling of a file, and which file cannot be read off the word, so
+    /// no rule can be matched against it. The refusal is on the word as it was written and the
+    /// rules in force; the same word with no such rule runs as it did.
+    ///
+    /// The refusal says the line is the short name only where the program word is. Under a
+    /// wrapper the short name is a later word, which may be an operand the compiler took from a
+    /// glob, so the line is said to run one and the word is not repeated ([`named_in_a_refusal`]).
+    fn refuse_a_short_name(&mut self, words: &[&str]) -> Gated<()> {
+        if let Some(depth) = self.permissions.short_name_depth(words) {
+            let line = named_in_a_refusal(words[0]);
+            let what = if depth == 0 { "is" } else { "runs" };
+            return Err(self.deny(
+                "run",
+                Principle::Capability,
+                format!(
+                    "{line} {what} an 8.3 short name, which a command rule cannot be matched against"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -7246,6 +7476,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// line and nothing between the two calls can change it.
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         for words in Self::plan_words(plan) {
+            self.refuse_a_short_name(&words)?;
             let decision = self.permissions.for_command(&words);
             self.refuse_if_denied("run", decision, &named_in_a_refusal(words[0]))?;
         }
@@ -7393,22 +7624,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// person vouches on, where an assertion must not follow a name onto a different binary.
     ///
     /// The path compared is the one the driver resolved and will execute, canonicalised before it
-    /// was returned, so a symlink into the project is compared as the file it is. False when no root
-    /// is known, which costs nothing: [`Policy::read_proven`] has already refused the plan by then,
+    /// was returned, so a symlink into the project is compared as the file it is. The directories
+    /// are the working directory and the ones the agent passed to
+    /// [`Policy::set_unproven_directories`]: the checkout holding the working directory, which a
+    /// session begun in a subdirectory has on `$PATH` as readily as one begun at its root, and the
+    /// directories added or left. Both sides are paths the driver computed, and a component
+    /// boundary decides, so `/work/repo-tools` is not under `/work/repo`. False when no directory is
+    /// known, which costs nothing: [`Policy::read_proven`] has already refused the plan by then,
     /// since it is asked whether the line runs at a root that does not exist.
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn resolves_inside_the_project(&self, resolved: &std::path::Path) -> bool {
         self.root
-            .as_deref()
-            .is_some_and(|root| resolved.starts_with(root))
+            .iter()
+            .chain(&self.unproven_directories)
+            .any(|directory| resolved.starts_with(directory))
     }
 
     /// The paths every step of the plan reads, or `None` where any step proves nothing.
     ///
     /// A step is read-proven when the line named a program rather than a path, the file that name
-    /// resolved to lies outside the workspace and is started by a path outside it under its own
-    /// file name, the audited table answers for that file's name and for the exact argv, the step
+    /// resolved to lies outside the workspace and the rest of the set
+    /// [`Policy::resolves_inside_the_project`] compares against, and is started by a path outside
+    /// them under its own file name, the audited table answers for that file's name and for the exact argv, the step
     /// carries no environment assignment, and it opens no file for a stream. `2>&1` renames a
     /// descriptor and opens nothing, so it is not one.
     ///
@@ -7465,6 +7703,28 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Some(paths)
     }
 
+    /// The paths a read-proven plan reads, as the line spelled them, or `None` where the plan is
+    /// not read-proven. What a caller with a file system looks up the other names of
+    /// ([`Policy::learn_operand_names`]).
+    pub fn operands_read_by(&self, plan: &crate::command::Plan) -> Option<Vec<String>> {
+        self.read_proven(plan)
+    }
+
+    /// Record the other names of each operand of the line about to be judged (TRUST-2, CMDLINE-8):
+    /// for an operand as the line spelled it, the keys the map is asked under besides its own, and
+    /// whether the lookup finished. Replaces what an earlier line left. Metadata of paths the
+    /// line's own words named, never a file's bytes; the names can only be added to the ones the
+    /// operand is asked under, so they can only lower the label.
+    ///
+    /// Until this is called the operands are judged by their spelling alone. Once it is, an
+    /// operand left out of `found`, or whose lookup did not finish, reads as untrusted.
+    pub fn learn_operand_names(
+        &mut self,
+        found: std::collections::HashMap<String, (Vec<String>, bool)>,
+    ) {
+        self.operand_names = Some(found);
+    }
+
     /// The label a read-proven plan's output carries, or `None` where the plan is not read-proven.
     ///
     /// The meet over the paths the plan reads and over its standard input, which is the ordinary
@@ -7494,19 +7754,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // before the names are worked out, since a `..` survives being re-spelled.
             let answer = match climbs_out(path) {
                 true => Integrity::Untrusted,
-                false => keys_for_the_map(&plan.directory, path)
-                    .iter()
-                    // A key nothing answers is the answer "nobody has said", which is the weakest
-                    // of them and not an absence to skip over. Dropping it would let one name's
-                    // rule decide for a name it was never written about: an operand holding the
-                    // workspace is asked about the project as well, and the project's rule alone
-                    // would hand back a tree nobody vouched for as trusted.
-                    .map(|key| {
-                        self.integrity_beneath_in_force(key)
-                            .unwrap_or(Integrity::Untrusted)
-                    })
-                    .reduce(Integrity::meet)
-                    .unwrap_or(Integrity::Untrusted),
+                false => {
+                    let mut keys = keys_for_the_map(&plan.directory, path);
+                    // The other names the file has (TRUST-2), found by the caller from the file
+                    // system, which this crate does not reach. A line whose operands the caller
+                    // did not look up is judged by spelling, and one it looked up for and left an
+                    // operand out of, or could not finish for, is untrusted: a name that was not
+                    // found may carry a rule that says so.
+                    match &self.operand_names {
+                        None => {}
+                        Some(found) => match found.get(path.as_str()) {
+                            Some((others, true)) => keys.extend(others.iter().cloned()),
+                            _ => keys.clear(),
+                        },
+                    }
+                    keys.iter()
+                        // A key nothing answers is the answer "nobody has said", which is the weakest
+                        // of them and not an absence to skip over. Dropping it would let one name's
+                        // rule decide for a name it was never written about: an operand holding the
+                        // workspace is asked about the project as well, and the project's rule alone
+                        // would hand back a tree nobody vouched for as trusted. No keys at all is
+                        // the same answer.
+                        .map(|key| {
+                            self.integrity_beneath_in_force(key)
+                                .unwrap_or(Integrity::Untrusted)
+                        })
+                        .reduce(Integrity::meet)
+                        .unwrap_or(Integrity::Untrusted)
+                }
             };
             integrity = integrity.meet(answer);
         }
@@ -12023,6 +12298,311 @@ five
                 "pwd started as {started_as} came back as the audited program's output"
             );
         }
+
+        // The same two positions with the working directory below a checkout and the checkout in
+        // the set the agent passes: a name that starts a file of the checkout's `bin` is refused
+        // whichever of the two fields holds it, against the system's `pwd` as the control.
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/repo/sub", &["."], &[]))
+            .with_root(std::path::Path::new("/work/repo/sub"));
+        policy.set_unproven_directories(&[std::path::PathBuf::from("/work/repo")]);
+        let started_as = |resolved: &str, started_as: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(started_as);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/work/repo/sub");
+            plan
+        };
+        let control = started_as("/usr/bin/pwd", "/usr/bin/pwd");
+        assert!(
+            !policy.plan_needs_approval(&control),
+            "the proof road is shut for the line this test contrasts with"
+        );
+        for (resolved, from) in [
+            ("/usr/bin/pwd", "/work/repo/bin/pwd"),
+            ("/work/repo/bin/pwd", "/usr/bin/pwd"),
+        ] {
+            let planted = started_as(resolved, from);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "pwd resolved to {resolved} and started as {from} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "pwd resolved to {resolved} and started as {from} came back as the audited \
+                 program's output"
+            );
+        }
+    }
+
+    /// A session begun in a subdirectory of a checkout has the checkout's `bin` on `$PATH` as readily
+    /// as one begun at its root (`PATH_add ../bin`), so a file there answering to an audited name
+    /// runs unasked and prints as the audited program unless the checkout is refused as well as the
+    /// working directory (CMDLINE-8, CMDLINE-9). The set is the one the agent passes.
+    ///
+    /// Each fixture trips one position the file can be named in, against the `/usr/bin` control that
+    /// shows the road is open for this line. A sibling that merely shares the checkout's name as a
+    /// prefix is a control too: it rejects a comparison of the text of the paths, which would refuse
+    /// `/work/repo-tools/bin/pwd`, and the directory above the checkout is not refused with it.
+    #[test]
+    fn a_program_in_the_checkout_above_the_working_directory_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/repo/sub", &["."], &[]))
+            .with_root(std::path::Path::new("/work/repo/sub"));
+        policy.set_unproven_directories(&[std::path::PathBuf::from("/work/repo")]);
+
+        let started = |resolved: &str, started_as: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(started_as);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/work/repo/sub");
+            plan
+        };
+
+        for (resolved, started_as) in [
+            ("/usr/bin/pwd", "/usr/bin/pwd"),
+            ("/work/repo-tools/bin/pwd", "/work/repo-tools/bin/pwd"),
+            ("/work/bin/pwd", "/work/bin/pwd"),
+        ] {
+            let control = started(resolved, started_as);
+            assert!(
+                !policy.plan_needs_approval(&control),
+                "pwd resolving to {resolved} asked: the proof road is shut for the control"
+            );
+            assert!(
+                label_of(&mut policy, &control).is_trusted(),
+                "pwd resolving to {resolved} came back untrusted: the proof road is shut for the control"
+            );
+        }
+
+        for (resolved, started_as) in [
+            ("/work/repo/bin/pwd", "/work/repo/bin/pwd"),
+            ("/work/repo/bin/pwd", "/usr/bin/pwd"),
+            ("/usr/bin/pwd", "/work/repo/bin/pwd"),
+            ("/work/repo/sub/bin/pwd", "/work/repo/sub/bin/pwd"),
+        ] {
+            let planted = started(resolved, started_as);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "pwd resolved to {resolved} and started as {started_as} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "pwd resolved to {resolved} and started as {started_as} came back as the audited \
+                 program's output"
+            );
+        }
+    }
+
+    /// A delegate working in a checkout (CHECKOUT-7) has the directory the checkout was made from on
+    /// `$PATH` as the session that made it does, so a file there answering to an audited name runs
+    /// unasked and prints as the audited program unless that directory is refused as well as the
+    /// checkout (CMDLINE-8, CMDLINE-9). The delegate's policy root is its checkout, and the set is
+    /// the one the agent passes: the working directory it was made from, and the checkout holding
+    /// that.
+    ///
+    /// Against the `/usr/bin` control, which shows the road is open for this line. The checkout
+    /// itself is a control too: it rejects a set that replaces the root instead of adding to it,
+    /// which would stop refusing the delegate's own `bin`.
+    #[test]
+    fn a_delegate_in_a_checkout_is_refused_programs_from_the_directory_it_was_made_from() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/state/checkouts/c1", &["."], &[]))
+            .with_root(std::path::Path::new("/state/checkouts/c1"));
+        policy.set_unproven_directories(&[
+            std::path::PathBuf::from("/work/repo/sub"),
+            std::path::PathBuf::from("/work/repo"),
+        ]);
+
+        let started = |resolved: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/state/checkouts/c1");
+            plan
+        };
+
+        let control = started("/usr/bin/pwd");
+        assert!(
+            !policy.plan_needs_approval(&control),
+            "the proof road is shut for the line this test contrasts with"
+        );
+        assert!(
+            label_of(&mut policy, &control).is_trusted(),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
+        for resolved in [
+            "/work/repo/sub/bin/pwd",
+            "/work/repo/bin/pwd",
+            "/state/checkouts/c1/bin/pwd",
+        ] {
+            let planted = started(resolved);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "a delegate ran {resolved} unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "{resolved} came back as the audited program's output"
+            );
+        }
+    }
+
+    /// After `/cd` the session's `$PATH` still lists the directory it left, so a file there
+    /// answering to an audited name runs unasked and prints as the audited program unless the
+    /// directory left is in the set. A relative `$PATH` entry resolves under the old root, since
+    /// `/cd` does not move the process (CMDLINE-8), and arrives here as a file under it. The
+    /// regression it rejects: a set that holds only the current root, which proves the old
+    /// directory's `pwd`.
+    ///
+    /// Against the `/usr/bin` control, and the new root is one too.
+    #[test]
+    fn a_program_in_a_directory_the_session_left_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work/new", &["."], &[]))
+            .with_root(std::path::Path::new("/work/new"));
+
+        let started = |resolved: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from("/work/new");
+            plan
+        };
+
+        // Without the directory left in the set, the old project's file is as good as the system's:
+        // the situation the set exists to change.
+        assert!(
+            !policy.plan_needs_approval(&started("/work/old/bin/pwd")),
+            "the control does not show the road open for a directory nobody listed"
+        );
+
+        policy.set_unproven_directories(&[std::path::PathBuf::from("/work/old")]);
+        assert!(
+            !policy.plan_needs_approval(&started("/usr/bin/pwd")),
+            "the proof road is shut for the control"
+        );
+        assert!(
+            label_of(&mut policy, &started("/usr/bin/pwd")).is_trusted(),
+            "the proof road is shut for the control"
+        );
+        for resolved in ["/work/old/bin/pwd", "/work/new/bin/pwd"] {
+            let planted = started(resolved);
+            assert!(
+                policy.plan_needs_approval(&planted),
+                "{resolved} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &planted).is_trusted(),
+                "{resolved} came back as the audited program's output"
+            );
+        }
+    }
+
+    /// The set adds to the working directory and changes nothing for a session that opened one
+    /// directory: `/work/repo/sub` with the system's `pwd` is proven, with its own `bin/pwd` asks,
+    /// and a session rooted at the checkout asks for the checkout's `bin/pwd` with the set empty
+    /// and with the set holding the checkout. The regressions it rejects: a set that replaces the
+    /// root, which stops refusing the working directory's own `bin`, and a set that refuses the
+    /// system's programs along with the project's.
+    #[test]
+    fn the_set_leaves_the_results_for_the_directory_alone_as_they_were() {
+        let started = |root: &str, resolved: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            let mut plan = plan_of(vec![step]);
+            plan.directory = std::path::PathBuf::from(root);
+            plan
+        };
+
+        for set in [
+            vec![],
+            vec![std::path::PathBuf::from("/work/repo")],
+            vec![std::path::PathBuf::from("/elsewhere/added")],
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_trust(trusting("/work/repo/sub", &["."], &[]))
+                .with_root(std::path::Path::new("/work/repo/sub"));
+            policy.set_unproven_directories(&set);
+            let system = started("/work/repo/sub", "/usr/bin/pwd");
+            assert!(!policy.plan_needs_approval(&system), "{set:?}");
+            assert!(label_of(&mut policy, &system).is_trusted(), "{set:?}");
+            let own = started("/work/repo/sub", "/work/repo/sub/bin/pwd");
+            assert!(policy.plan_needs_approval(&own), "{set:?}");
+            assert!(!label_of(&mut policy, &own).is_trusted(), "{set:?}");
+        }
+
+        for set in [vec![], vec![std::path::PathBuf::from("/work/repo")]] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_trust(trusting("/work/repo", &["."], &[]))
+                .with_root(std::path::Path::new("/work/repo"));
+            policy.set_unproven_directories(&set);
+            let planted = started("/work/repo", "/work/repo/bin/pwd");
+            assert!(policy.plan_needs_approval(&planted), "{set:?}");
+            assert!(!label_of(&mut policy, &planted).is_trusted(), "{set:?}");
+        }
+    }
+
+    /// TRUST-2, CMDLINE-8. The caller found other names for an operand; the label is the weakest
+    /// over all of them, and a lookup that did not finish (or left an operand out) is untrusted.
+    /// Controls: no lookup at all judges by spelling, and a finished lookup with no other names
+    /// stays trusted, so a proof that had stopped working for everyone would fail the control.
+    #[test]
+    fn an_operand_is_labelled_by_every_name_the_caller_found_and_fails_closed() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["vendor"]);
+        let line = plan_of(vec![step_named("wc", &["-l", "lib.js"])]);
+        let found = |others: Vec<&str>, complete: bool| {
+            let mut found = std::collections::HashMap::new();
+            found.insert(
+                "lib.js".to_string(),
+                (others.into_iter().map(String::from).collect(), complete),
+            );
+            found
+        };
+        let trusted = |policy: &Policy<'_, RecordingSink>| {
+            policy
+                .read_proven_label(&line)
+                .is_some_and(|label| label.is_trusted())
+        };
+
+        assert!(trusted(&policy), "the control: no lookup, spelling alone");
+
+        policy.learn_operand_names(found(Vec::new(), true));
+        assert!(
+            trusted(&policy),
+            "the control: a finished lookup found none"
+        );
+
+        policy.learn_operand_names(found(vec!["vendor/lib.js"], true));
+        assert!(
+            !trusted(&policy),
+            "another name under a distrusted rule did not lower the label"
+        );
+
+        policy.learn_operand_names(found(Vec::new(), false));
+        assert!(
+            !trusted(&policy),
+            "a lookup that did not finish was read as finding nothing"
+        );
+
+        policy.learn_operand_names(std::collections::HashMap::new());
+        assert!(
+            !trusted(&policy),
+            "an operand the lookup left out was judged by its spelling"
+        );
     }
 
     /// An assignment in front of a program decides what that program loads and reads before its own
@@ -14859,6 +15439,163 @@ five
             policy.before_command_rules("ls /x", &[]).is_err(),
             "a deny rule for ls let a program called `ls /x` through"
         );
+    }
+
+    /// PERM-5, PERM-20 and MODE-6. A program word respelled in case, with a `.exe` or under a
+    /// wrapper is refused by the same `deny` rule as the plain one, at both gates that rule the
+    /// line and wherever the step sits in it. Neither gate takes a permission mode, so the refusal
+    /// is the same in bypass mode, which only decides the prompts that follow a line the rules let
+    /// through.
+    #[test]
+    fn a_denied_program_respelled_is_refused_at_both_gates() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["Bash(touch *)"], &[], &[]));
+
+        for (program, args) in [
+            ("touch", &["x"][..]),
+            ("TOUCH", &["x"]),
+            ("Touch", &["x"]),
+            ("touch.exe", &["x"]),
+            ("touch.exe.", &["x"]),
+            ("touch.exe::$DATA", &["x"]),
+            ("touch.cmd", &["x"]),
+            ("TOUCH.BAT", &["x"]),
+            ("ENV", &["touch", "x"]),
+            ("env.exe", &["FOO=bar", "TOUCH.exe", "x"]),
+            ("TIMEOUT", &["5", "touch", "x"]),
+            ("timeout.exe.", &["5", "touch", "x"]),
+            ("nice.cmd", &["touch.bat", "x"]),
+        ] {
+            let args_owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+            assert!(
+                policy.before_command_rules(program, &args_owned).is_err(),
+                "{program} {args:?} was not refused before the program was looked for"
+            );
+            let step = step_named(program, args);
+            assert!(
+                policy
+                    .before_plan_rules(&plan_of(vec![step.clone()]))
+                    .is_err(),
+                "{program} {args:?} was not refused on the compiled plan"
+            );
+            assert!(
+                policy
+                    .before_plan_rules(&plan_of(vec![step_named("echo", &["hi"]), step]))
+                    .is_err(),
+                "{program} {args:?} as a later step was not refused"
+            );
+        }
+        assert!(
+            policy.before_command_rules("toucher", &[]).is_ok(),
+            "a program that only starts with the rule's name was refused"
+        );
+    }
+
+    /// A program written as an 8.3 short name is refused at both gates while a `deny` or `ask`
+    /// command rule is in force, since no rule can be matched against a name whose file is not
+    /// readable off the word (PERM-5). The same word is not refused when no rule restricts a
+    /// command, and a program given by a path is left to the rules as before.
+    #[test]
+    fn a_short_name_program_is_refused_at_both_gates_only_under_a_restricting_rule() {
+        for permissions in [
+            permissions(&["Bash(powershell *)"], &[], &[]),
+            permissions(&[], &["Bash(powershell *)"], &[]),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink).with_permissions(permissions);
+            for (program, args) in [
+                ("POWERS~1", &["x"][..]),
+                ("powers~1.exe", &["x"]),
+                ("POWERS~1.", &["x"]),
+                ("TIMEOU~1", &["5", "echo"]),
+                ("env", &["POWERS~1", "x"]),
+            ] {
+                let args_owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+                assert!(
+                    policy.before_command_rules(program, &args_owned).is_err(),
+                    "{program} {args:?} was not refused before the program was looked for"
+                );
+                assert!(
+                    policy
+                        .before_plan_rules(&plan_of(vec![step_named(program, args)]))
+                        .is_err(),
+                    "{program} {args:?} was not refused on the compiled plan"
+                );
+            }
+            assert!(policy.before_command_rules("echo", &[]).is_ok());
+            assert!(
+                policy
+                    .before_command_rules("/usr/bin/POWERS~1", &[])
+                    .is_ok()
+            );
+        }
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["Bash(echo *)"]));
+        assert!(policy.before_command_rules("POWERS~1", &[]).is_ok());
+        assert!(
+            policy
+                .before_plan_rules(&plan_of(vec![step_named("POWERS~1", &["x"])]))
+                .is_ok()
+        );
+    }
+
+    /// The refusal of a short name says which word is the short name. A program that is one is
+    /// named. A short name under a wrapper is not: the word may be an operand the compiler took
+    /// from a glob, which a refusal does not carry to the planner ([CMDLINE-4]), so the wrapper is
+    /// named as running one. Reading `env POWERS~1 x` as "`env` is an 8.3 short name" is what an
+    /// implementation that names the first word, whatever the short name is, would say.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    #[test]
+    fn a_short_name_refusal_names_the_short_name_and_not_the_wrapper_over_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["Bash(powershell *)"], &[], &[]));
+        let wrapped =
+            |args: &[&str]| -> Vec<String> { args.iter().map(|arg| (*arg).to_string()).collect() };
+
+        let direct = policy
+            .before_command_rules("POWERS~1", &wrapped(&["x"]))
+            .expect_err("a short name program was run");
+        assert!(
+            direct
+                .message
+                .contains("`POWERS~1` command line is an 8.3 short name"),
+            "{}",
+            direct.message
+        );
+
+        for (program, args) in [
+            ("env", &["POWERS~1", "x"][..]),
+            ("timeout", &["5", "POWERS~1", "x"]),
+            ("env", &["FOO=bar", "env", "POWERS~1"]),
+        ] {
+            let argv = wrapped(args);
+            let at_the_command = policy
+                .before_command_rules(program, &argv)
+                .expect_err("a short name under a wrapper was run")
+                .message;
+            let at_the_plan = policy
+                .before_plan_rules(&plan_of(vec![step_named(program, args)]))
+                .expect_err("a short name under a wrapper was run on the plan")
+                .message;
+            for message in [at_the_command, at_the_plan] {
+                assert!(
+                    !message.contains("is an 8.3 short name"),
+                    "{program} {args:?} said the wrapper is the short name: {message}"
+                );
+                assert!(
+                    message.contains(&format!("`{program}` command line runs an 8.3 short name")),
+                    "{program} {args:?}: {message}"
+                );
+                assert!(
+                    !message.contains("POWERS~1"),
+                    "{program} {args:?} carried an operand into the refusal: {message}"
+                );
+            }
+        }
     }
 
     /// The line an allow rule must not cross. A pattern covers commands nobody has read, so it
@@ -18067,6 +18804,118 @@ five
         assert!(
             !policy.read_is_quarantined("/C:/Users/someone/scratch/workings.txt"),
             "a turn could not read back what it wrote in its own directory"
+        );
+    }
+
+    /// TRUST-2: where the lookup of a file's other names did not finish, the read is untrusted
+    /// whatever the map says of the name typed, and the same file with a finished lookup stays
+    /// trusted. Covers the three questions asked under other names: one path's label, the quarantine
+    /// check, and several paths together. Rejects reading an unfinished lookup as "no other name".
+    #[test]
+    fn a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+        let none: &[String] = &[];
+
+        let finished = policy
+            .measure_path_under_names(&Capability::FileRead, "src/a.rs", none, true)
+            .expect("measured");
+        assert!(finished.label().is_trusted(), "control: a finished lookup");
+        let unfinished = policy
+            .measure_path_under_names(&Capability::FileRead, "src/a.rs", none, false)
+            .expect("measured");
+        assert!(
+            !unfinished.label().is_trusted(),
+            "an unfinished lookup was read as no other name"
+        );
+
+        assert!(!policy.read_is_quarantined_under_names("src/a.rs", none, true));
+        assert!(
+            policy.read_is_quarantined_under_names("src/a.rs", none, false),
+            "an unfinished lookup was not quarantined"
+        );
+
+        let mut together = |second_complete: bool| {
+            policy
+                .observe_paths_under_names(
+                    Capability::FileRead,
+                    [
+                        ("src/a.rs", none, true),
+                        ("src/b.rs", none, second_complete),
+                    ],
+                )
+                .expect("observed")
+        };
+        assert!(together(true).is_trusted(), "control: both finished");
+        assert!(
+            !together(false).is_trusted(),
+            "one unfinished lookup among several was lost in the meet"
+        );
+    }
+
+    /// TRUST-4: a trusted write through the name that was typed does not lift a person's distrust
+    /// of another name of the file. The entry distrusts every name, so the exact rule on
+    /// `docs/link` is replaced and has to be put back, and a read measured under all the names
+    /// stays untrusted. Rejects a completion that gives the other name what its directory says
+    /// (here the trust of the whole project), which is how the distrust was lifted.
+    #[test]
+    fn a_trusted_write_leaves_an_exact_distrust_on_another_name_of_the_file() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("docs/link");
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store);
+        let others = ["docs/link".to_string()];
+
+        let before = policy
+            .measure_path_under_names(&Capability::FileRead, "a.txt", &others, true)
+            .expect("measured");
+        assert!(
+            !before.label().is_trusted(),
+            "control: the distrusted name did not lower the read before the write"
+        );
+
+        policy
+            .capture_files(|_, capture| capture.begin_all(&["a.txt", "docs/link"]))
+            .expect("both names are free")
+            .complete(Integrity::Trusted);
+
+        assert!(policy.trust().is_trusted("a.txt"));
+        assert_eq!(
+            policy.trust().integrity_of("docs/link"),
+            Some(Integrity::Untrusted),
+            "a trusted write through a.txt lifted the distrust of docs/link"
+        );
+        let after = policy
+            .measure_path_under_names(&Capability::FileRead, "a.txt", &others, true)
+            .expect("measured");
+        assert!(
+            !after.label().is_trusted(),
+            "the file read as trusted under all its names after a write through one"
+        );
+
+        // The control: with no rule against the other name, the same write leaves the file
+        // trusted under both.
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+        policy
+            .capture_files(|_, capture| capture.begin_all(&["a.txt", "docs/link"]))
+            .expect("both names are free")
+            .complete(Integrity::Trusted);
+        assert!(
+            policy
+                .measure_path_under_names(&Capability::FileRead, "a.txt", &others, true)
+                .expect("measured")
+                .label()
+                .is_trusted(),
+            "control: a name nobody distrusted lowered the read"
         );
     }
 
@@ -22668,36 +23517,36 @@ five
             // Thrown away: a program started while the question was open.
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
             policy.file_authority().note_program_started();
             assert!(!policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
             assert!(
-                policy.should_offer_vouch("vendor/lib.js"),
+                policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a thrown-away answer left the path unasked about"
             );
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "the offer made after a thrown-away answer was made twice"
             );
 
             // A no: the confirmer is never asked to vouch, so nothing frees the path.
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a path the person said no to was offered again"
             );
 
             // A yes that was spent: the path is trusted, so there is nothing left to offer.
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
             assert!(policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a path the person vouched for was offered again"
             );
         }
@@ -22726,7 +23575,7 @@ five
                 let mut sink = RecordingSink::new();
                 let mut policy = open_policy(&mut sink);
                 let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
-                assert!(policy.should_offer_vouch("vendor/lib.js"));
+                assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
                 match answered_by {
                     None => policy.note_vouch_offered("vendor/lib.js"),
                     Some(mode) => policy.record_vouch_answered_by_mode("vendor/lib.js", mode),
@@ -22767,15 +23616,40 @@ five
             }
         }
 
+        /// R33 (d). A vouch writes a rule about one name, so a file the map distrusts under another
+        /// name, or whose other names could not all be found, is not offered, and the refused
+        /// asking is not recorded: the same path with nothing wrong is offered after it.
+        #[test]
+        fn a_vouch_is_not_offered_for_a_file_distrusted_under_another_name() {
+            let mut sink = RecordingSink::new();
+            let mut store = TrustStore::new("/work");
+            store.distrust("vendor/other.js");
+            let mut policy = open_policy(&mut sink).with_trust(store);
+            let other = vec!["vendor/other.js".to_string()];
+            let unruled = vec!["vendor/unruled.js".to_string()];
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js", &other, true),
+                "offered for a file distrusted under another of its names"
+            );
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js", &[], false),
+                "offered for a file whose other names could not be found"
+            );
+            assert!(
+                policy.should_offer_vouch("vendor/lib.js", &unruled, true),
+                "control: a refused offer was recorded as asked, or a name with no rule blocked it"
+            );
+        }
+
         /// Deciding to put the question writes no entry, and asks about a path once. A trail line
         /// written here would be there for a mode that never put the question to anybody.
         #[test]
         fn deciding_to_offer_a_vouch_writes_nothing_and_asks_once() {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a path was offered twice in one turn"
             );
             drop(policy);

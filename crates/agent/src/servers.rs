@@ -1872,7 +1872,7 @@ pub fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
         "{indent}{}",
         t!(servers_fetches, runner = shown(&fetched.runner))
     )];
-    lines.extend(fetched.unpinned.map(|unpinned| {
+    lines.extend(fetched.unpinned.into_iter().map(|unpinned| {
         let line = match unpinned {
             Unpinned::Package(package) => t!(servers_unpinned, package = shown(&package)),
             Unpinned::Unread(flag) => t!(
@@ -1892,7 +1892,9 @@ pub fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
 struct Fetches {
     /// The runner, as the words it was invoked with.
     runner: String,
-    unpinned: Option<Unpinned>,
+    /// Each package the line installs that names no exact version, in the order the words name
+    /// them, then the flag the words could not be read past.
+    unpinned: Vec<Unpinned>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1910,25 +1912,498 @@ enum Unpinned {
 /// cannot say what the runner will find.
 fn fetches(argv: &[String]) -> Option<Fetches> {
     let program = Path::new(argv.first()?).file_stem()?.to_str()?;
-    let rest = &argv[1..];
-    let (runner, rest, ecosystem) = match (program, rest.first().map(String::as_str)) {
-        ("npx" | "bunx", _) => (program.to_string(), rest, Ecosystem::Node),
-        ("pnpm" | "yarn", Some("dlx")) => (format!("{program} dlx"), &rest[1..], Ecosystem::Node),
-        ("npm", Some("exec")) => ("npm exec".to_string(), &rest[1..], Ecosystem::Node),
-        ("uvx", _) => (program.to_string(), rest, Ecosystem::Python),
-        ("uv", Some("tool")) if rest.get(1).map(String::as_str) == Some("run") => {
-            ("uv tool run".to_string(), &rest[2..], Ecosystem::Python)
+    let invocation = Invocation::of(program)?;
+    let (runner, located, ecosystem) = match invocation.after_subcommand(&argv[1..]) {
+        Ok(Some(located)) => (invocation.runner.to_string(), located, invocation.ecosystem),
+        Ok(None) => return None,
+        Err(flag) => {
+            return Some(Fetches {
+                runner: invocation.runner.to_string(),
+                unpinned: vec![Unpinned::Unread(flag)],
+            });
         }
-        ("pipx", Some("run")) => ("pipx run".to_string(), &rest[1..], Ecosystem::Python),
-        _ => return None,
     };
-    let unpinned = match package(rest, ecosystem) {
-        Ok(package) => package
-            .filter(|package| !ecosystem.pinned(package))
-            .map(Unpinned::Package),
-        Err(flag) => Some(Unpinned::Unread(flag)),
-    };
+    let read = packages(located.rest, ecosystem, located.earlier);
+    let unpinned = read
+        .named
+        .into_iter()
+        .filter(|package| !ecosystem.pinned(package))
+        .map(Unpinned::Package)
+        .chain(read.unread.map(Unpinned::Unread))
+        .collect();
     Some(Fetches { runner, unpinned })
+}
+
+/// The options a program takes before the word that names what it does, as they are written
+/// (`-y`, `--yes`), split by whether the next word is their value.
+#[derive(Debug, Clone, Copy)]
+struct Globals {
+    switches: &'static [&'static str],
+    valued: &'static [&'static str],
+}
+
+/// How a program names a runner: the words after the program that name it, each with every
+/// spelling the program accepts for it, and the options it takes in front of each word.
+#[derive(Debug, Clone, Copy)]
+struct Invocation {
+    /// What the prompt calls the runner, whichever spelling was declared.
+    runner: &'static str,
+    ecosystem: Ecosystem,
+    words: &'static [&'static [&'static str]],
+    globals: Globals,
+}
+
+/// Options npm takes before its sub-command: every switch and valued option in npm's own
+/// definitions (`@npmcli/config`, npm 11.19), with the short forms and shorthands it resolves.
+const NPM_GLOBALS: Globals = Globals {
+    switches: &[
+        "--all",
+        "--allow-same-version",
+        "--allow-scripts-pending",
+        "--allow-scripts-pin",
+        "--audit",
+        "--bin-links",
+        "--browser",
+        "--bypass-2fa",
+        "--color",
+        "--commit-hooks",
+        "--dangerously-allow-all-scripts",
+        "--dd",
+        "--ddd",
+        "--desc",
+        "--description",
+        "--dev",
+        "--diff-ignore-all-space",
+        "--diff-name-only",
+        "--diff-no-prefix",
+        "--diff-text",
+        "--dry-run",
+        "--engine-strict",
+        "--expect-results",
+        "--force",
+        "--foreground-scripts",
+        "--format-package-lock",
+        "--fund",
+        "--git-tag-version",
+        "--global",
+        "--global-style",
+        "--help",
+        "--if-present",
+        "--ignore-scripts",
+        "--include-attestations",
+        "--include-staged",
+        "--include-workspace-root",
+        "--init-private",
+        "--install-links",
+        "--iwr",
+        "--json",
+        "--legacy-bundling",
+        "--legacy-peer-deps",
+        "--link",
+        "--local",
+        "--long",
+        "--no",
+        "--offline",
+        "--omit-lockfile-registry-resolved",
+        "--optional",
+        "--package-lock",
+        "--package-lock-only",
+        "--packages-all",
+        "--parseable",
+        "--porcelain",
+        "--prefer-dedupe",
+        "--prefer-offline",
+        "--prefer-online",
+        "--production",
+        "--progress",
+        "--provenance",
+        "--quiet",
+        "--read-only",
+        "--readonly",
+        "--rebuild-bundle",
+        "--save",
+        "--save-bundle",
+        "--save-dev",
+        "--save-exact",
+        "--save-optional",
+        "--save-peer",
+        "--save-prod",
+        "--shrinkwrap",
+        "--sign-git-commit",
+        "--sign-git-tag",
+        "--silent",
+        "--strict-allow-scripts",
+        "--strict-peer-deps",
+        "--strict-ssl",
+        "--timing",
+        "--unicode",
+        "--update-notifier",
+        "--usage",
+        "--verbose",
+        "--version",
+        "--versions",
+        "--workspaces",
+        "--workspaces-update",
+        "--ws",
+        "--yes",
+        "-?",
+        "-B",
+        "-D",
+        "-E",
+        "-H",
+        "-O",
+        "-P",
+        "-S",
+        "-a",
+        "-d",
+        "-dd",
+        "-ddd",
+        "-f",
+        "-g",
+        "-h",
+        "-l",
+        "-n",
+        "-p",
+        "-q",
+        "-s",
+        "-v",
+        "-y",
+    ],
+    valued: &[
+        "--_auth",
+        "--access",
+        "--allow-directory",
+        "--allow-file",
+        "--allow-git",
+        "--allow-remote",
+        "--allow-scripts",
+        "--also",
+        "--audit-level",
+        "--auth-type",
+        "--before",
+        "--ca",
+        "--cache",
+        "--cache-max",
+        "--cache-min",
+        "--cafile",
+        "--call",
+        "--cert",
+        "--cidr",
+        "--cpu",
+        "--depth",
+        "--diff",
+        "--diff-dst-prefix",
+        "--diff-src-prefix",
+        "--diff-unified",
+        "--editor",
+        "--enjoy-by",
+        "--expect-result-count",
+        "--expires",
+        "--fetch-retries",
+        "--fetch-retry-factor",
+        "--fetch-retry-maxtimeout",
+        "--fetch-retry-mintimeout",
+        "--fetch-timeout",
+        "--git",
+        "--globalconfig",
+        "--heading",
+        "--https-proxy",
+        "--include",
+        "--init-author-email",
+        "--init-author-name",
+        "--init-author-url",
+        "--init-license",
+        "--init-module",
+        "--init-type",
+        "--init-version",
+        "--install-strategy",
+        "--key",
+        "--libc",
+        "--local-address",
+        "--location",
+        "--lockfile-version",
+        "--loglevel",
+        "--logs-dir",
+        "--logs-max",
+        "--maxsockets",
+        "--message",
+        "--min-release-age",
+        "--min-release-age-exclude",
+        "--name",
+        "--node-gyp",
+        "--node-options",
+        "--noproxy",
+        "--omit",
+        "--only",
+        "--orgs",
+        "--orgs-permission",
+        "--os",
+        "--otp",
+        "--pack-destination",
+        "--package",
+        "--packages",
+        "--packages-and-scopes-permission",
+        "--password",
+        "--prefix",
+        "--preid",
+        "--provenance-file",
+        "--proxy",
+        "--reg",
+        "--registry",
+        "--replace-registry-host",
+        "--save-prefix",
+        "--sbom-format",
+        "--sbom-type",
+        "--scope",
+        "--scopes",
+        "--script-shell",
+        "--searchexclude",
+        "--searchlimit",
+        "--searchopts",
+        "--searchstaleness",
+        "--shell",
+        "--tag",
+        "--tag-version-prefix",
+        "--token-description",
+        "--umask",
+        "--user-agent",
+        "--userconfig",
+        "--viewer",
+        "--which",
+        "--workspace",
+        "-C",
+        "-L",
+        "-c",
+        "-m",
+        "-w",
+    ],
+};
+
+/// Options pnpm takes before its sub-command, from `pnpm --help` (pnpm 11.28).
+const PNPM_GLOBALS: Globals = Globals {
+    switches: &[
+        "-v",
+        "--version",
+        "-y",
+        "--yes",
+        "--ignore-workspace",
+        "--color",
+        "--no-progress",
+        "--stream",
+        "--aggregate-output",
+        "--use-stderr",
+        "-r",
+        "--recursive",
+        "-w",
+        "--workspace-root",
+        "--fail-if-no-match",
+        "--no-fail-if-no-match",
+        "--include-workspace-root",
+        "--no-include-workspace-root",
+        "--sort",
+        "--no-sort",
+        "--reverse",
+        "--parallel",
+        "-h",
+        "--help",
+    ],
+    valued: &[
+        "-C",
+        "--dir",
+        "--store-dir",
+        "--state-dir",
+        "--npmrc-auth-file",
+        "--userconfig",
+        "--workspace-packages",
+        "--registry",
+        "--https-proxy",
+        "--http-proxy",
+        "--no-proxy",
+        "--reporter",
+        "--loglevel",
+        "-F",
+        "--filter",
+        "--filter-prod",
+        "--test-pattern",
+        "--changed-files-ignore-pattern",
+        "--workspace-concurrency",
+    ],
+};
+
+/// Options uv takes before `tool` and `run`, written from the global options uv documents and not
+/// read from an installed uv. An option missing from this list makes the line read as unknown,
+/// which draws the more cautious prompt.
+const UV_GLOBALS: Globals = Globals {
+    switches: &[
+        "-q",
+        "--quiet",
+        "-v",
+        "--verbose",
+        "-n",
+        "--no-cache",
+        "--no-progress",
+        "--offline",
+        "--native-tls",
+        "--no-native-tls",
+        "--no-config",
+        "--isolated",
+        "--preview",
+        "--no-preview",
+        "--no-python-downloads",
+        "--managed-python",
+        "--no-managed-python",
+        "-h",
+        "--help",
+        "-V",
+        "--version",
+    ],
+    valued: &[
+        "--color",
+        "--cache-dir",
+        "--python-preference",
+        "--config-file",
+        "--directory",
+        "--project",
+        "--allow-insecure-host",
+    ],
+};
+
+/// Options pipx takes before `run`, written from the global options pipx documents and not read
+/// from an installed pipx. An option missing from this list makes the line read as unknown, which
+/// draws the more cautious prompt.
+const PIPX_GLOBALS: Globals = Globals {
+    switches: &[
+        "-q",
+        "--quiet",
+        "-v",
+        "--verbose",
+        "--global",
+        "-h",
+        "--help",
+        "--version",
+    ],
+    valued: &[],
+};
+
+/// A program whose options before its sub-command are not known, so that any option there is read
+/// as one this does not know.
+const NO_GLOBALS: Globals = Globals {
+    switches: &[],
+    valued: &[],
+};
+
+/// Where a runner's own words begin: the words after its sub-command, and the packages that
+/// package flags in front of the sub-command named.
+struct Located<'a> {
+    rest: &'a [String],
+    earlier: Vec<String>,
+}
+
+impl Invocation {
+    /// The runner a program of this name starts, if it starts one by itself or with a sub-command.
+    fn of(program: &str) -> Option<Self> {
+        let named = |runner, ecosystem, words, globals| Self {
+            runner,
+            ecosystem,
+            words,
+            globals,
+        };
+        Some(match program {
+            "npx" => named("npx", Ecosystem::Node, &[], NO_GLOBALS),
+            "bunx" => named("bunx", Ecosystem::Node, &[], NO_GLOBALS),
+            "pnpm" => named("pnpm dlx", Ecosystem::Node, &[&["dlx"]], PNPM_GLOBALS),
+            "yarn" => named("yarn dlx", Ecosystem::Node, &[&["dlx"]], NO_GLOBALS),
+            // `exe` and `exec` are the abbreviations npm resolves to `exec` (the word `ex` is
+            // ambiguous with `explain` and `explore`), and `x` is its alias.
+            "npm" => named(
+                "npm exec",
+                Ecosystem::Node,
+                &[&["exec", "exe", "x"]],
+                NPM_GLOBALS,
+            ),
+            "uvx" => named("uvx", Ecosystem::Python, &[], NO_GLOBALS),
+            "uv" => named(
+                "uv tool run",
+                Ecosystem::Python,
+                &[&["tool"], &["run"]],
+                UV_GLOBALS,
+            ),
+            "pipx" => named("pipx run", Ecosystem::Python, &[&["run"]], PIPX_GLOBALS),
+            _ => return None,
+        })
+    }
+
+    /// The words after the ones that name the runner, skipping the program's own options in front
+    /// of each. None where the words name something else. Err with the option where one this does
+    /// not know comes in front of a word that could be the one asked for, because it may take that
+    /// word as its value and then the line is not read.
+    ///
+    /// A package flag listed among the program's valued options (`npm --package=x exec`) names a
+    /// package like the same flag after the sub-command does, so its value is returned in
+    /// `earlier` and is not skipped.
+    fn after_subcommand<'a>(&self, arguments: &'a [String]) -> Result<Option<Located<'a>>, String> {
+        let mut rest = arguments;
+        let mut earlier = Vec::new();
+        for spellings in self.words {
+            loop {
+                let Some(word) = rest.first() else {
+                    return Ok(None);
+                };
+                if !word.starts_with('-') {
+                    if !spellings.contains(&word.as_str()) {
+                        return Ok(None);
+                    }
+                    rest = &rest[1..];
+                    break;
+                }
+                if word == "--" {
+                    return Ok(None);
+                }
+                let globals = self.globals;
+                let (flag, attached) = match word.split_once('=') {
+                    Some((flag, value)) => (flag, Some(value)),
+                    None => (word.as_str(), None),
+                };
+                if globals.valued.contains(&flag) && self.ecosystem.package_flags().contains(&flag)
+                {
+                    match attached {
+                        Some(value) => {
+                            earlier.push(value.to_string());
+                            rest = &rest[1..];
+                        }
+                        None => {
+                            earlier.extend(rest.get(1).cloned());
+                            rest = rest.get(2..).unwrap_or_default();
+                        }
+                    }
+                    continue;
+                }
+                let valued = globals.valued.contains(&word.as_str());
+                if word.contains('=')
+                    || globals.switches.contains(&word.as_str())
+                    || (!valued
+                        && !globals.switches.is_empty()
+                        && self.ecosystem == Ecosystem::Node
+                        && word.starts_with("--no-"))
+                {
+                    rest = &rest[1..];
+                } else if valued {
+                    rest = rest.get(2..).unwrap_or_default();
+                } else {
+                    let next_could_name_it = rest[1..]
+                        .iter()
+                        .take(2)
+                        .any(|next| spellings.contains(&next.as_str()));
+                    return if next_could_name_it {
+                        Err(word.clone())
+                    } else {
+                        Ok(None)
+                    };
+                }
+            }
+        }
+        Ok(Some(Located { rest, earlier }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1938,7 +2413,8 @@ enum Ecosystem {
 }
 
 impl Ecosystem {
-    /// The flags naming the package where it is not the first word.
+    /// The flags naming the package where it is not the first word. Once one is given, the first
+    /// word that is not a flag is the command to run in it.
     fn package_flags(self) -> &'static [&'static str] {
         match self {
             Self::Node => &["-p", "--package"],
@@ -1946,10 +2422,19 @@ impl Ecosystem {
         }
     }
 
+    /// The flags naming a package that is installed beside the one that runs, and so leave the
+    /// first word that is not a flag where it was.
+    fn added_package_flags(self) -> &'static [&'static str] {
+        match self {
+            Self::Node => &[],
+            Self::Python => &["--with", "-w"],
+        }
+    }
+
     /// The flags before the package that take no value.
     fn switches(self) -> &'static [&'static str] {
         match self {
-            Self::Node => &["-y", "--yes", "--no", "-q", "--quiet", "--bun"],
+            Self::Node => &["-y", "--yes", "--no", "-q", "--quiet", "--bun", "--offline"],
             Self::Python => &[
                 "-q",
                 "--quiet",
@@ -1968,15 +2453,7 @@ impl Ecosystem {
     fn valued(self) -> &'static [&'static str] {
         match self {
             Self::Node => &["--registry", "--cache", "--userconfig"],
-            Self::Python => &[
-                "--with",
-                "-w",
-                "--python",
-                "-p",
-                "--index",
-                "--index-url",
-                "-i",
-            ],
+            Self::Python => &["--python", "-p", "--index", "--index-url", "-i"],
         }
     }
 
@@ -2010,25 +2487,58 @@ fn release(version: &str) -> Option<usize> {
         .then_some(parts.len())
 }
 
-/// The package a runner's arguments name, or the flag before it that they cannot be read past.
+/// What a runner's arguments name: every package the line installs, and the flag before the
+/// command that they cannot be read past.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Packages {
+    named: Vec<String>,
+    unread: Option<String>,
+}
+
+/// Every package a runner's arguments name, or the flag before the command that they cannot be read
+/// past.
+///
+/// `earlier` is the packages that package flags in front of the runner's sub-command named. A
+/// package flag (`-p`, `--package`, `--from`, `--spec`) names a package each time it is given,
+/// and once one is given, there or here, the first word that is not a flag is the command to run
+/// in it. With none,
+/// that word is the package. A flag that adds a package beside the one that runs (`--with`) names
+/// one and leaves that word where it was. Over-naming a word that turns out not to be a package
+/// costs the person one more line at the question, and leaving one out draws a floating package as
+/// pinned, so the reading names a word where it is not sure.
 ///
 /// A flag this does not know may take the next word as its value, and then that word is not the
 /// package: guessing either way could name a pinned word and leave the package unnamed.
-fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>, String> {
+fn packages(arguments: &[String], ecosystem: Ecosystem, earlier: Vec<String>) -> Packages {
+    let mut flagged = !earlier.is_empty();
+    let mut read = Packages {
+        named: earlier,
+        unread: None,
+    };
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
         let (flag, value) = match word.split_once('=') {
             Some((flag, value)) if flag.starts_with('-') => (flag, Some(value)),
             _ => (word.as_str(), None),
         };
-        if ecosystem.package_flags().contains(&flag) {
-            return Ok(value.map(str::to_string).or_else(|| words.next().cloned()));
+        let named = ecosystem.package_flags().contains(&flag);
+        if named || ecosystem.added_package_flags().contains(&flag) {
+            flagged |= named;
+            read.named
+                .extend(value.map(str::to_string).or_else(|| words.next().cloned()));
+            continue;
         }
         if word == "--" {
-            return Ok(words.next().cloned());
+            if !flagged {
+                read.named.extend(words.next().cloned());
+            }
+            return read;
         }
         if !word.starts_with('-') {
-            return Ok(Some(word.clone()));
+            if !flagged {
+                read.named.push(word.clone());
+            }
+            return read;
         }
         if value.is_some() || ecosystem.switches().contains(&flag) {
             continue;
@@ -2037,9 +2547,10 @@ fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>,
             words.next();
             continue;
         }
-        return Err(word.clone());
+        read.unread = Some(word.clone());
+        return read;
     }
-    Ok(None)
+    read
 }
 
 /// Start every planned server, and wait for each handshake for the startup bound its declaration
@@ -2678,9 +3189,10 @@ pub struct EffectivePolicy {
     /// Every path that was wanted and is not in `rows` because this platform names no path that is
     /// not on disk, and this one was not (SANDBOX-9).
     pub left_out: Vec<PathBuf>,
-    /// Whether a write row stops short of a `.git` beneath it, which macOS does for a policy that
-    /// grants any write and does not lift it (SANDBOX-14). A row says `write` and a write there is
-    /// still refused, so this is part of what the rows mean.
+    /// Whether a write row stops short of the protected names beneath it, which macOS does for a
+    /// policy that grants any write and does not lift it (SANDBOX-14). A row says `write` and a
+    /// write to a `.git`, `.bravebot`, `.husky`, `.gitmodules`, `.gitconfig` or
+    /// `.pre-commit-config.yaml` there is still refused, so this is part of what the rows mean.
     pub git_held_back: bool,
 }
 
@@ -3458,6 +3970,48 @@ mod tests {
         assert_eq!(program, &genuine);
     }
 
+    /// A session opened in a subdirectory leaves out the checkout holding it
+    /// ([`bravebot_sandbox::programs::with_checkout`]), so a name approved while it resolved to an
+    /// installed program does not start a file planted in that checkout's `bin` ahead of it. The
+    /// installation sits under the same repository's `target/` as the fixture and outside the
+    /// fixture's checkout, and is still found. Rejects a record of the session directory alone,
+    /// which starts the planted file, and one that leaves out every ancestor of the directory,
+    /// which loses the installation.
+    #[test]
+    fn an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session() {
+        let (home, project, declaration) = declared("cli-servers-checkout", &["weather-mcp"]);
+        let root = home.parent().unwrap();
+        // The scratch directory is under this repository, so the fixture needs a `.git` of its own
+        // for the checkout the session was opened in.
+        let checkout = root.join("checkout");
+        let session = checkout.join("sub");
+        std::fs::create_dir_all(checkout.join(".git")).expect("checkout");
+        std::fs::create_dir_all(&session).expect("session");
+        let real = root.join("real-bin");
+        let genuine = installed(&real, "weather-mcp");
+        installed(&checkout.join("bin"), "weather-mcp");
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", declaration.digest());
+        std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("approve");
+        let path = PathBuf::from(
+            std::env::join_paths([checkout.join("bin"), real.clone()]).expect("PATH"),
+        );
+
+        // What a session opened in `session` records, in the test's list of its own.
+        STAGE_WRITABLE.with(|writable| {
+            writable
+                .borrow_mut()
+                .extend(bravebot_sandbox::programs::with_checkout(&session))
+        });
+        let settled = settled(&home, &project, Asking::OneShot, false, true, "", &path);
+
+        assert_eq!(started(&settled), vec!["weather"]);
+        let Some((_, Plan::Stdio { program, .. })) = settled.plans.first() else {
+            panic!("a stdio plan");
+        };
+        assert_eq!(program, &genuine);
+    }
+
     #[test]
     fn skipping_permissions_starts_the_server_unasked_and_records_nothing() {
         let (home, project, _) = declared("cli-servers-bypass", &["weather-mcp"]);
@@ -4025,6 +4579,134 @@ mod tests {
                 None,
             ),
             (&["pipx", "install", "server"][..], None, None),
+            (
+                &["npm", "x", "-y", "evil@latest"][..],
+                Some("npm exec"),
+                unpinned("evil@latest"),
+            ),
+            (
+                &["npm", "x", "-y", "--offline", "-p", "evil@latest", "bin"][..],
+                Some("npm exec"),
+                unpinned("evil@latest"),
+            ),
+            (
+                &["npm", "x", "-y", "evil@1.0.0"][..],
+                Some("npm exec"),
+                None,
+            ),
+            (
+                &[
+                    "npm",
+                    "--loglevel=silent",
+                    "exe",
+                    "-y",
+                    "-p",
+                    "evil@latest",
+                    "bin",
+                ][..],
+                Some("npm exec"),
+                unpinned("evil@latest"),
+            ),
+            (
+                &["npm", "--loglevel", "silent", "exec", "evil"][..],
+                Some("npm exec"),
+                unpinned("evil"),
+            ),
+            (
+                &["npm", "--no-audit", "-C", "app", "x", "evil"][..],
+                Some("npm exec"),
+                unpinned("evil"),
+            ),
+            (
+                &["npm", "--noproxy", "example.com", "exec", "evil@1.0.0"][..],
+                Some("npm exec"),
+                None,
+            ),
+            (
+                &["pnpm", "--no-proxy", "example.com", "dlx", "server@1.0.0"][..],
+                Some("pnpm dlx"),
+                None,
+            ),
+            (
+                &["npm", "--unheard-of", "x", "evil@latest"][..],
+                Some("npm exec"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (&["npm", "--unheard-of", "install", "evil"][..], None, None),
+            (&["npm", "install", "x", "evil"][..], None, None),
+            (&["npm", "ex", "evil"][..], None, None),
+            (&["npm", "x"][..], Some("npm exec"), None),
+            (
+                &["pnpm", "--dir", "app", "dlx", "server"][..],
+                Some("pnpm dlx"),
+                unpinned("server"),
+            ),
+            (
+                &["pnpm", "--loglevel=silent", "-y", "dlx", "server@1.0.0"][..],
+                Some("pnpm dlx"),
+                None,
+            ),
+            (
+                &["pnpm", "--unheard-of", "dlx", "server"][..],
+                Some("pnpm dlx"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (&["pnpm", "exec", "server"][..], None, None),
+            (
+                &["yarn", "--unheard-of", "dlx", "server"][..],
+                Some("yarn dlx"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (
+                &["uv", "--quiet", "tool", "run", "server"][..],
+                Some("uv tool run"),
+                unpinned("server"),
+            ),
+            (
+                &[
+                    "uv",
+                    "--color",
+                    "never",
+                    "tool",
+                    "--offline",
+                    "run",
+                    "server==1.0.0",
+                ][..],
+                Some("uv tool run"),
+                None,
+            ),
+            (
+                &["uv", "--unheard-of", "tool", "run", "server"][..],
+                Some("uv tool run"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (&["uv", "tool", "install", "server"][..], None, None),
+            (&["uv", "pip", "install", "server"][..], None, None),
+            (
+                &["pipx", "--quiet", "run", "server"][..],
+                Some("pipx run"),
+                unpinned("server"),
+            ),
+            (
+                &["pipx", "--unheard-of", "run", "server"][..],
+                Some("pipx run"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"][..],
+                Some("npx"),
+                unpinned("evil"),
+            ),
+            (
+                &["npx", "-p", "a@1.0.0", "-p", "b@1.0.0", "bin"][..],
+                Some("npx"),
+                None,
+            ),
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil"][..],
+                Some("npx"),
+                unpinned("evil"),
+            ),
             (&["weather-mcp", "--stdio"][..], None, None),
             (&["node", "server.js"][..], None, None),
         ] {
@@ -4034,7 +4716,156 @@ mod tests {
                 runner,
                 "{argv:?}"
             );
-            assert_eq!(found.and_then(|found| found.unpinned), expected, "{argv:?}");
+            assert_eq!(
+                found.map(|found| found.unpinned).unwrap_or_default(),
+                expected.into_iter().collect::<Vec<_>>(),
+                "{argv:?}"
+            );
+        }
+    }
+
+    /// A line that installs several packages names each one that floats, and the prompt draws
+    /// each of them (SERVERS-6).
+    #[test]
+    fn every_package_a_runner_line_installs_is_read_and_each_unpinned_one_is_named() {
+        let package = |package: &str| Unpinned::Package(package.to_string());
+        for (argv, expected) in [
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &["npx", "-y", "-p", "evil", "-p", "good@1.2.3", "bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &[
+                    "npx",
+                    "-p",
+                    "a@latest",
+                    "--package=b",
+                    "-p",
+                    "c@1.0.0",
+                    "bin",
+                ][..],
+                vec![package("a@latest"), package("b")],
+            ),
+            (
+                &[
+                    "npx",
+                    "--offline",
+                    "-y",
+                    "-p",
+                    "a@1.0.0",
+                    "-p",
+                    "b@2.0.0",
+                    "b-bin",
+                ][..],
+                vec![],
+            ),
+            // Once a package flag is given the next word is the command, not a package.
+            (&["npx", "-y", "-p", "good@1.2.3", "serve"][..], vec![]),
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil"][..],
+                vec![package("evil")],
+            ),
+            // What follows the command belongs to the command.
+            (
+                &["npx", "-p", "good@1.2.3", "serve", "-p", "evil"][..],
+                vec![],
+            ),
+            (
+                &["npm", "x", "-y", "-p", "good@1.2.3", "-p", "evil", "bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &["pnpm", "dlx", "-p", "good@1.2.3", "-p", "evil", "bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &["yarn", "dlx", "-p", "good@1.2.3", "-p", "evil", "bin"][..],
+                vec![package("evil")],
+            ),
+            (&["npx", "--", "server"][..], vec![package("server")]),
+            // A flag that cannot be read past is named after the packages read before it.
+            (
+                &[
+                    "npx",
+                    "-p",
+                    "evil",
+                    "--prefer-offline",
+                    "-p",
+                    "good@1.0.0",
+                    "bin",
+                ][..],
+                vec![
+                    package("evil"),
+                    Unpinned::Unread("--prefer-offline".to_string()),
+                ],
+            ),
+            // `uvx --from` and `--spec` repeat, and `--with` packages are installed too.
+            (
+                &["uvx", "--from", "a==1.0.0", "--from", "b", "serve"][..],
+                vec![package("b")],
+            ),
+            (
+                &["uvx", "--spec", "a==1.0.0", "--from=b>=1", "serve"][..],
+                vec![package("b>=1")],
+            ),
+            (
+                &["uvx", "--with", "helper", "server==1.0.0"][..],
+                vec![package("helper")],
+            ),
+            (
+                &["uvx", "--with", "helper", "--with=other>=2", "server"][..],
+                vec![package("helper"), package("other>=2"), package("server")],
+            ),
+            (
+                &[
+                    "uvx",
+                    "--with",
+                    "helper==1.0.0",
+                    "--from",
+                    "tool>=1",
+                    "serve",
+                ][..],
+                vec![package("tool>=1")],
+            ),
+            (
+                &["uvx", "--with", "helper==1.0.0", "server==1.0.0"][..],
+                vec![],
+            ),
+            // `-w` is read as `--with`, so its package is named and the main one stays pinned.
+            (
+                &["uvx", "-w", "helper", "server==1.0.0"][..],
+                vec![package("helper")],
+            ),
+            // A `--package` in front of npm's sub-command names a package, and the word after the
+            // sub-command is then the command to run in it.
+            (
+                &["npm", "--package=evil@latest", "x", "bin"][..],
+                vec![package("evil@latest")],
+            ),
+            (
+                &["npm", "--package", "evil@latest", "exec", "bin"][..],
+                vec![package("evil@latest")],
+            ),
+            (
+                &[
+                    "npm",
+                    "--package",
+                    "good@1.2.3",
+                    "exec",
+                    "--package",
+                    "evil",
+                    "bin",
+                ][..],
+                vec![package("evil")],
+            ),
+            (&["npm", "--package=good@1.2.3", "exec", "bin"][..], vec![]),
+        ] {
+            let found = fetches(&words(argv)).expect("a runner");
+            assert_eq!(found.unpinned, expected, "{argv:?}");
         }
     }
 
@@ -4058,6 +4889,106 @@ mod tests {
             lines.contains(
                 &t!(servers_unpinned, package = "@dangahagan/weather-mcp@latest").as_str()
             ),
+            "{lines:?}"
+        );
+    }
+
+    /// A floating package behind a pinned one is what the prompt exists to show: reading only the
+    /// first package would call the line pinned (SERVERS-6).
+    #[test]
+    fn a_runner_line_that_installs_two_packages_draws_the_one_that_floats() {
+        let argv = words(&["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"]);
+        let declaration = Declaration::stdio(argv, Vec::new(), None).expect("declaration");
+        let lines: Vec<String> = fetching("weather", &declaration)
+            .iter()
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                t!(servers_fetches, runner = "npx").to_string(),
+                t!(servers_unpinned, package = "evil").to_string(),
+            ]
+        );
+
+        let argv = words(&["npx", "-p", "a@latest", "-p", "b", "-p", "c@1.0.0", "bin"]);
+        let declaration = Declaration::stdio(argv, Vec::new(), None).expect("declaration");
+        let lines: Vec<String> = fetching("weather", &declaration)
+            .iter()
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                t!(servers_fetches, runner = "npx").to_string(),
+                t!(servers_unpinned, package = "a@latest").to_string(),
+                t!(servers_unpinned, package = "b").to_string(),
+            ]
+        );
+    }
+
+    /// A person who writes `npm x` runs a package from the registry as `npm exec` does, so the
+    /// prompt must draw it as a runner; `npm install` fetches nothing to run and must not be
+    /// (SERVERS-6).
+    #[test]
+    fn an_npm_alias_is_drawn_as_the_npm_exec_runner_it_is_and_install_is_not() {
+        let lines_of = |argv: &[&str]| -> Vec<String> {
+            let declaration =
+                Declaration::stdio(words(argv), Vec::new(), None).expect("declaration");
+            fetching("weather", &declaration)
+                .iter()
+                .map(|line| line.trim().to_string())
+                .collect()
+        };
+        assert_eq!(
+            lines_of(&["npm", "x", "-y", "evil@latest"]),
+            vec![
+                t!(servers_fetches, runner = "\"npm exec\"").to_string(),
+                t!(servers_unpinned, package = "evil@latest").to_string(),
+            ]
+        );
+        assert_eq!(
+            lines_of(&[
+                "npm",
+                "--loglevel=silent",
+                "exe",
+                "-y",
+                "-p",
+                "evil@latest",
+                "bin"
+            ]),
+            vec![
+                t!(servers_fetches, runner = "\"npm exec\"").to_string(),
+                t!(servers_unpinned, package = "evil@latest").to_string(),
+            ]
+        );
+        assert!(lines_of(&["npm", "install", "x", "evil@latest"]).is_empty());
+    }
+
+    /// The question a person answers is where the unpinned package has to be visible, so the line
+    /// naming it must reach the prompt and not only the unit that reads the command (SERVERS-6).
+    #[test]
+    fn a_runner_line_with_two_packages_draws_the_unpinned_one_at_the_question() {
+        let (home, project, _) = declared(
+            "cli-servers-runner-two",
+            &["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"],
+        );
+        let bin = home.parent().unwrap().join("bin");
+        installed(&bin, "npx");
+
+        let settled = settled(&home, &project, Asking::Person, true, true, "3\n", &bin);
+
+        let lines: Vec<&str> = settled.screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_fetches, runner = "npx").as_str()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&t!(servers_unpinned, package = "evil").as_str()),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.contains(&t!(servers_unpinned, package = "good@1.2.3").as_str()),
             "{lines:?}"
         );
     }

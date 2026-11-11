@@ -155,7 +155,13 @@ variable or substitution as an argument or as the program, backticks (an assignm
   resolved binary, permission checks and recorded reads and writes, and runs just before the step
   that uses it, in the same directory, under the same deadline and sandbox, with no standard input.
   It is one level deep: `$`, a substitution or a backtick inside it is refused. Trailing newlines of
-  its output are dropped, and the output is not shown to the model.
+  its output are dropped, and the output is not shown to the model. Nothing else is done to the
+  output, and bravebot does not look at it: its length and its encoding do not refuse the line, so
+  a long output or a byte that is not text reaches the program as it was printed. On Windows the
+  value is text, so a byte sequence that is not valid UTF-8 arrives as U+FFFD. A value the system
+  will not put in an environment, such as one holding a NUL byte or one larger than the system
+  takes, fails the start of the step that would use it, with the system's words about that program
+  and nothing of the value.
 - **A withheld variable is refused.** The credentials bravebot removes from every step
   ([below](#what-a-program-is-handed)) and the names in `run.scrubEnv` cannot be read this way, and
   the removal is still applied after the assignment. A variable that is not set is refused too,
@@ -285,8 +291,10 @@ operand therefore leaves the step unproven, so `grep -r TODO src -n` is asked ab
 
 Five other things leave a step unproven. Naming the program by path rather than by name, since a file
 called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
-resolves to a file inside the workspace, for the same reason: a `PATH` entry in the project can put
-one there. An environment assignment, which decides what a program loads before its own arguments are read. A
+resolves to a file inside the workspace, the checkout holding it, a directory you added or left
+with `/cd`, or a directory a stage was granted to write (and, for a delegate working in a checkout,
+the directory the checkout was made from), for the same reason: a `PATH` entry in the project can
+put one there. An environment assignment, which decides what a program loads before its own arguments are read. A
 redirection, which opens a file the argument list does not name. And running anywhere but the
 directory the trust map's rules are written against.
 
@@ -651,7 +659,8 @@ result lists, which is every earlier look at the job, so a line printed before a
 
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting on
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
-Both are refused rather than half-honoured.
+Both are refused rather than half-honoured. A redirection inside a `NAME="$(...)"` assignment value
+counts too, so such a line cannot be started in the background.
 
 **In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
 started in one turn is still running when you ask the next question, and the model is told at the
@@ -682,7 +691,8 @@ seconds, and under which job name. Nothing it printed is in that result, includi
 before the move: [`job_output`](tools.md#job_output) returns it, in the first look at the job.
 
 **Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
-`background: true` accepts. A line that reads its input from an earlier result and one a delegate is
+`background: true` accepts. A redirection inside a `NAME="$(...)"` assignment value counts, so a
+line with one is not offered. A line that reads its input from an earlier result and one a delegate is
 running are waited for to the end, and the hint does not name the key while they run. A line that
 asked for its output with `read: true` can be moved: the result for the call is then the move, and
 [`job_output`](tools.md#job_output) returns the output.

@@ -4040,6 +4040,75 @@ mod tests {
             "{screen}"
         );
         assert!(!screen.contains("names no exact version"), "{screen}");
+
+        let two = [
+            "add",
+            "two",
+            "--stdio",
+            "--",
+            "npx",
+            "-y",
+            "-p",
+            "good@1.2.3",
+            "-p",
+            "evil",
+            "evil-bin",
+        ];
+        let (_, screen) = typing(&directory, &two, "n\n");
+        let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_unpinned, package = "evil").as_str()),
+            "{screen}"
+        );
+        assert!(
+            !lines.contains(&t!(servers_unpinned, package = "good@1.2.3").as_str()),
+            "{screen}"
+        );
+
+        let alias = [
+            "add",
+            "alias",
+            "--stdio",
+            "--",
+            "npm",
+            "x",
+            "-y",
+            "evil@latest",
+        ];
+        let (_, screen) = typing(&directory, &alias, "n\n");
+        let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_fetches, runner = "\"npm exec\"").as_str()),
+            "{screen}"
+        );
+        assert!(
+            lines.contains(&t!(servers_unpinned, package = "evil@latest").as_str()),
+            "{screen}"
+        );
+
+        let globals = [
+            "add",
+            "globals",
+            "--stdio",
+            "--",
+            "npm",
+            "--loglevel=silent",
+            "exe",
+            "-y",
+            "-p",
+            "evil@latest",
+            "bin",
+        ];
+        let (_, screen) = typing(&directory, &globals, "n\n");
+        let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_fetches, runner = "\"npm exec\"").as_str()),
+            "{screen}"
+        );
+        assert!(
+            lines.contains(&t!(servers_unpinned, package = "evil@latest").as_str()),
+            "{screen}"
+        );
     }
 
     #[test]

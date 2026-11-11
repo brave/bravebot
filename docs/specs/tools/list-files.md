@@ -21,7 +21,8 @@ see them.
 <a id="LIST-1"></a>
 ### LIST-1: a filename is content, so an untrusted listing is quarantined
 
-A listing is trusted only if every file it touched is. A file can be named to read like an
+A listing is trusted only if every file it touched is, each asked about under every name it has, as
+a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). A file can be named to read like an
 instruction, so the names are treated as content and not shown to the planner.
 
 **The same bytes come back from a language server, and [LSP-3](lsp.md#LSP-3) treats them the same
@@ -33,6 +34,7 @@ would have typed a path, carries no position.
 `verified-by: bravebot_agent::turn::untrusted_listings_never_reach_the_model`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
 `verified-by: bravebot_agent::workspace::a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted`
+`verified-by: bravebot_agent::workspace::a_listing_of_a_hard_link_to_a_distrusted_file_is_untrusted`
 
 <a id="LIST-2"></a>
 ### LIST-2: a quarantined listing returns one reference per entry, not one for the listing

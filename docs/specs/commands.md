@@ -459,13 +459,16 @@ turn running and the other loops that share the working status are not a turn, a
 typed during one waits. A `/btw` typed during a turn is the exception: it is asked beside the turn
 on a thread of its own over the exchange the turn published with its latest request, over the
 turn's own file authority and with no sign-in, so it holds nothing the turn holds and no command
-waits for it. Its answer is a row of the agents list and does not open the view
-([WATCH-19](watching.md#WATCH-19)). A second `/btw` is refused while one is out, a file dropped on
-it is refused, a `/btw` typed before the turn has sent a request says there is nothing to read
-yet, nothing is saved or closed for it, and the stop that ends the turn ends the question. A
-prompt or command waiting in the queue does not hold a `/btw` back: it is asked at once and the
-waiting lines stay where they were. Only a `/btw` already waiting holds a later one back, as a
-waiting line of the same command does for any command. A click on a row of the info panel that
+waits for it. Typing it puts one line in the transcript that says the question is out and names
+the key that opens its answer. The answer is a row of the agents list, with a line that says so, and
+does not open the view ([WATCH-19](watching.md#WATCH-19)). A second `/btw` is refused while one is
+out, a file dropped on it is refused, a `/btw` typed before the turn has sent a request says there
+is nothing to read yet, nothing is saved or closed for it, and a stop of the turn ends the question.
+A turn that ends any other way does not: the question is answered between turns, as the row and the
+line it would have been, and the record is written again for the row. A prompt or command waiting in
+the queue does not hold a `/btw` back: it is asked at once and the waiting lines stay where they
+were. Only a `/btw` already waiting holds a later one back, as a waiting line of the same command
+does for any command. A click on a row of the info panel that
 stands for one of these commands is carried out by the same rule ([MOUSE-29](mouse.md#MOUSE-29)).
 
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
@@ -576,11 +579,14 @@ does not read:
 
 - **`/btw`.** It asks over a copy of the exchange the turn published with its latest request, on a
   thread of its own, so the turn's conversation, record and rewind point are neither read nor
-  changed. The answer is a row of the agents list and the transcript gets nothing
+  changed. The answer is a row of the agents list, and the transcript gets a line when the question
+  goes out and a line when the answer is in, neither holding a word of either
   ([WATCH-19](watching.md#WATCH-19)). A file dropped on it is refused, since reading it records a
   rule in the map the turn answers into. Before the turn has sent a request it says there is nothing
   to read yet. What the question cost is charged to the turn ([SESSION-11](sessions.md#SESSION-11)).
-  The exchange the turn publishes, and the one a question is asked over, hold the messages the
+  A question still out when its turn ends by itself is left out and answered between turns, because
+  the person asked it and stopping it would throw away a request already paid for. A stop of the
+  turn stops it, and `/clear` drops it with the rows it clears. The exchange the turn publishes, and the one a question is asked over, hold the messages the
   conversation stores and copy none of them; the quarantine is not shared.
 
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
@@ -704,7 +710,12 @@ carried out or queued as above.
 `verified-by: bravebot_agent::aside::a_question_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
 `verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
-`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_is_stopped`
+`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_is_stopped_is_stopped`
+`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_by_itself_stays_out`
+`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
+`verified-by: bravebot_tui::app::a_btw_that_failed_after_the_turn_ended_says_why`
+`verified-by: bravebot_tui::app::settling_with_no_question_out_does_nothing`
+`verified-by: bravebot_tui::state::clearing_stops_and_drops_a_question_still_out`
 `verified-by: bravebot_agent::turn::the_exchange_is_forked_once_per_parent_request_and_never_for_a_delegate`
 `verified-by: bravebot_agent::turn::a_question_over_a_published_exchange_holds_the_prompt_and_ends_with_the_question`
 `verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`

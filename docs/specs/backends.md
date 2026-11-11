@@ -1325,11 +1325,11 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
+| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
-| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside the checkout; a project or local layer, and a `--settings` file inside the checkout, naming one is ignored and reported the same way |
+| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside every checkout the session has been in; a project or local layer, and a `--settings` file inside one, naming one is ignored and reported the same way |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1693,7 +1693,8 @@ file `--settings` names, and removed from the project and local layers before th
 that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
 never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
 it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
-named file that resolves inside the workspace is a checkout's file under another name.
+named file that resolves inside the workspace, or inside a checkout the session has been in, is a
+checkout's file under another name ([PERM-14](permissions.md#PERM-14)).
 
 **A stated value is handed over as text to copy rather than as a sentence addressed to the
 planner.** The string is the person's own, so this is presentation rather than a defence: it is
@@ -2050,17 +2051,21 @@ something reads:
 
 The last six rows are the network names. Three more rows are the Google names, and six are the
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
-`ANTHROPIC_DEFAULT_*_MODEL` tiers. All three sets come from the person's own layers alone, the
-user's settings file and a file the command line named that is not inside the checkout. The project
-and local files arrive with a clone, and a proxy or an authority they chose would decide where
-conversation content is sent and who may read it, and a Google key or project, or an AWS account,
-region, profile or tier model, they chose would decide which account receives it. So one of these
-fifteen names in either file is reported by `doctor` with the file that wrote it and decides nothing,
-and it does not displace what a layer
-entitled to state it said. The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six
-Bedrock names and the two endpoints. The endpoints are the only pinnable names a project or local
-file can still state, on a source build
-([BACKEND-35](#BACKEND-35)). An exported variable still wins, as for every name here, and each of the
+`ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
+alone, the user's settings file and a file the command line named that is not inside the workspace or
+a checkout the session has been in ([PERM-14](permissions.md#PERM-14) says which).
+The project and local files arrive with a clone, and a proxy or an authority they chose would decide
+where conversation content is sent and who may read it, a Google key or project, or an AWS account,
+region, profile or tier model, they chose would decide which account receives it, and an endpoint
+they chose would decide which host receives the conversation and which host the premium key is
+presented to. So one of these seventeen names in either file is reported by `doctor` with the file
+that wrote it and decides nothing, and it does not displace what a layer entitled to state it said.
+The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six Bedrock names and the two
+endpoints, so every pinnable name is read from the person's layers alone. A build that carries an
+endpoint outranks the file, as for every name ([BACKEND-35](#BACKEND-35)), and a source build
+carries none, so a source build reaches an endpoint only through the person's own file or an
+exported variable. An exported variable still wins, as for every name here, and each of the
 two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
 upper case, and a lower-case spelling is not read from a file.
@@ -2123,7 +2128,10 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
 `verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
 `verified-by: bravebot_config::settings::a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do`
-`verified-by: bravebot_config::settings::every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it`
+`verified-by: bravebot_config::settings::a_checkouts_endpoints_configure_no_host_and_the_persons_own_still_do`
+`verified-by: bravebot_config::lib::a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_endpoints_that_decide_nothing`
+`verified-by: bravebot_config::settings::no_pinnable_name_is_decided_by_a_checkouts_files`
 `verified-by: bravebot_config::settings::the_persons_own_files_decide_every_pinnable_name`
 
 <a id="BACKEND-34"></a>
@@ -2173,9 +2181,11 @@ binary reaches the host it was given and signs with the credentials it was given
 easiest thing on the machine to write to, which is the same reason BACKEND-1 gives for a file
 granting no capability at all.
 
-On a binary built with nothing, which is a source build, the file is what answers for all of it:
-the endpoint, the key id and the signing key included, and a project layer can name any of them.
-That is the case the file exists for, and what it costs is under Known costs.
+On a binary built with nothing, which is a source build, the file is what answers for what the build
+would have carried. A project layer can name the key id and the signing key. It cannot name either
+endpoint, which is read from the person's own layers alone ([BACKEND-33](#BACKEND-33)), so a source
+build with no endpoint in the person's own file or environment has none. That is the case the file
+exists for, and what a project layer naming the key id or the signing key costs is under Known costs.
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
 default on every binary anybody was given, and an exported default would outrank every `model` key
@@ -2189,6 +2199,7 @@ file and from none of these three, which is BACKEND-38.
 `verified-by: bravebot_config::lib::a_blank_variable_survives_when_nothing_was_built_in`
 `verified-by: bravebot_config::lib::an_exported_value_outranks_the_build_which_outranks_the_file`
 `verified-by: bravebot_config::lib::a_blank_export_hides_the_file_but_not_the_build`
+`verified-by: bravebot_config::lib::a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do`
 
 <a id="BACKEND-36"></a>
 ### BACKEND-36: a name nothing reads is kept and decides nothing
@@ -2441,7 +2452,8 @@ above the process environment and therefore above every other source. It is
 
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
-`AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
+`AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. None of the
+variables is read from a project or local file ([BACKEND-33](#BACKEND-33)). Every other
 name in the file decides nothing, the signing key and the key id included, save `crashReports` and
 the server lists below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
 as it would with no such file.
@@ -4793,8 +4805,10 @@ cancel kills it rather than asking it to stop.
   (`provider` and `model`, [BACKEND-24](#BACKEND-24)) are refused from the project layers outright,
   because the credential value comes from the person's own environment under names the layer would
   choose, and a file nobody read must not pick either. The `env` names that choose the account a
-  request goes to are refused from them too: the six network names, the three Google names and the
-  six Bedrock names ([BACKEND-33](#BACKEND-33)). For the remaining fields, what limits the
+  request goes to are refused from them too: the six network names, the three Google names, the
+  six Bedrock names and the two endpoints ([BACKEND-33](#BACKEND-33)). A team that shares a
+  development endpoint states it in each person's own file, the environment or the build, and not in
+  `.bravebot/settings.json`. For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no
   capability, so the worst it does is send a request somewhere useless or somewhere watching.
 

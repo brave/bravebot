@@ -1520,7 +1520,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         .plan
         .writes
         .iter()
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| bravebot_agent::confirm::shown_path(path))
         .collect();
     let confinement = request
         .confined
@@ -1530,7 +1530,7 @@ fn program(request: &RunRequest) -> Vec<String> {
             directories: confined
                 .directories
                 .iter()
-                .map(|directory| directory.to_string_lossy().into_owned())
+                .map(|directory| bravebot_agent::confirm::shown_path(directory))
                 .collect(),
             sentences: confined.sentences(),
         });
@@ -3308,6 +3308,60 @@ mod tests {
                 assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
             }
         }
+    }
+
+    /// PROMPT-1, PATH-003: the plain question for a run draws a written file and a confined
+    /// directory whose name holds a byte that is not text as `\xNN`, and not as the U+FFFD a lossy
+    /// conversion gives, so two names that differ only in such a byte are not drawn alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_is_not_text() {
+        use std::os::unix::ffi::OsStrExt;
+        let drawn =
+            |written: &std::ffi::OsStr, directory: &std::ffi::OsStr| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], "/work");
+                request.plan.writes = vec![written.into()];
+                request.confined = Some(bravebot_agent::Confined {
+                    reads_the_machine: false,
+                    directories: vec![directory.into()],
+                    network: bravebot_sandbox::network::Network::Open,
+                    filesystem: Default::default(),
+                    requested: Vec::new(),
+                    requested_reaches: Vec::new(),
+                    carried: Vec::new(),
+                    writes_git_directories: false,
+                });
+                program(&request)
+            };
+        let invalid = std::ffi::OsStr::from_bytes(b"out-\xff.txt");
+        let lookalike = std::ffi::OsStr::new("out-\u{FFFD}.txt");
+        let plain = std::ffi::OsStr::new("/work");
+        let written = drawn(invalid, plain);
+        let looked_alike = drawn(lookalike, plain);
+        assert!(
+            written.contains(&"  \"out-\\xff.txt\"".to_string()),
+            "{written:?}"
+        );
+        assert_ne!(written, looked_alike);
+        let confined = drawn(
+            std::ffi::OsStr::new("note.md"),
+            std::ffi::OsStr::from_bytes(b"/w-\xff"),
+        );
+        assert!(
+            confined.contains(&"  \"/w-\\xff\"".to_string()),
+            "{confined:?}"
+        );
+        assert_ne!(
+            confined,
+            drawn(
+                std::ffi::OsStr::new("note.md"),
+                std::ffi::OsStr::new("/w-\u{FFFD}")
+            )
+        );
     }
 
     /// PROMPT-1: the plain question for a run names the directory the line runs in on its summary

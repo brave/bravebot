@@ -273,6 +273,18 @@ impl Workspace {
             });
         }
 
+        // The same tree under another name: a macOS firmlink, a Linux bind mount. Its files would
+        // have two names, the name under the working directory and the name under this one, and the
+        // trust map and the writer reservation are asked about one. Refused here with the other
+        // refusals, since every door that opens a directory comes through this function (TRUST-9).
+        #[cfg(unix)]
+        if let Some(reason) = self.is_another_path_to_an_open_tree(&canonical) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason,
+            });
+        }
+
         if self.reaches_scratch(&canonical) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -329,9 +341,25 @@ impl Workspace {
     pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let canonical = self.resolve_directory(directory)?;
 
-        bravebot_sandbox::programs::keep_out(&canonical);
+        // Kept out before the directory is open, as it always was, so there is no moment when a
+        // stage may write a directory the programs list does not hold.
+        bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         let mut added = locked(&self.added);
         if !added.iter().any(|open| open.path() == canonical) {
+            // Asked again under the lock: two opens of two paths to one tree both pass the check in
+            // `resolve_directory` while neither is in the list, and the second to take the lock
+            // would otherwise add the pair (TRUST-9).
+            #[cfg(unix)]
+            {
+                let held: Vec<PathBuf> =
+                    added.iter().map(|open| open.path().to_path_buf()).collect();
+                if let Some(reason) = self.refuse_a_second_path_among(&canonical, &held) {
+                    return Err(WorkspaceError::Invalid {
+                        path: directory.to_string(),
+                        reason,
+                    });
+                }
+            }
             // Recorded as the directory it is now, so a name that later leads elsewhere is not
             // taken for it (SANDBOX-18). A name that cannot be read as a directory is not opened.
             let made = ScratchDirectory::observed(canonical.clone()).ok_or_else(|| {
@@ -428,12 +456,60 @@ impl Workspace {
         &self.reference_problems
     }
 
+    /// The directories a file that a bare program name resolves to may not lie in if it is to be
+    /// taken for one the system provides (CMDLINE-8): the working directory, every directory added
+    /// by name and every directory the session has left or closed, each with the checkout that
+    /// holds it ([`bravebot_sandbox::programs::with_checkout`]).
+    ///
+    /// A session begun in a subdirectory has the `bin` of the checkout above it on `$PATH` as readily
+    /// as one begun at the root, and a directory left with `/cd` or closed keeps its `bin` there.
+    /// Decided from the directories the person opened and from which of their ancestors hold a
+    /// `.git`, never from a file's contents. Read when a line is about to run and not when the turn
+    /// begins, since a directory can be added in the middle of one (PATHREQ-7).
+    pub fn unproven_directories(&self) -> Vec<PathBuf> {
+        let mut directories: Vec<PathBuf> = Vec::new();
+        // A delegate in a checkout has the checkout as its root, so the working directory the
+        // checkout was made from, which is the person's own tree, is among the directories it is
+        // not in (CHECKOUT-7).
+        let made_from = self
+            .checkout()
+            .map(|info| info.working_directory().to_path_buf());
+        let open = std::iter::once(self.root.clone())
+            .chain(self.added_directories())
+            .chain(self.left.iter().cloned())
+            .chain(made_from);
+        for directory in open {
+            for held in bravebot_sandbox::programs::with_checkout(&directory) {
+                if !directories.contains(&held) {
+                    directories.push(held);
+                }
+            }
+        }
+        // A directory a stage was allowed to write is one a program can be put in, whether or not
+        // it is on `$PATH`, such as the `bin` of a virtualenv outside the project.
+        for reach in self.path_reach() {
+            if reach.write && !directories.contains(&reach.path) {
+                directories.push(reach.path);
+            }
+        }
+        directories
+    }
+
     /// The directories added by name, in the order they were added.
     pub fn added_directories(&self) -> Vec<PathBuf> {
         locked(&self.added)
             .iter()
             .map(|open| open.path().to_path_buf())
             .collect()
+    }
+
+    /// The working directories and closed added directories the session has left, oldest first.
+    ///
+    /// A stage wrote in each while it was open and closing one does not remove what was written,
+    /// so a file in one, or in the checkout that held it, is as much the plan's as one in a
+    /// directory still open (SANDBOX-20). Not a row of any stage.
+    pub fn left_directories(&self) -> Vec<PathBuf> {
+        self.left.clone()
     }
 
     /// The working directory and every directory added by name, each as the directory it was when
@@ -571,7 +647,7 @@ impl Workspace {
 
         refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
 
-        bravebot_sandbox::programs::keep_out(&canonical);
+        bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
         self.root_made = ScratchDirectory::observed(canonical.clone());
@@ -583,17 +659,29 @@ impl Workspace {
             let mut added = locked(&self.added);
             let (overlapping, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut *added)
                 .into_iter()
-                .partition(|open| overlaps(open.path(), &canonical));
+                .partition(|open| self.overlaps_the_root(open.path(), &canonical));
             *added = kept;
             closed.extend(overlapping.iter().map(|open| open.path().to_path_buf()));
         }
         // Whatever the new root is now reachable as itself, so it did not close.
         closed.retain(|open| *open != canonical);
+        self.left.extend(closed.iter().cloned());
 
         Ok(Moved {
             root: canonical,
             closed,
         })
+    }
+
+    /// Whether the added directory `open` overlaps the root `canonical` is about to become: the
+    /// same tree, or one holding the other, under the same spelling or another (TRUST-9). A second
+    /// path to the new root stays open otherwise, with every file under it named two ways.
+    fn overlaps_the_root(&self, open: &Path, canonical: &Path) -> bool {
+        #[cfg(unix)]
+        if Self::another_name_for_the_same_tree(canonical, open, self.identity) {
+            return true;
+        }
+        overlaps(open, canonical)
     }
 
     /// Close every directory added by name, leaving only the primary root.
@@ -602,7 +690,11 @@ impl Workspace {
     /// grants do. Leaving them open while the trust map that vouched for them was discarded would
     /// leave a tree reachable that nobody had vouched for.
     pub fn close_added_directories(&mut self) {
-        locked(&self.added).clear();
+        let closed: Vec<PathBuf> = std::mem::take(&mut *locked(&self.added))
+            .iter()
+            .map(|open| open.path().to_path_buf())
+            .collect();
+        self.left.extend(closed);
     }
 
     /// Close one directory added by name, and return the name it was open under (TRUST-9).
@@ -636,6 +728,8 @@ impl Workspace {
                 path: directory.to_string(),
                 reason: "is not a directory opened beside the working directory",
             })?;
-        Ok(added.remove(open).path().to_path_buf())
+        let closed = added.remove(open).path().to_path_buf();
+        self.left.push(closed.clone());
+        Ok(closed)
     }
 }

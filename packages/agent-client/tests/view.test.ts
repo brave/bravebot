@@ -55,6 +55,16 @@ test('a view keeps only the most recent rows it is bounded to and counts the res
   assert.deepEqual([view.omitted, view.rows.map((item) => item.id)], [6, [7, 8, 9, 10]])
 })
 
+test('a view leaves out the rows an update says the runtime no longer keeps, and a lower count brings none back', () => {
+  let view = startView(update(0, [row(1), row(2), row(3)]))
+  view = applyUpdate(view, { ...update(1, [row(4)]), omitted: 2 })
+  assert.deepEqual([view.omitted, view.rows.map((item) => item.id)], [2, [3, 4]])
+  view = applyUpdate(view, { ...update(2, [row(2, 'late'), row(5)]), omitted: 1 })
+  assert.deepEqual([view.omitted, view.rows.map((item) => item.id)], [2, [3, 4, 5]])
+  view = applyUpdate(view, { ...update(3, [row(6)]), omitted: 5 })
+  assert.deepEqual([view.omitted, view.rows.map((item) => item.id)], [5, [6]])
+})
+
 test('a resyncing view ignores updates until a snapshot, and a snapshot older than the view is refused', () => {
   let view = awaitSnapshot(applyUpdate(startView(update(0, [row(1)])), update(1, [row(2)])))
   assert.equal(applyUpdate(view, update(5, [row(9)])), view)

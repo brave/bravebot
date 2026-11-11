@@ -160,7 +160,7 @@ enum Entitled {
     /// The home layer, and the file the command line named.
     OwnOrNamed,
     /// The layers [`grants`] answers true for: the home layer, and a named file that resolves
-    /// outside the workspace and outside the directory the session began in.
+    /// outside every checkout the session has been in.
     Granting,
 }
 
@@ -221,6 +221,9 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // be choosing what the person's home contributes to the prompt (INSTR-17):
     // [`Settings::shared_skill_directories_ignored`].
     (SHARED_SKILLS_KEY, Entitled::OwnOrNamed),
+    // Turning it on sends a bot's conversation to an embeddings endpoint, which makes it a
+    // destination, and a checkout cannot choose one (RETRIEVE-1): [`Settings::retrieval_ignored`].
+    (RETRIEVAL_BLOCK, Entitled::OwnOrNamed),
     // The interface is in one language for the whole process and is chosen before the command line
     // is read, so the one file that can say which is the person's own: a checkout's file would be
     // choosing the language for whoever opened the checkout: [`Settings::language_ignored`].
@@ -247,6 +250,9 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
 /// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
 /// since [`Retention::Days`] cannot hold zero.
 pub const DEFAULT_RETENTION_DAYS: NonZeroU32 = NonZeroU32::new(30).unwrap();
+
+/// The block whose `enabled` turns on retrieval in a bot's conversations (RETRIEVE-1).
+const RETRIEVAL_BLOCK: &str = "retrieval";
 
 /// The key naming the other agents' skill directories in the person's home that this program may
 /// read (INSTR-17).
@@ -299,6 +305,7 @@ const READ_KEYS: &[&str] = &[
     PROVIDER_BLOCK,
     REFERENCES_BLOCK,
     RETENTION_KEY,
+    RETRIEVAL_BLOCK,
     "run",
     SANDBOX_BLOCK,
     "search",
@@ -452,6 +459,13 @@ pub struct Settings {
     suggestions: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
     update_check: Option<bool>,
+    /// What `retrieval.enabled` said, if it said a boolean.
+    retrieval: Option<bool>,
+    /// What `retrieval.embeddings` said: the service selected and what was kept for each.
+    embeddings: crate::embeddings::Choice,
+    /// The file whose `retrieval.enabled` is the one in force, or the managed file where it turned
+    /// retrieval off.
+    retrieval_from: Option<PathBuf>,
     /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
     away_summary_enabled: Option<bool>,
     /// What the top-level `awaySummaryIdleSeconds` key said, if it said a whole positive count.
@@ -916,7 +930,7 @@ impl Settings {
     }
 
     /// These settings with the `deny` and `ask` rules the managed file wrote added to every
-    /// layer's own (PERM-19).
+    /// layer's own (PERM-19), and retrieval off where it turned it off (RETRIEVE-23).
     ///
     /// Put ahead of the layers' entries, so a refusal both a person's rule and the administrator's
     /// would have made names the administrator's file. Nothing is removed and `allow` is not
@@ -925,6 +939,10 @@ impl Settings {
     /// in any file outside the checkout does, and a `reason` is not read from it.
     #[must_use]
     pub fn under(mut self, managed: &crate::Managed) -> Self {
+        if managed.retrieval_off() {
+            self.retrieval = Some(false);
+            self.retrieval_from = managed.path().map(Path::to_path_buf);
+        }
         let (Some(path), rules) = (managed.path(), managed.rules()) else {
             return self;
         };
@@ -1032,18 +1050,18 @@ impl Settings {
     /// rather than read from [`NAMED`] here, so the order and the merge rules are checked without a
     /// process-wide switch in force under every other test in this binary.
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
-        Self::layered_since(home, cwd, named, None)
+        Self::layered_since(home, cwd, named, &[])
     }
 
-    /// As [`Settings::layered`], for a session in `cwd` that began in `started`.
+    /// As [`Settings::layered`], for a session in `cwd` that has been in each of `left`.
     ///
-    /// A named file inside either is a checkout's file: moving out of the checkout it sits in does
-    /// not make it the person's.
+    /// A named file inside any of them, or inside the checkout holding one, is a checkout's file:
+    /// moving out of the checkout it sits in does not make it the person's.
     pub fn layered_since(
         home: Option<PathBuf>,
         cwd: Option<&Path>,
         named: Option<&Path>,
-        started: Option<&Path>,
+        left: &[PathBuf],
     ) -> Self {
         let home_layer = home.map(|home| user_settings_file(&home));
         // A found layer the command line also named is left out here and read at the end, since
@@ -1103,6 +1121,7 @@ impl Settings {
         // Settled per layer for the same reason: which file chose a mode decides whether it binds.
         let mut sandbox_chosen = None;
         let mut sandbox_asked_strict = Vec::new();
+        let mut retrieval_from = None;
         let mut sandbox_ignored = Vec::new();
         let mut sandbox_unreadable = Vec::new();
         let mut sandbox_hold_back_temporary = false;
@@ -1179,7 +1198,7 @@ impl Settings {
             let named_here = Some(&path) == named_path.as_ref();
             // Entitled the way an allow rule is for the keys marked [`Entitled::Granting`]: a named
             // file that resolves inside the workspace is a checkout's file.
-            let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            let granting = grants(&path, home_layer.as_deref(), named, cwd, left);
             // Removed here rather than read and dropped later, because the merge unions every name
             // a layer set and a removed key cannot reach [`Settings::from_map`] at all.
             for (key, entitled) in HOME_ONLY {
@@ -1212,6 +1231,9 @@ impl Settings {
             }
             for key in unreadable {
                 narrowing_unreadable.push((path.clone(), key));
+            }
+            if retrieval_stated(&root).is_some() {
+                retrieval_from = Some(path.clone());
             }
             if root.contains_key("model") {
                 model_above_home = !own;
@@ -1313,11 +1335,7 @@ impl Settings {
             for value in misshapen_rule_lists(&root, &["deny", "ask", "allow"]) {
                 misshapen.push((path.clone(), value));
             }
-            for name in crate::env_var::NETWORK
-                .into_iter()
-                .chain(crate::env_var::GOOGLE)
-                .chain(crate::env_var::BEDROCK)
-            {
+            for name in crate::env_var::person_only() {
                 let Some(value) = env_string(&root, name) else {
                     continue;
                 };
@@ -1393,6 +1411,7 @@ impl Settings {
         settings.run_network_ignored = run_network_ignored;
         settings.run_network_unreadable = run_network_unreadable;
         settings.sandbox_chosen = sandbox_chosen;
+        settings.retrieval_from = retrieval_from;
         settings.sandbox_asked_strict = sandbox_asked_strict;
         settings.sandbox_ignored = sandbox_ignored;
         settings.sandbox_unreadable = sandbox_unreadable;
@@ -1419,11 +1438,7 @@ impl Settings {
         // Put back to what the entitled layers said, a checkout's value having been merged in above
         // under the same name. Scrubbed on the way, the values being a proxy address that may carry
         // a credential.
-        for name in crate::env_var::NETWORK
-            .into_iter()
-            .chain(crate::env_var::GOOGLE)
-            .chain(crate::env_var::BEDROCK)
-        {
+        for name in crate::env_var::person_only() {
             if let Some(mut stale) = settings.env.remove(name) {
                 crate::scrub(&mut stale);
             }
@@ -1530,6 +1545,8 @@ impl Settings {
             terminal_title: flag(root, "terminalTitle"),
             suggestions: flag(root, "suggestions"),
             update_check: flag(root, "updateCheck"),
+            retrieval: retrieval_stated(root),
+            embeddings: crate::embeddings::Choice::from_retrieval(object(root, RETRIEVAL_BLOCK)),
             away_summary_enabled: flag(root, "awaySummaryEnabled"),
             away_summary_idle_seconds: positive(root.get("awaySummaryIdleSeconds")),
             ask_idle_seconds: positive(root.get("askIdleSeconds")),
@@ -1553,6 +1570,7 @@ impl Settings {
             narrowed_by: Vec::new(),
             narrowing_unreadable: Vec::new(),
             // Filled by [`Settings::layered`], which knows which file each was written in.
+            retrieval_from: None,
             sandbox_chosen: None,
             sandbox_asked_strict: Vec::new(),
             sandbox_ignored: Vec::new(),
@@ -1809,6 +1827,33 @@ impl Settings {
     /// comes from the person's own configuration and never from a response.
     pub fn update_check(&self) -> Option<bool> {
         self.update_check
+    }
+
+    /// Whether a bot's turns retrieve earlier excerpts instead of summarising them (RETRIEVE-1).
+    ///
+    /// Off unless `retrieval.enabled` is a real `true`: turning it on sends the conversation to
+    /// another endpoint, so a quoted `"true"` is absence. A checkout's file is never obeyed: see
+    /// [`Settings::retrieval_ignored`].
+    pub fn retrieval(&self) -> bool {
+        self.retrieval == Some(true)
+    }
+
+    /// The file that decided [`Settings::retrieval`], where one stated it: the last layer entitled
+    /// to that gave `retrieval.enabled` a boolean, or the managed file where it turned retrieval
+    /// off (RETRIEVE-24).
+    pub fn retrieval_from(&self) -> Option<&Path> {
+        self.retrieval_from.as_deref()
+    }
+
+    /// The service a bot's retrieval embeds with and what the person kept for each one
+    /// (RETRIEVE-33), read from the same files [`Settings::retrieval`] is.
+    pub fn embeddings(&self) -> &crate::embeddings::Choice {
+        &self.embeddings
+    }
+
+    /// The files that named `retrieval` from a layer not entitled to, weakest first.
+    pub fn retrieval_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.not_obeyed(RETRIEVAL_BLOCK)
     }
 
     /// Whether the settings in force let the interface recap a session by itself when a person has
@@ -2286,6 +2331,8 @@ impl Settings {
             && self.terminal_title.is_none()
             && self.suggestions.is_none()
             && self.update_check.is_none()
+            && self.retrieval.is_none()
+            && self.embeddings == crate::embeddings::Choice::default()
             && self.away_summary_enabled.is_none()
             && self.away_summary_idle_seconds.is_none()
             && self.max_running_delegates.is_none()
@@ -2601,6 +2648,7 @@ impl Settings {
     /// Names only. The values include credentials on some machines, and a diagnostic that prints
     /// them is a diagnostic people paste into issues. The keys that are not variables are among them
     /// so a file that sets only one of those is not reported as setting nothing.
+    #[expect(clippy::too_many_lines, reason = "the list of keys, one row for each")]
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.model
             .is_some()
@@ -2632,6 +2680,11 @@ impl Settings {
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.suggestions.is_some().then_some("suggestions"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
+            .chain(self.retrieval.is_some().then_some("retrieval.enabled"))
+            .chain(
+                (self.embeddings != crate::embeddings::Choice::default())
+                    .then_some("retrieval.embeddings"),
+            )
             .chain(
                 self.away_summary_enabled
                     .is_some()
@@ -2960,6 +3013,11 @@ pub(crate) fn object<'a>(
     }
 }
 
+/// What `retrieval.enabled` says in `root`, where it says a boolean.
+fn retrieval_stated(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    object(root, RETRIEVAL_BLOCK).and_then(|block| flag(block, "enabled"))
+}
+
 /// The boolean under `key` in `root`, or `None` where the key is absent or holds anything else.
 ///
 /// A real boolean and nothing else: `"true"`, `1` and `null` are absence, with no coercion.
@@ -3117,9 +3175,10 @@ pub(crate) fn narrowing_stated(
 
 /// Whether a rule that *grants* may be read from this layer.
 ///
-/// True for the home layer, and for a file the command line named that sits outside the workspace
-/// and outside the one the session began in. False for `.bravebot/settings.json`, for
-/// `.bravebot/settings.local.json`, and for a named file that resolves inside either.
+/// True for the home layer, and for a file the command line named that sits outside the workspace,
+/// outside every directory the session has been in, and outside the checkout holding each of them.
+/// False for `.bravebot/settings.json`, for `.bravebot/settings.local.json`, and for a named file
+/// that resolves inside any of those.
 ///
 /// The home layer is the person's own, on the footing this module's own note on what these files
 /// are trusted for already states. A file the command line named is a path somebody typed at this
@@ -3127,7 +3186,9 @@ pub(crate) fn narrowing_stated(
 /// next. But it can name a file inside the checkout, which
 /// `a_command_line_file_that_is_already_a_layer_is_read_once` exists because people do, so a README
 /// saying `--settings ./tooling/bravebot.json` would be a route back in. A named file that resolves
-/// inside the workspace is therefore the checkout's file under another name.
+/// inside the workspace, or inside the checkout holding it, is therefore the checkout's file under
+/// another name. `left` is every other directory the session has been in, which `/cd` leaves
+/// behind without changing who wrote the file.
 ///
 /// The local layer is a checkout's file too. Nothing stops one being committed, and its being
 /// conventionally private is not a property this can rely on, which is the same reading `vetting`
@@ -3137,15 +3198,21 @@ fn grants(
     home_layer: Option<&Path>,
     named: Option<&Path>,
     cwd: Option<&Path>,
-    started: Option<&Path>,
+    left: &[PathBuf],
 ) -> bool {
     if Some(path) == home_layer {
         return true;
     }
-    Some(path) == named && !inside(cwd, path) && !inside(started, path)
+    Some(path) == named && !inside(cwd, path) && !left.iter().any(|left| inside(Some(left), path))
 }
 
-/// Whether `path` resolves to somewhere under `cwd`.
+/// Whether `path` resolves to somewhere under `cwd`, or under the checkout holding it.
+///
+/// The checkout is found as the sandbox finds the one a stage may not write
+/// ([`bravebot_sandbox::programs::with_checkout`]): the nearest ancestor with a `.git`. A session
+/// begun in a subdirectory reads no project layer, but the clone it sits in is the same tree, so a
+/// file `--settings ../tooling/bravebot.json` names from there is the checkout's file as much as one
+/// beside the working directory is.
 ///
 /// Both sides resolved, because the question is where the file *is* and not how it was spelled: a
 /// link, a `..`, or a relative name reaches the same file under a different string, and comparing
@@ -3155,7 +3222,9 @@ fn grants(
 fn inside(cwd: Option<&Path>, path: &Path) -> bool {
     let Some(cwd) = cwd else { return false };
     match (std::fs::canonicalize(cwd), std::fs::canonicalize(path)) {
-        (Ok(cwd), Ok(path)) => path.starts_with(cwd),
+        (Ok(cwd), Ok(path)) => bravebot_sandbox::programs::with_checkout(&cwd)
+            .iter()
+            .any(|held| path.starts_with(held)),
         _ => true,
     }
 }
@@ -5305,6 +5374,10 @@ mod tests {
             let project = root.join("cwd").join(PROJECT_DIR);
             std::fs::create_dir_all(&home).expect("scratch home");
             std::fs::create_dir_all(&project).expect("scratch project");
+            // The working directory is a checkout of its own. The scratch root is under the
+            // workspace's `target/`, so without this the checkout holding it would be the
+            // repository the tests run in, and every file written beside it would be inside.
+            std::fs::create_dir_all(root.join("cwd").join(".git")).expect("scratch checkout");
             Self {
                 home,
                 cwd: root.join("cwd"),
@@ -5349,6 +5422,29 @@ mod tests {
         fn named_inside_the_workspace(mut self, text: &str) -> Self {
             let path = self.cwd.join("tooling.json");
             std::fs::write(&path, text).expect("named layer inside the workspace");
+            self.named = Some(path);
+            self
+        }
+
+        /// A directory that is a checkout, under the scratch root and apart from the working
+        /// directory: `.git` is what makes it one.
+        fn checkout(&self, name: &str) -> PathBuf {
+            let checkout = self.home.parent().expect("the scratch root").join(name);
+            std::fs::create_dir_all(checkout.join(".git")).expect("scratch checkout");
+            checkout
+        }
+
+        /// A file the command line named that sits in a checkout the working directory is a
+        /// subdirectory of, without being inside the working directory: the layout a README gets
+        /// with `--settings ../tooling/bravebot.json` from `repo/sub`.
+        fn named_in_the_enclosing_checkout(mut self, text: &str) -> Self {
+            let repo = self.checkout("repo");
+            let sub = repo.join("sub");
+            std::fs::create_dir_all(&sub).expect("the subdirectory");
+            std::fs::create_dir_all(repo.join("tooling")).expect("the tooling directory");
+            let path = repo.join("tooling").join("bravebot.json");
+            std::fs::write(&path, text).expect("named layer in the enclosing checkout");
+            self.cwd = sub;
             self.named = Some(path);
             self
         }
@@ -7523,6 +7619,123 @@ mod tests {
         let ignored: Vec<_> = settings.allow_ignored().collect();
         assert_eq!(ignored.len(), 1);
         assert!(ignored[0].0.ends_with("tooling.json"));
+
+        // The same file one directory up, in the checkout the working directory is a
+        // subdirectory of, is that checkout's file as well.
+        let above = Layers::new("allow-named-above")
+            .named_in_the_enclosing_checkout(
+                r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+            )
+            .read();
+        assert!(
+            above.permissions().allow.is_empty(),
+            "a file in the checkout above the working directory answered an approval prompt"
+        );
+        let ignored: Vec<_> = above.allow_ignored().collect();
+        assert_eq!(ignored.len(), 1);
+        assert!(ignored[0].0.ends_with("bravebot.json"));
+    }
+
+    /// PERM-14: a session begun in a subdirectory of a checkout reads no project layer, but a file
+    /// `--settings ../tooling/bravebot.json` names from there is still the checkout's. The rule is
+    /// dropped and reported, and `grants` says so for the file beside the working directory and the
+    /// file above it alike.
+    #[test]
+    fn a_named_layer_in_the_checkout_above_the_working_directory_grants_nothing() {
+        let layers = Layers::new("grants-above").named_in_the_enclosing_checkout("{}");
+        let above = layers.named.clone().expect("the named file");
+        let sub = layers.cwd.clone();
+        assert!(
+            sub.ends_with("sub"),
+            "the working directory is the subdirectory"
+        );
+        assert!(
+            !grants(
+                &above,
+                None,
+                Some(&above),
+                Some(&sub),
+                std::slice::from_ref(&sub)
+            ),
+            "a file in the checkout above the working directory was read as the person's own"
+        );
+        let beside = sub.join("tooling.json");
+        std::fs::write(&beside, "{}").expect("a file beside the working directory");
+        assert!(!grants(
+            &beside,
+            None,
+            Some(&beside),
+            Some(&sub),
+            std::slice::from_ref(&sub)
+        ));
+    }
+
+    /// Over-refusal guard: only the checkouts the session has been in count. A named file in some
+    /// other repository is still the person's.
+    #[test]
+    fn a_named_layer_in_another_checkout_still_grants() {
+        let layers = Layers::new("grants-other-checkout");
+        let other = layers.checkout("other");
+        let elsewhere = other.join("tooling.json");
+        std::fs::write(&elsewhere, "{}").expect("a file in another checkout");
+        assert!(grants(
+            &elsewhere,
+            None,
+            Some(&elsewhere),
+            Some(&layers.cwd),
+            std::slice::from_ref(&layers.cwd)
+        ));
+    }
+
+    /// PERM-14, known cost: a `.git` at the home directory, or above it, makes every file under it
+    /// the checkout's, so a dotfiles repository refuses a `--settings` file beneath it that is not
+    /// the home layer. This lookup does not leave out a checkout that is or holds the home
+    /// directory, as the sandbox's does (SANDBOX-20, SANDBOX-30): a settings file fails closed.
+    /// Rejects an `inside` that does not take the checkout into account.
+    #[test]
+    fn a_named_layer_under_a_dotfiles_repository_at_or_above_home_grants_nothing() {
+        let rule = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+        for (name, repository_is_home) in [("at-home", true), ("above-home", false)] {
+            let layers = Layers::new(&format!("allow-named-dotfiles-{name}"));
+            let root = layers
+                .home
+                .parent()
+                .expect("the scratch root")
+                .to_path_buf();
+            let repository = if repository_is_home {
+                layers.home.clone()
+            } else {
+                root.clone()
+            };
+            std::fs::create_dir_all(repository.join(".git")).expect("the dotfiles repository");
+            // A session below the home directory, in a directory that is not a checkout itself.
+            let cwd = layers.home.join("work");
+            std::fs::create_dir_all(&cwd).expect("the working directory");
+            let named = repository.join("tooling.json");
+            std::fs::write(&named, rule).expect("a named layer in the dotfiles repository");
+
+            assert!(
+                !grants(&named, None, Some(&named), Some(&cwd), &[]),
+                "{name}: a file in the dotfiles repository was read as the person's own"
+            );
+            let settings = Settings::layered(Some(layers.home.clone()), Some(&cwd), Some(&named));
+            assert!(
+                settings.permissions().allow.is_empty(),
+                "{name}: a file in the dotfiles repository answered an approval prompt"
+            );
+            assert_eq!(settings.allow_ignored().count(), 1, "{name}");
+        }
+    }
+
+    /// A key other than `allow` that only the person's own file may set is refused from the file
+    /// above the working directory too, since every such key is read through `grants`.
+    #[test]
+    fn a_named_layer_in_the_checkout_above_cannot_open_the_network() {
+        let settings = Layers::new("network-named-above")
+            .named_in_the_enclosing_checkout(NETWORK_OPEN)
+            .read();
+        assert_eq!(settings.run_network(), None);
+        assert_eq!(settings.run_network_ignored().count(), 1);
     }
 
     /// Outside the workspace the session moved to, and still the checkout's file it started in.
@@ -7531,19 +7744,44 @@ mod tests {
         let layers = Layers::new("allow-named-left-behind").named_inside_the_workspace(
             r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
         );
-        let elsewhere = layers.home.with_file_name("elsewhere");
-        std::fs::create_dir_all(&elsewhere).expect("the directory moved to");
+        let elsewhere = layers.checkout("elsewhere");
         let settings = Settings::layered_since(
             Some(layers.home.clone()),
             Some(&elsewhere),
             layers.named.as_deref(),
-            Some(&layers.cwd),
+            std::slice::from_ref(&layers.cwd),
         );
         assert!(
             settings.permissions().allow.is_empty(),
             "a file in the checkout left behind answered an approval prompt"
         );
         assert_eq!(settings.allow_ignored().count(), 1);
+
+        // And the checkout above a directory left behind is left behind with it.
+        let above = Layers::new("allow-named-above-left-behind").named_in_the_enclosing_checkout(
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+        );
+        let elsewhere = above.checkout("elsewhere");
+        let settings = Settings::layered_since(
+            Some(above.home.clone()),
+            Some(&elsewhere),
+            above.named.as_deref(),
+            std::slice::from_ref(&above.cwd),
+        );
+        assert!(
+            settings.permissions().allow.is_empty(),
+            "a file in the checkout above a directory left behind answered an approval prompt"
+        );
+        assert_eq!(settings.allow_ignored().count(), 1);
+
+        // Every directory left counts, not only the first.
+        let settings = Settings::layered_since(
+            Some(above.home.clone()),
+            Some(&elsewhere),
+            above.named.as_deref(),
+            &[elsewhere.clone(), above.cwd.clone()],
+        );
+        assert!(settings.permissions().allow.is_empty());
     }
 
     /// A blank entry is nobody's grant, so which layer wrote it decides nothing. It goes through
@@ -7928,6 +8166,42 @@ mod tests {
         assert_eq!(settings.unread_keys().count(), 0);
     }
 
+    /// Retrieval is off where nothing says, and where anything but a real `true` under
+    /// `retrieval.enabled` says; a file saying either boolean is not a file that set nothing; and a
+    /// checkout's file cannot turn it on, where the person's own can.
+    #[test]
+    fn retrieval_is_off_unless_the_persons_own_file_says_true() {
+        assert!(!Settings::parse("{}").retrieval());
+        assert!(Settings::parse(r#"{"retrieval": {"enabled": true}}"#).retrieval());
+        for off in [
+            r#"{"retrieval": {"enabled": false}}"#,
+            r#"{"retrieval": {"enabled": "true"}}"#,
+            r#"{"retrieval": {"enabled": 1}}"#,
+            r#"{"retrieval": true}"#,
+            r#"{"retrieval": {}}"#,
+        ] {
+            assert!(!Settings::parse(off).retrieval(), "{off} turned it on");
+        }
+
+        let settings = Settings::parse(r#"{"retrieval": {"enabled": false}}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["retrieval.enabled"]);
+        assert!(!settings.is_empty());
+
+        let checkout = Layers::new("retrieval-project")
+            .project(r#"{"retrieval": {"enabled": true}}"#)
+            .read();
+        assert!(!checkout.retrieval());
+        assert_eq!(checkout.retrieval_ignored().count(), 1);
+
+        let own = Layers::new("retrieval-home")
+            .global(r#"{"retrieval": {"enabled": true}}"#)
+            .project(r#"{"retrieval": {"enabled": false}}"#)
+            .read();
+        assert!(own.retrieval());
+        assert_eq!(own.unread_keys().count(), 0);
+    }
+
     /// A file that sets only this is not a file that set nothing: `doctor` reports which names a layer
     /// carried, and a person debugging why their box edits the way it does has to see it there.
     #[test]
@@ -8045,6 +8319,7 @@ mod tests {
         ("agent", false, false),
         ("style", false, false),
         ("sharedSkillDirectories", false, false),
+        ("retrieval", false, false),
         ("language", true, true),
         ("retentionDays", true, true),
         ("references", false, true),
@@ -8074,6 +8349,7 @@ mod tests {
             ("sharedSkillDirectories", |s| {
                 paths(s.shared_skill_directories_ignored())
             }),
+            ("retrieval", |s| paths(s.retrieval_ignored())),
             ("language", |s| paths(s.language_ignored())),
             ("retentionDays", |s| paths(s.retention_ignored())),
             ("references", |s| paths(s.references_ignored())),
@@ -8469,17 +8745,6 @@ mod tests {
         }
     }
 
-    /// The names of [`crate::managed::PINNABLE`] that a checkout's project or local file can state
-    /// today.
-    ///
-    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds the six network names, the
-    /// three Google names and the six Bedrock names from a checkout, so the endpoints are the ones
-    /// that resolve to the closest layer. BACKEND-35 says a project layer can name the endpoints on
-    /// a source build. Moving a name out of this list means reading it from the person's layers
-    /// alone, and the test below then fails until the name is taken off.
-    const CHECKOUT_SETTABLE: [&str; 2] =
-        [crate::env_var::ENDPOINT, crate::env_var::PREMIUM_ENDPOINT];
-
     /// Whether the project layer, and then the local layer, alone decide `name` for a session.
     fn a_checkouts_files_decide(name: &str) -> (bool, bool) {
         let text = format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
@@ -8498,41 +8763,127 @@ mod tests {
         )
     }
 
-    /// A name a managed layer may pin is either read from the person's layers alone or listed in
-    /// [`CHECKOUT_SETTABLE`], so a name added to `PINNABLE` has to be placed on one side, and a name
-    /// moved to the person's layers has to come off the list.
+    /// Every name a managed layer may pin is read from the person's layers alone, so a name added
+    /// to `PINNABLE` has to be placed in the person-only lists of `env_var`, which is what keeps a
+    /// checkout from choosing the host that receives a conversation or a credential (BACKEND-33).
     #[test]
-    fn every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it() {
-        // The control: a name that is withheld from a checkout reads as withheld, so a helper that
-        // answered `true` for every name would not pass for the list below.
-        for name in crate::env_var::NETWORK
-            .into_iter()
-            .chain(crate::env_var::GOOGLE)
-            .chain(crate::env_var::BEDROCK)
-        {
-            assert_eq!(a_checkouts_files_decide(name), (false, false), "{name}");
+    fn no_pinnable_name_is_decided_by_a_checkouts_files() {
+        // The control: names a checkout's files do decide read as decided, so a helper that
+        // answered `false` for every name would not pass for the list below.
+        for name in [
+            crate::env_var::KEY_ID,
+            crate::env_var::SIGNING_KEY,
+            crate::env_var::DEFAULT_MODEL,
+        ] {
+            assert_eq!(a_checkouts_files_decide(name), (true, true), "{name}");
         }
         for name in crate::managed::PINNABLE {
-            let listed = CHECKOUT_SETTABLE.contains(&name);
             assert_eq!(
                 a_checkouts_files_decide(name),
-                (listed, listed),
-                "{name} is {} a checkout's files, and the list says {}",
-                if listed {
-                    "withheld from"
-                } else {
-                    "decided by"
-                },
-                if listed {
-                    "decided by them"
-                } else {
-                    "withheld"
-                },
+                (false, false),
+                "{name} is decided by a checkout's files"
+            );
+            assert!(
+                crate::env_var::is_person_only(name),
+                "{name} is not in the person-only lists"
             );
         }
-        for name in CHECKOUT_SETTABLE {
-            assert!(crate::managed::PINNABLE.contains(&name), "{name}");
+    }
+
+    /// BACKEND-33: which host receives a conversation, and which host the premium credential is
+    /// presented to, is the person's to choose, so a checkout's project and local files decide
+    /// neither endpoint, on a build that bakes nothing in. `doctor` reports the checkout's names.
+    #[test]
+    fn a_checkouts_endpoints_configure_no_host_and_the_persons_own_still_do() {
+        let block = r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "http://checkout.invalid:1",
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.checkout.invalid"}}"#;
+
+        let project = Layers::new("endpoints-checkout-project")
+            .project(block)
+            .read();
+        let local = Layers::new("endpoints-checkout-local").local(block).read();
+        for (file, settings) in [("project", &project), ("local", &local)] {
+            assert_eq!(
+                settings.get("BRAVE_AI_CHAT_ENDPOINT"),
+                None,
+                "a {file} file chose the host the conversation goes to"
+            );
+            assert_eq!(
+                settings.get("BRAVE_AI_CHAT_PREMIUM_ENDPOINT"),
+                None,
+                "a {file} file chose the host the premium credential goes to"
+            );
+            let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+            assert_eq!(
+                reported,
+                ["BRAVE_AI_CHAT_ENDPOINT", "BRAVE_AI_CHAT_PREMIUM_ENDPOINT"],
+                "{file}"
+            );
+            assert_eq!(settings.network_values().count(), 0, "{file}");
         }
+
+        // Each name alone, in each checkout file. The names are spelled here and not taken from the
+        // list under test, so a name left out of `env_var::ENDPOINTS` fails its own case.
+        for name in ["BRAVE_AI_CHAT_ENDPOINT", "BRAVE_AI_CHAT_PREMIUM_ENDPOINT"] {
+            let text = format!(r#"{{"env": {{"{name}": "https://checkout.invalid"}}}}"#);
+            for (file, layers) in [
+                (
+                    "project",
+                    Layers::new(&format!("endpoint-only-project-{name}")).project(&text),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("endpoint-only-local-{name}")).local(&text),
+                ),
+            ] {
+                let settings = layers.read();
+                assert_eq!(settings.get(name), None, "a {file} file decided {name}");
+                let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+                assert_eq!(reported, [name], "a {file} file's {name} was not reported");
+            }
+        }
+
+        let own = Layers::new("endpoints-home")
+            .global(
+                r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://person.invalid",
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.person.invalid"}}"#,
+            )
+            .read();
+        assert_eq!(
+            own.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("https://person.invalid")
+        );
+        assert_eq!(
+            own.get("BRAVE_AI_CHAT_PREMIUM_ENDPOINT"),
+            Some("https://premium.person.invalid")
+        );
+        assert_eq!(own.network_ignored().count(), 0);
+        // The transport is handed its six names and no others.
+        assert_eq!(own.network_values().count(), 0);
+
+        // The person's value wins over the checkout's, and the checkout's is neither the winner nor
+        // reported as having overridden the person's.
+        let both = Layers::new("endpoints-home-and-checkout")
+            .global(r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://person.invalid"}}"#)
+            .project(block)
+            .read();
+        assert_eq!(
+            both.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("https://person.invalid")
+        );
+        assert_eq!(both.overridden().count(), 0);
+
+        // A file the command line named decides when it sits outside the checkout and not inside.
+        let outside = Layers::new("endpoints-named-outside").named(block).read();
+        assert_eq!(
+            outside.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("http://checkout.invalid:1")
+        );
+        let inside = Layers::new("endpoints-named-inside")
+            .named_inside_the_workspace(block)
+            .read();
+        assert_eq!(inside.get("BRAVE_AI_CHAT_ENDPOINT"), None);
+        assert_eq!(inside.network_ignored().count(), 2);
     }
 
     /// The person's own file and a file the command line named outside the checkout decide every
@@ -9692,6 +10043,62 @@ mod tests {
         let file = dir.join("managed.json");
         std::fs::write(&file, text).expect("managed file");
         crate::Managed::at(&file)
+    }
+
+    /// RETRIEVE-23: a managed `retrieval.enabled: false` keeps retrieval off whatever the person's
+    /// own file and a named file say, and a managed `true` does not turn it on.
+    #[test]
+    fn a_managed_false_keeps_retrieval_off_and_a_managed_true_is_not_obeyed() {
+        let off = pinned("retrieval-off", r#"{"retrieval": {"enabled": false}}"#);
+        let settings = Layers::new("retrieval-pinned-off")
+            .global(r#"{"retrieval": {"enabled": true}}"#)
+            .named(r#"{"retrieval": {"enabled": true}}"#)
+            .read();
+        assert!(settings.retrieval());
+        assert!(!settings.under(&off).retrieval());
+
+        let on = pinned("retrieval-on", r#"{"retrieval": {"enabled": true}}"#);
+        assert!(
+            !Layers::new("retrieval-pinned-on")
+                .read()
+                .under(&on)
+                .retrieval()
+        );
+    }
+
+    /// RETRIEVE-24: the file named as deciding retrieval is the last one entitled to that gave it a
+    /// boolean, so a checkout's file is never named and a named file beats the person's own, and
+    /// it is the managed file where that turned retrieval off.
+    #[test]
+    fn the_file_that_decided_retrieval_is_the_last_entitled_one_or_the_managed_file() {
+        let home = Layers::new("retrieval-from-home").global(r#"{"retrieval": {"enabled": true}}"#);
+        assert_eq!(
+            home.read().retrieval_from(),
+            Some(home.home.join(SETTINGS_FILE).as_path())
+        );
+
+        let checkout = Layers::new("retrieval-from-checkout")
+            .global(r#"{"retrieval": {"enabled": false}}"#)
+            .project(r#"{"retrieval": {"enabled": true}}"#);
+        assert_eq!(
+            checkout.read().retrieval_from(),
+            Some(checkout.home.join(SETTINGS_FILE).as_path())
+        );
+
+        let named = Layers::new("retrieval-from-named")
+            .global(r#"{"retrieval": {"enabled": true}}"#)
+            .named(r#"{"retrieval": {"enabled": false}}"#);
+        assert_eq!(named.read().retrieval_from(), named.named.as_deref());
+
+        let quoted =
+            Layers::new("retrieval-from-quoted").global(r#"{"retrieval": {"enabled": "true"}}"#);
+        assert_eq!(quoted.read().retrieval_from(), None);
+
+        let off = pinned(
+            "retrieval-from-managed",
+            r#"{"retrieval": {"enabled": false}}"#,
+        );
+        assert_eq!(home.read().under(&off).retrieval_from(), off.path());
     }
 
     /// SANDBOX-22: the person's own file chooses any of the three, and a file the command line

@@ -634,7 +634,7 @@ than patching what it drew.
 
 #### `turn.send`
 
-`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10).
+`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10). A send under an id the session has recorded starts no turn: with the same parameters it is given the first answer again, and with others it is refused with `bad_request`. A refusal is recorded too, so a send after one needs a new id. A session records at most 4096 sends and refuses a new id past that (RPCVIEW-11).
 
 The optional `model` parameter selects a model ID for this and subsequent turns on the
 open session handle. Provider IDs remain qualified (for example,
@@ -767,6 +767,14 @@ keeps the behaviour it had.
 
 **One turn at a time per session.** A second `turn.send` on a session with a turn in
 flight errors `turn_in_flight`. Different sessions run concurrently.
+
+#### `turn.lookup`
+
+```json
+{ "id": 7, "method": "turn.lookup", "params": { "session": "s1", "messageId": "0b6f1c9e-3d2a-4f5e-9a71-2c4d8e6f0a13" } }
+```
+
+Says what the session answered the `turn.send` with that id: `{ "state": "accepted", "turn": 5, "target": 12 }`, `{ "state": "refused", "error": { "code": "turn_in_flight", "message": "..." } }`, or `{ "state": "not_received" }`. It does not depend on the view's rows, and it says whether a turn started, not how it ended. An unknown handle, which is what a session closed or a bridge restarted leaves, is refused with `no_such_session`; a client takes that as unknown, not as not sent (RPCVIEW-11).
 
 #### `turn.cancel`
 
@@ -1805,7 +1813,7 @@ answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6): `{
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
-or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. The view also keeps at most 4 MiB of rows, apart from the rows the latest update sent, so a snapshot can hold fewer than `retainedRows`. Each update carries `omitted` as well; leave out the rows up to it so the view holds what a snapshot would. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
 within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,

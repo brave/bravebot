@@ -3,13 +3,16 @@
 //!
 //! On Windows the clipboard tool (`clipboard.rs`) and `/caffeinate` (`caffeinate.rs`) start
 //! `powershell`. Both start their program through [`start`], so one list covers both
-//! ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). Any other program started through
-//! it, such as the Linux and macOS clipboard tools, is given the generic table alone.
+//! ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). On Linux the same start runs
+//! `systemd-inhibit` and `wl-copy`, which have lists of their own
+//! ([`SYSTEMD_INHIBIT_CODE_SELECTORS`], [`WL_COPY_CODE_SELECTORS`]). Any other program started
+//! through it, such as `xclip`, `xsel`, `pbcopy` and `clip`, is given the generic table alone.
 //!
 //! [`CODE_SELECTORS`] was written from documentation. It has not been shown by running `powershell`
-//! on Windows that any variable in it changes what runs (#3808).
+//! on Windows that any variable in it changes what runs (#3808). The Linux lists were written from
+//! source and were not shown by running the programs on Linux (#3810).
 
-use bravebot_sandbox::programs::{CodeSelectors, Inherits, Names, Resolved, SearchPath};
+use bravebot_sandbox::programs::{CodeSelectors, Inherits, Names, Resolved, SearchPath, selectors};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,10 +52,81 @@ const CODE_SELECTORS: [(&str, Names); 11] = [
     ("CORECLR_PROFILER_PATH_64", Names::File),
 ];
 
+/// What `osascript` reads to choose code to run, judged on top of the generic names. The script
+/// libraries (`~/Library/Script Libraries`) and scripting additions (`~/Library/ScriptingAdditions`)
+/// of the user domain are found under `CFFIXED_USER_HOME` when it is set, and a compiled library
+/// there runs when a script uses it. `HOME` does not move them (run on macOS 26.6; SANDBOX-30), so
+/// it is not listed. Only `osascript` is given this list, since `CFFIXED_USER_HOME` is not shown to
+/// be read by other programs.
+const OSASCRIPT_CODE_SELECTORS: [(&str, Names); 1] = [("CFFIXED_USER_HOME", Names::Directory)];
+
+/// What `systemd-inhibit` reads to choose code to run, judged on top of the generic names.
+///
+/// `systemd-inhibit` connects to the system bus with `sd_bus_default_system`, which reads
+/// `DBUS_SYSTEM_BUS_ADDRESS` and accepts a `unixexec:` address, for which sd-bus runs the program
+/// the address names (systemd v255 `src/login/inhibit.c` line 268, `src/libsystemd/sd-bus/sd-bus.c`
+/// lines 1280 to 1290 and 1058, `src/libsystemd/sd-bus/bus-socket.c` lines 1066 to 1069). The value
+/// is an address and not a path, which no [`Names`] kind judges, so it is removed whatever it holds
+/// ([`Names::Options`]) and sd-bus uses its default, `unix:path=/run/dbus/system_bus_socket`. A
+/// person whose system bus is elsewhere gets an inhibitor that exits at once, which `/caffeinate`
+/// already reports as no hold.
+///
+/// `DBUS_STARTER_ADDRESS` and `DBUS_STARTER_BUS_TYPE` are read only by `sd_bus_default` and
+/// `sd_bus_open`, which `inhibit.c` does not call. `SYSTEMD_PAGER` and `PAGER` are read by
+/// `pager_open`, which `inhibit.c` calls only for `--list`, which no start passes. No Linux run was
+/// made (SANDBOX-30, "What a checked start does not cover").
+const SYSTEMD_INHIBIT_CODE_SELECTORS: [(&str, Names); 1] =
+    [("DBUS_SYSTEM_BUS_ADDRESS", Names::Options)];
+
+/// What `wl-copy` and the programs it starts read to choose code to run, judged on top of the
+/// generic names.
+///
+/// The start passes no `--type`, so `wl-copy` runs `xdg-mime query filetype <file>` for every copy
+/// (wl-clipboard v2.2.1 `src/wl-copy.c` lines 266 to 267, `src/util/files.c` lines 141 to 173).
+/// `xdg-mime` is a shell script that runs `gio info`, `kmimetypefinder`, `qtxdg-mat` or `mimetype`
+/// by name, depending on the desktop (xdg-utils v1.2.1 `scripts/xdg-mime.in` lines 63 to 129 and
+/// 684 to 700).
+///
+/// - `GIO_EXTRA_MODULES` and `GIO_MODULE_DIR` are directories GLib loads modules from when `gio`
+///   starts (GLib 2.80.0 `gio/giomodule.c` lines 1310 and 1249).
+/// - `QT_PLUGIN_PATH` is the list of directories a Qt program loads plug-ins from
+///   (Qt 5.15.12 `qcoreapplication.cpp` lines 2728 and 2939), as `kmimetypefinder` is.
+/// - `PERL5LIB` and `PERLLIB` are directories Perl adds to `@INC` and loads modules from when it is
+///   not in taint mode (perl v5.38.0 `perl.c` lines 4823 to 4830), as the Perl `mimetype` script
+///   is. `PERL5OPT` is in the generic table.
+///
+/// The tools `xdg-mime` starts are not all read. The source of `qtxdg-mat` and whether `mimetype`
+/// runs in taint mode were not read, so the list can be short. Passing `--type` would stop
+/// `xdg-mime` being run and is not done because it declares a type the content may not have.
+/// `WL_SEAT` is not read by `wl-copy`. No Linux run was made (SANDBOX-30, "What a checked start
+/// does not cover").
+const WL_COPY_CODE_SELECTORS: [(&str, Names); 5] = [
+    selectors::GIO_EXTRA_MODULES,
+    selectors::GIO_MODULE_DIR,
+    selectors::QT_PLUGIN_PATH,
+    ("PERL5LIB", Names::Directories),
+    ("PERLLIB", Names::Directories),
+];
+
 /// Whether `program`, as a lookup resolved it, is PowerShell: a file named `powershell`, with or
 /// without a Windows executable extension and in any case.
 fn is_powershell(program: &Path) -> bool {
     bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "powershell")
+}
+
+/// Whether `program`, as a lookup resolved it, is `osascript`.
+fn is_osascript(program: &Path) -> bool {
+    bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "osascript")
+}
+
+/// Whether `program`, as a lookup resolved it, is `systemd-inhibit`.
+fn is_systemd_inhibit(program: &Path) -> bool {
+    bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "systemd-inhibit")
+}
+
+/// Whether `program`, as a lookup resolved it, is `wl-copy`.
+fn is_wl_copy(program: &Path) -> bool {
+    bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "wl-copy")
 }
 
 /// The command that starts the tool the lookup found at `program`: the person's whole environment,
@@ -61,7 +135,9 @@ fn is_powershell(program: &Path) -> bool {
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
 ///
 /// The generic names are removed when their value names a file a stage may write. PowerShell has
-/// [`CODE_SELECTORS`] removed as well, and no other tool does.
+/// [`CODE_SELECTORS`] removed as well, `osascript` has [`OSASCRIPT_CODE_SELECTORS`],
+/// `systemd-inhibit` has [`SYSTEMD_INHIBIT_CODE_SELECTORS`], `wl-copy` has
+/// [`WL_COPY_CODE_SELECTORS`], and no other tool has a list.
 pub(crate) fn start(program: PathBuf) -> Command {
     start_against(
         &Resolved::found_earlier(program),
@@ -86,13 +162,44 @@ fn start_against(
             held,
             outside_stage_writable,
         )
+    } else if is_osascript(program.as_path()) {
+        bravebot_sandbox::programs::start_against(
+            program,
+            Inherits::All,
+            SearchPath::Reduced,
+            CodeSelectors::Checked(&OSASCRIPT_CODE_SELECTORS),
+            held,
+            outside_stage_writable,
+        )
+    } else if is_systemd_inhibit(program.as_path()) {
+        bravebot_sandbox::programs::start_against(
+            program,
+            Inherits::All,
+            SearchPath::Reduced,
+            CodeSelectors::Checked(&SYSTEMD_INHIBIT_CODE_SELECTORS),
+            held,
+            outside_stage_writable,
+        )
+    } else if is_wl_copy(program.as_path()) {
+        bravebot_sandbox::programs::start_against(
+            program,
+            Inherits::All,
+            SearchPath::Reduced,
+            CodeSelectors::Checked(&WL_COPY_CODE_SELECTORS),
+            held,
+            outside_stage_writable,
+        )
     } else {
         bravebot_sandbox::programs::start_against(
             program,
             Inherits::All,
             SearchPath::Reduced,
-            // A clipboard or inhibitor tool other than PowerShell: the generic table alone
-            // (SANDBOX-30, empty-list starts).
+            // A clipboard tool other than PowerShell, `osascript` and `wl-copy`: the generic table
+            // alone (SANDBOX-30, empty-list starts). `xclip` 0.13 and `xsel` 1.2.1 read no
+            // variable of their own, and libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 read only
+            // names that select a socket, a credential file or data (`DISPLAY`, `XAUTHORITY`,
+            // `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). `pbcopy` and `clip` read none. No
+            // Linux run was made. The sources are in the SANDBOX-30 bullet.
             CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,
@@ -161,6 +268,173 @@ mod tests {
         started("/windows/powershell.exe", name, value, fixture)
             .get_envs()
             .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. The start of `program` takes `name` off the environment when the person's
+    /// environment holds `value` for it.
+    fn removed_by(program: &str, name: &str, value: impl AsRef<OsStr>, fixture: &Fixture) -> bool {
+        started(program, name, value, fixture)
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. `systemd-inhibit` connects to the system bus with sd-bus, which runs the
+    /// program a `unixexec:` address names. The address is not a path, so it is removed whatever it
+    /// holds, and sd-bus uses its default system bus. The list is from systemd v255 source and no
+    /// Linux run was made. The regression it rejects: `systemd-inhibit` started with the generic
+    /// table alone, so a `unixexec:` address naming a program a stage wrote reaches it; the name
+    /// classed as a directory list, so a value that is an absolute safe directory is kept; or the
+    /// list given to every program started through [`start`].
+    #[test]
+    fn a_system_bus_address_is_removed_from_systemd_inhibit_whatever_it_holds() {
+        let fixture = Fixture::new("system-bus");
+        let withheld = |name: &str, value: &OsStr| {
+            removed_by("/usr/bin/systemd-inhibit", name, value, &fixture)
+        };
+        let planted = format!("unixexec:path={}", fixture.planted_file().display());
+        let genuine = format!("unixexec:path={}", fixture.genuine_file().display());
+
+        assert!(withheld("DBUS_SYSTEM_BUS_ADDRESS", OsStr::new(&planted)));
+        assert!(withheld("DBUS_SYSTEM_BUS_ADDRESS", OsStr::new(&genuine)));
+        assert!(withheld(
+            "DBUS_SYSTEM_BUS_ADDRESS",
+            OsStr::new("unixexec:path=bravebot-bus-helper")
+        ));
+        assert!(withheld(
+            "DBUS_SYSTEM_BUS_ADDRESS",
+            OsStr::new("unix:path=/run/dbus/system_bus_socket")
+        ));
+        assert!(withheld(
+            "DBUS_SYSTEM_BUS_ADDRESS",
+            fixture.genuine_directory().as_os_str()
+        ));
+        assert!(withheld("DBUS_SYSTEM_BUS_ADDRESS", OsStr::new("")));
+
+        // Only the name listed for it is removed, and only from `systemd-inhibit`.
+        assert!(!withheld("DBUS_SESSION_BUS_ADDRESS", OsStr::new(&planted)));
+        assert!(!withheld(
+            "XDG_RUNTIME_DIR",
+            fixture.planted_directory().as_os_str()
+        ));
+        for program in [
+            "/usr/bin/xclip",
+            "/usr/bin/xsel",
+            "/usr/bin/wl-copy",
+            "/windows/powershell.exe",
+            "/usr/bin/osascript",
+        ] {
+            assert!(
+                !removed_by(program, "DBUS_SYSTEM_BUS_ADDRESS", &planted, &fixture),
+                "{program}"
+            );
+        }
+        for found in ["systemd-inhibit", "/usr/bin/systemd-inhibit"] {
+            assert!(is_systemd_inhibit(Path::new(found)), "{found}");
+        }
+        for found in ["systemd-inhibit-helper", "systemd-run", "inhibit", ""] {
+            assert!(!is_systemd_inhibit(Path::new(found)), "{found}");
+        }
+    }
+
+    /// SANDBOX-30. `wl-copy` is started with no `--type`, so it runs `xdg-mime`, which runs `gio
+    /// info`, `kmimetypefinder` or the Perl `mimetype` by name. The list is from the source of
+    /// wl-clipboard v2.2.1, xdg-utils v1.2.1, GLib 2.80.0, Qt 5.15.12 and perl v5.38.0, and no
+    /// Linux run was made. The regression it rejects: `wl-copy` started with the generic table
+    /// alone, so a module, plug-in or Perl library directory a stage wrote reaches the tools
+    /// `xdg-mime` starts; a list name judged by its first entry or as one path, so a list with a
+    /// stage-writable entry among safe ones is kept; `GIO_MODULE_DIR` read as a list, so two
+    /// directories joined are kept; or a name classed as options, so a safe directory is removed.
+    #[test]
+    fn the_directories_xdg_mime_would_load_code_from_are_removed_from_wl_copy_when_a_stage_may_write_them()
+     {
+        let fixture = Fixture::new("wl-copy");
+        let join = |entries: &[PathBuf]| std::env::join_paths(entries).unwrap();
+        let planted = fixture.planted_directory();
+        let genuine = fixture.genuine_directory();
+        let mixed = join(&[genuine.clone(), planted.clone()]);
+        let safe_list = join(&[genuine.clone(), fixture.safe.clone()]);
+        let withheld =
+            |name: &str, value: &OsStr| removed_by("/usr/bin/wl-copy", name, value, &fixture);
+
+        for name in ["GIO_EXTRA_MODULES", "QT_PLUGIN_PATH", "PERL5LIB", "PERLLIB"] {
+            assert!(withheld(name, planted.as_os_str()), "{name}");
+            assert!(withheld(name, &mixed), "{name} kept {mixed:?}");
+            assert!(withheld(name, OsStr::new("modules")), "{name}");
+            assert!(withheld(name, OsStr::new("")), "{name}");
+            assert!(!withheld(name, genuine.as_os_str()), "{name}");
+            assert!(!withheld(name, &safe_list), "{name}");
+        }
+        assert!(withheld("GIO_EXTRA_MODULES", planted.as_os_str()));
+        assert!(!withheld("GIO_EXTRA_MODULES", genuine.as_os_str()));
+        assert!(withheld("QT_PLUGIN_PATH", planted.as_os_str()));
+        assert!(!withheld("QT_PLUGIN_PATH", genuine.as_os_str()));
+        assert!(withheld("PERL5LIB", planted.as_os_str()));
+        assert!(!withheld("PERL5LIB", genuine.as_os_str()));
+        assert!(withheld("PERLLIB", planted.as_os_str()));
+        assert!(!withheld("PERLLIB", genuine.as_os_str()));
+
+        // One directory.
+        assert!(withheld("GIO_MODULE_DIR", planted.as_os_str()));
+        assert!(withheld("GIO_MODULE_DIR", &safe_list));
+        assert!(withheld("GIO_MODULE_DIR", OsStr::new("modules")));
+        assert!(!withheld("GIO_MODULE_DIR", genuine.as_os_str()));
+
+        // Only `wl-copy` is given these names, and `wl-copy` is not given another program's.
+        for program in [
+            "/usr/bin/xclip",
+            "/usr/bin/xsel",
+            "/usr/bin/systemd-inhibit",
+            "/windows/powershell.exe",
+        ] {
+            assert!(
+                !removed_by(program, "PERL5LIB", planted.as_os_str(), &fixture),
+                "{program}"
+            );
+        }
+        assert!(!withheld("PSModulePath", planted.as_os_str()));
+        assert!(!withheld("DBUS_SYSTEM_BUS_ADDRESS", planted.as_os_str()));
+        // `wl-copy` does not read `WL_SEAT`, so it is left as set.
+        assert!(!withheld("WL_SEAT", planted.as_os_str()));
+        for found in ["wl-copy", "/usr/bin/wl-copy"] {
+            assert!(is_wl_copy(Path::new(found)), "{found}");
+        }
+        for found in ["wl-paste", "wl-copy-helper", "xclip", ""] {
+            assert!(!is_wl_copy(Path::new(found)), "{found}");
+        }
+    }
+
+    /// SANDBOX-30. `xclip` and `xsel` read no variable of their own that selects code (xclip 0.13,
+    /// xsel 1.2.1, libX11 1.8.7, libxcb 1.16, libXau 1.0.11 source), so they are given the generic
+    /// table alone and the names that select data are left as set. The regression it rejects: the
+    /// `wl-copy` or `systemd-inhibit` names given to the X tools, or `DISPLAY` and `XAUTHORITY`
+    /// removed, so a person on X loses their clipboard.
+    #[test]
+    fn the_x_clipboard_tools_are_given_the_generic_names_alone() {
+        let fixture = Fixture::new("x-tools");
+        let planted = fixture.planted_directory();
+        for program in ["/usr/bin/xclip", "/usr/bin/xsel"] {
+            for name in [
+                "DISPLAY",
+                "XAUTHORITY",
+                "XENVIRONMENT",
+                "XLOCALEDIR",
+                "XCOMPOSEFILE",
+                "WAYLAND_DISPLAY",
+                "GIO_EXTRA_MODULES",
+                "PERL5LIB",
+                "DBUS_SYSTEM_BUS_ADDRESS",
+            ] {
+                assert!(
+                    !removed_by(program, name, planted.as_os_str(), &fixture),
+                    "{name} was removed from the start of {program}"
+                );
+            }
+            // The generic names are still removed.
+            assert!(
+                removed_by(program, "LD_PRELOAD", planted.join("lib.so"), &fixture),
+                "{program}"
+            );
+        }
     }
 
     /// SANDBOX-30. The list is from documentation and not from running `powershell`. The regression
@@ -308,6 +582,130 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// SANDBOX-30, run on macOS 26.6: `osascript` loads a compiled script library from
+    /// `Library/Script Libraries` under `CFFIXED_USER_HOME`. The regression it rejects: the name
+    /// not listed for `osascript`, so a library a stage wrote runs; classed as options, so a safe
+    /// directory is removed; or listed as `HOME`, which `osascript` does not follow.
+    #[test]
+    fn osascript_has_a_user_home_it_would_load_script_libraries_from_removed_when_a_stage_may_write_it()
+     {
+        let fixture = Fixture::new("osascript-home");
+        let planted = fixture.planted_directory();
+        let genuine = fixture.genuine_directory();
+        let removed = |program: &str, name: &str, value: &Path| {
+            started(program, name, value, &fixture)
+                .get_envs()
+                .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+        let withheld = |name: &str, value: &Path| removed("/usr/bin/osascript", name, value);
+
+        assert!(withheld("CFFIXED_USER_HOME", &planted));
+        assert!(withheld("CFFIXED_USER_HOME", Path::new("modules")));
+        assert!(withheld("CFFIXED_USER_HOME", &fixture.safe.join("missing")));
+        assert!(!withheld("CFFIXED_USER_HOME", &genuine));
+        // `HOME` is not what `osascript` follows, so it is left as set.
+        assert!(!withheld("HOME", &planted));
+        // Another tool, PowerShell included, is not given the name.
+        for program in ["/windows/powershell.exe", "/usr/bin/xclip"] {
+            assert!(
+                !removed(program, "CFFIXED_USER_HOME", &planted),
+                "{program}"
+            );
+        }
+        // `osascript` is not given PowerShell's names.
+        assert!(!withheld("PSModulePath", &planted));
+        assert!(is_osascript(Path::new("/usr/bin/osascript")));
+        assert!(!is_osascript(Path::new("/usr/bin/osascript-helper")));
+    }
+
+    /// SANDBOX-30, run on macOS: a compiled script library a stage wrote under
+    /// `CFFIXED_USER_HOME` runs when `osascript` uses it, and the checked start does not let that
+    /// happen. The control (the name set, the start not applied) must run the library, so the check
+    /// cannot pass because the library never loads. Prints `skipped` and passes where `osascript`
+    /// or `osacompile` is absent, and fails under `CI` on macOS.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start() {
+        let (osascript, osacompile) = (
+            Path::new("/usr/bin/osascript"),
+            Path::new("/usr/bin/osacompile"),
+        );
+        if !osascript.exists() || !osacompile.exists() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "osascript or osacompile is absent under CI"
+            );
+            eprintln!("skipped: osascript or osacompile is absent");
+            return;
+        }
+        let base = scratch_dir("osascript-real-run");
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let libraries = home.join("Library").join("Script Libraries");
+        std::fs::create_dir_all(&libraries).unwrap();
+        let marker = base.join("marker");
+        let source = base.join("Marker3809.applescript");
+        std::fs::write(
+            &source,
+            format!(
+                "on ping()\n  do shell script \"echo ran >> '{}'\"\n  return 1\nend ping\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let compiled = Command::new(osacompile)
+            .arg("-o")
+            .arg(libraries.join("Marker3809.scpt"))
+            .arg(&source)
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        let home = home.canonicalize().unwrap();
+        let session = base.canonicalize().unwrap();
+        let args = [
+            "-e",
+            "use lib : script \"Marker3809\"",
+            "-e",
+            "return lib's ping()",
+        ];
+
+        // Control: the name set as the person would set it, with no start applied.
+        let control = Command::new(osascript)
+            .args(args)
+            .env_clear()
+            .env("CFFIXED_USER_HOME", &home)
+            .output()
+            .unwrap();
+        assert!(control.status.success(), "{control:?}");
+        assert!(marker.exists(), "the control did not run the library");
+        std::fs::remove_file(&marker).unwrap();
+
+        // The checked start, with the session the one directory a stage may write.
+        let writable = vec![session];
+        let mut start = start_against(
+            &Resolved::found_earlier(osascript),
+            [(
+                OsString::from("CFFIXED_USER_HOME"),
+                home.clone().into_os_string(),
+            )],
+            &|file: &Path| {
+                bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
+            },
+        );
+        let removed = start
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new("CFFIXED_USER_HOME") && now.is_none());
+        assert!(removed, "the start kept CFFIXED_USER_HOME");
+        let checked = start.args(args).output().unwrap();
+        assert!(!checked.status.success(), "{checked:?}");
+        assert!(
+            !marker.exists(),
+            "the library ran through the checked start"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// SANDBOX-30. The list is given to the program the lookup resolved to, which on Windows keeps

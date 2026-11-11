@@ -445,18 +445,47 @@ impl FileAuthority {
     /// Called under `capture`, immediately before entering a filesystem effect.
     /// Refuses overlapping writers; no approval is held while waiting on another effect.
     fn begin(&self, path: &str) -> Option<FileEffect> {
+        self.begin_all(&[path])
+    }
+
+    /// [`FileAuthority::begin`] for a file with more than one name (TRUST-4): the effect reserves
+    /// and distrusts every name in `paths`, or none of them. One name held by another writer
+    /// refuses the whole entry and changes nothing.
+    fn begin_all(&self, paths: &[&str]) -> Option<FileEffect> {
         let mut state = self.state();
-        let key = state.trust.key(&self.spelled(path));
-        let slot = state.slot(&key);
-        if !state.active.insert(slot) {
-            return None;
+        let keys: Vec<String> = paths
+            .iter()
+            .map(|path| state.trust.key(&self.spelled(path)))
+            .collect();
+        let mut slots: Vec<String> = Vec::new();
+        for key in &keys {
+            let slot = state.slot(key);
+            if state.active.contains(&slot) {
+                return None;
+            }
+            if !slots.contains(&slot) {
+                slots.push(slot);
+            }
         }
-        state.trust.distrust(&key);
-        let revision = state.record_change(key.clone());
+        state.active.extend(slots);
+        // What the map said of each name before any is distrusted, so a name a person had distrusted
+        // is known to have been when the effect completes (TRUST-4).
+        let before: Vec<Option<Integrity>> = keys
+            .iter()
+            .map(|key| state.trust.integrity_of(key))
+            .collect();
+        let mut entered: Vec<(String, u64, Option<Integrity>)> = Vec::new();
+        for (key, before) in keys.into_iter().zip(before) {
+            if entered.iter().any(|(held, _, _)| *held == key) {
+                continue;
+            }
+            state.trust.distrust(&key);
+            let revision = state.record_change(key.clone());
+            entered.push((key, revision, before));
+        }
         Some(FileEffect {
             authority: self.clone(),
-            key,
-            revision,
+            entered,
             completed: false,
         })
     }
@@ -493,13 +522,20 @@ impl FileCapture<'_> {
     pub fn begin(&self, path: &str) -> Option<FileEffect> {
         self.authority.begin(path)
     }
+
+    /// Reserve every name of one file before releasing this boundary to perform a write. Refused
+    /// when any of them is held by another writer.
+    pub fn begin_all(&self, paths: &[&str]) -> Option<FileEffect> {
+        self.authority.begin_all(paths)
+    }
 }
 
 /// Dropping an unfinished effect leaves explicit distrust, including after an I/O error.
 pub struct FileEffect {
     authority: FileAuthority,
-    key: String,
-    revision: u64,
+    /// Each name of the file the effect entered, with the revision its entry recorded and what the
+    /// map said of it just before.
+    entered: Vec<(String, u64, Option<Integrity>)>,
     completed: bool,
 }
 
@@ -507,15 +543,53 @@ impl FileEffect {
     pub fn complete(mut self, integrity: Integrity) {
         let _access = self.authority.capture();
         let mut state = self.authority.state();
-        let slot = state.slot(&self.key);
-        state.active.remove(&slot);
-        let unchanged = state.revision_of(&self.key) <= self.revision;
-        match integrity {
-            Integrity::Trusted if unchanged => state.trust.trust(&self.key),
-            _ => state.trust.distrust(&self.key),
+        // Every name is judged before any is recorded, so one name's record does not move the
+        // revision another is compared with.
+        //
+        // The name the write was made through (the first) is trusted as it always was. Another
+        // name of the file is given what the rules over its directory say and no more: the yes to
+        // the write was about the first name, so a link or a second path inside a directory the
+        // map distrusts stays distrusted (an exact trust rule would outrank the directory's), and
+        // one inside a directory nobody ruled on is left undecided, which grants it nothing and
+        // does not lower a read through the first name (TRUST-4). A name the map distrusted before
+        // the effect entered, by a rule of its own or its directory's, is distrusted afterwards: the
+        // entry replaced that rule with the effect's own, and the yes to the write was not about
+        // this name.
+        let mut settled: Vec<(&str, Option<Integrity>)> = Vec::new();
+        for (position, (key, revision, before)) in self.entered.iter().enumerate() {
+            let slot = state.slot(key);
+            state.active.remove(&slot);
+            let decision = match integrity {
+                Integrity::Untrusted => Some(Integrity::Untrusted),
+                Integrity::Trusted if state.revision_of(key) > *revision => {
+                    Some(Integrity::Untrusted)
+                }
+                Integrity::Trusted if position == 0 => Some(Integrity::Trusted),
+                Integrity::Trusted if *before == Some(Integrity::Untrusted) => {
+                    Some(Integrity::Untrusted)
+                }
+                Integrity::Trusted => state.trust.integrity_of(parent_key(key)),
+            };
+            settled.push((key, decision));
         }
-        state.record_change(self.key.clone());
+        for (key, decision) in settled {
+            match decision {
+                Some(Integrity::Trusted) => state.trust.trust(key),
+                Some(Integrity::Untrusted) => state.trust.distrust(key),
+                None => state.trust.undecide(key),
+            }
+            state.record_change(key.to_string());
+        }
         self.completed = true;
+    }
+}
+
+/// The directory a key is in, as a key: what decides the key where no rule is written about it.
+fn parent_key(key: &str) -> &str {
+    match key.rsplit_once('/') {
+        Some(("", _)) => "/",
+        Some((parent, _)) => parent,
+        None => "",
     }
 }
 
@@ -523,10 +597,12 @@ impl Drop for FileEffect {
     fn drop(&mut self) {
         if !self.completed {
             let mut state = self.authority.state();
-            let slot = state.slot(&self.key);
-            state.active.remove(&slot);
-            state.trust.distrust(&self.key);
-            state.record_change(self.key.clone());
+            for (key, _, _) in &self.entered {
+                let slot = state.slot(key);
+                state.active.remove(&slot);
+                state.trust.distrust(key);
+                state.record_change(key.clone());
+            }
         }
     }
 }
@@ -673,6 +749,137 @@ mod tests {
                 "{changed}"
             );
         }
+    }
+
+    /// A writer that enters under two names of one file (TRUST-4) holds both: a second writer
+    /// through either is refused, an entry refused for one name reserves none of the others, and
+    /// an untrusted completion leaves every name untrusted. Rejects an entry that reserves only the
+    /// first name, one that reserves the names before it finds a held one, and a completion that
+    /// trusts or distrusts only the first.
+    #[test]
+    fn a_writer_under_two_names_reserves_and_distrusts_both() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish("src", Integrity::Trusted);
+
+        let held = authority.capture().begin_all(&["src/a", "src/b"]).unwrap();
+        assert!(authority.capture().begin("src/b").is_none());
+        assert!(authority.capture().begin("src/a").is_none());
+        assert!(authority.capture().begin_all(&["src/c", "src/b"]).is_none());
+        drop(held);
+
+        let free = authority.capture().begin("src/c");
+        assert!(
+            free.is_some(),
+            "a refused entry reserved the names it passed"
+        );
+        drop(free);
+
+        authority.publish("src", Integrity::Trusted);
+        let effect = authority.capture().begin_all(&["src/a", "src/b"]).unwrap();
+        effect.complete(Integrity::Untrusted);
+        assert!(!authority.snapshot().is_trusted("src/a"));
+        assert!(!authority.snapshot().is_trusted("src/b"));
+        assert!(authority.capture().begin("src/b").is_some());
+    }
+
+    /// A completed trusted write trusts the name it was made through and gives every other name
+    /// of the file no more than the rules over its directory give (TRUST-4). A link inside a
+    /// distrusted directory stays distrusted: an exact trust rule on the link would outrank the
+    /// directory's rule, so the file would read as trusted through it. Rejects a completion that
+    /// trusts every entered key, and one that distrusts every other name whatever its directory
+    /// says (a link in a trusted directory would then never be trusted).
+    #[test]
+    fn a_trusted_write_does_not_lift_another_name_out_of_a_distrusted_directory() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.publish("vendor", Integrity::Untrusted);
+
+        let effect = authority
+            .capture()
+            .begin_all(&["src/a", "vendor/link", "docs/link"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("src/a"), Some(Integrity::Trusted));
+        assert_eq!(
+            map.integrity_of("vendor/link"),
+            Some(Integrity::Untrusted),
+            "a name inside a distrusted directory was trusted by a write through another name"
+        );
+        assert_eq!(
+            map.integrity_of("docs/link"),
+            Some(Integrity::Trusted),
+            "a name in a trusted directory was not given that trust"
+        );
+
+        // The reverse: the write is made through the name inside the distrusted directory. That
+        // name is the one the write was approved for, and the name in the trusted directory is
+        // trusted only because its own directory is.
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.publish("vendor", Integrity::Untrusted);
+        let effect = authority
+            .capture()
+            .begin_all(&["vendor/a", "src/link", "vendor/second"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("src/link"), Some(Integrity::Trusted));
+        assert_eq!(
+            map.integrity_of("vendor/second"),
+            Some(Integrity::Untrusted),
+            "a second name inside the distrusted directory was trusted"
+        );
+    }
+
+    /// A trusted write completed through one name keeps an exact distrust on another name of the
+    /// file, and an effect dropped without completing leaves every name distrusted and releases
+    /// its reservations (TRUST-4). Rejects a completion that gives the other name what its
+    /// directory says, and a drop that distrusts only the first name.
+    #[test]
+    fn an_exact_distrust_on_another_name_survives_completion_and_a_drop_distrusts_every_name() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.publish("docs/link", Integrity::Untrusted);
+
+        let effect = authority
+            .capture()
+            .begin_all(&["a.txt", "docs/link"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("a.txt"), Some(Integrity::Trusted));
+        assert_eq!(
+            map.integrity_of("docs/link"),
+            Some(Integrity::Untrusted),
+            "a trusted write through a.txt lifted the distrust of docs/link"
+        );
+
+        // A name nobody had a rule against is still given its directory's trust.
+        let effect = authority
+            .capture()
+            .begin_all(&["b.txt", "docs/other"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+        assert_eq!(
+            authority.snapshot().integrity_of("docs/other"),
+            Some(Integrity::Trusted)
+        );
+
+        // Dropped before completing: every name is distrusted and none stays reserved.
+        authority.publish("c.txt", Integrity::Trusted);
+        authority.publish("docs/third", Integrity::Trusted);
+        let effect = authority
+            .capture()
+            .begin_all(&["c.txt", "docs/third"])
+            .unwrap();
+        assert!(authority.capture().begin("docs/third").is_none());
+        drop(effect);
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("c.txt"), Some(Integrity::Untrusted));
+        assert_eq!(map.integrity_of("docs/third"), Some(Integrity::Untrusted));
+        assert!(authority.capture().begin("docs/third").is_some());
     }
 
     /// A handle rooted in a checkout files a relative name under the checkout and leaves the

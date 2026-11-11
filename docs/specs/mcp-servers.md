@@ -562,10 +562,12 @@ not seen, and a changed argv is a server they have not seen.
 
 A program named rather than given as a path is looked for only in `PATH` entries a stage may not
 write, and a file that is a link into such a directory is not taken
-([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). The digest holds the name, so an approval of the
-name must not start a file a confined stage wrote into an activated virtualenv's `bin` or a
-`node_modules/.bin` ahead of the installation the person was shown. A name found only in such a
-directory is not found, as for any absent program.
+([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). Those entries include the checkout holding a
+directory the session was opened on, added or moved to, the nearest of it and its ancestors with a
+`.git`, so a session opened below a checkout's root does not search the checkout's `bin`. The digest holds the
+name, so an approval of the name must not start a file a confined stage wrote into an activated
+virtualenv's `bin`, a `node_modules/.bin` or the `bin` of the checkout ahead of the installation the
+person was shown. A name found only in such a directory is not found, as for any absent program.
 
 **Why.** Same reason [CMDLINE-3](tools/command-line.md#CMDLINE-3) binds an endorsement to the
 compiled plan rather than the line: the thing a person read has to be the thing that runs, and an
@@ -593,6 +595,7 @@ rewritten. The session's question says *that* the declaration changed and not wh
 digest is kept of what was approved, and a digest names no field.
 
 `verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_planted_in_a_directory_a_stage_may_write`
+`verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session`
 `verified-by: bravebot_config::mcp::a_digest_covers_the_program_every_argument_the_names_and_the_directory`
 `verified-by: bravebot_config::mcp::a_digest_covers_every_stored_value_and_every_file_it_may_read`
 `verified-by: bravebot_config::mcp::a_declaration_storing_no_value_digests_as_it_did_before_values_could_be_stored`
@@ -631,15 +634,39 @@ an approval prompt.
 
 The runners are `npx`, `bunx`, `npm exec`, `pnpm dlx` and `yarn dlx` for Node, and `uvx`,
 `uv tool run` and `pipx run` for Python, recognised by the name of the declared program whatever
-directory it is given in. The package is the one a `--package` or `-p` flag names for Node, or
-`--from` or `--spec` for Python, and otherwise the first word that is not a flag or the value of a
-flag known to take one, such as `--registry` or `--with`. A flag the reading does not know may take
-the next word, so where one comes before the package the prompt says which package runs is not
-known, rather than name a word that may not be it. A Node package is pinned where the version after
-its last `@` is one exact release, `@scope/name@1.4.2`, and a Python one where `==` or `@` is
-followed by one; a tag such as `latest`, a range, and no version at all are each unpinned. An exact
-release is numbers joined by dots, with a pre-release or build suffix allowed after them, and for
-Node it is three numbers, since npm reads `@1.2` as every `1.2.x`.
+directory it is given in. `npm exec` is also read under the spellings npm resolves to it, `exe` and
+`x`; `ex` is not one, since npm reads it as `explain` or `explore`. The word that names the
+sub-command (`exec`, `dlx`, `tool` then `run`, `run`) is looked for after the program's own options,
+which are skipped with the value each takes: `npm --loglevel=silent exe`, `npm --loglevel silent x`
+and `pnpm --dir app dlx` are runners. Those options are listed per program. An option the list does
+not know, in front of a word that could be the sub-command, may take that word as its value, so the
+prompt says which package runs is not known; with no such word after it the line is not a runner.
+An option written with an `=` is skipped whatever it is, since its value is attached. For Node, an
+option written `--no-` and a name is skipped as a switch when the program has switches listed. The
+`--package` of `npm`, given before the sub-command, is a package flag as it is after it: `npm
+--package=evil@latest x bin` installs `evil@latest` and runs `bin` in it. `yarn` has no options
+listed, so an option before `dlx` that has no `=` is one the reading does not know.
+
+The packages are every one the line installs. A `--package` or `-p` flag for Node, and a `--from` or
+`--spec` flag for Python, names one each time it is given, with the value after a space or an `=`.
+Once such a flag is given, the first word after the flags is the command to run in it and is not a
+package, and the words after that command are the command's own and are not read. With no such flag
+that first word is the package. For Python, each `--with` or `-w` also names a package and leaves
+the first word where it was, because `uvx` installs and runs what `--with` names as it does the main
+package. The reading over-names where it is unsure: a word that turns out not to be a package costs
+one more line at the question, and a package left out would be drawn as pinned. Other flags before
+the command are skipped with the value each takes, such as `--registry`. A flag the reading does not
+know may take the next word, so where one comes before the command the prompt says which package
+runs is not known, after naming the packages read before it, rather than name a word that may not
+be one.
+
+A Node package is pinned where the version after its last `@` is one exact release,
+`@scope/name@1.4.2`, and a Python one where `==` or `@` is followed by one; a tag such as `latest`,
+a range, and no version at all are each unpinned. An exact release is numbers joined by dots, with a
+pre-release or build suffix allowed after them, and for Node it is three numbers, since npm reads
+`@1.2` as every `1.2.x`. A line is unpinned where any one of its packages is, and the prompt draws
+one line for each package that is, in the order the words name them, so `npx -y -p good@1.2.3 -p
+evil bin` is drawn with `evil` unpinned and `good@1.2.3` not.
 
 Both questions draw these lines: the one `bravebot mcp add` and `approve` ask, and the one a session
 asks. What is read is the words the person declared and nothing else, so this says what the line asks
@@ -649,6 +676,10 @@ calls one, is drawn as a plain program.
 `verified-by: bravebot_agent::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
 `verified-by: bravebot_agent::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
 `verified-by: bravebot_agent::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
+`verified-by: bravebot_agent::servers::every_package_a_runner_line_installs_is_read_and_each_unpinned_one_is_named`
+`verified-by: bravebot_agent::servers::a_runner_line_that_installs_two_packages_draws_the_one_that_floats`
+`verified-by: bravebot_agent::servers::a_runner_line_with_two_packages_draws_the_unpinned_one_at_the_question`
+`verified-by: bravebot_agent::servers::an_npm_alias_is_drawn_as_the_npm_exec_runner_it_is_and_install_is_not`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
 `verified-by: bravebot_ui_bridge::wire::a_server_question_carries_the_declaration_and_no_stored_value`
 
@@ -1155,7 +1186,9 @@ the lookup of the programs bravebot starts itself, as a stage's rows are
 ([SANDBOX-30](sandboxing.md#SANDBOX-30)). A server is code we did not write, and a program it
 writes there would start with the person's access, which the confinement withholds from the server.
 The rows are recorded as the server is launched, and a server that is only described records none.
-The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record.
+The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record, and the
+record holds the checkout of each directory the session opens, adds or moves to
+([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **A server is given no directory inside a git repository.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, and a relative
@@ -1166,7 +1199,9 @@ itself, a `HEAD` file beside `objects` and `refs` directories. `add` refuses it 
 writes nothing, and a session refuses a declaration that names one before anybody is asked, with a
 line naming the directory and the repository it is in. On macOS a row the server may write does
 not reach a `.git` beneath it either, whatever its case ([SANDBOX-14](sandboxing.md#SANDBOX-14)),
-so a server cannot make one in its own home or the temporary directory and write into it.
+so a server cannot make one in its own home or the temporary directory and write into it. The same
+holds for a `.husky` or `.bravebot` beneath a row and for `.gitmodules`, `.gitconfig` and
+`.pre-commit-config.yaml`, which git or a hook runner reads as code to run.
 
 **A server has a home directory of its own**, and `HOME` names it unless the declaration names
 `HOME`, in which case the person's value is handed over as any other named variable is. A runner
@@ -1963,7 +1998,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   thing the declaration names. Digesting the resolved path would make an approval machine-specific,
   which is either the correct reading of what was approved or a re-approval every time a toolchain
   moves. [SERVERS-5](#SERVERS-5) keeps the name in the digest and closes the planting case another
-  way, by not searching a directory a stage may write (#2777).
+  way, by not searching a directory a stage may write or the checkout holding a directory the
+  session opened (#2777, #3893).
 
 ## Known costs
 
@@ -1982,6 +2018,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
   better. For the distribution form nearly every server uses, the digest binds the argv and the argv
   names a package whose contents change. The only real fix is pinning with an integrity hash, which
   the package ecosystems support and this declaration format does not yet express.
+- **A runner's options are listed, not discovered.** [SERVERS-6](#SERVERS-6) skips the options a
+  runner takes before its sub-command from a list kept here for each program. The `npm` list is
+  taken from npm's own option definitions and the `pnpm` list from its help text. The `uv` and
+  `pipx` lists are written from the options those tools document and are not read from an installed
+  tool, and `yarn` has none. An option missing from a list is read as one the reading does not know,
+  so the prompt says which package runs is not known, and a line is never drawn as pinned for want
+  of an entry. The short `-w` of `uvx --with` is read as `--with` on that documentation; if a uv
+  release gives `-w` another meaning, `uvx -w x pkg==1.0.0` is drawn with `x` as one more package.
+- **A runner outside the list is drawn as a plain program.** `pnpx`, `bun x` and `pnpm create`, which
+  fetch a package and run it, are not among the runners SERVERS-6 reads, so a server declared with
+  one gets no runner line and no unpinned-package line. Pinning is the person's to check there.
 - **A person who approves a server has approved a program.** Beyond the confinement
   [MCP-3](mcp.md#MCP-3) requires and the capability [SERVERS-9](#SERVERS-9) grants, there is no audit
   of what it does once it runs. A confined process with a network capability is still a program
@@ -2057,8 +2104,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   process's memory while it does.
 - **A Windows server's grants are changes to the filesystem.** A grant for the server's home, its
   directory and the directories its program is found in changes the access list of each, so a run
-  that ends without cleanup leaves the entries behind. A server there may also start a
-  subprocess, since the container has no mechanism to deny one ([SANDBOX-5](sandboxing.md#SANDBOX-5)).
+  that ends without cleanup leaves the entries behind.
 - **Only the directories above a server's directory are searched for a repository.** A directory
   holding checkouts is not refused, so the server may write their work trees, a hook a relative
   `core.hooksPath` points at among them, on every platform.
@@ -2068,7 +2114,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   before the server started or the server made it, and git run there later runs what the server
   wrote. On every platform a directory a server lays out as a repository itself, with no `.git` in
   its path, is not refused once the server is running.
-- **On macOS a server cannot make a work tree.** No `.git` is writable to it, so a server or a
+- **On macOS a server cannot make a work tree.** No protected name is writable to it, so a server or a
   runner that clones a repository into its home or the temporary directory fails there, and on
   every platform a server meant to work on a git repository cannot be given one.
 - **A person whose home directory is a git work tree** has every directory in it refused as a
@@ -2154,9 +2200,9 @@ callable that the person turned off.
 At the end of its report, `/status` has a `Server policy` line naming each local server the session
 started, and under it one line each for what the policy holds of egress (none, this machine only,
 any address, or only the proxy that applies the session's host list), whether the server may start
-subprocesses, and the directory it starts in. Where the platform refuses a write to a `.git` beneath
-a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a `.git` line
-says so, since a row that reads `write` does not reach one. Then comes one line for each path the
+subprocesses, and the directory it starts in. Where the platform refuses a write to a protected name
+beneath a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a
+`protected names` line says so, since a row that reads `write` does not reach one. Then comes one line for each path the
 policy names, labelled `read`, `write` or `read, write` for what the row grants, and the paths that
 were wanted and are in no row because this platform names no path that is not on disk
 ([SANDBOX-9](sandboxing.md#SANDBOX-9)), under a `left out` line giving that reason. A write row

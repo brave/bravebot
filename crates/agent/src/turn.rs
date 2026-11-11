@@ -3174,6 +3174,8 @@ where
         None if nothing_was_typed => {}
         None => conversation.push_from(submitted, Provenance::Typed),
     }
+    // Where excerpts for this turn go, in front of the prompt they were chosen for (RETRIEVE-8).
+    conversation.prompt_given();
     // A delegate's task is the whole of what it was told, so a compaction sends it again
     // (COMPACT-19). Recorded from the fact that the turn is a delegate's, not from the task.
     if task.delegate.is_some() {
@@ -7330,6 +7332,874 @@ mod tests {
         }
     }
 
+    /// RETRIEVE-7, 8, 12 and 13: a bot's turn over its budget retrieves in place of a summary, and
+    /// summarises only where it could not.
+    mod retrieving {
+        use super::ceiling::said;
+        use super::fallback::configured;
+        use super::*;
+        use crate::backend::{BackendError, scripted};
+        use crate::retrieval::{Recalled, Retriever, Unavailable};
+        use bravebot_aichat::Completion;
+        use bravebot_aichat::protocol::Message;
+        use bravebot_core::cancel::Cancel;
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+
+        const EXCERPTS: &str =
+            "<earlier n=\"2\" from=\"user\">the parser lives in src/lex</earlier>";
+
+        /// Answers each retrieval with the next of its answers, and keeps what it was asked.
+        #[derive(Debug, Default)]
+        struct Scripted {
+            answers: Mutex<VecDeque<Result<Recalled, Unavailable>>>,
+            asked: Mutex<Vec<(String, u32, usize)>>,
+        }
+
+        impl Scripted {
+            fn answering(answers: Vec<Result<Recalled, Unavailable>>) -> Arc<Self> {
+                Arc::new(Self {
+                    answers: Mutex::new(answers.into()),
+                    asked: Mutex::default(),
+                })
+            }
+
+            fn asked(&self) -> Vec<(String, u32, usize)> {
+                self.asked.lock().unwrap().clone()
+            }
+        }
+
+        impl Retriever for Scripted {
+            fn retrieve(
+                &self,
+                _: &Conversation,
+                query: &str,
+                cut: u32,
+                budget: usize,
+            ) -> Result<Recalled, Unavailable> {
+                self.asked
+                    .lock()
+                    .unwrap()
+                    .push((query.to_string(), cut, budget));
+                self.answers
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("asked once more than the script answers")
+            }
+        }
+
+        fn recalled() -> Recalled {
+            Recalled {
+                text: EXCERPTS.into(),
+                excerpts: vec![(2, 0), (5, 1)],
+                context: vec![1],
+                model: "an-embedder".into(),
+                considered: 14,
+                tokens: 31,
+                latency: std::time::Duration::from_millis(40),
+            }
+        }
+
+        const LATER_EXCERPTS: &str = "LATER EXCERPTS FOR THE TESTS";
+
+        fn recalled_later() -> Recalled {
+            Recalled {
+                text: LATER_EXCERPTS.into(),
+                excerpts: vec![(3, 0)],
+                ..recalled()
+            }
+        }
+
+        /// A bot turn over its budget that retrieved, then a second turn within it.
+        fn retrieved_then_asked_again(
+            name: &str,
+            later: Result<Recalled, Unavailable>,
+        ) -> (Conversation, Arc<Scripted>, Turned, Turned) {
+            let mut conversation = a_long_bot_conversation();
+            let retriever = Scripted::answering(vec![Ok(recalled()), later]);
+            let first = turn(
+                name,
+                &mut conversation,
+                "where does the parser live",
+                Some(retriever.clone()),
+                vec![
+                    said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                    said("in src/lex", &[], None),
+                ],
+            );
+            let second = turn(
+                name,
+                &mut conversation,
+                "and the tests",
+                Some(retriever.clone()),
+                vec![said("beside it", &[], None)],
+            );
+            (conversation, retriever, first, second)
+        }
+
+        /// Eight exchanges of about four hundred bytes each, past a budget of a thousand tokens.
+        fn a_long_bot_conversation() -> Conversation {
+            let mut conversation = Conversation::new();
+            grow(&mut conversation, 8);
+            conversation
+        }
+
+        fn grow(conversation: &mut Conversation, exchanges: usize) {
+            for at in 0..exchanges {
+                conversation.push(Message::user(format!("question {at}: {}", "q".repeat(400))));
+                conversation.push(Message::assistant(format!(
+                    "answer {at}: {}",
+                    "a".repeat(400)
+                )));
+            }
+            conversation.measured(50_000);
+        }
+
+        struct Turned {
+            /// The messages of each request sent, in order, as JSON.
+            sent: Vec<Vec<String>>,
+            reporter: crate::report::RecordingReporter,
+            sink: bravebot_core::event::RecordingSink,
+        }
+
+        fn turn(
+            name: &str,
+            conversation: &mut Conversation,
+            prompt: &str,
+            retriever: Option<Arc<dyn Retriever>>,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> Turned {
+            turn_as(
+                name,
+                conversation,
+                &Task::new(prompt).with_retriever(retriever),
+                replies,
+            )
+        }
+
+        fn turn_as(
+            name: &str,
+            conversation: &mut Conversation,
+            task: &Task,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> Turned {
+            let mut config = configured(None);
+            config.context_budget = 1_000;
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            scripted::script(replies);
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let completed = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                task,
+                conversation,
+                &mut crate::confirm::ApproveWrites,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            );
+            let asked = scripted::asked();
+            scripted::clear();
+            completed.outcome.expect("the turn answered");
+            let sent = asked
+                .iter()
+                .map(|body| {
+                    let request: serde_json::Value = serde_json::from_str(body).unwrap();
+                    request["messages"]
+                        .as_array()
+                        .expect("a request has messages")
+                        .iter()
+                        .map(|message| message.to_string())
+                        .collect()
+                })
+                .collect();
+            Turned {
+                sent,
+                reporter,
+                sink,
+            }
+        }
+
+        fn retrieve_lines(sink: &bravebot_core::event::RecordingSink) -> Vec<String> {
+            sink.events()
+                .iter()
+                .filter_map(|event| match event {
+                    bravebot_core::event::Event::GatePassed { gate, detail }
+                        if *gate == "retrieve" =>
+                    {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// Fails naming the first message `later` does not repeat of `earlier`.
+        fn starts_with(later: &[String], earlier: &[String]) {
+            if let Some(at) = (0..earlier.len()).find(|&at| later.get(at) != Some(&earlier[at])) {
+                let then = &earlier[at];
+                let now = later.get(at).map_or("", String::as_str);
+                let from = then
+                    .chars()
+                    .zip(now.chars())
+                    .take_while(|(a, b)| a == b)
+                    .count()
+                    .saturating_sub(40);
+                panic!(
+                    "message {at} of {} was not sent again:\n{}\n{}",
+                    earlier.len(),
+                    then.chars().skip(from).take(300).collect::<String>(),
+                    now.chars().skip(from).take(300).collect::<String>(),
+                );
+            }
+        }
+
+        fn holds(message: &str, text: &str) -> bool {
+            let escaped = serde_json::to_string(text).unwrap();
+            message.contains(&escaped[1..escaped.len() - 1])
+        }
+
+        #[test]
+        fn an_over_budget_bot_turn_retrieves_and_does_not_summarise() {
+            let mut conversation = a_long_bot_conversation();
+            let before = conversation.len();
+            let retriever = Scripted::answering(vec![Ok(recalled())]);
+
+            let turned = turn(
+                "retrieving-over-budget",
+                &mut conversation,
+                "where does the parser live",
+                Some(retriever.clone()),
+                vec![said("in src/lex", &[], None)],
+            );
+
+            assert_eq!(turned.sent.len(), 1, "a summary was asked for");
+            let asked = retriever.asked();
+            let [(query, cut, budget)] = asked.as_slice() else {
+                panic!("one retrieval: {asked:?}");
+            };
+            assert_eq!(query, "where does the parser live");
+            assert!(*cut > 0 && *budget > 0 && *budget <= 250, "{cut} {budget}");
+            let request = &turned.sent[0];
+            let at = request
+                .iter()
+                .position(|message| holds(message, EXCERPTS))
+                .expect("the excerpts were sent");
+            assert!(holds(&request[at + 1], "where does the parser live"));
+            assert_eq!(
+                at + 2,
+                request.len(),
+                "the excerpts are just before the prompt"
+            );
+            assert!(
+                !request.iter().any(|message| holds(message, "question 0:")),
+                "a message before the cut was sent"
+            );
+            assert_eq!(conversation.len(), before + 3, "the record lost a message");
+            assert!(
+                turned
+                    .reporter
+                    .narration
+                    .iter()
+                    .all(|said| !said.contains("summarised")),
+                "{:?}",
+                turned.reporter.narration
+            );
+        }
+
+        /// The record keeps which excerpts went as context lines, as the retriever said, for the
+        /// cut and for the refresh after it.
+        #[test]
+        fn the_record_keeps_the_context_lines_each_retrieval_sent() {
+            let (conversation, _, _, _) = retrieved_then_asked_again(
+                "retrieving-context-lines",
+                Ok(Recalled {
+                    context: vec![0],
+                    ..recalled_later()
+                }),
+            );
+
+            type Kept = (Vec<(u32, u16)>, Vec<u16>);
+            let kept: Vec<Kept> = conversation
+                .messages()
+                .iter()
+                .filter_map(|stored| match &stored.composed {
+                    Some(crate::conversation::Composed::Retrieved {
+                        excerpts, context, ..
+                    }) => Some((excerpts.clone(), context.clone())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                kept,
+                vec![(vec![(2, 0), (5, 1)], vec![1]), (vec![(3, 0)], vec![0])]
+            );
+        }
+
+        #[test]
+        fn the_next_turn_sends_the_previous_turn_byte_for_byte() {
+            let (_, _, first, second) =
+                retrieved_then_asked_again("retrieving-prefix", Ok(recalled_later()));
+
+            let [round_one, round_two] = first.sent.as_slice() else {
+                panic!("two rounds: {:?}", first.sent.len());
+            };
+            starts_with(round_two, round_one);
+            let next = &second.sent[0];
+            starts_with(next, round_two);
+            assert_eq!(
+                next.iter()
+                    .filter(|message| holds(message, EXCERPTS))
+                    .count(),
+                1,
+                "the excerpts are one message"
+            );
+        }
+
+        /// RETRIEVE-30. A turn within its budget after a cut gets excerpts found for its own
+        /// prompt, in front of it, without the cut moving or the earlier excerpts changing.
+        #[test]
+        fn a_prompt_after_the_cut_gets_excerpts_of_its_own() {
+            let (conversation, retriever, first, second) =
+                retrieved_then_asked_again("retrieving-again", Ok(recalled_later()));
+
+            let asked = retriever.asked();
+            let [(_, first_cut, _), (query, cut, budget)] = asked.as_slice() else {
+                panic!("two retrievals: {asked:?}");
+            };
+            assert_eq!(query, "and the tests");
+            assert_eq!(cut, first_cut, "the cut moved");
+            assert!(*budget > 0 && *budget <= 250, "{budget}");
+            assert_eq!(second.sent.len(), 1, "a summary was asked for");
+            let next = &second.sent[0];
+            assert!(holds(&next[next.len() - 2], LATER_EXCERPTS));
+            assert!(holds(&next[next.len() - 1], "and the tests"));
+            assert!(
+                next.iter().any(|message| holds(message, EXCERPTS)),
+                "the earlier excerpts were stubbed"
+            );
+            let lines = retrieve_lines(&second.sink);
+            assert!(
+                matches!(lines.as_slice(), [line] if line.contains("1 excerpt(s)") && line.contains("0 message(s) no longer sent")),
+                "{lines:?}"
+            );
+            assert_eq!(second.reporter.retrieved.len(), 1);
+            assert!(!first.reporter.retrieved.is_empty());
+            assert!(!conversation.excerpts_owed());
+        }
+
+        /// RETRIEVE-30. Within the budget, excerpts that cannot be found leave the prompt without
+        /// them: nothing is summarised and nothing is said in the conversation.
+        #[test]
+        fn a_prompt_within_its_budget_goes_without_excerpts_that_cannot_be_found() {
+            let (_, _, _, second) =
+                retrieved_then_asked_again("retrieving-again-failed", Err(Unavailable::NotReady));
+
+            assert_eq!(second.sent.len(), 1, "a summary was asked for");
+            assert!(
+                !second.sent[0]
+                    .iter()
+                    .any(|message| holds(message, LATER_EXCERPTS))
+            );
+            assert!(
+                second.reporter.narration.is_empty(),
+                "{:?}",
+                second.reporter.narration
+            );
+            assert_eq!(
+                retrieve_lines(&second.sink),
+                ["round 0: could not retrieve (not ready), so the prompt goes without excerpts"]
+            );
+        }
+
+        #[test]
+        fn a_cut_with_too_little_to_pass_neither_retrieves_nor_summarises() {
+            let mut conversation = Conversation::new();
+            grow(&mut conversation, 2);
+            let retriever = Scripted::answering(Vec::new());
+
+            let turned = turn(
+                "retrieving-no-step",
+                &mut conversation,
+                "go on",
+                Some(retriever.clone()),
+                vec![said("going on", &[], None)],
+            );
+
+            assert_eq!(turned.sent.len(), 1, "a summary was asked for");
+            assert!(retriever.asked().is_empty());
+            assert_eq!(conversation.retrieval_cut(), 0);
+        }
+
+        #[test]
+        fn every_reason_retrieval_cannot_run_falls_back_to_a_summary() {
+            for why in [
+                Unavailable::Key,
+                Unavailable::Unreachable,
+                Unavailable::Failed,
+                Unavailable::OutOfTime,
+                Unavailable::Missing,
+                Unavailable::Untrusted,
+                Unavailable::Unconfigured,
+            ] {
+                let mut conversation = a_long_bot_conversation();
+
+                let turned = turn(
+                    "retrieving-fallback",
+                    &mut conversation,
+                    "go on",
+                    Some(Scripted::answering(vec![Err(why)])),
+                    vec![
+                        said("they were porting the parser", &[], None),
+                        said("going on", &[], None),
+                    ],
+                );
+
+                assert_eq!(turned.sent.len(), 2, "{why:?} did not summarise");
+                assert_eq!(
+                    turned.reporter.narration,
+                    vec![format!(
+                        "Earlier messages weren't recalled this turn: {}. Summarised instead.",
+                        why.reason()
+                    )],
+                );
+                assert_eq!(
+                    retrieve_lines(&turned.sink),
+                    vec![format!(
+                        "round 0: could not retrieve ({}), so the conversation is summarised",
+                        why.word()
+                    )],
+                );
+                assert_eq!(
+                    turned.reporter.retrieved,
+                    vec![crate::report::Retrieved {
+                        used: Vec::new(),
+                        tokens: 0,
+                        fell_back: Some(why),
+                    }],
+                );
+            }
+        }
+
+        /// RETRIEVE-27: the interface is told where each message the excerpts came from was said,
+        /// once each, and no word of them.
+        #[test]
+        fn a_retrieval_reports_where_its_excerpts_were_said_and_not_what() {
+            use crate::report::{Place, Retrieved, Spoken};
+            let mut conversation = a_long_bot_conversation();
+            let mut answer = recalled();
+            answer.excerpts = vec![(2, 0), (2, 1), (5, 1)];
+            let turned = turn(
+                "retrieving-reports-places",
+                &mut conversation,
+                "where does the parser live",
+                Some(Scripted::answering(vec![Ok(answer)])),
+                vec![said("in src/lex", &[], None)],
+            );
+
+            assert_eq!(
+                turned.reporter.retrieved,
+                vec![Retrieved {
+                    used: vec![
+                        Place {
+                            ordinal: 2,
+                            prompt: Some(1),
+                            said: Spoken::Prompt,
+                        },
+                        Place {
+                            ordinal: 5,
+                            prompt: Some(2),
+                            said: Spoken::Reply { nth: 0 },
+                        },
+                    ],
+                    tokens: 31,
+                    fell_back: None,
+                }],
+            );
+            assert_eq!(
+                conversation.retrieved_by_prompt(),
+                vec![(8, turned.reporter.retrieved[0].used.clone())],
+                "the record does not place the line on the turn's prompt"
+            );
+        }
+
+        #[test]
+        fn a_fallback_is_said_once_and_again_only_after_retrieval_worked() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever: Arc<dyn Retriever> = Scripted::answering(vec![
+                Err(Unavailable::Key),
+                Err(Unavailable::Key),
+                Ok(recalled()),
+                Err(Unavailable::Key),
+            ]);
+            let mut said_each = Vec::new();
+            for at in 0..4 {
+                if at > 0 {
+                    grow(&mut conversation, 6);
+                }
+                let mut replies = Vec::new();
+                if at != 2 {
+                    replies.push(said("a summary", &[], None));
+                }
+                replies.push(said("going on", &[], None));
+                let turned = turn(
+                    "retrieving-said-once",
+                    &mut conversation,
+                    "go on",
+                    Some(retriever.clone()),
+                    replies,
+                );
+                said_each.push(
+                    turned
+                        .reporter
+                        .narration
+                        .iter()
+                        .any(|line| line.starts_with("Earlier messages weren't recalled")),
+                );
+            }
+
+            assert_eq!(said_each, [true, false, false, true]);
+        }
+
+        /// RETRIEVE-7: that the person was told is not kept in the record, so a session reopened
+        /// tells them again the first time retrieval falls back.
+        #[test]
+        fn a_reopened_session_says_a_fallback_again() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever: Arc<dyn Retriever> =
+                Scripted::answering(vec![Err(Unavailable::Key), Err(Unavailable::Key)]);
+            let mut said_each = Vec::new();
+            for at in 0..2 {
+                if at > 0 {
+                    grow(&mut conversation, 6);
+                    conversation = Conversation::restored(conversation.snapshot());
+                }
+                let turned = turn(
+                    "retrieving-said-again-on-reopen",
+                    &mut conversation,
+                    "go on",
+                    Some(retriever.clone()),
+                    vec![said("a summary", &[], None), said("going on", &[], None)],
+                );
+                said_each.push(
+                    turned
+                        .reporter
+                        .narration
+                        .iter()
+                        .any(|line| line.starts_with("Earlier messages weren't recalled")),
+                );
+            }
+
+            assert_eq!(said_each, [true, true]);
+        }
+
+        #[test]
+        fn a_fallback_summary_is_followed_by_retrieval_once_the_index_is_ready() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever: Arc<dyn Retriever> =
+                Scripted::answering(vec![Err(Unavailable::Missing), Ok(recalled())]);
+
+            let fell_back = turn(
+                "retrieving-after-a-summary",
+                &mut conversation,
+                "go on",
+                Some(retriever.clone()),
+                vec![said("a summary", &[], None), said("going on", &[], None)],
+            );
+            grow(&mut conversation, 6);
+            let retrieved = turn(
+                "retrieving-after-a-summary",
+                &mut conversation,
+                "where does the parser live",
+                Some(retriever),
+                vec![said("in src/lex", &[], None)],
+            );
+
+            assert_eq!(fell_back.sent.len(), 2);
+            assert_eq!(retrieved.sent.len(), 1, "the turn summarised again");
+            assert!(
+                retrieved.sent[0]
+                    .iter()
+                    .any(|message| holds(message, EXCERPTS))
+            );
+        }
+
+        /// The trail line of a round that left earlier messages out without excerpts.
+        fn left_out_without_excerpts(line: &str) -> bool {
+            line.starts_with("round 0: the index is still being built, so ")
+                && line.ends_with(" earlier message(s) are left out without excerpts until it is")
+        }
+
+        /// RETRIEVE-31. Over its budget with the vectors still being built, the cut moves as it
+        /// would for excerpts, nothing is put in front of the prompt, nothing is summarised and
+        /// the trail says why.
+        #[test]
+        fn an_index_still_being_built_leaves_earlier_messages_out_without_excerpts() {
+            for why in [Unavailable::NotReady, Unavailable::Stale] {
+                let mut conversation = a_long_bot_conversation();
+                let before = conversation.len();
+                let retriever = Scripted::answering(vec![Err(why)]);
+
+                let turned = turn(
+                    "retrieving-not-ready-cut",
+                    &mut conversation,
+                    "where does the parser live",
+                    Some(retriever.clone()),
+                    vec![said("in src/lex", &[], None)],
+                );
+
+                assert_eq!(turned.sent.len(), 1, "{why:?}: a summary was asked for");
+                assert_eq!(retriever.asked().len(), 1);
+                let request = &turned.sent[0];
+                assert!(
+                    !request.iter().any(|message| holds(message, "question 0:")),
+                    "{why:?}: a message before the cut was sent"
+                );
+                assert!(!request.iter().any(|message| holds(message, EXCERPTS)));
+                assert!(holds(
+                    &request[request.len() - 1],
+                    "where does the parser live"
+                ));
+                assert!(
+                    conversation.retrieval_cut() > 0,
+                    "{why:?}: the cut did not move"
+                );
+                assert!(conversation.out_of_request() > 0);
+                assert_eq!(
+                    conversation.len(),
+                    before + 2,
+                    "{why:?}: a message was added"
+                );
+                assert!(
+                    turned.reporter.narration.is_empty(),
+                    "{why:?}: {:?}",
+                    turned.reporter.narration
+                );
+                assert_eq!(
+                    turned.reporter.retrieved,
+                    vec![crate::report::Retrieved {
+                        used: Vec::new(),
+                        tokens: 0,
+                        fell_back: None,
+                    }],
+                );
+                let lines = retrieve_lines(&turned.sink);
+                assert!(
+                    matches!(lines.as_slice(), [line] if left_out_without_excerpts(line)),
+                    "{why:?}: {lines:?}"
+                );
+            }
+        }
+
+        /// RETRIEVE-31. A prompt cut without excerpts is owed them, and a later round finds them
+        /// once the vectors are ready, in front of the prompt and without moving the cut again.
+        #[test]
+        fn a_prompt_cut_without_excerpts_gets_them_once_the_index_is_ready() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever = Scripted::answering(vec![Err(Unavailable::NotReady), Ok(recalled())]);
+
+            let turned = turn(
+                "retrieving-not-ready-then-ready",
+                &mut conversation,
+                "where does the parser live",
+                Some(retriever.clone()),
+                vec![
+                    said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                    said("in src/lex", &[], None),
+                ],
+            );
+
+            let asked = retriever.asked();
+            let [(_, first_cut, _), (_, cut, _)] = asked.as_slice() else {
+                panic!("two retrievals: {asked:?}");
+            };
+            assert_eq!(cut, first_cut, "the cut moved again");
+            let [cut_without, recalled_for] = turned.sent.as_slice() else {
+                panic!("two rounds: {}", turned.sent.len());
+            };
+            assert!(!cut_without.iter().any(|message| holds(message, EXCERPTS)));
+            let at = recalled_for
+                .iter()
+                .position(|message| holds(message, EXCERPTS))
+                .expect("the excerpts owed were sent");
+            assert!(holds(&recalled_for[at + 1], "where does the parser live"));
+            assert!(
+                !recalled_for
+                    .iter()
+                    .any(|message| holds(message, "question 0:")),
+                "a message before the cut was sent"
+            );
+            assert!(!conversation.excerpts_owed());
+            let lines = retrieve_lines(&turned.sink);
+            assert!(
+                matches!(lines.as_slice(), [first, second]
+                    if left_out_without_excerpts(first)
+                        && second.starts_with("round 1: 2 excerpt(s)")
+                        && second.contains("0 message(s) no longer sent")),
+                "{lines:?}"
+            );
+            assert!(
+                turned
+                    .reporter
+                    .narration
+                    .iter()
+                    .all(|said| !said.contains("ummarised")),
+                "{:?}",
+                turned.reporter.narration
+            );
+        }
+
+        /// RETRIEVE-31. A request the service refuses after a cut without excerpts is answered
+        /// the way any refusal is (COMPACT-14).
+        #[test]
+        fn a_request_refused_after_a_cut_without_excerpts_is_summarised() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever =
+                Scripted::answering(vec![Err(Unavailable::NotReady), Err(Unavailable::NotReady)]);
+
+            let turned = turn(
+                "retrieving-not-ready-refused",
+                &mut conversation,
+                "go on",
+                Some(retriever.clone()),
+                vec![
+                    super::fallback::failed_with(400),
+                    said("they were porting the parser", &[], None),
+                    said("going on", &[], None),
+                ],
+            );
+
+            assert_eq!(turned.sent.len(), 3, "the refusal was not summarised");
+            let lines = retrieve_lines(&turned.sink);
+            assert!(
+                matches!(lines.as_slice(), [first, ..] if left_out_without_excerpts(first)),
+                "{lines:?}"
+            );
+            assert!(
+                turned
+                    .reporter
+                    .narration
+                    .iter()
+                    .any(|said| said.contains("ummarised")),
+                "{:?}",
+                turned.reporter.narration
+            );
+        }
+
+        /// RETRIEVE-31. With no vectors file at all, no pass has begun building one, so the turn
+        /// summarises as RETRIEVE-7 says rather than leave the messages out for good.
+        #[test]
+        fn a_missing_index_still_falls_back_to_a_summary() {
+            let mut conversation = a_long_bot_conversation();
+
+            let turned = turn(
+                "retrieving-missing",
+                &mut conversation,
+                "go on",
+                Some(Scripted::answering(vec![Err(Unavailable::Missing)])),
+                vec![
+                    said("they were porting the parser", &[], None),
+                    said("going on", &[], None),
+                ],
+            );
+
+            assert_eq!(turned.sent.len(), 2, "the conversation was not summarised");
+            assert_eq!(conversation.retrieval_cut(), 0);
+            assert_eq!(
+                retrieve_lines(&turned.sink),
+                ["round 0: could not retrieve (missing), so the conversation is summarised"]
+            );
+            assert_eq!(
+                turned.reporter.narration,
+                [crate::retrieval::fallback_narration(Unavailable::Missing)]
+            );
+        }
+
+        #[test]
+        fn the_trail_says_what_retrieval_sent_in_counts() {
+            let mut conversation = a_long_bot_conversation();
+
+            let turned = turn(
+                "retrieving-trail",
+                &mut conversation,
+                "where does the parser live",
+                Some(Scripted::answering(vec![Ok(recalled())])),
+                vec![said("in src/lex", &[], None)],
+            );
+
+            let lines = retrieve_lines(&turned.sink);
+            let [line] = lines.as_slice() else {
+                panic!("one line: {lines:?}");
+            };
+            assert!(
+                line.starts_with("round 0: 2 excerpt(s) of 14 chunk(s) sent, about 31 tokens, "),
+                "{line}"
+            );
+            assert!(line.ends_with("the query took 40 ms"), "{line}");
+            assert!(
+                !line.contains("src/lex") && !line.contains("parser"),
+                "{line}"
+            );
+        }
+
+        #[test]
+        fn a_turn_without_a_retriever_compacts_as_it_did() {
+            let mut conversation = a_long_bot_conversation();
+
+            let turned = turn(
+                "retrieving-none",
+                &mut conversation,
+                "go on",
+                None,
+                vec![
+                    said("they were porting the parser", &[], None),
+                    said("going on", &[], None),
+                ],
+            );
+
+            assert_eq!(turned.sent.len(), 2, "the conversation was not summarised");
+            assert!(retrieve_lines(&turned.sink).is_empty());
+            assert_eq!(conversation.retrieval_cut(), 0);
+            assert!(turned.reporter.narration[0].starts_with("the conversation was getting long"));
+        }
+
+        /// The vectors are of the session's record, and a delegate's conversation is its own, so
+        /// excerpts of the session would stand in for messages the delegate never had.
+        #[test]
+        fn a_delegate_never_retrieves_and_compacts_as_it_did() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever = Scripted::answering(vec![Ok(recalled())]);
+            let task = Task::delegated(super::a_delegate_spec("reader", CapabilitySet::default()))
+                .with_retriever(Some(retriever.clone()));
+
+            let turned = turn_as(
+                "retrieving-delegate",
+                &mut conversation,
+                &task,
+                vec![
+                    said("they were porting the parser", &[], None),
+                    said("going on", &[], None),
+                ],
+            );
+
+            assert!(retriever.asked().is_empty(), "a delegate retrieved");
+            assert_eq!(turned.sent.len(), 2, "the conversation was not summarised");
+            assert!(retrieve_lines(&turned.sink).is_empty());
+            assert_eq!(conversation.retrieval_cut(), 0);
+        }
+    }
+
     /// BACKEND-53: a turn whose model keeps failing moves to the fallback model the person named.
     mod fallback {
         use super::ceiling::said;
@@ -7341,7 +8211,7 @@ mod tests {
         const FALLBACK: &str = "fallback-model";
 
         /// What the backend hands the turn once its own attempts at a request are spent.
-        fn failed_with(status: u16) -> Result<Completion, BackendError> {
+        pub(super) fn failed_with(status: u16) -> Result<Completion, BackendError> {
             Err(
                 BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
                     url: "https://example.invalid/".into(),

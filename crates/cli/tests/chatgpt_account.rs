@@ -1194,6 +1194,74 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_record_of_a_backgro
     );
 }
 
+/// SANDBOX-30 over the process: `auth login chatgpt` opens the sign-in address with the installed
+/// opener, and not with a program of the same name in a `bin` of the checkout it runs in or of the
+/// directory below it. The command opens no session, so nothing but the start of the program
+/// records those directories. Each opener name any platform uses is planted in both places and
+/// installed behind them, and the installed one records that it was run.
+///
+/// The fault it rejects: a `main` that records the directory only for the commands that were
+/// written to, which leaves this one to find the planted opener first on `PATH`.
+#[test]
+fn auth_login_chatgpt_opens_the_address_with_no_program_from_the_checkout_it_runs_in() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Scratch::new("cli-chatgpt-account-opener-planted");
+    let stand_in = StandIn::new(vec![(REFRESH_ONE, ACCESS_TWO, REFRESH_TWO)]);
+    let work = home.path.join("work");
+    std::fs::create_dir_all(work.join(".git")).expect("the checkout");
+    let here = work.join("crates").join("cli");
+    std::fs::create_dir_all(&here).expect("the directory the command runs in");
+    let tools = home.path.join("tools");
+    let mut planted = Vec::new();
+    for name in ["open", "xdg-open"] {
+        for (place, directory) in [
+            ("checkout", work.join("bin")),
+            ("directory", here.join("bin")),
+        ] {
+            let marker = home.path.join(format!("ran-{place}-{name}"));
+            write_opener(&directory, name, &marker);
+            planted.push(marker);
+        }
+        write_opener(
+            &tools,
+            name,
+            &home.path.join(format!("ran-installed-{name}")),
+        );
+    }
+    fn write_opener(directory: &std::path::Path, name: &str, marker: &std::path::Path) {
+        std::fs::create_dir_all(directory).expect("a bin directory");
+        let opener = directory.join(name);
+        std::fs::write(&opener, format!("#!/bin/sh\n: > '{}'\n", marker.display()))
+            .expect("an opener");
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+    }
+    let path = std::env::join_paths([here.join("bin"), work.join("bin"), tools]).expect("a PATH");
+
+    let (terminal, _, signed_in) = chatgpt_run::sign_in_with(&home, &stand_in, |command| {
+        command.env("PATH", &path).current_dir(&here);
+    });
+
+    assert!(signed_in, "the sign-in failed: {terminal}");
+    let installed =
+        ["open", "xdg-open"].map(|name| home.path.join(format!("ran-installed-{name}")));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !installed.iter().any(|marker| marker.exists()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        installed.iter().any(|marker| marker.exists()),
+        "the installed opener was not run: {terminal}"
+    );
+    for marker in planted {
+        assert!(
+            !marker.exists(),
+            "{} was started: {terminal}",
+            marker.file_name().unwrap().to_string_lossy()
+        );
+    }
+}
+
 /// CHATGPT-14: an incognito session spends a stored sign-in and writes its renewal. The stored
 /// access token is within the minute of its expiry, so the turn's first request renews it, and the
 /// file holds the new tokens afterwards with the client and the host it had. A session that took

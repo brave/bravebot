@@ -14,16 +14,15 @@ anything, so that sentence is no reason to drop a candidate about them. This lan
 permission, a program that starts or a string that is shown?**
 
 `BACKEND-24` says which layer answers for which name, and `BACKEND-33` names the variables an `env`
-block sets and the six read from the person's layers alone:
+block sets and the seventeen read from the person's layers alone:
 
 {layer_clauses}
 
 `PINNABLE` in `crates/config/src/managed.rs` lists the names a machine's managed layer may pin, which
-its comment describes as the ones that decide where a request goes. Six of its eight names are the
-Bedrock names, which come from the person's layers alone. The two endpoints are the names on it that
-a project or local file can still decide on a source build (`BACKEND-35`), and the test
-`every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it` in
-`crates/config/src/settings.rs` fails when that set changes.
+its comment describes as the ones that decide where a request goes. All eight are read from the
+person's layers alone, the six Bedrock names and the two endpoints (`BACKEND-33`), and the test
+`no_pinnable_name_is_decided_by_a_checkouts_files` in `crates/config/src/settings.rs` fails when a
+name that a checkout's files decide is added to it.
 
 ### Where to start
 

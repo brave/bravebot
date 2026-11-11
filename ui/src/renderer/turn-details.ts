@@ -130,7 +130,7 @@ const text = (value: unknown): string => typeof value === 'string' ? value : ''
 
 /**
  * A field of a record as the window draws it: the words the bridge sent for it, in which each
- * control character is already replaced by its picture by `printable` in `bravebot-approval`
+ * control character is already replaced by its picture by `printable` in `bravebot-agent`
  * (LAYER-3). A name from a checkout can hold an escape or a bell; a text node drops those without
  * a trace. The renderer holds no definition of which characters those are, and a field the bridge
  * sent no words for is drawn as nothing rather than as the raw text. The recorded evidence is JSON,

@@ -232,8 +232,8 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 
 | Variable | What it sets |
 |---|---|
-| `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in ([Brave's premium service](premium.md#what-is-sent-and-where)) |
+| `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to; your own file, the environment or the build, and never a project or local file |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in, from the same three places ([Brave's premium service](premium.md#what-is-sent-and-where)) |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
 | `BRAVEBOT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
@@ -265,12 +265,14 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Nine names are read from your own file and a `--settings` file outside the project, and from no
+Seventeen names are read from your own file and a `--settings` file outside the project, and from no
 project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
 `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
-because they choose the AWS account a conversation is sent through. `bravebot doctor` reports one a
-project or local file names and the name decides nothing; see
+because they choose the AWS account a conversation is sent through, and `BRAVE_AI_CHAT_ENDPOINT` and
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, because they choose the host a conversation and a premium key are
+sent to. A build that carries an endpoint outranks your file, and a source build carries none.
+`bravebot doctor` reports one a project or local file names and the name decides nothing; see
 [certificates and proxies](../security/security.md#certificates-and-proxies) for the network names
 and [Bedrock](providers/bedrock.md) for the AWS ones.
 
@@ -311,7 +313,7 @@ one thing leaves everything else in force:
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
-| `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
+| `references` | your own file and a `--settings` file outside the project and its checkout; a project or local file's block, and a `--settings` file that resolves inside either, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
 | `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and a `--settings` file outside the project; a project or local file's are ignored and reported |
@@ -340,8 +342,8 @@ in the project lists them in one box with the file each came from, and only your
 force. The answer is kept per project in `~/.bravebot/granted/`, so you are asked once rather than at
 every launch, and a rule the project edits afterwards is asked about again. `bravebot doctor` names
 every such entry and says whether it is granted. A file `--settings` names is yours, since you typed
-the path, unless it resolves inside the project you are working in, which makes it the checkout's file
-under another name.
+the path, unless it resolves inside the project you are working in, or inside the git checkout holding it or a
+directory you moved out of, which makes it the checkout's file under another name.
 
 **The project files are read from the directory you started bravebot in, and from no directory above
 it.** Searching upward would make what configures a session depend on which directory you happened to
@@ -988,10 +990,24 @@ documents show:
   no other, so where it is used, assume the wheel and a click arrive, and that a drag, the target
   under the pointer and a column past 223 may not.
 
-This is what the multiplexers' documents say, and the session has not been run inside either. If the
-wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier above to
-select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the session
-asking for the mouse at all.
+Run with tmux 3.8 and GNU screen 4.00.03 (FAU) on macOS, a single pane filling the whole window, no
+splits: the wheel scrolled the transcript, and a right click opened the session's own menu, through
+both, byte-identical to running outside either. A drag that selected text and a release that followed
+copied the selection to the system clipboard through tmux, by the platform's own clipboard command
+rather than by OSC 52 (the session is local, not reached over `ssh`, so OSC 52 is not the path either
+takes here). tmux forwarded the wheel and the click whether its own `mouse` option was on or off, for
+this one pane filling the window: the option is what tmux needs to tell a click on its own status
+line or a pane's border from a click meant for the pane, and there is neither here. Screen forwarded
+both with no multiplexer setting of its own, asked or not: an SGR report matches none of the escape
+sequences screen reads for itself, so it passes through a window the way a byte sequence screen does
+not recognize at all does.
+
+Not run: a drag held past the bottom edge, and the scrollbar, the footer naming what the pointer is
+over, copying through GNU screen specifically (only tmux's copy was checked against the clipboard),
+a column past 223 behind either multiplexer, and more than one pane or window open at once in either.
+Where the wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier
+above to select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the
+session asking for the mouse at all.
 
 ### `tui.contextMenu`
 

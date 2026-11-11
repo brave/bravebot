@@ -389,6 +389,14 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         &mut state.spent,
         &mut state.may_compact,
         &mut state.retries,
+        // A delegate's conversation is its own, and the vectors are of the session's record.
+        match (&task.retriever, &task.delegate) {
+            (Some(retriever), None) => Some(Retrieving {
+                retriever: retriever.as_ref(),
+                query: &task.prompt,
+            }),
+            _ => None,
+        },
         // A delegate summarises a conversation of its own, which is not the session's (HOOK-2).
         match task.delegate {
             None => Some(AfterCompacting {
@@ -1370,6 +1378,274 @@ pub(super) struct AfterCompacting<'a> {
     pub said: &'a mut Vec<String>,
 }
 
+/// What a turn that may retrieve retrieves with, and for what.
+#[derive(Clone, Copy)]
+pub(super) struct Retrieving<'a> {
+    pub retriever: &'a dyn crate::retrieval::Retriever,
+    /// The turn's prompt, which the excerpts are found for.
+    pub query: &'a str,
+}
+
+/// What one try at retrieving came to.
+enum Retrieval {
+    /// The cut moved, and the excerpts it found, drawn from these messages, are in front of the
+    /// prompt.
+    Cut(crate::report::Retrieved),
+    /// The cut has nowhere worth moving to yet.
+    NoStep,
+    /// The excerpts could not be found, for this reason.
+    Unavailable(crate::retrieval::Unavailable),
+}
+
+/// The most tokens of excerpts a round sends, whatever the window. Past this, more excerpts
+/// mostly repeat what the best ones say.
+const EXCERPT_CEILING: u64 = 6_000;
+
+/// What the excerpts may cost when `kept` tokens of messages are sent whole: half of what those
+/// leave of the budget, never more than a quarter of it, and never more than the ceiling, so the
+/// request sits below the budget with room for the turn to run (RETRIEVE-19).
+fn excerpt_budget(context_budget: u64, kept: u64) -> u64 {
+    (context_budget.saturating_sub(kept) / 2)
+        .min(context_budget / 4)
+        .min(EXCERPT_CEILING)
+}
+
+/// Move the retrieval cut a step and keep the excerpts found for the prompt in front of it.
+///
+/// The trail gets one line of counts (RETRIEVE-12). Where the vectors are still being built, the
+/// cut moves all the same and nothing is put in front of the prompt: the messages it passes stay
+/// in the record to be indexed, and the prompt is owed its excerpts until a later round finds them
+/// (RETRIEVE-31).
+fn retrieve<S: Sink>(
+    retrieving: Retrieving<'_>,
+    context_budget: u64,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    steps: usize,
+) -> Retrieval {
+    let Some(cut) = conversation.retrieval_boundary(context_budget) else {
+        return Retrieval::NoStep;
+    };
+    let budget = excerpt_budget(context_budget, conversation.tokens_from(cut));
+    let recalled = match retrieving.retriever.retrieve(
+        conversation,
+        retrieving.query,
+        conversation.ordinal_at(cut),
+        usize::try_from(budget).unwrap_or(usize::MAX),
+    ) {
+        Ok(recalled) => Some(recalled),
+        Err(crate::retrieval::Unavailable::NotReady | crate::retrieval::Unavailable::Stale) => None,
+        Err(why) => return Retrieval::Unavailable(why),
+    };
+    let passed = cut - conversation.retrieval_cut();
+    conversation.cut_for_retrieval(cut);
+    let Some(recalled) = recalled else {
+        policy.record_retrieval_deferred(steps, passed);
+        return Retrieval::Cut(crate::report::Retrieved {
+            used: Vec::new(),
+            tokens: 0,
+            fell_back: None,
+        });
+    };
+    let sent = recalled.excerpts.len();
+    let ordinals: Vec<u32> = recalled
+        .excerpts
+        .iter()
+        .map(|&(ordinal, _)| ordinal)
+        .collect();
+    let drawn_on = crate::report::Retrieved {
+        used: conversation.places(&ordinals),
+        tokens: recalled.tokens,
+        fell_back: None,
+    };
+    if sent > 0 {
+        conversation.insert_retrieved(
+            recalled.text,
+            crate::conversation::Excerpts {
+                sent: recalled.excerpts,
+                context: recalled.context,
+            },
+            recalled.model,
+        );
+    }
+    conversation.set_recall_fallback_said(false);
+    policy.record_retrieval(
+        steps,
+        sent,
+        recalled.considered,
+        recalled.tokens,
+        passed,
+        u64::try_from(recalled.latency.as_millis()).unwrap_or(u64::MAX),
+    );
+    Retrieval::Cut(drawn_on)
+}
+
+/// Find excerpts for a prompt given after the cut and keep them in front of it, leaving the cut
+/// where it is (RETRIEVE-30).
+///
+/// For a turn within its budget, so a failure only means the prompt goes without excerpts: the
+/// request fits, and nothing is summarised.
+fn recall<S: Sink, R: Reporter>(
+    retrieving: Retrieving<'_>,
+    context_budget: u64,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    steps: usize,
+    reporter: &mut R,
+) {
+    if !conversation.excerpts_owed() {
+        return;
+    }
+    let cut = conversation.retrieval_cut();
+    let budget = excerpt_budget(context_budget, conversation.tokens_from(cut));
+    if budget == 0 {
+        return;
+    }
+    let recalled = match retrieving.retriever.retrieve(
+        conversation,
+        retrieving.query,
+        conversation.ordinal_at(cut),
+        usize::try_from(budget).unwrap_or(usize::MAX),
+    ) {
+        Ok(recalled) => recalled,
+        Err(why) => {
+            policy.record_retrieval_skipped(steps, why.word());
+            return;
+        }
+    };
+    let sent = recalled.excerpts.len();
+    let ordinals: Vec<u32> = recalled
+        .excerpts
+        .iter()
+        .map(|&(ordinal, _)| ordinal)
+        .collect();
+    let drawn_on = crate::report::Retrieved {
+        used: conversation.places(&ordinals),
+        tokens: recalled.tokens,
+        fell_back: None,
+    };
+    if sent > 0 {
+        conversation.insert_recalled(
+            recalled.text,
+            crate::conversation::Excerpts {
+                sent: recalled.excerpts,
+                context: recalled.context,
+            },
+            recalled.model,
+        );
+    }
+    conversation.set_recall_fallback_said(false);
+    policy.record_retrieval(
+        steps,
+        sent,
+        recalled.considered,
+        recalled.tokens,
+        0,
+        u64::try_from(recalled.latency.as_millis()).unwrap_or(u64::MAX),
+    );
+    reporter.retrieved(drawn_on);
+}
+
+/// How hard a request presses on its context budget.
+#[derive(Clone, Copy)]
+struct Pressure {
+    budget: u64,
+    /// Past the budget, or refused, with compaction allowed.
+    due: bool,
+    /// The service refused the last request, so something has to be cut.
+    refused: bool,
+}
+
+/// What retrieving before a request left to do.
+enum Retrieved {
+    /// The cut shortened the conversation.
+    Cut,
+    /// The request goes as it is, with nothing to compact.
+    AsItIs,
+    /// Compaction decides, told why retrieval could not where it could not.
+    Compact(Option<crate::retrieval::Unavailable>),
+}
+
+/// What the person is told once a summary is adopted. The fallback is said once, and again only
+/// after retrieval has worked in between.
+fn say_compacted<R: Reporter>(
+    reporter: &mut R,
+    conversation: &mut Conversation,
+    fell_back: Option<crate::retrieval::Unavailable>,
+    (summarised, kept): (usize, usize),
+) {
+    match fell_back {
+        Some(why) if !conversation.recall_fallback_said() => {
+            conversation.set_recall_fallback_said(true);
+            reporter.narration(crate::retrieval::fallback_narration(why));
+        }
+        _ => reporter.narration(format!(
+            "the conversation was getting long, so {summarised} earlier messages were summarised \
+             and the last {kept} kept as they are"
+        )),
+    }
+}
+
+/// Retrieve rather than summarise, for a bot's turn with the setting on (RETRIEVE-13), leaving
+/// compaction to where it could not (RETRIEVE-7). Within the budget there is nothing to cut, but a
+/// prompt past the cut still needs excerpts of its own (RETRIEVE-30).
+fn retrieve_if_due<S: Sink, R: Reporter>(
+    retrieving: Retrieving<'_>,
+    pressure: Pressure,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    steps: usize,
+    reporter: &mut R,
+    (account, spent): (&crate::outcome::Spent, &Elapsed),
+) -> Retrieved {
+    if !pressure.due {
+        recall(
+            retrieving,
+            pressure.budget,
+            policy,
+            conversation,
+            steps,
+            reporter,
+        );
+        return Retrieved::Compact(None);
+    }
+    match retrieve(retrieving, pressure.budget, policy, conversation, steps) {
+        Retrieval::Cut(drawn_on) => {
+            reporter.retrieved(drawn_on);
+            reporter.spent(crate::outcome::Spent {
+                context_tokens: 0,
+                timing: spent.finish(account),
+                ..*account
+            });
+            Retrieved::Cut
+        }
+        // The cut would pass too little to be worth a new prefix (RETRIEVE-8). Summarising
+        // instead would send twice what the excerpts already carry, so the request goes as it
+        // is, unless the service refused it and something has to be cut.
+        Retrieval::NoStep if !pressure.refused => {
+            recall(
+                retrieving,
+                pressure.budget,
+                policy,
+                conversation,
+                steps,
+                reporter,
+            );
+            Retrieved::AsItIs
+        }
+        Retrieval::NoStep => Retrieved::Compact(None),
+        Retrieval::Unavailable(why) => {
+            policy.record_retrieval_fallback(steps, why.word());
+            reporter.retrieved(crate::report::Retrieved {
+                used: Vec::new(),
+                tokens: 0,
+                fell_back: Some(why),
+            });
+            Retrieved::Compact(Some(why))
+        }
+    }
+}
+
 /// Shorten the conversation before a request when it is past the budget, or when the service
 /// refused the last one and there may be something to cut.
 ///
@@ -1396,6 +1672,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     spent: &mut Elapsed,
     may_compact: &mut bool,
     retries: &mut Retries,
+    retrieving: Option<Retrieving<'_>>,
     afterwards: Option<AfterCompacting<'_>>,
 ) -> Result<(), TurnError> {
     // Before the request rather than after the reply that overflowed. The figure being
@@ -1415,8 +1692,31 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
             ..*account
         });
     }
-    if retries.refused.is_some() || *may_compact && account.context_tokens >= config.context_budget
-    {
+    let due = |account: &crate::outcome::Spent, may_compact: bool, retries: &Retries| {
+        retries.refused.is_some() || may_compact && account.context_tokens >= config.context_budget
+    };
+    let mut fell_back = None;
+    if let Some(retrieving) = retrieving {
+        let pressure = Pressure {
+            budget: config.context_budget,
+            due: due(account, *may_compact, retries),
+            refused: retries.refused.is_some(),
+        };
+        match retrieve_if_due(
+            retrieving,
+            pressure,
+            policy,
+            conversation,
+            steps,
+            reporter,
+            (account, spent),
+        ) {
+            Retrieved::Cut => shortened = true,
+            Retrieved::AsItIs => return Ok(()),
+            Retrieved::Compact(why) => fell_back = why,
+        }
+    }
+    if !shortened && due(account, *may_compact, retries) {
         reporter.phase(Phase::Compacting);
         let mut chat = crate::processor::Chat::new(config, egress, session)
             .spending(subscription)
@@ -1449,11 +1749,12 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
                     timing: spent.finish(&*account),
                     ..*account
                 });
-                reporter.narration(format!(
-                    "the conversation was getting long, so {} earlier messages were \
-         summarised and the last {} kept as they are",
-                    done.summarised, done.kept
-                ));
+                say_compacted(
+                    reporter,
+                    conversation,
+                    fell_back,
+                    (done.summarised, done.kept),
+                );
                 if let Some(after) = afterwards {
                     after.said.extend(super::fire_hooks(
                         after.hooks,
@@ -2009,5 +2310,16 @@ mod tests {
         let mut window = Moves::default();
         after_a_failure(refusal(), &mut window);
         assert!(window.why.is_empty());
+    }
+
+    /// RETRIEVE-19. A large window gets no more excerpts than the ceiling; a small one gets a
+    /// quarter of its budget, or half of what the kept messages leave.
+    #[test]
+    fn excerpts_stop_at_a_fixed_ceiling_whatever_the_window() {
+        assert_eq!(excerpt_budget(200_000, 10_000), 6_000);
+        assert_eq!(excerpt_budget(1_000_000, 0), 6_000);
+        assert_eq!(excerpt_budget(16_000, 2_000), 4_000);
+        assert_eq!(excerpt_budget(16_000, 12_000), 2_000);
+        assert_eq!(excerpt_budget(16_000, 20_000), 0);
     }
 }

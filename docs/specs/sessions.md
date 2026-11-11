@@ -389,8 +389,8 @@ like any other one-shot run. The entry's `<id>.history` file holds one line for 
 session, and `schedule history` reads the tokens it spent from the record.
 
 A `/btw` question asked while a turn runs ([CMD-8](commands.md#CMD-8)) is charged to that turn, in
-the total, the breakdown and the split. The status line and the turn's clock are the turn's own and
-the question adds nothing to them.
+the total, the breakdown and the split, including one whose answer arrives after the turn has
+ended. The status line and the turn's clock are the turn's own and the question adds nothing to them.
 
 **Why.** A transcript is read after the fact to find out why a session went the way it did, and
 both questions are unanswerable from a total alone. Twenty even turns and one turn that ran away
@@ -402,6 +402,7 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
 `verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
+`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
 `verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
 `verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`

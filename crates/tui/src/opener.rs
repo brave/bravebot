@@ -23,8 +23,10 @@ use std::process::Stdio;
 /// The variables `xdg-open` and the desktop tools it starts read that name code they then run,
 /// beyond the generic names ([`bravebot_sandbox::programs::CODE_SELECTORS`]).
 ///
-/// `BROWSER` is a list of commands that `xdg-open` runs before it looks at a desktop environment,
-/// so a value is kept only when every entry is a program found on the reduced `PATH` or an existing
+/// `BROWSER` is a list of commands that `xdg-open` runs in its generic mode, which it takes when it
+/// detects no desktop environment and falls back to when the tool a desktop environment's branch
+/// uses (`gio`, for GNOME) is missing. With `gio` installed it never reads `BROWSER` under GNOME.
+/// A value is kept only when every entry is a program found on the reduced `PATH` or an existing
 /// absolute path outside every directory a stage may write, alone or followed by ` %s`
 /// ([`Names::Commands`]). The four `XDG_` names choose the directories `.desktop` entries, MIME
 /// handler associations and configuration are read from, which name the program that opens the
@@ -32,12 +34,41 @@ use std::process::Stdio;
 /// complete. A value is kept only when every entry is an existing absolute path outside every
 /// directory a stage may write
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
-const CODE_SELECTORS: [(&str, Names); 5] = [
+///
+/// The other names are those of `gio open` and `kde-open`. GLib loads a module from each directory
+/// of `GIO_EXTRA_MODULES` and from `GIO_MODULE_DIR`. Qt loads plug-ins from `QT_PLUGIN_PATH` and
+/// `QT_QPA_PLATFORM_PLUGIN_PATH`, and finds them by the names in `QT_QPA_PLATFORMTHEME`,
+/// `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM` and `QT_STYLE_OVERRIDE`, which are options and so
+/// removed whatever they hold. `KDESYCOCA` is the service cache `kde-open` reads `Exec` lines from.
+///
+/// `HOME` is listed as one directory because `gio open`, which `xdg-open` runs under a GNOME
+/// session, reads `$HOME/.config/mimeapps.list` and `$HOME/.local/share/applications` when
+/// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not set, and Qt and GLib keep configuration under it.
+/// [`home_reads_outside_stage_writable`] also judges those two paths, since a stage can write them
+/// without writing `HOME` itself. A value a stage may write is removed and the program falls back
+/// to the account's own home.
+///
+/// `GIO_LAUNCH_DESKTOP` is the path of the wrapper program that `gio open` executes with the whole
+/// command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line 3100), so it is one
+/// file ([`Names::File`]) and is kept only when it is an existing file outside every directory a
+/// stage may write.
+const CODE_SELECTORS: [(&str, Names); 16] = [
     selectors::BROWSER,
+    ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    selectors::GIO_EXTRA_MODULES,
+    selectors::GIO_MODULE_DIR,
+    ("GIO_LAUNCH_DESKTOP", Names::File),
+    selectors::QT_PLUGIN_PATH,
+    ("QT_QPA_PLATFORM_PLUGIN_PATH", Names::Directory),
+    ("QT_QPA_PLATFORMTHEME", Names::Options),
+    ("QT_QPA_GENERIC_PLUGINS", Names::Options),
+    ("QT_QPA_PLATFORM", Names::Options),
+    ("QT_STYLE_OVERRIDE", Names::Options),
+    ("KDESYCOCA", Names::File),
 ];
 
 /// Whether `address` may be handed to the opener, which is the one test every caller shares.
@@ -135,6 +166,11 @@ fn opening_against(
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> std::process::Command {
+    let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let home = held
+        .iter()
+        .find(|(name, _)| name == OsStr::new("HOME"))
+        .map(|(_, value)| std::path::PathBuf::from(value));
     let mut command = bravebot_sandbox::programs::start_against(
         program,
         Inherits::Without(&bravebot_config::scrub::own_credentials()),
@@ -143,12 +179,46 @@ fn opening_against(
         held,
         outside_stage_writable,
     );
+    if let Some(home) = home
+        && !home_reads_outside_stage_writable(&home, outside_stage_writable)
+    {
+        command.env_remove("HOME");
+    }
     command
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
+}
+
+/// The paths under `HOME` that `gio open` reads the handler from when the matching `XDG_`
+/// directory is not set.
+const READ_UNDER_HOME: [&str; 2] = [".config", ".local/share/applications"];
+
+/// Whether what `xdg-open` reads under `home` is outside the directories a stage may write.
+///
+/// A session opened on `~/.config` or `~/.local/share` has no row for `HOME` itself, so `HOME` alone
+/// passes while the files read under it can be written. Each path in [`READ_UNDER_HOME`] is judged
+/// as it is when it exists (a link counts and is followed by the judgment). One that does not exist
+/// is judged by the nearest existing directory above it below `home`, since whoever may write that
+/// directory can make the path. `home` itself is judged by [`CODE_SELECTORS`].
+fn home_reads_outside_stage_writable(
+    home: &Path,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    READ_UNDER_HOME.iter().all(|under| {
+        let mut path = home.join(under);
+        while path != home {
+            if path.symlink_metadata().is_ok() {
+                return outside_stage_writable(&path);
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+        true
+    })
 }
 
 #[cfg(test)]
@@ -258,8 +328,10 @@ mod tests {
     ///
     /// The opener runs in a child run of this test binary named by `test`, because the command takes
     /// its environment from the process and a test cannot set one. The child keeps the session out
-    /// as a stage's directory. The variables that choose a desktop environment are removed, since a
-    /// desktop environment's own opener is read before `BROWSER`.
+    /// as a stage's directory. The variables that choose a desktop environment and the display
+    /// variables are removed, so `xdg-open` takes its generic mode, which is the only place it reads
+    /// `BROWSER` (a desktop environment's own tool, `gio` for GNOME, is tried first and `BROWSER`
+    /// is not read when it runs).
     #[cfg(unix)]
     fn helper_run_by(
         test: &str,
@@ -346,12 +418,16 @@ mod tests {
         assert_eq!(ran, Some((false, true)));
     }
 
-    /// SANDBOX-30, through the installed `xdg-open` where this host has one. The same two runs as
+    /// SANDBOX-30, through the installed `xdg-open` where this host has one, in its generic mode
+    /// (no desktop environment and no display named), the only mode in which `xdg-open` reads
+    /// `BROWSER`: under GNOME, with `gio` installed, it runs `gio open` and never reads it. The same
+    /// two runs as
     /// [`a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`], with the
     /// program that reads `BROWSER` being the real one. It prints `skipped` and passes where there
     /// is no `xdg-open` (macOS opens with `/usr/bin/open`, which does not read `BROWSER`), and where
-    /// the installed one does not run an installed helper named by `BROWSER` here, since the
-    /// planted helper then not running says nothing.
+    /// the installed one does not run an installed helper named by `BROWSER` here (a host whose
+    /// session bus names a desktop environment `xdg-open` detects, for one), since the planted
+    /// helper then not running says nothing.
     #[cfg(unix)]
     #[test]
     fn a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open() {
@@ -372,27 +448,54 @@ mod tests {
         }
     }
 
-    /// The installed `xdg-open` run under a GNOME session, which hands the address to `gio open`,
-    /// with `variable` naming a directory that selects the handler. Says whether the handler in a
-    /// directory a stage may write ran and whether the one in an installed directory ran.
+    /// The installed `xdg-open` run under the desktop environment `desktop` sets, with `variable`
+    /// naming a directory that selects the handler, or for `BROWSER` a command. Says whether the
+    /// handler in a directory a stage may write ran and whether the one in an installed directory
+    /// ran. `desktop` is the environment that chooses the desktop: an empty list is generic mode,
+    /// and every variable that chooses a desktop is removed first, so only those given are set.
+    /// Under GNOME `xdg-open` hands the address to `gio open`, and under KDE to `kde-open`.
     ///
     /// Each directory holds a `mimeapps.list` naming its own handler as the default for `https`.
     /// `XDG_DATA_DIRS` names an installed directory that holds both handlers' entries, so a
     /// `mimeapps.list` read from `variable` is the only thing that chooses. `HOME` is a scratch
-    /// directory, so the person's own defaults cannot start a browser.
+    /// directory, so the person's own defaults cannot start a browser, except when `variable` is
+    /// `HOME`, which is then the directory under test.
     ///
     /// `XDG_DATA_DIRS` is the variable that cannot be run that way: with the planted value
     /// removed, `gio open` reads the system's directories and starts the browser they name for
     /// `https`. Its directories hold the entries and the `mimeapps.list` themselves, and the
     /// address has the scheme `bravebot-test`, which no system handler opens, so a removed value
     /// leaves `gio open` with no handler and starts nothing.
+    ///
+    /// In generic mode `xdg-open` asks `xdg-mime` for the handler of `https` only when it sees a
+    /// display (`has_display` in `xdg-open.in`: `DISPLAY` or `WAYLAND_DISPLAY` not empty), so a
+    /// generic run that gives no display sets `WAYLAND_DISPLAY` to a name no socket has, and the
+    /// generic-mode test gives `DISPLAY` set to `:9999`, which no X server answers. Nothing
+    /// connects to a real display on that path: the only programs that could, `xprop` in `detectDE`
+    /// and an X client, read `DISPLAY`. `DBUS_SESSION_BUS_ADDRESS` is removed in every run that
+    /// sets no `XDG_CURRENT_DESKTOP` so the
+    /// `dbus-send` probe in `detectDE` cannot name GNOME. `BROWSER` names an installed stand-in
+    /// that records `fallback-ran`, which the generic path runs after the handler lookup finds
+    /// nothing; with `BROWSER` unset and a display it would try `x-www-browser`, `firefox` and
+    /// `chromium` and start a real browser. Under GNOME `BROWSER` is not read.
+    ///
+    /// `BROWSER` names a command, so each side holds a `helper.sh` that records it ran and
+    /// `BROWSER` is that path followed by ` %s`, which replaces the stand-in above.
     #[cfg(unix)]
-    fn gnome_handler_run_by(test: &str, variable: &str, opener: &Path) -> (bool, bool) {
+    fn handler_run_by(
+        test: &str,
+        variable: &str,
+        desktop: &[(&str, &str)],
+        opener: &Path,
+    ) -> (bool, bool) {
         use std::os::unix::fs::PermissionsExt;
 
         let name = variable.to_ascii_lowercase();
-        let session = crate::testutil::scratch_dir(&format!("opener-gnome-{name}-session"));
-        let installed = crate::testutil::scratch_dir(&format!("opener-gnome-{name}-installed"));
+        // The test's own name is part of the directory, since tests run in parallel and every test
+        // uses the same four variable names.
+        let label = test.rsplit("::").next().unwrap_or(test);
+        let session = crate::testutil::scratch_dir(&format!("opener-{label}-{name}-session"));
+        let installed = crate::testutil::scratch_dir(&format!("opener-{label}-{name}-installed"));
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&installed);
         let data = installed.join("data/applications");
@@ -430,22 +533,52 @@ mod tests {
             )
             .unwrap();
         };
+        let fallback = installed.join("fallback.sh");
+        std::fs::write(
+            &fallback,
+            format!(
+                "#!/bin/sh\n: > '{}'\n",
+                session.join("fallback-ran").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(0o755)).unwrap();
         let planted = session.join("selected");
         let genuine = installed.join("selected");
         for (directory, marker) in [(&planted, "planted-ran"), (&genuine, "genuine-ran")] {
-            if variable == "XDG_DATA_HOME" || variable == "XDG_DATA_DIRS" {
+            if variable == "BROWSER" {
+                std::fs::create_dir_all(directory).unwrap();
+                let helper = directory.join("helper.sh");
+                std::fs::write(
+                    &helper,
+                    format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display()),
+                )
+                .unwrap();
+                std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            } else if variable == "XDG_DATA_HOME" || variable == "XDG_DATA_DIRS" {
                 entry(&directory.join("applications"), marker);
                 default(&directory.join("applications/mimeapps.list"), marker);
+            } else if variable == "HOME" {
+                entry(&directory.join(".local/share/applications"), marker);
+                std::fs::create_dir_all(directory.join(".config")).unwrap();
+                default(&directory.join(".config/mimeapps.list"), marker);
             } else {
                 entry(&data, marker);
                 std::fs::create_dir_all(directory).unwrap();
                 default(&directory.join("mimeapps.list"), marker);
             }
         }
+        let mut logs: Vec<String> = Vec::new();
         for directory in [&planted, &genuine] {
+            let value = if variable == "BROWSER" {
+                OsString::from(format!("{} %s", directory.join("helper.sh").display()))
+            } else {
+                directory.clone().into_os_string()
+            };
             let child = {
                 // nosemgrep: rust.lang.security.current-exe.current-exe
-                std::process::Command::new(std::env::current_exe().unwrap())
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
                     .args(["--exact", test, "--test-threads=1", "--nocapture"])
                     .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
                     .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
@@ -453,33 +586,69 @@ mod tests {
                         "BRAVEBOT_TEST_BROWSER_ADDRESS",
                         format!("{scheme}://example.invalid/"),
                     )
+                    .env("BROWSER", format!("{} %s", fallback.display()))
                     .env("HOME", &home)
                     .env_remove("BRAVEBOT_HOME")
-                    .env("XDG_CURRENT_DESKTOP", "GNOME")
                     .env("XDG_DATA_DIRS", installed.join("data"))
                     .env_remove("XDG_DATA_HOME")
                     .env_remove("XDG_CONFIG_HOME")
-                    .env_remove("XDG_CONFIG_DIRS")
-                    .env_remove("BROWSER")
-                    .env_remove("XDG_SESSION_DESKTOP")
-                    .env_remove("DESKTOP_SESSION")
-                    .env_remove("GNOME_DESKTOP_SESSION_ID")
-                    .env_remove("KDE_FULL_SESSION")
-                    .env_remove("DISPLAY")
-                    .env_remove("WAYLAND_DISPLAY")
-                    .env(variable, directory)
+                    .env_remove("XDG_CONFIG_DIRS");
+                for chooser in [
+                    "XDG_CURRENT_DESKTOP",
+                    "XDG_SESSION_DESKTOP",
+                    "DESKTOP_SESSION",
+                    "GNOME_DESKTOP_SESSION_ID",
+                    "KDE_FULL_SESSION",
+                    "KDE_SESSION_VERSION",
+                    "DISPLAY",
+                    "WAYLAND_DISPLAY",
+                ] {
+                    command.env_remove(chooser);
+                }
+                for (name, set) in desktop {
+                    command.env(name, set);
+                }
+                // Generic mode is a run that sets no desktop environment of its own. It must not
+                // see the runner's session bus, whose `dbus-send` probe in `detectDE` could name
+                // GNOME, and it needs a display variable for `has_display`.
+                if !desktop
+                    .iter()
+                    .any(|(name, _)| *name == "XDG_CURRENT_DESKTOP")
+                {
+                    command.env_remove("DBUS_SESSION_BUS_ADDRESS");
+                    if !desktop.iter().any(|(name, _)| *name == "DISPLAY") {
+                        command.env("WAYLAND_DISPLAY", "bravebot-test-no-such-display");
+                    }
+                }
+                command
+                    .env("XDG_UTILS_DEBUG_LEVEL", "3")
+                    .env(variable, value)
                     .output()
                     .unwrap()
             };
+            logs.push(format!(
+                "{variable} in {}:\nstdout:\n{}\nstderr:\n{}",
+                directory.display(),
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            ));
             assert!(
                 child.status.success(),
                 "{}",
                 String::from_utf8_lossy(&child.stderr)
             );
         }
+        // The handler is started by `xdg-open` and may be slow to run on a loaded host, so wait
+        // for its marker rather than for the opener to return.
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !session.join("genuine-ran").exists() && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !session.join("genuine-ran").exists() {
+            eprintln!(
+                "the handler in the installed directory did not run for {variable}:\n{}",
+                logs.join("\n")
+            );
         }
         let ran = (
             session.join("planted-ran").exists(),
@@ -490,6 +659,16 @@ mod tests {
         ran
     }
 
+    /// A host where the programs are expected to be there and to start a handler: Linux with `CI`
+    /// set, where `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and `kde-cli-tools`. A test that
+    /// finds a program missing, or a handler that does not start, fails there, since a skip would
+    /// report green for an opener that was never run. Everywhere else, macOS included, it prints
+    /// `skipped` and passes.
+    #[cfg(unix)]
+    fn the_runner_must_run_the_handlers() -> bool {
+        cfg!(target_os = "linux") && std::env::var_os("CI").is_some()
+    }
+
     /// SANDBOX-30, through the installed `xdg-open` and `gio open` where this host has both. The
     /// regression it rejects: the opener left `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`
     /// or `XDG_DATA_DIRS` as the person set it, so a `mimeapps.list` a stage wrote in the directory it
@@ -498,7 +677,21 @@ mod tests {
     /// is run with an address whose scheme only the planted and the installed entries handle,
     /// since with the planted value removed `gio open` falls back to the system's handlers and
     /// would start a browser for `https`. It prints `skipped` and passes where either program is
-    /// missing or the handler in the installed directory does not run.
+    /// missing or the handler in the installed directory does not run, except on Linux with `CI`
+    /// set, where either fails it.
+    ///
+    /// `BROWSER` is not run here and has no case. `xdg-open` reads it in `open_generic`, which
+    /// `open_gnome` reaches only when `gio` is not installed (per the 1.1.x script; not checked
+    /// against 1.2.1), and this test needs `gio`. A `BROWSER` helper under GNOME would not
+    /// run when it is installed either, so a case for it could not tell a removed value from a kept
+    /// one. `BROWSER` is run in generic mode by
+    /// [`a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`].
+    ///
+    /// A logged-in GNOME session adds `GNOME_DESKTOP_SESSION_ID`, a session bus and a display to
+    /// what this sets. `xdg-open` reads the first only to choose `open_gnome`, which
+    /// `XDG_CURRENT_DESKTOP=GNOME` also chooses, and `gio open` reads its handler from the
+    /// directories the four names select. The names the survey in SANDBOX-30 found are the same
+    /// with or without a session, so none is expected to be added by one. No session was run.
     #[cfg(unix)]
     #[test]
     fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome() {
@@ -509,6 +702,10 @@ mod tests {
             bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
             bravebot_sandbox::programs::find(OsStr::new("gio")),
         ) else {
+            assert!(
+                !the_runner_must_run_the_handlers(),
+                "CI is set and xdg-open or gio is not installed"
+            );
             println!("skipped: no xdg-open and gio on this host");
             return;
         };
@@ -518,18 +715,516 @@ mod tests {
             "XDG_DATA_HOME",
             "XDG_DATA_DIRS",
         ] {
-            let ran = gnome_handler_run_by(
+            let ran = handler_run_by(
                 "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome",
                 variable,
+                &[("XDG_CURRENT_DESKTOP", "GNOME")],
                 &opener,
             );
             match ran {
-                (_, false) => println!(
-                    "skipped {variable}: the xdg-open here does not run a handler chosen by it"
-                ),
+                (_, false) => {
+                    assert!(
+                        !the_runner_must_run_the_handlers(),
+                        "{variable}: the xdg-open here did not run the handler in the installed directory"
+                    );
+                    println!(
+                        "skipped {variable}: the xdg-open here does not run a handler chosen by it"
+                    );
+                }
                 ran => assert_eq!(ran, (false, true), "{variable}"),
             }
         }
+    }
+
+    /// SANDBOX-30, through the installed `xdg-open` in generic-desktop mode, where it reads the
+    /// handler for the address from the directories the four `XDG_` names select and does not hand
+    /// the address to `gio open`. The regression it rejects: the opener left `XDG_CONFIG_DIRS`,
+    /// `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `XDG_DATA_DIRS` as the person set it, so a
+    /// `mimeapps.list` and a `.desktop` entry a stage wrote in the directory it names choose the
+    /// program that opens the address. The same value naming an installed directory still runs its
+    /// handler, which shows the variable chooses the handler here and that a safe value opens the
+    /// link. It prints `skipped` and passes where there is no `xdg-open`, and for a variable whose
+    /// installed handler does not run here, since the planted handler then not running says nothing.
+    /// On Linux with `CI` set either fails it.
+    ///
+    /// The run removes every variable that names a desktop environment and `DBUS_SESSION_BUS_ADDRESS`,
+    /// so `xdg-open` takes its generic path. That path asks `xdg-mime` for the handler of `https` only
+    /// when a display is set (`has_display` in `xdg-open.in`), so the run sets `DISPLAY` to a number no
+    /// X server answers ([`handler_run_by`] says why that starts nothing). It also skips where
+    /// `/etc/xdg/mimeapps.list` exists, since a removed `XDG_CONFIG_DIRS` falls back to it and it could
+    /// name a real browser.
+    #[cfg(unix)]
+    #[test]
+    fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode() {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let (Some(opener), Some(_xdg_mime)) = (
+            bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
+            bravebot_sandbox::programs::find(OsStr::new("xdg-mime")),
+        ) else {
+            assert!(
+                !the_runner_must_run_the_handlers(),
+                "CI is set and xdg-open or xdg-mime is not installed"
+            );
+            println!("skipped: no xdg-open and xdg-mime on this host");
+            return;
+        };
+        if Path::new("/etc/xdg/mimeapps.list").exists() {
+            println!("skipped: this host has a system mimeapps.list");
+            return;
+        }
+        for variable in [
+            "XDG_CONFIG_DIRS",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_DATA_DIRS",
+        ] {
+            // `xdg-open` 1.2.1 looks up a scheme handler in generic mode only when `DISPLAY` or
+            // `WAYLAND_DISPLAY` is set. `DISPLAY` names a number no X server answers, so `xprop`
+            // in `detectDE` cannot reach a real one. The handlers are scripts that connect to nothing.
+            let ran = handler_run_by(
+                "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode",
+                variable,
+                &[("DISPLAY", ":9999")],
+                &opener,
+            );
+            match ran {
+                (_, false) => {
+                    assert!(
+                        !the_runner_must_run_the_handlers(),
+                        "{variable}: the xdg-open here did not run the handler in the installed directory"
+                    );
+                    println!(
+                        "skipped {variable}: the xdg-open here does not run a handler chosen by it"
+                    );
+                }
+                ran => assert_eq!(ran, (false, true), "{variable}"),
+            }
+        }
+    }
+
+    /// SANDBOX-30, through the installed `xdg-open` under KDE (`XDG_CURRENT_DESKTOP=KDE` and
+    /// `KDE_FULL_SESSION=true`), which hands the address to `kde-open` (package `kde-cli-tools`),
+    /// or to `kde-open5` when `KDE_SESSION_VERSION` is `5`. The regression it rejects: the opener
+    /// left one of the five names as the person set it, so a handler, a `mimeapps.list` or a
+    /// `BROWSER` command a stage wrote is run by the program `xdg-open` hands the address to. For
+    /// each of `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS` a
+    /// directory a stage may write is not read, and the same value naming an installed directory
+    /// still runs its handler, so a safe value opens the link.
+    ///
+    /// `BROWSER` has a control of its own, because it is not known whether `kde-open` reads it. The
+    /// same two runs are made with a command in a stage-writable directory and one in an installed
+    /// directory. If the installed command runs, `kde-open` reads `BROWSER` here and the command in
+    /// the stage-writable directory must not run. If the installed command does not run, the test
+    /// prints that `kde-open` does not read `BROWSER` and asserts nothing about it, since the
+    /// planted command then not running says nothing.
+    ///
+    /// Where there is no `xdg-open` or no `kde-open` it prints `skipped` and passes, except on Linux
+    /// with `CI` set, where it fails, because a runner that lacks them runs nothing. A variable whose
+    /// installed handler does not start is skipped, since the planted handler then not running says
+    /// nothing. The stand-in test below is the one that fails on CI when the opener's names reach
+    /// a started `kde-open`, since this one needs a KDE session bus a headless runner lacks.
+    #[cfg(unix)]
+    #[test]
+    fn a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde()
+     {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let on_ci = the_runner_must_run_the_handlers();
+        let kde_open5 = bravebot_sandbox::programs::find(OsStr::new("kde-open5"));
+        let kde_open = kde_open5
+            .clone()
+            .or_else(|| bravebot_sandbox::programs::find(OsStr::new("kde-open")));
+        let (Some(opener), Some(_kde_open)) = (
+            bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
+            kde_open,
+        ) else {
+            assert!(
+                !on_ci,
+                "CI is set and xdg-open or kde-open is not installed"
+            );
+            println!("skipped: no xdg-open and kde-open on this host");
+            return;
+        };
+        let mut desktop = vec![("XDG_CURRENT_DESKTOP", "KDE"), ("KDE_FULL_SESSION", "true")];
+        // `xdg-open` 1.2.1 runs `kfmclient exec` when `KDE_SESSION_VERSION` is unset, `kde-open5`
+        // for 5 and `kde-open` for 4 and 6.
+        desktop.push((
+            "KDE_SESSION_VERSION",
+            if kde_open5.is_some() { "5" } else { "6" },
+        ));
+        for variable in [
+            "BROWSER",
+            "XDG_CONFIG_DIRS",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_DATA_DIRS",
+        ] {
+            let ran = handler_run_by(
+                "opener::tests::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde",
+                variable,
+                &desktop,
+                &opener,
+            );
+            if variable == "BROWSER" {
+                if ran.1 {
+                    assert!(!ran.0, "BROWSER: a command a stage may write was run");
+                } else {
+                    println!(
+                        "BROWSER: kde-open here does not run an installed BROWSER, so it does not read it; nothing asserted"
+                    );
+                }
+                continue;
+            }
+            match ran {
+                (_, false) => {
+                    // `kde-open` may need a session bus that a headless runner lacks, and the
+                    // planted handler then not running says nothing.
+                    println!(
+                        "skipped {variable}: kde-open here does not run a handler chosen by it"
+                    );
+                }
+                ran => {
+                    assert_eq!(ran, (false, true), "{variable}");
+                }
+            }
+        }
+    }
+
+    /// SANDBOX-30, `XDG_DATA_DIRS` with no desktop environment named (`XDG_CURRENT_DESKTOP` and the
+    /// other variables that choose one are removed, so `xdg-open` takes its generic path). The
+    /// regression it rejects: the opener left `XDG_DATA_DIRS` as the person set it, so the `.desktop`
+    /// entries in a directory a stage wrote choose the program `xdg-open` and `xdg-mime` run.
+    ///
+    /// The installed `xdg-open` cannot show this on every host (`XDG_DATA_DIRS` removed makes `gio`
+    /// fall back to the system's handlers, which would start a real browser, and macOS has no
+    /// `xdg-open`). The opener's launch path runs a stand-in program instead, in a child run of
+    /// this test binary that holds the planted directory in `XDG_DATA_DIRS`, as the other tests
+    /// here do. The stand-in appends the `XDG_DATA_DIRS` it receives to a log and starts nothing.
+    /// A control run of the same stand-in that does not go through the opener must log the planted
+    /// value, which shows the log can hold it.
+    #[cfg(unix)]
+    #[test]
+    fn xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let session = crate::testutil::scratch_dir("opener-data-dirs-session");
+        let installed = crate::testutil::scratch_dir("opener-data-dirs-installed");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        let planted = session.join("planted-data-dirs-marker");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let log = installed.join("seen.log");
+        let stand_in = installed.join("xdg-open");
+        std::fs::write(
+            &stand_in,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"${{XDG_DATA_DIRS-unset}}\" >> '{}'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let without_a_desktop = |command: &mut std::process::Command| {
+            command
+                .env("XDG_DATA_DIRS", &planted)
+                .env_remove("XDG_CURRENT_DESKTOP")
+                .env_remove("XDG_SESSION_DESKTOP")
+                .env_remove("DESKTOP_SESSION")
+                .env_remove("GNOME_DESKTOP_SESSION_ID")
+                .env_remove("KDE_FULL_SESSION")
+                .env_remove("DISPLAY")
+                .env_remove("WAYLAND_DISPLAY")
+                .env_remove("BROWSER");
+        };
+
+        let mut control = std::process::Command::new(&stand_in);
+        without_a_desktop(&mut control);
+        assert!(control.status().unwrap().success());
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let mut through_the_opener = std::process::Command::new(std::env::current_exe().unwrap());
+        through_the_opener
+            .args([
+                "--exact",
+                "opener::tests::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
+            .env("BRAVEBOT_TEST_BROWSER_OPENER", &stand_in);
+        without_a_desktop(&mut through_the_opener);
+        let child = through_the_opener.output().unwrap();
+
+        let seen = std::fs::read_to_string(&log).unwrap_or_default();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        assert!(child.status.success(), "{report}");
+        let lines: Vec<&str> = seen.lines().collect();
+        assert_eq!(lines.len(), 2, "the stand-in ran once per start: {seen:?}");
+        assert_eq!(
+            lines[0],
+            planted.display().to_string(),
+            "the control did not receive the planted directory"
+        );
+        assert!(
+            !lines[1].contains("planted-data-dirs-marker"),
+            "the opener passed on a directory a stage may write: {}",
+            lines[1]
+        );
+    }
+
+    /// SANDBOX-30, through the installed `xdg-open` and `gio open` where this host has both, with
+    /// every `XDG_` directory unset so that `HOME` alone chooses the handler. The regression it
+    /// rejects: the opener left `HOME` as the person set it, so a `mimeapps.list` and a `.desktop`
+    /// entry a stage wrote under a `HOME` it may write choose the program `gio open` runs. The same
+    /// layout under an installed `HOME` is read and its handler runs, which shows `HOME` does choose
+    /// the handler here. It prints `skipped` and passes where either program is missing, where the
+    /// handler in the installed `HOME` does not run, and where the person running it has handlers of
+    /// their own under their `HOME`, since `gio open` falls back to that directory when `HOME` is
+    /// removed and would start their browser.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome() {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let (Some(opener), Some(_gio)) = (
+            bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
+            bravebot_sandbox::programs::find(OsStr::new("gio")),
+        ) else {
+            println!("skipped: no xdg-open and gio on this host");
+            return;
+        };
+        if std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .is_some_and(|own| {
+                own.join(".config/mimeapps.list").exists()
+                    || own.join(".local/share/applications").exists()
+            })
+        {
+            println!("skipped: this account has handlers of its own under its home");
+            return;
+        }
+        let ran = handler_run_by(
+            "opener::tests::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome",
+            "HOME",
+            &[("XDG_CURRENT_DESKTOP", "GNOME")],
+            &opener,
+        );
+        match ran {
+            (_, false) => {
+                println!("skipped: the xdg-open here does not run a handler chosen by HOME")
+            }
+            ran => assert_eq!(ran, (false, true)),
+        }
+    }
+
+    /// The stand-in `kde-open` that [`kde_open_saw`] places first on `PATH`: it writes the arguments
+    /// it was started with and each variable of the opener's list it can see to `@LOG@`, and starts
+    /// nothing. The names are those of [`CODE_SELECTORS`], so a name added to it is looked for.
+    #[cfg(unix)]
+    fn kde_open_stand_in(log: &Path) -> String {
+        let names: Vec<&str> = CODE_SELECTORS.iter().map(|(name, _)| *name).collect();
+        format!(
+            "#!/bin/sh\n{{\necho \"ARGS $*\"\nfor name in {}; do\n  if printenv \"$name\" >/dev/null 2>&1; then echo \"SET $name=$(printenv \"$name\")\"; fi\ndone\n}} > '{}'\n",
+            names.join(" "),
+            log.display()
+        )
+    }
+
+    /// What a stand-in `kde-open`, started by the installed `xdg-open` that the opener starts under
+    /// `XDG_CURRENT_DESKTOP=KDE`, was given: the lines it logged, or `None` when it did not run.
+    ///
+    /// `variable` is set in the environment of a child run of this test binary (the command takes its
+    /// environment from the process, so a test cannot set one) to a path in a directory a stage may
+    /// write when `planted`, and to one in an installed directory otherwise. The child keeps the
+    /// session directory out as a stage's, runs the opener against `opener`, and every other name
+    /// of the opener's list is removed from its environment. `KDE_SESSION_VERSION=6` makes
+    /// `xdg-open`'s `open_kde` start `kde-open` (`xdg-open.in`), which is found by name on `PATH`,
+    /// and the stand-in is first on it.
+    #[cfg(unix)]
+    fn kde_open_saw(test: &str, variable: &str, opener: &Path, planted: bool) -> Option<String> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let which = if planted { "planted" } else { "installed" };
+        let name = variable.to_ascii_lowercase();
+        let session = crate::testutil::scratch_dir(&format!("opener-kde-{name}-{which}-session"));
+        let installed =
+            crate::testutil::scratch_dir(&format!("opener-kde-{name}-{which}-installed"));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let log = installed.join("seen.log");
+        let executable = |path: &Path, body: &str| {
+            std::fs::write(path, body).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        executable(&installed.join("kde-open"), &kde_open_stand_in(&log));
+        let place = if planted { &session } else { &installed };
+        let value = match variable {
+            "BROWSER" => {
+                executable(&place.join("browser.sh"), "#!/bin/sh\n");
+                format!("{} %s", place.join("browser.sh").display())
+            }
+            "GIO_LAUNCH_DESKTOP" => {
+                executable(&place.join("gio-launch-desktop"), "#!/bin/sh\n");
+                place.join("gio-launch-desktop").display().to_string()
+            }
+            "KDESYCOCA" => {
+                std::fs::write(place.join("sycoca"), "").unwrap();
+                place.join("sycoca").display().to_string()
+            }
+            _ => {
+                std::fs::create_dir_all(place.join("selected")).unwrap();
+                place.join("selected").display().to_string()
+            }
+        };
+        let mut path = vec![installed.clone()];
+        path.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
+            .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
+            .env("PATH", std::env::join_paths(path).unwrap())
+            .env("XDG_CURRENT_DESKTOP", "KDE")
+            .env("KDE_SESSION_VERSION", "6")
+            .env_remove("XDG_SESSION_DESKTOP")
+            .env_remove("DESKTOP_SESSION")
+            .env_remove("GNOME_DESKTOP_SESSION_ID")
+            .env_remove("KDE_FULL_SESSION")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY");
+        for (listed, _) in CODE_SELECTORS {
+            command.env_remove(listed);
+        }
+        command.env(variable, &value);
+        let child = command.output().unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let seen = std::fs::read_to_string(&log).ok();
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        seen
+    }
+
+    /// SANDBOX-30, KDE mode, through the installed `xdg-open` where this host has one and a stand-in
+    /// `kde-open` first on `PATH`, for every name in the opener's list. The opener's real launch
+    /// path starts `xdg-open` with `XDG_CURRENT_DESKTOP=KDE`, which starts the stand-in with the
+    /// address. With the name set to a path a stage may write, the stand-in is still started with
+    /// the address and does not see the name. With it set to a path in an installed directory the
+    /// stand-in sees it, which shows the log can hold the name and that a safe value still opens the
+    /// address. A name that [`Names::Options`] judges is removed with either value and the address
+    /// is still opened. The regression it rejects: a name left out of the opener's list or kept
+    /// whatever it holds, so the real `kde-open` would read it from the environment the opener
+    /// passed.
+    ///
+    /// The stand-in shows what the opener hands on, not what `kde-open` reads: that is from the source
+    /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). It prints `skipped` and passes
+    /// where there is no `xdg-open`, as on macOS, and where the installed one does not start the
+    /// stand-in. On Linux with `CI` set it fails instead, since the runner has `xdg-open`.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts() {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let Some(opener) = bravebot_sandbox::programs::find(OsStr::new("xdg-open")) else {
+            assert!(
+                !the_runner_must_run_the_handlers(),
+                "CI is set and xdg-open is not installed"
+            );
+            println!("skipped: no xdg-open on this host");
+            return;
+        };
+        let test = "opener::tests::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts";
+        for (variable, names) in CODE_SELECTORS {
+            let Some(installed) = kde_open_saw(test, variable, &opener, false) else {
+                assert!(
+                    !the_runner_must_run_the_handlers(),
+                    "{variable}: CI is set and the xdg-open here did not start the kde-open"
+                );
+                println!("skipped {variable}: the xdg-open here did not start the kde-open");
+                continue;
+            };
+            let sets = |log: &str| {
+                log.lines()
+                    .filter_map(|line| line.strip_prefix("SET "))
+                    .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                installed.lines().next(),
+                Some("ARGS https://example.invalid/"),
+                "{variable}: {installed}"
+            );
+            // An options name is removed whatever it holds, so the safe value is not kept either.
+            if names == Names::Options {
+                assert!(
+                    sets(&installed).is_empty(),
+                    "{variable} reached kde-open: {installed}"
+                );
+            } else {
+                assert_eq!(sets(&installed), [variable], "{variable} was not kept");
+            }
+            let planted = kde_open_saw(test, variable, &opener, true)
+                .unwrap_or_else(|| panic!("{variable}: the address was not opened"));
+            assert_eq!(
+                planted.lines().next(),
+                Some("ARGS https://example.invalid/"),
+                "{variable}: {planted}"
+            );
+            assert!(
+                sets(&planted).is_empty(),
+                "{variable} reached kde-open: {planted}"
+            );
+        }
+    }
+
+    /// CHATGPT-13, the Windows start, checked on every host. The command built for it is
+    /// `rundll32`, the library's entry point and the address, as exactly those arguments: an address
+    /// holding `&`, `|`, `^`, `%` and `"` is neither split nor joined with another, and no shell is
+    /// between it and the program. The regression it rejects: the Windows address joined into one
+    /// string with the entry point, or passed to `cmd /c start`, which reads `&`. That `rundll32`
+    /// then opens a page was read and not run, which needs Windows.
+    #[test]
+    fn the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments() {
+        let url = "https://auth.example/a?x=1&y=2|3^4%20\"5";
+        assert!(is_openable(url));
+
+        let (program, arguments) = opener("windows", url);
+        let command = opening_against(
+            &Resolved::found_earlier(r"C:\Windows\System32\rundll32.exe"),
+            &arguments,
+            [],
+            &|_| true,
+        );
+
+        assert_eq!(program, "rundll32");
+        assert_eq!(
+            command.get_program(),
+            OsStr::new(r"C:\Windows\System32\rundll32.exe")
+        );
+        let given: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(
+            given,
+            [OsStr::new("url.dll,FileProtocolHandler"), OsStr::new(url)]
+        );
     }
 
     /// SANDBOX-30. The regression it rejects: the opener started with `Checked(&[])`, or with the
@@ -555,6 +1250,13 @@ mod tests {
 
         assert!(withheld("XDG_CONFIG_DIRS", "/safe/etc:/stage/etc"));
         assert!(!withheld("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+
+        assert!(withheld("HOME", "/stage/home"));
+        assert!(withheld("HOME", "home"));
+        assert!(withheld("HOME", ""));
+        assert!(!withheld("HOME", "/safe/home"));
+        assert!(!withheld("HOME", "/safe/home/"));
+        assert!(withheld("HOME", "/safe-not/home"));
     }
 
     /// SANDBOX-30. The regression it rejects: `BROWSER` judged as a single program name, so a list
@@ -582,17 +1284,173 @@ mod tests {
     fn the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names() {
         for name in [
             "EDITOR",
-            "HOME",
             "XDG_RUNTIME_DIR",
             "DISPLAY",
             "LANG",
             "PATH",
+            "GSETTINGS_SCHEMA_DIR",
+            "GIO_USE_VFS",
+            "QT_QPA_PLATFORM_PLUGIN_PATHS",
         ] {
             assert!(!withheld(name, "/stage/anything"), "{name} was removed");
         }
         assert!(!withheld("BROWSER", "/safe/bin/firefox"));
         assert!(!withheld("XDG_DATA_DIRS", "/safe/share"));
         assert!(!withheld("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+        assert!(!withheld("HOME", "/safe/home"));
+    }
+
+    /// SANDBOX-30, on the disk: `HOME` is removed when it, or the configuration or handler
+    /// directory `xdg-open` reads under it, leads to a directory a stage may write, and kept
+    /// otherwise. The regression it rejects: `HOME` judged alone, so a session opened on
+    /// `~/.config` or on `~/.local/share/applications` (which has no row for `HOME`) leaves `HOME`
+    /// as set while the files read under it are the stage's; and a comparison of the names as
+    /// written, which a link into the session slips past.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk() {
+        let session = crate::testutil::scratch_dir("opener-home-session");
+        let safe = crate::testutil::scratch_dir("opener-home-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        let planted = session.join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        let make = |name: &str| {
+            let home = safe.join(name);
+            std::fs::create_dir_all(&home).unwrap();
+            home
+        };
+        let genuine = make("genuine");
+        std::fs::create_dir_all(genuine.join(".config")).unwrap();
+        std::fs::create_dir_all(genuine.join(".local/share/applications")).unwrap();
+        let bare = make("bare");
+        let linked_config = make("linked-config");
+        std::os::unix::fs::symlink(&planted, linked_config.join(".config")).unwrap();
+        let linked_applications = make("linked-applications");
+        std::fs::create_dir_all(linked_applications.join(".local/share")).unwrap();
+        std::os::unix::fs::symlink(
+            &planted,
+            linked_applications.join(".local/share/applications"),
+        )
+        .unwrap();
+        let linked_share = make("linked-share");
+        std::fs::create_dir_all(linked_share.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&planted, linked_share.join(".local/share")).unwrap();
+        let linked_home = safe.join("to-planted");
+        std::os::unix::fs::symlink(&planted, &linked_home).unwrap();
+        let writable = vec![session.clone()];
+        let outside = |path: &Path| {
+            bravebot_sandbox::programs::outside_stage_writable_with(path, &writable, &[])
+        };
+        let removed = |value: &Path| {
+            opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from("HOME"), value.as_os_str().to_os_string())],
+                &outside,
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new("HOME") && now.is_none())
+        };
+
+        assert!(!removed(&genuine));
+        assert!(!removed(&bare));
+        assert!(removed(&planted));
+        assert!(removed(&linked_home));
+        assert!(removed(&linked_config));
+        assert!(removed(&linked_applications));
+        assert!(removed(&linked_share));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+    }
+
+    /// SANDBOX-30, `gio open` and `kde-open`. The regression it rejects: the opener's list left at
+    /// the XDG names, so a module directory, a launcher, a plug-in directory, a plug-in name or a
+    /// service cache a stage wrote is loaded or read by the program the opener starts. A name whose
+    /// value is a path has a value a stage may write, which is removed, and a safe one, which is
+    /// kept; an option is removed whatever it holds. `GIO_LAUNCH_DESKTOP` is one file, so what
+    /// it keeps is shown on the disk by a test of its own.
+    #[test]
+    fn the_opener_removes_a_glib_or_qt_name_that_selects_code_a_stage_may_write() {
+        assert!(withheld("HOME", "/stage/home"));
+        assert!(withheld("HOME", "home"));
+        assert!(!withheld("HOME", "/safe/home"));
+
+        assert!(withheld("GIO_EXTRA_MODULES", "/stage/modules"));
+        assert!(withheld(
+            "GIO_EXTRA_MODULES",
+            "/safe/modules:/stage/modules"
+        ));
+        assert!(!withheld("GIO_EXTRA_MODULES", "/safe/modules:/safe/more"));
+
+        assert!(withheld("GIO_MODULE_DIR", "/stage/modules"));
+        assert!(!withheld("GIO_MODULE_DIR", "/safe/modules"));
+
+        assert!(withheld("GIO_LAUNCH_DESKTOP", "/stage/launcher"));
+
+        assert!(withheld("QT_PLUGIN_PATH", "/stage/plugins"));
+        assert!(withheld("QT_PLUGIN_PATH", "/safe/plugins:/stage/plugins"));
+        assert!(!withheld("QT_PLUGIN_PATH", "/safe/plugins:/safe/more"));
+
+        assert!(withheld("QT_QPA_PLATFORM_PLUGIN_PATH", "/stage/platforms"));
+        assert!(!withheld("QT_QPA_PLATFORM_PLUGIN_PATH", "/safe/platforms"));
+
+        assert!(withheld("QT_QPA_PLATFORMTHEME", "evil"));
+        assert!(withheld("QT_QPA_PLATFORMTHEME", "/safe/anything"));
+        assert!(withheld("QT_QPA_PLATFORMTHEME", ""));
+        assert!(withheld("QT_QPA_GENERIC_PLUGINS", "evil"));
+        assert!(withheld("QT_QPA_GENERIC_PLUGINS", "/safe/anything"));
+        assert!(withheld("QT_QPA_GENERIC_PLUGINS", ""));
+        assert!(withheld("QT_QPA_PLATFORM", "evil"));
+        assert!(withheld("QT_QPA_PLATFORM", "/safe/anything"));
+        assert!(withheld("QT_QPA_PLATFORM", ""));
+        assert!(withheld("QT_STYLE_OVERRIDE", "evil"));
+        assert!(withheld("QT_STYLE_OVERRIDE", "/safe/anything"));
+        assert!(withheld("QT_STYLE_OVERRIDE", ""));
+    }
+
+    /// SANDBOX-30, `kde-open`: `KDESYCOCA` names a file, so it is removed when that file is one a
+    /// stage may write and kept when it is an existing file outside them. The regression it rejects:
+    /// `KDESYCOCA` judged as a directory or as an option, or not listed. Judged on the disk, since a
+    /// file has to exist to be kept.
+    #[cfg(unix)]
+    #[test]
+    fn the_opener_judges_a_kde_service_cache_by_the_file_it_names() {
+        let session = crate::testutil::scratch_dir("opener-sycoca-session");
+        let safe = crate::testutil::scratch_dir("opener-sycoca-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let planted = session.join("ksycoca6");
+        let genuine = safe.join("ksycoca6");
+        std::fs::write(&planted, "").unwrap();
+        std::fs::write(&genuine, "").unwrap();
+        let session = session.canonicalize().unwrap();
+        let safe = safe.canonicalize().unwrap();
+
+        // Whether the start takes `name` off when it holds `value`, with every file under the
+        // session one a stage may write.
+        let checked = |name: &str, value: &Path| {
+            let command = opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from(name), value.as_os_str().to_os_string())],
+                &|path: &Path| !path.starts_with(&session),
+            );
+            command
+                .get_envs()
+                .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+
+        assert!(checked("KDESYCOCA", &session.join("ksycoca6")));
+        assert!(checked("KDESYCOCA", &session.join("not-yet")));
+        assert!(checked("KDESYCOCA", Path::new("ksycoca6")));
+        assert!(!checked("KDESYCOCA", &safe.join("ksycoca6")));
+        assert!(checked("KDESYCOCA", &safe));
+
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
     }
 
     /// SANDBOX-30, on the disk: a directory a stage planted under the session is removed from
@@ -641,6 +1499,57 @@ mod tests {
             assert!(!removed_for(name, &genuine_list), "{name}: a genuine list");
             assert!(removed_for(name, &mixed_list), "{name}: a list with a link");
         }
+    }
+
+    /// SANDBOX-30, on the disk: `GIO_LAUNCH_DESKTOP` names the wrapper `gio open` executes with the
+    /// handler's command line, so it is removed when it is a file in a directory a stage may write,
+    /// a link into one, a directory, a path that does not exist or a bare name, and kept when it is
+    /// an existing file outside every such directory. The regression it rejects: the name left out
+    /// of the opener's list, so a wrapper a stage wrote runs the handler outside the sandbox; and a
+    /// judgment of the name as written, which a link into the session slips past.
+    #[cfg(unix)]
+    #[test]
+    fn gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one()
+    {
+        let session = crate::testutil::scratch_dir("opener-gio-session");
+        let safe = crate::testutil::scratch_dir("opener-gio-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let planted = session.join("gio-launch-desktop");
+        let genuine = safe.join("gio-launch-desktop");
+        std::fs::write(&planted, "#!/bin/sh\n").unwrap();
+        std::fs::write(&genuine, "#!/bin/sh\n").unwrap();
+        let link = safe.join("to-planted");
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+        let writable = vec![session.clone()];
+        let outside = |path: &Path| {
+            bravebot_sandbox::programs::outside_stage_writable_with(path, &writable, &[])
+        };
+        // Shadows the helper above, which judges by the name `/safe` and cannot see a file on disk.
+        let withheld = |name: &str, value: &Path| {
+            opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from(name), value.as_os_str().to_os_string())],
+                &outside,
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+
+        assert!(withheld("GIO_LAUNCH_DESKTOP", &planted));
+        assert!(withheld("GIO_LAUNCH_DESKTOP", &link));
+        assert!(withheld("GIO_LAUNCH_DESKTOP", &safe));
+        assert!(withheld("GIO_LAUNCH_DESKTOP", &safe.join("missing")));
+        assert!(withheld(
+            "GIO_LAUNCH_DESKTOP",
+            Path::new("gio-launch-desktop")
+        ));
+        assert!(!withheld("GIO_LAUNCH_DESKTOP", &genuine));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
     }
 
     /// What a command was told to unset, which is how `env_remove` reads back.

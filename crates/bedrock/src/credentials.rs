@@ -102,23 +102,39 @@ fn absent(command: &Command) -> bool {
 ///   engine or a provider module, and `OPENSSL_CONF_INCLUDE` is where its `.include` lines are read
 ///   from. `OPENSSL_ENGINES` and `OPENSSL_MODULES` are where those engines and providers are loaded
 ///   from.
+/// - `HOME` selects `~/.aws/config`, `~/.aws/credentials` and `~/.aws/cli/alias`, in which a
+///   `credential_process` or a `!` alias runs a command. It is also where asdf (`~/.asdf`) and pyenv
+///   (`~/.pyenv`) look for the installation an `aws` shim runs.
+/// - `PAGER` and `MANPAGER` are the commands `aws <command> help` pipes its text through
+///   (`MANPAGER` first), judged as a list of commands, so a value with arguments such as
+///   `less -R` is removed. `PYTHONWARNINGS` can import a module by name, and
+///   `BOTOCORE_EXPERIMENTAL__PLUGINS` is read by botocore 1 for the plug-ins a client loads (no
+///   run loaded a module through it); both are options and are removed whatever they hold.
 ///
-/// The CLI does not read `PYTHONPATH` or the other `PYTHON*` variables (it is a frozen executable),
-/// and runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start here has
-/// piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
+/// An `aws` that is the frozen executable does not read `PYTHONPATH` or the other `PYTHON*`
+/// variables. An `aws` that is a script (pip, Homebrew) does: the generic names cover
+/// `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE` and `PYTHONPYCACHEPREFIX`, and `BASH_ENV`,
+/// `SHELLOPTS`, `PS4`, the `BASH_FUNC_` prefix and the pyenv and asdf names cover a shim. The
+/// frozen executable runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start
+/// here has piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
 /// `SSL_CERT_DIR` name certificates, and `AWS_WEB_IDENTITY_TOKEN_FILE` names a token; none is run.
-const CODE_SELECTORS: [(&str, Names); 11] = [
+const CODE_SELECTORS: [(&str, Names); 16] = [
     ("AWS_CONFIG_FILE", Names::File),
     ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
     selectors::BROWSER,
     selectors::OPENSSL_CONF,
     ("OPENSSL_CONF_INCLUDE", Names::Directory),
-    ("OPENSSL_ENGINES", Names::Directory),
-    ("OPENSSL_MODULES", Names::Directory),
+    selectors::OPENSSL_ENGINES,
+    selectors::OPENSSL_MODULES,
     ("XDG_DATA_HOME", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    ("HOME", Names::Directory),
+    ("PAGER", Names::Commands),
+    ("MANPAGER", Names::Commands),
+    ("PYTHONWARNINGS", Names::Options),
+    ("BOTOCORE_EXPERIMENTAL__PLUGINS", Names::Options),
 ];
 
 fn command_for(program: &Path) -> Command {
@@ -1014,16 +1030,11 @@ mod tests {
         assert!(!withheld_value("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
     }
 
-    /// A variable the sign-in reads that selects no code is left as the person set it.
+    /// A variable the sign-in reads that selects no code is left as the person set it. `HOME` is
+    /// not here: it is in the list and is kept only for a directory outside every stage's.
     #[test]
     fn the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read() {
-        for name in [
-            "AWS_PROFILE",
-            "AWS_REGION",
-            "HOME",
-            "DISPLAY",
-            "XDG_RUNTIME_DIR",
-        ] {
+        for name in ["AWS_PROFILE", "AWS_REGION", "DISPLAY", "XDG_RUNTIME_DIR"] {
             assert!(
                 !withheld_value(name, "/stage/anything"),
                 "{name} was removed"
@@ -1195,7 +1206,6 @@ mod tests {
             "AWS_REGION",
             "AWS_ACCESS_KEY_ID",
             "AWS_SESSION_TOKEN",
-            "HOME",
             "PATH",
         ] {
             assert!(
@@ -1371,6 +1381,78 @@ mod tests {
         assert!(withheld("OPENSSL_MODULES", &planted, &session));
         assert!(!withheld("OPENSSL_MODULES", &safe, &session));
         assert!(withheld("OPENSSL_MODULES", Path::new("modules"), &session));
+    }
+
+    /// SANDBOX-30, an `aws` that is a script (pip or Homebrew), run with the help pager piped:
+    /// `PAGER` and `MANPAGER` are commands `aws s3 help` ran (observed, awscli 1.46.3, `MANPAGER`
+    /// first). The regression it rejects: the names not listed, listed as a file or a program so
+    /// `less -R` passes for a bare name, or judged as options so a person's `less` is removed.
+    #[test]
+    fn a_pager_the_cli_runs_for_its_help_is_kept_only_when_it_is_an_installed_program() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-pager");
+
+        assert!(withheld("PAGER", &planted, &session));
+        assert!(withheld("PAGER", Path::new("./pager"), &session));
+        assert!(withheld("PAGER", Path::new(""), &session));
+        assert!(withheld("PAGER", Path::new("less -R"), &session));
+        assert!(!withheld("PAGER", Path::new("less"), &session));
+        assert!(!withheld("PAGER", &genuine, &session));
+        assert!(withheld("MANPAGER", &planted, &session));
+        assert!(withheld("MANPAGER", Path::new("./pager"), &session));
+        assert!(withheld("MANPAGER", Path::new(""), &session));
+        assert!(withheld("MANPAGER", Path::new("less -R"), &session));
+        assert!(!withheld("MANPAGER", Path::new("less"), &session));
+        assert!(!withheld("MANPAGER", &genuine, &session));
+    }
+
+    /// SANDBOX-30. `HOME` selects `~/.aws/config`, `~/.aws/credentials` and `~/.aws/cli/alias` for
+    /// the script (a `credential_process` and a `!` alias ran, observed), and the installation a
+    /// version-manager shim runs. The regression it rejects: `HOME` left out of the list, or in it
+    /// as options, so a person's own home is removed from the CLI.
+    #[test]
+    fn a_home_a_stage_may_write_is_not_the_one_the_cli_reads_its_configuration_from() {
+        let (session, _planted, _genuine, safe) = planted_and_genuine("credentials-home");
+        let planted = session.join("home");
+        std::fs::create_dir_all(&planted).unwrap();
+
+        assert!(withheld("HOME", &planted, &session));
+        assert!(withheld("HOME", &session, &session));
+        assert!(withheld("HOME", Path::new("home"), &session));
+        assert!(withheld("HOME", &safe.join("not-yet"), &session));
+        assert!(!withheld("HOME", &safe, &session));
+    }
+
+    /// SANDBOX-30. Python imports a module named in `PYTHONWARNINGS` (observed), and botocore 1
+    /// reads `BOTOCORE_EXPERIMENTAL__PLUGINS` for plug-ins (`awscli/botocore/plugin.py`; no run
+    /// loaded a module through it). Both are options, so they are removed whatever they hold. The
+    /// regression it rejects: either left out, or kept for a value that looks like a path outside
+    /// every row.
+    #[test]
+    fn a_python_warning_filter_or_botocore_plugin_is_removed_whatever_it_holds() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-python-options");
+
+        assert!(withheld("PYTHONWARNINGS", &planted, &session));
+        assert!(withheld("PYTHONWARNINGS", &genuine, &session));
+        assert!(withheld(
+            "PYTHONWARNINGS",
+            Path::new("evil_module"),
+            &session
+        ));
+        assert!(withheld(
+            "BOTOCORE_EXPERIMENTAL__PLUGINS",
+            &planted,
+            &session
+        ));
+        assert!(withheld(
+            "BOTOCORE_EXPERIMENTAL__PLUGINS",
+            &genuine,
+            &session
+        ));
+        assert!(withheld(
+            "BOTOCORE_EXPERIMENTAL__PLUGINS",
+            Path::new("evil_module"),
+            &session
+        ));
     }
 
     /// A variable of the CLI's that selects no code is left as the person set it, whatever it

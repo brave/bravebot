@@ -553,11 +553,20 @@ pub fn describe(operation: Operation, answer: &Answer, root: &Path) -> String {
 /// reason. A server that can write to the tree can create the entry, which no check here can see
 /// (LSP-3).
 ///
+/// **A file is asked about under every name it has** (TRUST-2, TRUST-4), the way a read of it is:
+/// the name the server reported, the name a symbolic link on the way lands on, its hard links and
+/// its spelling under another open directory that is the same directory
+/// ([`Workspace::other_trust_keys`]). A server that reports a link to a file the map distrusts
+/// therefore gets an untrusted answer, and so does one that reports the file by a hard link. The
+/// other names can lower the label and never raise it. Where the lookup of a file's other names
+/// could not finish, the file reads as untrusted.
+///
 /// Apart from that, the paths are handed to the kernel and the label comes back.
 /// [`pictured`] and [`MAX_LOCATIONS`] still bound the shape of the answer, which matters for a
 /// person reading it and for a tree the user has vouched for.
 pub fn label_for_locations<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &crate::Workspace,
     answer: &Answer,
 ) -> Result<Label, bravebot_core::policy::Denial> {
     // A name the server composed is not a file: one no entry on disk backs, or one beneath a file,
@@ -567,12 +576,29 @@ pub fn label_for_locations<S: Sink>(
     if !answer.locations.iter().all(backed) {
         return policy.observe(bravebot_core::capability::Capability::LanguageServer);
     }
-    policy.observe_paths(
+    // The file system's answer about each reported name, never a file's bytes. A path is asked
+    // once however many positions in it the server reported.
+    //
+    // The lookup is asked under the name relative to the root where there is one, as
+    // `without_denied` asks the rules: `Workspace::resolve` refuses an absolute name inside the
+    // root, which would leave a file with no other names. The reported name stays the one the map
+    // is asked about first, as before.
+    let mut named: Vec<(&str, crate::workspace::OtherKeys)> = Vec::new();
+    for location in &answer.locations {
+        if named.iter().any(|(path, _)| *path == location.path) {
+            continue;
+        }
+        let looked_up = match Path::new(&location.path).strip_prefix(workspace.root()) {
+            Ok(relative) => relative.to_string_lossy().into_owned(),
+            Err(_) => location.path.clone(),
+        };
+        named.push((&location.path, workspace.other_trust_keys(&looked_up)));
+    }
+    policy.observe_paths_under_names(
         bravebot_core::capability::Capability::LanguageServer,
-        answer
-            .locations
+        named
             .iter()
-            .map(|location| location.path.as_str()),
+            .map(|(own, others)| (*own, others.keys.as_slice(), others.complete)),
     )
 }
 
@@ -647,6 +673,11 @@ mod tests {
         }
     }
 
+    /// The workspace a `tree` is, which is what a location is asked under.
+    fn workspace_of(ws: &str) -> crate::Workspace {
+        crate::Workspace::new(ws).expect("workspace")
+    }
+
     /// A real tree to name, since a path no entry backs is not a file: `src/a.rs`, `README.md`,
     /// and a `vendor/` holding `b.rs` and a file whose name is a sentence.
     fn tree(name: &str) -> String {
@@ -682,7 +713,7 @@ mod tests {
                 locations: vec![location(&path, 1)],
                 ..Answer::default()
             };
-            label_for_locations(&mut policy, &answer).expect("labelled")
+            label_for_locations(&mut policy, &workspace_of(&ws), &answer).expect("labelled")
         };
         let vouched_tree = || {
             let mut store = bravebot_core::trust::TrustStore::new(&ws);
@@ -728,10 +759,11 @@ mod tests {
     }
 
     /// LSP-3, through the other rows of TRUST-2's spelling table: a `.` segment, a doubled or
-    /// trailing separator, and a symbolic link are each the same file as a distrusted one, or
-    /// refused. `.` and `//` are one rule with the file they name, so a distrusted `vendor` stays
-    /// distrusted; a trailing separator on a file names no entry. A link is the table's known cost
-    /// (#2328) and is not pinned here. Case is not run: whether it is one file is the volume's.
+    /// trailing separator are each the same file as a distrusted one, or refused. `.` and `//` are
+    /// one rule with the file they name, so a distrusted `vendor` stays distrusted; a trailing
+    /// separator on a file names no entry. A symbolic link and a hard link are the rows of the two
+    /// tests below, which ask the location under the file's other names. Case is not run: whether
+    /// it is one file is the volume's.
     #[test]
     fn a_respelled_location_of_a_distrusted_file_is_still_untrusted() {
         let ws = tree("lsp-respelled-location");
@@ -748,7 +780,7 @@ mod tests {
                 locations: vec![location(&path, 1)],
                 ..Answer::default()
             };
-            label_for_locations(&mut policy, &answer).expect("labelled")
+            label_for_locations(&mut policy, &workspace_of(&ws), &answer).expect("labelled")
         };
 
         assert!(label_of(format!("{ws}/src/a.rs")).is_trusted(), "control");
@@ -761,6 +793,103 @@ mod tests {
         ] {
             assert!(!label_of(path.clone()).is_trusted(), "{path} was trusted");
         }
+    }
+
+    /// A location labelled for a tree where `vendor` is distrusted and the rest is vouched, by the
+    /// workspace the tree is. The file tools ask a read under every name the file has, and so does
+    /// this (LSP-3, TRUST-2).
+    #[cfg(unix)]
+    fn label_in_tree(workspace: &crate::Workspace, ws: &str, path: &str) -> Label {
+        let mut sink = RecordingSink::new();
+        let mut store = bravebot_core::trust::TrustStore::new(ws);
+        store.trust(".");
+        store.distrust("vendor");
+        let mut policy = Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+            .expect("policy")
+            .with_trust(store);
+        let answer = Answer {
+            locations: vec![location(path, 1)],
+            ..Answer::default()
+        };
+        label_for_locations(&mut policy, workspace, &answer).expect("labelled")
+    }
+
+    /// LSP-3, TRUST-2: a server that reports a symbolic link to a distrusted file has reported that
+    /// file. The link is in a vouched directory, so asked under its own name alone it reads as
+    /// trusted. Rejects a label taken from the reported name only. The control is a link to a
+    /// vouched file, which stays trusted, so the row is refused for the file it lands on and not
+    /// for being a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_location_reported_through_a_link_to_a_distrusted_file_is_untrusted() {
+        let ws = tree("lsp-linked-location");
+        let root = Path::new(&ws);
+        std::os::unix::fs::symlink(root.join("vendor/b.rs"), root.join("src/to-vendor.rs"))
+            .expect("link to the distrusted file");
+        std::os::unix::fs::symlink(root.join("src/a.rs"), root.join("src/to-src.rs"))
+            .expect("link to the vouched file");
+        let workspace = workspace_of(&ws);
+
+        assert!(
+            label_in_tree(&workspace, &ws, &format!("{ws}/src/to-src.rs")).is_trusted(),
+            "control: a link to a vouched file"
+        );
+        assert!(
+            !label_in_tree(&workspace, &ws, &format!("{ws}/vendor/b.rs")).is_trusted(),
+            "the distrusted file itself"
+        );
+        let label = label_in_tree(&workspace, &ws, &format!("{ws}/src/to-vendor.rs"));
+        assert!(
+            !label.is_trusted(),
+            "a link to a distrusted file was trusted"
+        );
+        assert!(!label.is_public());
+    }
+
+    /// LSP-3, TRUST-2: the same for a hard link, which canonicalizes to its own name so no landing
+    /// reaches the file it is. Control: a hard link to a vouched file stays trusted.
+    #[cfg(unix)]
+    #[test]
+    fn a_location_reported_through_a_hard_link_to_a_distrusted_file_is_untrusted() {
+        let ws = tree("lsp-hard-linked-location");
+        let root = Path::new(&ws);
+        std::fs::hard_link(root.join("vendor/b.rs"), root.join("src/hard-vendor.rs"))
+            .expect("hard link to the distrusted file");
+        std::fs::hard_link(root.join("src/a.rs"), root.join("src/hard-src.rs"))
+            .expect("hard link to the vouched file");
+        let workspace = workspace_of(&ws);
+
+        assert!(
+            label_in_tree(&workspace, &ws, &format!("{ws}/src/hard-src.rs")).is_trusted(),
+            "control: a hard link to a vouched file"
+        );
+        assert!(
+            !label_in_tree(&workspace, &ws, &format!("{ws}/src/hard-vendor.rs")).is_trusted(),
+            "a hard link to a distrusted file was trusted"
+        );
+    }
+
+    /// TRUST-2: where the lookup of a file's other names cannot finish, the location reads as
+    /// untrusted, whatever the map says of the name reported. The walk for a hard link is held to
+    /// one file, so it gives up. Rejects reading an unfinished lookup as "no other name". The
+    /// control is a file with one link, for which no walk is asked and the label stays trusted.
+    #[cfg(unix)]
+    #[test]
+    fn a_location_whose_other_names_could_not_be_found_is_untrusted() {
+        let ws = tree("lsp-unfinished-location");
+        let root = Path::new(&ws);
+        std::fs::hard_link(root.join("src/a.rs"), root.join("src/hard-src.rs"))
+            .expect("hard link to the vouched file");
+        let capped = workspace_of(&ws).with_search_caps(Some(1), None);
+
+        assert!(
+            label_in_tree(&capped, &ws, &format!("{ws}/README.md")).is_trusted(),
+            "control: one link needs no walk"
+        );
+        assert!(
+            !label_in_tree(&capped, &ws, &format!("{ws}/src/a.rs")).is_trusted(),
+            "a lookup that gave up was read as no other name"
+        );
     }
 
     /// LSP-4: a definition in a dependency is the common case in Rust, not an edge, and it must not
@@ -1075,7 +1204,8 @@ mod tests {
             locations: vec![location(&format!("{ws}/src/a.rs"), 1)],
             ..Answer::default()
         };
-        let label = label_for_locations(&mut policy, &vouched).expect("labelled");
+        let workspace = workspace_of(&ws);
+        let label = label_for_locations(&mut policy, &workspace, &vouched).expect("labelled");
         assert!(label.is_trusted(), "a vouched-for file's name is readable");
         assert!(!label.is_public(), "a reported path is not routing-safe");
 
@@ -1086,7 +1216,7 @@ mod tests {
             )],
             ..Answer::default()
         };
-        let label = label_for_locations(&mut policy, &unvouched).expect("labelled");
+        let label = label_for_locations(&mut policy, &workspace, &unvouched).expect("labelled");
         assert!(!label.is_trusted(), "a distrusted file's name is content");
         assert!(!label.is_public());
 
@@ -1098,19 +1228,22 @@ mod tests {
             ],
             ..Answer::default()
         };
-        let label = label_for_locations(&mut policy, &mixed).expect("labelled");
+        let label = label_for_locations(&mut policy, &workspace, &mixed).expect("labelled");
         assert!(!label.is_trusted(), "one unvouched name taints the answer");
 
         // An answer that names nothing is the driver's own sentence.
-        let empty = label_for_locations(&mut policy, &Answer::default()).expect("labelled");
+        let empty =
+            label_for_locations(&mut policy, &workspace, &Answer::default()).expect("labelled");
         assert!(
             empty.is_trusted(),
             "an answer naming nothing carries no taint"
         );
 
         // The presentation gate acts on the label: the planner is shown the first and not the second.
-        let vouched_label = label_for_locations(&mut policy, &vouched).expect("labelled");
-        let unvouched_label = label_for_locations(&mut policy, &unvouched).expect("labelled");
+        let vouched_label =
+            label_for_locations(&mut policy, &workspace, &vouched).expect("labelled");
+        let unvouched_label =
+            label_for_locations(&mut policy, &workspace, &unvouched).expect("labelled");
         let mut slots = SlotStore::new();
         let shown = policy
             .present(

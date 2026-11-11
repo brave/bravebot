@@ -530,6 +530,35 @@ impl Store {
         held
     }
 
+    /// The directories the grants in force for `session` at `root` let a stage write, each judged
+    /// against `profile` and `state` as it is now (see [`Grant::directory`]).
+    ///
+    /// A program can be put into such a directory, so a file a bare program name resolves to there
+    /// is not taken for one the system provides (CMDLINE-8). Only a write is listed, since a read
+    /// cannot put a program there, and a scope or a directory that is refused now is left out. A
+    /// grant is listed whether or not it covers the line about to run, because an earlier stage
+    /// it did cover may have written the file.
+    pub fn written_directories(
+        &self,
+        session: &str,
+        root: &Path,
+        profile: &Path,
+        state: Option<&Path>,
+    ) -> Vec<PathBuf> {
+        let mut directories: Vec<PathBuf> = Vec::new();
+        for grant in self.read(Some(session), root) {
+            if !grant.write {
+                continue;
+            }
+            if let Some(directory) = grant.directory(profile, state)
+                && !directories.contains(&directory)
+            {
+                directories.push(directory);
+            }
+        }
+        directories
+    }
+
     /// Add `grant`. Whether a line was written.
     pub fn allow(&self, grant: &Grant) -> bool {
         self.append(Action::Allow, grant)

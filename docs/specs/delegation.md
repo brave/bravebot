@@ -1337,7 +1337,12 @@ leading `/`) cannot be read, since a definition has neither to resolve it agains
 slash matches in any directory, as it does in a rule ([PERM-4](permissions.md#PERM-4)).
 
 A file written by a tool call and one written by a redirection (`> file`) are held to the limit
-alike. A program the delegate runs is not, since what it opens is its own business, so a definition
+alike. The limit is judged again immediately before the run opens a redirection's file, so a link
+or a hard link that an earlier part of the delegate's own line left at a name inside its files, to a
+file outside them, is refused and the line stops there ([CMDLINE-5](tools/command-line.md#CMDLINE-5)).
+A file with another name outside the limit is refused as the file is, and where the search for its
+other names gave up while a limit is in force the write is refused. A program the delegate runs is
+not, since what it opens is its own business, so a definition
 that must keep source out of reach leaves `run` out of its `tools:` line. A turn the person
 addresses to a definition with `/agent` is their own and is not held to the line
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7) narrows it by the tools the definition names). A delegate's
@@ -1355,6 +1360,9 @@ holds ([DELEGATE-4](#DELEGATE-4)), and a limit takes some of it away.
 `verified-by: bravebot_core::delegate::a_later_definition_cannot_take_a_write_limit_away`
 `verified-by: bravebot_core::policy::a_delegate_may_write_only_inside_its_definitions_writes`
 `verified-by: bravebot_core::policy::a_writes_line_cannot_allow_what_a_deny_rule_refuses`
+`verified-by: bravebot_agent::turn::a_limited_delegate_cannot_redirect_through_a_link_its_own_line_made_out_of_its_files`
+`verified-by: bravebot_agent::turn::a_limited_delegate_cannot_redirect_through_a_hard_link_its_own_line_made_out_of_its_files`
+`verified-by: bravebot_agent::turn::a_limited_delegate_does_not_redirect_into_a_file_with_a_second_name_when_the_names_cannot_be_listed`
 `verified-by: bravebot_core::policy::an_unreadable_writes_pattern_leaves_no_write_path`
 `verified-by: bravebot_core::policy::a_delegate_started_by_a_limited_one_is_limited_too`
 `verified-by: bravebot_agent::agents::a_definition_reads_the_writes_it_names`
