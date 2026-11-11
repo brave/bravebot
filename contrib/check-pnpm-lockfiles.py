@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lints the pnpm lockfiles of the four JavaScript projects that are not the Rust workspace.
+"""Lints the pnpm lockfiles of the five JavaScript projects that are not the Rust workspace.
 
 A lockfile is the whole of what an install fetches, so a hand-edited or tool-edited entry that
 points a package at a different host, a local directory or a git repository changes what runs on
@@ -34,6 +34,7 @@ LOCKFILES = (
     "ui/pnpm-lock.yaml",
     "docs/website/pnpm-lock.yaml",
     "packages/agent-client/pnpm-lock.yaml",
+    "packages/sdk/pnpm-lock.yaml",
     "mobile/pnpm-lock.yaml",
 )
 
