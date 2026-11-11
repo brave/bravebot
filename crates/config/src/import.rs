@@ -3443,9 +3443,8 @@ mod tests {
         assert_eq!(written, serde_json::json!({"provider": {"openai": {}}}));
     }
 
-    /// SERVERS-2: a request goes in once, beside what the file already requests, and comes out
-    /// leaving the rest; a `mcp` or `mcp.request` the settings reader would not take as a list is
-    /// not replaced by one.
+    /// RETRIEVE-24: the switch is written into the person's own settings file, so turning it on
+    /// must leave the rest of that file, and the rest of its `retrieval` block, as it was.
     #[test]
     fn a_destination_sets_retrieval_and_keeps_the_rest_of_the_file() {
         let home = Scratch::new("destination-retrieval");
@@ -3556,6 +3555,9 @@ mod tests {
         );
     }
 
+    /// SERVERS-2: a request goes in once, beside what the file already requests, and comes out
+    /// leaving the rest; a `mcp` or `mcp.request` the settings reader would not take as a list is
+    /// not replaced by one.
     #[test]
     fn a_destination_requests_a_server_once_and_withdraws_only_it() {
         let home = Scratch::new("import-destination-request");

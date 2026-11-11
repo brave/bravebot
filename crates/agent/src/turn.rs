@@ -7467,6 +7467,20 @@ mod tests {
             retriever: Option<Arc<dyn Retriever>>,
             replies: Vec<Result<Completion, BackendError>>,
         ) -> Turned {
+            turn_as(
+                name,
+                conversation,
+                &Task::new(prompt).with_retriever(retriever),
+                replies,
+            )
+        }
+
+        fn turn_as(
+            name: &str,
+            conversation: &mut Conversation,
+            task: &Task,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> Turned {
             let mut config = configured(None);
             config.context_budget = 1_000;
             let scratch = crate::testutil::scratch_dir(name);
@@ -7482,7 +7496,7 @@ mod tests {
                 &config,
                 &Egress::new(),
                 &workspace,
-                &Task::new(prompt).with_retriever(retriever),
+                task,
                 conversation,
                 &mut crate::confirm::ApproveWrites,
                 &mut reporter,
@@ -8155,6 +8169,31 @@ mod tests {
             assert!(retrieve_lines(&turned.sink).is_empty());
             assert_eq!(conversation.retrieval_cut(), 0);
             assert!(turned.reporter.narration[0].starts_with("the conversation was getting long"));
+        }
+
+        /// The vectors are of the session's record, and a delegate's conversation is its own, so
+        /// excerpts of the session would stand in for messages the delegate never had.
+        #[test]
+        fn a_delegate_never_retrieves_and_compacts_as_it_did() {
+            let mut conversation = a_long_bot_conversation();
+            let retriever = Scripted::answering(vec![Ok(recalled())]);
+            let task = Task::delegated(super::a_delegate_spec("reader", CapabilitySet::default()))
+                .with_retriever(Some(retriever.clone()));
+
+            let turned = turn_as(
+                "retrieving-delegate",
+                &mut conversation,
+                &task,
+                vec![
+                    said("they were porting the parser", &[], None),
+                    said("going on", &[], None),
+                ],
+            );
+
+            assert!(retriever.asked().is_empty(), "a delegate retrieved");
+            assert_eq!(turned.sent.len(), 2, "the conversation was not summarised");
+            assert!(retrieve_lines(&turned.sink).is_empty());
+            assert_eq!(conversation.retrieval_cut(), 0);
         }
     }
 
