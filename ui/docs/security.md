@@ -89,7 +89,13 @@ two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_
 launcher it starts is a script that records which of the fifteen names it was started with. The
 Electron test has a case for `openExternal` and `openPath` and a case for `showItemInFolder`. Neither
 case has been run on Linux since the test was changed, and the `showItemInFolder` case has never
-been run there.
+been run there. In Electron v44.9.3 (`shell/common/platform_util_linux.cc`, read, not run)
+`showItemInFolder` asks the portal and `org.freedesktop.FileManager1` over the session bus first and
+runs `xdg-open .` in the folder that holds the file when neither is available or a call fails; the
+child gets Electron's environment, so the deletion applies to it. The case sets
+`DBUS_SESSION_BUS_ADDRESS` to a missing socket to reach that fallback. Whether a missing socket
+leaves a null bus connection, which starts no `xdg-open`, is not shown by the source read, and the
+case fails when no start is seen.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 

@@ -4770,7 +4770,9 @@ shown by running the program, or not entirely:
     bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
     judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
     not run or read.
-  - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. Its names are
+  - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. A test added with
+    #3884 runs it once per name with a marker handler, and a CI step runs that test under
+    `dbus-run-session`; neither has run yet. Its names are
     from source only, read at these commits, none of which is a release tag: kde-cli-tools
     aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
     `KIOCLIENT_AS_KDEOPEN`), KIO a80751d2, KService 2bd4461c and KCoreAddons e96958b2, and Qt 6.10.0
@@ -4792,8 +4794,26 @@ shown by running the program, or not entirely:
     and the name `<desktop>-mimeapps.list`. These reads are from source and none was observed in a
     run. Which release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
     `KDEDIRS`, `KDE_FULL_SESSION`, `KDE_SESSION_VERSION`, `KDE_FORK_SLAVES` and the `QML*_IMPORT_PATH`
-    names have no read in the files searched, which does not show they are never read. A run of
-    `kde-open` on Linux is tracked by #3822.
+    names have no read in the files searched, which does not show they are never read. Handler
+    selection was read at the default-branch commits kio ad78db8a, KService 2bd4461c and KConfig
+    eb4dec9c, and qtbase `dev` 7d402fc0: `KIO::OpenUrlJob` (`openurljob.cpp`) asks
+    `KApplicationTrader::preferredService` for the scheme or the MIME type, which reads
+    `mimeapps.list` and the service cache. `QStandardPaths` (`qstandardpaths_unix.cpp`) reads
+    `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` and falls back on
+    `HOME`. `KMimeAssociations` (`kmimeassociations.cpp`) searches the config directories, then the
+    `applications` directories, for `mimeapps.list` and for `<desktop>-mimeapps.list`, where
+    `<desktop>` comes from `XDG_CURRENT_DESKTOP`. `KBuildSycoca` (`kbuildsycoca.cpp`) reads the
+    `.desktop` files from the `applications` directories, and the cache file name is built from
+    the cache location and a hash of the data directories unless `KDESYCOCA` names it
+    (`ksycoca.cpp`, `KSycoca::absoluteFilePath`). `XDG_CURRENT_DESKTOP` also filters entries by
+    `OnlyShowIn` and `NotShowIn` (`kservice.cpp`, `showInCurrentDesktop`) where the caller asks for
+    that. So the four `XDG_` directory names select the program `kde-open` runs, and
+    `XDG_CURRENT_DESKTOP` selects among `mimeapps.list` files. `kprocessrunner.cpp` starts the
+    program through systemd on the session bus when the bus reports systemd, and otherwise forks it;
+    read so, a session bus may not be required, and the child gets the process environment. This is
+    from source and was not run, and whether `kde-open` needs a session bus is not established. The
+    `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there. A run
+    of `kde-open` on Linux is tracked by #3822 and #3884.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
   cells marked run below. Every test added after that run is not run: the host here is macOS,
@@ -4802,8 +4822,15 @@ shown by running the program, or not entirely:
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
   the installed handler does not start. The KDE test skips a name whose installed handler does not
-  start, since `kde-open` needs a session bus that a headless runner lacks and ran no installed
-  handler on the CI runner. The test that puts a stand-in `kde-open` first on `PATH` and reads what
+  start, since `kde-open` was run through `xdg-open` on the CI runner, which has no session bus, and ran
+  no installed handler. `kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
+  runs `kde-open` itself under a bus with `HOME` and the `XDG_` names pointing at scratch
+  directories, once without a planted name and once per name in `KDE_OPEN_MARKER_NAMES`, and the
+  `ci.yml` step that runs it under `dbus-run-session` sets `BRAVEBOT_OBSERVE_KDE_OPEN`, which makes
+  a missing `kde-open`, a baseline that starts no handler, or a name that runs the planted handler
+  and is not removed by the opener fail the test. Names with no marker form (the plug-in
+  directories and names, `QT_STYLE_OVERRIDE`) are printed as not exercised. Without the variable
+  it prints `skipped`, as it did on this macOS host. The test that puts a stand-in `kde-open` first on `PATH` and reads what
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
   stand-in, so the opener's names are checked there against a started `kde-open`. The
   generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
@@ -4844,8 +4871,15 @@ shown by running the program, or not entirely:
   external-open.ts and with them without it` asserts no start count, since how many times Electron
   starts `xdg-open` is Electron's choice, and fails when either run starts none. Each start through
   `external-open.ts` must carry none of the names and each control start all fifteen. It sets
-  `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`, which
-  rests on a recollection of Electron's source. Both cases print `skipped` where
+  `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`. In
+  Electron v44.9.3 (`shell/common/platform_util_linux.cc`) `showItemInFolder` first checks the
+  portal and `org.freedesktop.FileManager1` over the session bus, which libdbus finds through
+  `DBUS_SESSION_BUS_ADDRESS`; where neither is running, or a call fails, it runs `xdg-open .` in
+  the folder that holds the file, and `openPath` and `openExternal` start `xdg-open` through the
+  same helper. That helper sets only the working directory, `MM_NOTTTY`, and the activation token,
+  so the child gets Electron's environment. This was read, not run, and the source read does not
+  show what a missing socket does to the bus connection itself: a null connection returns without
+  starting `xdg-open`, which the case reports as a run that started none. Both cases print `skipped` where
   there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
   or Electron fails them. Neither has been run on Linux since the test was changed. The
   `showItemInFolder` case has never been run on Linux.
@@ -4914,11 +4948,12 @@ shown by running the program, or not entirely:
   `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
   `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
   mirror of the KDE repositories. Those files read `PATH` directly (`desktopexecparser.cpp`
-  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable themselves.
+  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable by name.
   `kprocessrunner.cpp` sets `XDG_ACTIVATION_TOKEN` in the environment of the process it starts and
-  does not read it. The libraries they call do read `XDG_*` names, which are listed in the
-  `kde-open` entry above (KService 2bd4461c and Qt 6.10.0). The terminal emulator comes from the
-  KDE configuration file and not from the environment.
+  does not read it. The libraries they call do read `XDG_*` names, as the `kde-open` entry above
+  records (`QStandardPaths`, `KMimeAssociations`, `KSycoca`; KService 2bd4461c and Qt 6.10.0), so
+  reading nothing by name in those files does not mean `kde-open` ignores the `XDG_` names. The
+  terminal emulator comes from the KDE configuration file and not from the environment.
   `HOME` is in the opener's list and is removed when it names a directory a stage may write. With
   `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
   `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
@@ -4932,16 +4967,16 @@ shown by running the program, or not entirely:
   system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
-  unobserved; a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
+  unobserved (the marker test and CI step added with #3884 are meant to observe it); a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
   with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
-  stand-in for `xdg-open` instead; KDE's `KConfig`, which was not read, and the platform
-  implementation of Qt's `QDesktopServices`, which was not located (`qdesktopservices.cpp` reads
-  no variable), so that what `kde-open` reads is complete only for the files named in the `kde-open`
-  entry above; that `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`,
-  `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and `XDG_CURRENT_DESKTOP` is read from
-  that source and was not run, so it is unverified by a run; the parts of GLib not
+  stand-in for `xdg-open` instead; Qt's `QDesktopServices` and
+  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig`, which were read later (see the
+  `kde-open` entry above), so that `kde-open` chooses its handler through `XDG_DATA_HOME`,
+  `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and
+  `XDG_CURRENT_DESKTOP` is supported by source and unobserved, so it is unverified by a run; the
+  parts of GLib not
   read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
   the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
   set, which is shown only by a test of the opener's judgment of the value. The list of variables
@@ -5277,6 +5312,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
+`verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`

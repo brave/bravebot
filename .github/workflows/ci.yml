@@ -147,7 +147,7 @@ jobs:
             echo "installing the cached packages failed, falling back to apt" >&2
           fi
           for attempt in 1 2 3 4; do
-            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives xdg-utils libglib2.0-bin kde-cli-tools"; then
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives xdg-utils libglib2.0-bin kde-cli-tools dbus"; then
               exit 0
             fi
             echo "apt attempt $attempt failed or timed out" >&2
@@ -182,6 +182,17 @@ jobs:
       # nextest does not run doctests.
       - name: Doctests
         run: cargo test --workspace --doc --locked
+
+      # Whether `kde-open` needs a session bus is not established (SANDBOX-30 reads the source and
+      # did not run it). The runner has none, so the Test step skips the test that runs it. This
+      # step runs it under `dbus-run-session`, so a bus exists. With BRAVEBOT_OBSERVE_KDE_OPEN set the
+      # test fails when `kde-open` is missing, when the baseline run starts no handler, and when a
+      # name that made `kde-open` run the planted handler is not one the opener removes. The names
+      # it observed are in the log as `kde-open observed:` lines.
+      - name: Run kde-open with each name set to a marker handler
+        env:
+          BRAVEBOT_OBSERVE_KDE_OPEN: "1"
+        run: dbus-run-session -- cargo test -p bravebot-tui --lib kde_open_run_with_each_name --locked -- --nocapture
 
       # Run once, with its output, to put the number of workflows skipped for want of a tool in the
       # log. Running it inside the Test step as well used to double its tens of seconds.
