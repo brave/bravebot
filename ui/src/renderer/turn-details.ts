@@ -1,4 +1,4 @@
-import type { BridgeEvent } from '../shared/protocol'
+import type { BridgeEvent, RecalledPlace } from '../shared/protocol'
 
 export interface AuditRecord {
   sequence: number
@@ -21,6 +21,9 @@ export interface TurnDetails {
   outputTokens?: number
   steps?: number
   clean?: boolean
+  /** The earlier messages the turn's retrievals drew on, as the bridge last sent them. */
+  recalled?: RecalledPlace[]
+  recalledOpen: boolean
   audit: AuditRecord[]
   received: number
   omitted: number
@@ -28,13 +31,13 @@ export interface TurnDetails {
 }
 
 export type Turns = Record<number, TurnDetails>
-export type TurnDisclosure = 'noticesOpen'
+export type TurnDisclosure = 'noticesOpen' | 'recalledOpen'
 export const AUDIT_EVENTS_PER_TURN = 1000
 export const AUDIT_BYTES_PER_TURN = 256 * 1024
 export const AUDIT_BYTES_PER_SESSION = 2 * 1024 * 1024
 
 function fresh(turn: number): TurnDetails {
-  return { turn, status: 'running', started: false, notices: [], noticesOpen: true,
+  return { turn, status: 'running', started: false, notices: [], noticesOpen: true, recalledOpen: false,
     audit: [], received: 0, omitted: 0, bytes: 0 }
 }
 
@@ -48,6 +51,22 @@ function noticesIn(data: Record<string, unknown>): string[] {
   return Array.isArray(data.notices) ? data.notices.filter((line): line is string => typeof line === 'string') : []
 }
 
+const SAID = new Set(['prompt', 'reply', 'tool', 'other'])
+
+/** The places a retrieval drew on. A row this build cannot read is left out, never guessed at. */
+function placesIn(value: unknown): RecalledPlace[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((place: unknown): RecalledPlace[] => {
+    if (!place || typeof place !== 'object') return []
+    const { prompt, said, nth, ordinal } = place as Record<string, unknown>
+    if (typeof said !== 'string' || !SAID.has(said)) return []
+    const at = prompt === null ? null : count(prompt)
+    if (at === undefined) return []
+    const numbered = count(ordinal)
+    return [{ prompt: at, said: said as RecalledPlace['said'], nth: count(nth) ?? null, ...(numbered === undefined ? {} : { ordinal: numbered }) }]
+  })
+}
+
 /** The words the bridge drew for the string fields of a record. Anything else is not text to draw. */
 function picturedIn(data: Record<string, unknown>): Record<string, string> {
   const sent = data.pictured
@@ -57,7 +76,7 @@ function picturedIn(data: Record<string, unknown>): Record<string, string> {
 
 /** This map belongs to one session handle. Only numbered events may change it. */
 export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
-  if (!['turn.started', 'turn.done', 'turn.error', 'audit'].includes(message.event)) return turns
+  if (!['turn.started', 'turn.retrieved', 'turn.done', 'turn.error', 'audit'].includes(message.event)) return turns
   const data = message.data as unknown as Record<string, unknown>
   const number = count(data.turn)
   if (number === undefined) return turns
@@ -66,6 +85,10 @@ export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
   if (message.event === 'turn.started') {
     // A worker can emit audit records before its turn.started announcement reaches the UI.
     next.started = true
+  } else if (message.event === 'turn.retrieved') {
+    // A fallback names no message, and draws no line: the narration says it summarised instead.
+    const used = placesIn(data.used)
+    if (used.length) next.recalled = used
   } else if (message.event === 'turn.done') {
     const notices = noticesIn(data)
     const prior = Object.values(turns).filter((turn) => turn.turn < number && turn.status === 'complete')

@@ -76,6 +76,8 @@ const NO_GATE = {
   'manifest.read': 'reads a store record and opens nothing',
   'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',
   'connectors.connect': 'a stdio connector\'s own working folder, typed into the form',
+  'retrieval.status': 'reads the session record and vector file in the folder it names, and opens no session',
+  'retrieval.excerpts': 'reads the session record and vector file in the folder it names, and opens no session',
 }
 const TAKES_NO_DIRECTORY = [
   'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
@@ -84,7 +86,7 @@ const TAKES_NO_DIRECTORY = [
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'permissions.list', 'permissions.revoke',
-  'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
+  'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'retrieval.set', 'retrieval.embeddings.set', 'retrieval.embeddings.models', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
   'accounts.list', 'accounts.signOut', 'effort.set',
 ]

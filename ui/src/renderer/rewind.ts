@@ -107,6 +107,8 @@ export function rewoundLive(old: Live, rewound: RewoundSession): Live {
     todos: Object.values(rewound.todos).flat(),
     contextTokens: rewound.contextTokens,
     archived: rewound.archived,
+    outOfRequest: rewound.outOfRequest ?? old.outOfRequest,
+    recalled: rewound.recalled ?? [],
     context: rewound.context,
     rewind: rewound.rewind,
     awaitingOrdinal: null,

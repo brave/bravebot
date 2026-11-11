@@ -397,6 +397,9 @@
 .bot-servers { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
 .bot-servers-list { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
 .bot-server { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
+.bot-recall { display: flex; flex-direction: column; gap: var(--leo-spacing-s); }
+.bot-recall-line { font: var(--type-meta); color: var(--ink-primary); }
+.bot-recall-until { font: var(--type-meta); color: var(--ink-secondary); }
 .bot-servers-note { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
 /* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
 .bot-details .bot-memory {

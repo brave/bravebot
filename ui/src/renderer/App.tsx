@@ -60,6 +60,7 @@ import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
+import { forgetExcerpts } from './excerpts'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy, thinking } from './live'
 
@@ -199,6 +200,9 @@ export function App(): React.JSX.Element {
       // rather than assumed, since the main process is the one that saw the agent's answer. The
       // summons are written as the turn ends, so they are read back then too.
       if (message.event === 'turn.done' || message.event === 'turn.error') {
+        // The record was saved before the turn said it ended, so what a recalled row read may
+        // now be out of date.
+        forgetExcerpts()
         void readBots()
         void readSummons()
       }
@@ -276,6 +280,7 @@ export function App(): React.JSX.Element {
         return
       }
       bot ??= botsRef.current.find((item) => hadConversation(item, summary) || item.slug === conversationPreferences(conversationKey(summary.directory, summary.id)).botSlug)
+      forgetExcerpts()
       const opened = await call<OpenedSession>('session.open', {
         directory: summary.directory,
         id: summary.id,
@@ -311,6 +316,8 @@ export function App(): React.JSX.Element {
         // extra reading of a short file is cheaper than a bot that has quietly forgotten itself.
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
+        outOfRequest: opened.outOfRequest ?? 0,
+        recalled: opened.recalled ?? [],
         context: opened.context,
         rewind: opened.rewind ?? [],
       }))
@@ -936,9 +943,13 @@ export function App(): React.JSX.Element {
   // The right column of a bot's own page and of its home conversation holds the bot, since a home
   // folder has no project to inspect.
   const detailed = viewedBot ?? (noProject ? openBotRecord : null)
+  const ownLive = !!detailed && live?.bot?.slug === detailed.slug
+  const detailedFellBack = ownLive ? live?.fellBack ?? null : null
+  const detailedRunning = ownLive && !!live?.running
   const details = useMemo(() => detailed
-    ? <BotDetails bot={detailed} onSave={saveBot} onArchive={() => void retireBot(detailed.slug, true)} />
-    : null, [detailed, saveBot, retireBot])
+    ? <BotDetails bot={detailed} onSave={saveBot} onArchive={() => void retireBot(detailed.slug, true)}
+        fellBack={detailedFellBack} running={detailedRunning} />
+    : null, [detailed, saveBot, retireBot, detailedFellBack, detailedRunning])
   const [recents, setRecents] = useState<string[]>([])
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => undefined) }, [live?.handle])
   const fresh = !!live && live.entries.length === 0 && !live.running
