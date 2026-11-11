@@ -333,7 +333,7 @@ takes in a diff.
 
 | Shape | Result |
 |---|---|
-| A branch on untrusted bytes | None. The module validates a slug, a name, a purpose and a model, which are text a person typed and rows from the person's own file, with one known cost, under "Where the rows come from", which is not one of the seven places [labels.md](../specs/labels.md) admits, and carries them. The memory view decides its margin from the memory's standing and never from the bytes. The save's check against the text the person started from runs in `bravebot-ui-files`, which is not the driver, and the driver receives no bytes back to decide from. The test for a compaction compares two numbers the agent computes. |
+| A branch on untrusted bytes | None. The module validates a slug, a name, a purpose and a model, which are text a person typed and rows from the person's own file, with one known cost, under "Where the rows come from", which is not one of the seven places [labels.md](../specs/labels.md) admits, and carries them. The memory view decides its margin from the memory's standing and never from the bytes. The save's checks of size, of a null character, and against the text the person started from run in `bravebot-ui-files`, which is not the driver, and the driver receives no bytes back to decide from. The test for a compaction compares two numbers the agent computes. |
 | The same branch moved into the kernel | None. No decision moves. |
 | A `declassify` outside the gates | None. Nothing is declassified. |
 | A `Labelled` built by hand | None. The module holds plain driver data and adds no construction site, so the count pinned in [labels.md](../specs/labels.md) does not change. |

@@ -626,9 +626,15 @@ program the person runs writes a file, as the GUI's panel does.
 The GUI refuses a memory edit when the text is over 64 kilobytes (KB), 65,536 bytes of UTF-8,
 or holds a null character, when the file's current text is not the text the person started from,
 and while a turn of the bot is in progress in the same program. It reads and edits only a folder
-the row records, which is the home or a conversation's folder. The terminal's view keeps the same four rules and offers the same
-folders, which the layout shows as the selected conversation's folder. The GUI's panel also
-lists them in a dropdown, which the layout does not draw.
+the row records, which is the home or a conversation's folder. The size, the null character and
+the check that the file is still the text the person started from are the `replace` operation of
+`bravebot-ui-files`, which the GUI already calls through its helper. The terminal calls the same
+operation. The GUI's `editMemory` stops checking the size and the null, so both programs are refused
+by that one implementation
+([SHARE-001](../best-practices/shared-implementation.md#SHARE-001)). The refusal while a turn of
+the bot is in progress stays in the program that is asked (see "Known costs" below). The terminal's
+view offers the same folders, which the layout shows as the selected conversation's folder. The
+GUI's panel also lists them in a dropdown, which the layout does not draw.
 
 A memory left untrusted stays
 withheld after either. The one way a person grants trust to it is the yes to a quarantined read of
@@ -640,10 +646,10 @@ list, or restore those versions.
 
 **Why the standing decides the margin.** The standing comes from the map and the record of
 untrusted writes, through the one function the run uses, so the pane and the run cannot disagree. The
-bytes decide nothing, so the driver does not branch on them. The save's check that the file is the
-text the person started from is a comparison on bytes a run wrote. It runs in `bravebot-ui-files`,
-which is not the driver, and the driver hands it paths and the person's text and receives no bytes
-back to decide from.
+bytes decide nothing, so the driver does not branch on them. The save's checks of size, of a
+null character, and that the file is the text the person started from run in `bravebot-ui-files`.
+The last of those compares bytes a run wrote, so it is not in the module. The driver hands the
+helper paths and the person's text and receives no bytes back to decide from.
 
 `verified-by: none`
 

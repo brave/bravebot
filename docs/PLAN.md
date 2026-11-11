@@ -297,7 +297,9 @@ for bots, so each terminal function is in the bots layout.
    the untrusted margin unless the memory's standing is `Kept`, with no
    notice, deciding the margin from the standing. A save is refused over 64 kilobytes (KB), with a null
    character, when the file is not the text the person started from, and while a turn of the bot is
-   in progress in the terminal, as the GUI's edit is for its own turns. A person's save does not change the
+   in progress in the terminal. The first three refusals are the `replace` operation of
+   `bravebot-ui-files`, which the GUI already calls, and the GUI's `editMemory` stops checking the
+   size and the null. The turn-in-progress refusal stays in each program. A person's save does not change the
    record. Memory is edited in the person's own editor. The read of the live memory file goes through
    `bravebot-ui-files`, and the slice edits the `bravebot-ui-files` and `bravebot-tui` rows of
    [layering.md](specs/layering.md) for that read. A write by the
@@ -305,7 +307,8 @@ for bots, so each terminal function is in the bots layout.
    by a run is drawn inside the margin, a memory whose standing is `Kept` is drawn without it, the layout with no session draws every memory inside it, a save
    from the view leaves the record as it was, a yes at a quarantined read takes the memory out of
    quarantine, a `/undo` over the memory file does not put back bytes the map would not trust
-   ([BOT-14](specs/bots.md#BOT-14)), and the GUI's panel is unchanged.
+   ([BOT-14](specs/bots.md#BOT-14)), and a save that breaks one of the three checks is refused by the
+   helper from the terminal and from the GUI.
 9. **The consolidation turns are built in Rust, and the GUI uses them.** Add the constant and the
    bridge method that builds the consolidation and carry-over turns
    ([BOT-15](specs/bots.md#BOT-15)), and remove the GUI's TypeScript text and its copy of the
