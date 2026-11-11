@@ -1263,35 +1263,38 @@ fn a_setup_cargo_doc_open_is_not_handed_a_browser() {
     if !usability::available() {
         return;
     }
-    let planted = planted_dir("cargo-browser");
-    let marker = planted.join("ran");
-    let helper = planted.join("helper");
-    plant(&helper, &marker);
-    let openers = planted_dir("cargo-browser-openers");
-    let opened = openers.join("opened");
-    plant(&openers.join("open"), &opened);
-    plant(&openers.join("xdg-open"), &opened);
-    let path = std::env::join_paths(std::iter::once(openers).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
-    .expect("a PATH");
+    for variable in ["BROWSER", "CARGO_DOC_BROWSER"] {
+        let name = format!("cargo-{}", variable.to_lowercase().replace('_', "-"));
+        let planted = planted_dir(&name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let openers = planted_dir(&format!("{name}-openers"));
+        let opened = openers.join("opened");
+        plant(&openers.join("open"), &opened);
+        plant(&openers.join("xdg-open"), &opened);
+        let path = std::env::join_paths(std::iter::once(openers).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .expect("a PATH");
 
-    let ran = withheld_from_a_setup_cargo(
-        "cargo-browser",
-        &["doc", "-q", "--offline", "--no-deps", "--open"],
-        &[
-            ("BROWSER", helper.to_str().expect("utf-8")),
-            ("PATH", path.to_str().expect("utf-8")),
-        ],
-        &marker,
-        Some(planted.as_path()),
-    );
-
-    if ran && cfg!(target_os = "macos") {
-        assert!(
-            opened.exists(),
-            "cargo did not run the stub opener, so the opener it used may have opened the documentation in a browser"
+        let ran = withheld_from_a_setup_cargo(
+            &name,
+            &["doc", "-q", "--offline", "--no-deps", "--open"],
+            &[
+                (variable, helper.to_str().expect("utf-8")),
+                ("PATH", path.to_str().expect("utf-8")),
+            ],
+            &marker,
+            Some(planted.as_path()),
         );
+
+        if ran && cfg!(target_os = "macos") {
+            assert!(
+                opened.exists(),
+                "cargo did not run the stub opener, so the opener it used may have opened the documentation in a browser"
+            );
+        }
     }
 }
 
@@ -2243,10 +2246,18 @@ fn a_setup_make_is_not_handed_an_include_directory() {
 
 /// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 on macOS arm64 ran the program in each of the
 /// variables its built-in rules and recipes read (`AS`, `FC`, `PC`, `M2C`, `LEX`, `YACC`, `LINT`,
-/// `TEXI2DVI`, `MAKEINFO`, `GET`, `CO`, `AR`, `RM`, `MAKE`), and the linker `-B<directory>` finds in
-/// `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` when the built-in rule
-/// links a program. `CC` and `CXX` do the same and are tested with go. `ASFLAGS`, `ARFLAGS`, `LD`,
-/// `F77`, `SHELL` and `CPP` ran nothing from a built-in rule, so they are not listed. All are
+/// `TEXI2DVI`, `MAKEINFO`, `GET`, `CO`, `AR`, `RM`, `MAKE`, `MAKE_COMMAND`), the dotted rule
+/// variables (`COMPILE.c`, `COMPILE.S`, `LINK.c`, `LINK.o`, `LEX.l`, `YACC.y`, `LINT.c`,
+/// `PREPROCESS.r`), and the linker `-B<directory>` finds in `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`,
+/// `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` when the built-in rule links a program. `ASFLAGS` and
+/// `OUTPUT_OPTION` ran an `as` planted in the directory of `-fno-integrated-as -B<directory>` when
+/// the rule compiles. GNU Make 4.0 to 4.4.1 also ran `OBJC` and `OBJCFLAGS` (the cases print
+/// `skipped` on 3.81, which has no Objective-C rule). `TANGLE`, `CTANGLE`, `WEAVE`, `CWEAVE` and
+/// `TEX` have cases whose control decides the same way. `CC` and `CXX` do the same and are tested
+/// with go. `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` ran nothing from a built-in rule, so they are
+/// not listed. A case whose control does not run the helper on the installed `make` prints
+/// `skipped` and proves nothing there. `FFLAGS` is listed from documentation and has no case, since
+/// no Fortran compiler is installed on the host that ran the others. All are
 /// options, so a start removes them whatever they hold and the helper is left where no stage can
 /// write. The stage ends its `make` with `|| true`, since a rule whose real tool is not installed
 /// makes `make` fail: the test is whether the helper ran. The regression it rejects: a setup `make`
@@ -2263,7 +2274,30 @@ fn a_setup_make_is_not_handed_the_program_or_linker_flags_of_a_built_in_rule() {
         &'static str,
         &'static [(&'static str, &'static str)],
     );
-    let cases: [Case; 20] = [
+    let cases: [Case; 38] = [
+        (
+            "MAKE_COMMAND",
+            "all:\n\t$(MAKE) -s sub\nsub:\n\t@true\n",
+            "",
+            &[],
+        ),
+        ("OBJC", "all: x.o\n", "", &[("x.m", "int x;\n")]),
+        ("COMPILE.c", "all: x.o\n", "", &[("x.c", "int x;\n")]),
+        ("COMPILE.S", "all: x.o\n", "", &[("x.S", "")]),
+        ("LINK.c", "all: x\n", "", &[("x.c", LINK)]),
+        ("LINK.o", "all: x\n", "", &[("x.o", "")]),
+        ("LEX.l", "all: x.c\n", "", &[("x.l", "%%\n")]),
+        ("YACC.y", "all: x.c\n", "", &[("x.y", "%%\n")]),
+        ("LINT.c", "all: x.ln\n", "", &[("x.c", "int x;\n")]),
+        ("PREPROCESS.r", "all: x.f\n", "", &[("x.r", "x\n")]),
+        ("ASFLAGS", "all: x.o\n", "as", &[("x.S", "")]),
+        ("OBJCFLAGS", "all: x.o\n", "as", &[("x.m", "int x;\n")]),
+        ("OUTPUT_OPTION", "all: x.o\n", "as", &[("x.c", "int x;\n")]),
+        ("TANGLE", "all: x.p\n", "", &[("x.web", "")]),
+        ("CTANGLE", "all: x.c\n", "", &[("x.w", "")]),
+        ("WEAVE", "all: x.tex\n", "", &[("x.web", "")]),
+        ("CWEAVE", "all: x.tex\n", "", &[("x.w", "")]),
+        ("TEX", "all: x.dvi\n", "", &[("x.tex", "")]),
         ("AS", "all: x.o\n", "", &[("x.s", "")]),
         ("FC", "all: x.o\n", "", &[("x.f", "x\n")]),
         ("PC", "all: x.o\n", "", &[("x.p", "x\n")]),
@@ -2298,6 +2332,9 @@ fn a_setup_make_is_not_handed_the_program_or_linker_flags_of_a_built_in_rule() {
             let helper = planted.join("helper");
             plant(&helper, &marker);
             helper.display().to_string()
+        } else if linker == "as" {
+            plant(&planted.join(linker), &marker);
+            format!("-fno-integrated-as -B{}/", planted.display())
         } else {
             plant(&planted.join(linker), &marker);
             format!("-B{}/", planted.display())
@@ -2367,10 +2404,177 @@ fn a_setup_cargo_is_not_handed_a_credential_provider() {
     }
 }
 
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 ran the program
+/// `CARGO_CREDENTIAL_ALIAS_<name>` names, when the credential providers include the alias `<name>`,
+/// for `cargo logout`. The name is a family matched by its start and is an option. Without the
+/// variable the alias is unknown and cargo fails, which the stage ignores: the test is whether the
+/// helper ran. The regression it rejects: a setup `cargo` started
+/// with a credential alias the person's shell holds.
+#[test]
+fn a_setup_cargo_is_not_handed_a_credential_alias() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("cargo-credential-alias");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+
+    withheld_from_a_setup_stage(
+        "cargo-credential-alias",
+        "sh",
+        &[
+            "-c",
+            "cargo logout --config 'registry.global-credential-providers=[\"zzalias\"]' || true",
+        ],
+        &[],
+        &[(
+            "CARGO_CREDENTIAL_ALIAS_ZZALIAS",
+            helper.to_str().expect("utf-8"),
+        )],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 on macOS arm64 ran the program `GOAUTH` names when
+/// a module query reached a proxy, before the connection was made. The proxy is a port nothing
+/// listens on, so the query fails after the helper is asked, and the stage ends in `|| true`. The
+/// regression it rejects: a setup `go` started with the authentication command the person's shell
+/// holds.
+#[test]
+fn a_setup_go_is_not_handed_an_authentication_command() {
+    if !usability::available() || !go_is_installed("go-goauth") {
+        return;
+    }
+    let planted = planted_dir("go-goauth");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+
+    withheld_from_a_setup_stage(
+        "go-goauth",
+        "sh",
+        &["-c", "go -C {session} list -m example.com/x@latest || true"],
+        &[("go.mod", "module example.invalid/app\n\ngo 1.18\n")],
+        &[
+            ("GOAUTH", helper.to_str().expect("utf-8")),
+            ("GOPROXY", "https://127.0.0.1:9"),
+        ],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): the compiler driver (clang on macOS arm64) ran the `ld` found
+/// in the directories `COMPILER_PATH` lists, for `make` linking a program. The directory holds the
+/// helper, so it is recorded as one a stage may write, and a start removes the variable. The
+/// regression it rejects: a setup `make` started with a compiler path the person's shell holds.
+#[test]
+fn a_setup_make_is_not_handed_a_compiler_path() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-compiler-path");
+    let marker = planted.join("ran");
+    plant(&planted.join("ld"), &marker);
+
+    withheld_from_a_setup_stage(
+        "make-compiler-path",
+        "sh",
+        &["-c", "make -s -C {session} || true"],
+        &[
+            ("Makefile", "all: x\n"),
+            ("x.c", "int main(void) { return 0; }\n"),
+        ],
+        &[("COMPILER_PATH", planted.to_str().expect("utf-8"))],
+        &marker,
+        Some(&planted),
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): python3 3.15.2 on macOS arm64 loaded the provider module
+/// `OPENSSL_MODULES` names, when the file `OPENSSL_CONF` names activates it, and ran the
+/// constructor of the library. Alone, `OPENSSL_CONF` loaded nothing. The module is built here with
+/// the host's `cc`; a host without one skips. Both are put where a stage may write, so a start
+/// removes them. The regression it rejects: a setup `python3` that uses TLS started with an OpenSSL
+/// configuration and module directory the person's shell holds.
+#[test]
+fn a_setup_python_is_not_handed_an_openssl_provider() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-openssl");
+    let marker = planted.join("ran");
+    let modules = planted.join("modules");
+    std::fs::create_dir_all(&modules).expect("modules");
+    let source = planted.join("x.c");
+    std::fs::write(
+        &source,
+        format!(
+            "#include <stdio.h>\nvoid __attribute__((constructor)) c(void) {{ FILE *f = fopen(\"{}\", \"w\"); if (f) fclose(f); }}\n",
+            marker.display()
+        ),
+    )
+    .expect("source");
+    let library = modules.join(if cfg!(target_os = "macos") {
+        "x.dylib"
+    } else {
+        "x.so"
+    });
+    let built = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))
+        .and_then(|cc| {
+            bravebot_sandbox::programs::start_against(
+                &cc,
+                bravebot_sandbox::programs::Inherits::All,
+                bravebot_sandbox::programs::SearchPath::Inherited,
+                bravebot_sandbox::programs::CodeSelectors::Kept,
+                std::iter::empty(),
+                &|_: &Path| true,
+            )
+            .arg("-shared")
+            .arg("-o")
+            .arg(&library)
+            .arg(&source)
+            .status()
+            .ok()
+        })
+        .is_some_and(|status| status.success());
+    if !built {
+        eprintln!("skipped python-openssl: no cc builds a shared library here");
+        return;
+    }
+    let configuration = planted.join("openssl.cnf");
+    std::fs::write(
+        &configuration,
+        "openssl_conf = oi\n[oi]\nproviders = ps\n[ps]\nx = xs\n[xs]\nactivate = 1\n",
+    )
+    .expect("configuration");
+
+    withheld_from_a_setup_stage(
+        "python-openssl",
+        "sh",
+        &[
+            "-c",
+            "python3 -c 'import ssl; ssl.create_default_context()' || true",
+        ],
+        &[],
+        &[
+            ("OPENSSL_CONF", configuration.to_str().expect("utf-8")),
+            ("OPENSSL_MODULES", modules.to_str().expect("utf-8")),
+        ],
+        &marker,
+        Some(&planted),
+    );
+}
+
 /// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 on macOS arm64 built `runtime/cgo` with the
 /// assembler `-B<directory>` finds when `CGO_CFLAGS` or `CGO_CPPFLAGS` holds
-/// `-fno-integrated-as -B<directory>`, and so ran an `as` planted there. `CGO_CXXFLAGS` and
-/// `CGO_FFLAGS` ran nothing. Both are options, so the helper is left where no stage can write. The
+/// `-fno-integrated-as -B<directory>`, and so ran an `as` planted there. `CGO_CXXFLAGS` ran the
+/// same `as` for a package that holds a `.cc` file, which `runtime/cgo` alone does not, so its case
+/// adds one. `CGO_FFLAGS` has no case: no Fortran compiler is installed on the host that ran the
+/// others. Both are listed with the others. All are options, so the helper is left where no stage
+/// can write. The
 /// build uses `-a`, since `go` caches a compiled package and a second build compiles nothing, and
 /// the stage ends its `go` with `|| true`. The regression it rejects: a setup `go` started with cgo
 /// compiler flags the person's shell holds.
@@ -2379,7 +2583,7 @@ fn a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler() {
     if !usability::available() || !go_is_installed("go-cgo_cflags") {
         return;
     }
-    for variable in ["CGO_CFLAGS", "CGO_CPPFLAGS"] {
+    for variable in ["CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS"] {
         let label = format!("go-{}", variable.to_lowercase());
         let planted = planted_dir(&label);
         let marker = planted.join("ran");
@@ -2391,6 +2595,7 @@ fn a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler() {
             &["-c", "go -C {session} build -a ./... || true"],
             &[
                 ("go.mod", "module example.invalid/app\n\ngo 1.18\n"),
+                ("extra.cc", "int g(void) { return 2; }\n"),
                 (
                     "main.go",
                     "package main\n\n/*\nint f(void) { return 1; }\n*/\nimport \"C\"\n\nfunc main() { _ = C.f() }\n",

@@ -299,6 +299,9 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     selectors::PYTHONUSERBASE,
     selectors::PYTHONPYCACHEPREFIX,
     selectors::PYTHONHOME,
+    // Python joins this to `sys.prefix`, so a real value is a relative name such as `lib64` and a
+    // relative path that climbs out of the prefix selects a standard library elsewhere.
+    ("PYTHONPLATLIBDIR", Names::Options),
     ("BASH_ENV", Names::File),
     // A program that is a bash script, which every shim and many wrappers are: `xtrace` with a
     // `PS4` that holds a command substitution runs that command, whatever the script does.
@@ -759,6 +762,10 @@ pub mod selectors {
     pub const BROWSER: (&str, Names) = ("BROWSER", Names::Commands);
     /// A configuration file of the OpenSSL a program loads, which can load a provider module.
     pub const OPENSSL_CONF: (&str, Names) = ("OPENSSL_CONF", Names::File);
+    /// The directory OpenSSL loads provider modules from.
+    pub const OPENSSL_MODULES: (&str, Names) = ("OPENSSL_MODULES", Names::Directory);
+    /// The directory OpenSSL loads dynamic engines from.
+    pub const OPENSSL_ENGINES: (&str, Names) = ("OPENSSL_ENGINES", Names::Directory);
     /// Directories Python imports from, including `sitecustomize.py`.
     pub const PYTHONPATH: (&str, Names) = ("PYTHONPATH", Names::Directories);
     /// The prefix Python finds its standard library under.
@@ -3053,6 +3060,51 @@ mod tests {
         assert!(!checked("LD_PRELOAD", &genuine, &session));
         assert!(!checked("PYTHONHOME", &safe, &session));
         assert!(!checked("GIT_EXEC_PATH", &safe, &session));
+    }
+
+    /// The regression it rejects: `PYTHONPLATLIBDIR` judged as a directory, so the relative name
+    /// `lib64` a real setting holds is refused as an unprovable path, or kept when it is a relative
+    /// path that climbs out of `sys.prefix` to a standard library a stage wrote. It is an option
+    /// and is removed whatever it holds.
+    #[cfg(unix)]
+    #[test]
+    fn pythonplatlibdir_is_removed_whatever_it_holds() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t5p");
+
+        assert!(checked("PYTHONPLATLIBDIR", Path::new("lib64"), &session));
+        assert!(checked(
+            "PYTHONPLATLIBDIR",
+            Path::new("../../x/lib"),
+            &session
+        ));
+        assert!(checked("PYTHONPLATLIBDIR", &planted, &session));
+        assert!(checked("PYTHONPLATLIBDIR", &genuine, &session));
+        assert!(checked("PYTHONPLATLIBDIR", &safe, &session));
+    }
+
+    /// The regression it rejects: the shared OpenSSL directory names kept when they name a place a
+    /// stage may write, which loads a provider module or an engine from it, or removed when they
+    /// name a directory outside every one.
+    #[cfg(unix)]
+    #[test]
+    fn the_openssl_module_and_engine_directories_are_judged_as_directories() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("t5o");
+        let planted = planted.parent().unwrap().to_path_buf();
+        let one = |(name, kind): (&str, Names), value: &Path| {
+            removes(
+                CodeSelectors::Checked(&[(name, kind)]),
+                name,
+                value.as_os_str(),
+                &session,
+            )
+        };
+
+        assert!(one(selectors::OPENSSL_MODULES, &planted));
+        assert!(!one(selectors::OPENSSL_MODULES, &safe));
+        assert!(one(selectors::OPENSSL_MODULES, Path::new("modules")));
+        assert!(one(selectors::OPENSSL_ENGINES, &planted));
+        assert!(!one(selectors::OPENSSL_ENGINES, &safe));
+        assert!(one(selectors::OPENSSL_ENGINES, Path::new("engines")));
     }
 
     /// The regression it rejects: skipping a value that cannot be converted to text, which keeps a

@@ -260,9 +260,12 @@ the rest of these, and that the list is complete:
 The variables of the five programs the sandbox usability suite starts (`make`, `cargo`, `npm`, `go`
 and `python3`) are covered by a run of the real program with a planted helper. SANDBOX-30 records
 the versions, the names that ran a helper and the names that did not. The run covers the names
-found by reading each program's documentation and trying them on one macOS host. It does not show
-that no other name or version selects code, so a reviewer still reads the launcher for each change
-to the list.
+found by reading each program's documentation and trying them on one macOS host. A name whose
+SANDBOX-30 text says it was read from documentation or source alone, such as `FFLAGS`,
+`CGO_FFLAGS`, `GCC_EXEC_PREFIX` and `OPENSSL_ENGINES`, was not run, and a name that exists only on
+Linux or Windows is listed from source without a run only where the text says so. The run does not
+show that no other name or version selects code, so a reviewer still reads the launcher for each
+change to the list.
 
 ```rust
 // Wrong: the variables are inherited as the person set them, so a value naming a file a stage

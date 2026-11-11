@@ -3947,7 +3947,7 @@ file. A new spawn that looks a name up through
   | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `MUSL_LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
   | `LD_ORIGIN_PATH`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
   | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
-  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, `PYTHONPLATLIBDIR`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
 
   `SHELLOPTS`, `PS4`, `BASH_FUNC_` and the asdf and pyenv names are in the generic table and not in
   one program's list because an asdf or pyenv shim is a `#!/usr/bin/env bash` script that is found
@@ -4015,12 +4015,23 @@ file. A new spawn that looks a name up through
   under a GNOME session the application's opener therefore still reads a `HOME` a stage may write.
   [#3904](https://github.com/brave/bravebot/issues/3904) tracks that. The names another program
   reads are added to its start when that program is audited. The usability suite's list
-  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
-  `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
-  (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`) and `go` (with the C compiler, `pkg-config` and
-  linker flags a cgo build reads) read to choose code, and it matches by form
-  `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS` and every
-  `npm_config_` name in any case. `python3` is also given the generic table.
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 77 names) adds the names `git`, `make`
+  (the programs and flags of its built-in rules, `MAKE_COMMAND`, and `COMPILER_PATH` and
+  `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
+  the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, and the credential providers),
+  `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, and `OPENSSL_CONF`, `OPENSSL_MODULES` and
+  `OPENSSL_ENGINES` through the constants in `programs::selectors`) and `go` (with the C
+  compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
+  choose code, and it matches by form `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and
+  `_RUSTDOCFLAGS`, `CARGO_CREDENTIAL_ALIAS_<name>`, make's `COMPILE.<suffix>`, `LINK.<suffix>`,
+  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, and every
+  `npm_config_` name in any case. `python3` is also given the generic table, which holds
+  `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
+  compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
+  only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
+  applies to every checked start (`gcloud`, `aws`, `ssh` and `git` among them), none of which reads
+  them, and no list in `crates/sandbox/src/programs.rs` is selected by `cfg(windows)`. That row of
+  [#3811](https://github.com/brave/bravebot/issues/3811) stays open.
   `CC`, `CXX` and `PKG_CONFIG` are in this list and not in the generic table, because the generic
   table is applied to every checked start and only these starts compile or link. A run with a
   planted helper on the host recorded in the last bullet of "What a checked start does not cover"
@@ -4786,7 +4797,9 @@ shown by running the program, or not entirely:
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
   are given the generic table and the suite's own list ([SANDBOX-21](#SANDBOX-21)). Each name was
   found by running the program with a helper planted under it on macOS 26 (arm64) with GNU Make
-  3.81, cargo 1.99.0, npm 11.19.1, go 1.27.3 and python3 3.15.0. The helper ran under
+  3.81, cargo 1.99.0, npm 11.19.1, go 1.27.3 and python3 3.15.0, and the names added for #3811 with
+  python3 3.15.2, Apple clang, and GNU Make 4.0, 4.2.1, 4.3, 4.4 and 4.4.1 built from the
+  ftp.gnu.org tarballs with `./configure --without-guile`, with 3.81 as the control. The helper ran under
   `MAKEFLAGS` (`SHELL=` and `-I`), `MAKEFILES`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTC`,
   `RUSTDOC`, the `CARGO_BUILD_` forms of those, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`,
   `RUSTDOCFLAGS`, `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS`,
@@ -4801,6 +4814,22 @@ shown by running the program, or not entirely:
   `CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS` and `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` (for
   `cargo logout`), `CARGO_ENCODED_RUSTDOCFLAGS` and `CARGO_BUILD_RUSTDOCFLAGS` (`cargo test --doc` with
   `--test-runtool=`), `BROWSER` (`cargo doc --open`, in the suite's list as well as the browser opener's),
+  `CARGO_DOC_BROWSER` (`cargo doc --open --offline`, cargo 1.99.0), `CARGO_CREDENTIAL_ALIAS_<name>`
+  (cargo 1.99.0 `cargo --config registry.global-credential-providers=["<name>"] logout` ran the
+  program the variable names and did not run it without the variable), `GOAUTH` (`go list -m
+  example.com/x@latest` with `GOPROXY=https://127.0.0.1:9` ran the helper before the connection
+  failed), `CGO_CXXFLAGS` (a package with a `.cc` file, `-fno-integrated-as -B<dir>/` and an `as` in
+  the directory), `PYTHONPLATLIBDIR` (a relative value that climbs from `sys.prefix` to a copy of the
+  standard library holding a `sitecustomize.py`), `OPENSSL_CONF` with `OPENSSL_MODULES` (python3
+  `ssl.create_default_context()` loaded a provider library from the directory and its constructor
+  wrote a marker; `OPENSSL_CONF` alone loaded nothing), `COMPILER_PATH` (a directory holding `ld`),
+  and these make variables on 3.81 and on 4.0, 4.2.1, 4.3, 4.4 and 4.4.1 with the same result:
+  `MAKE_COMMAND` (through a `+$(MAKE)` recipe line), `OUTPUT_OPTION` (only when it holds
+  `-fno-integrated-as -B<dir>/ -o x.o`; a bare program name did not run), `ASFLAGS` and `CFLAGS` with
+  that form, `COMPILE.c`, `COMPILE.S`, `LINK.c`, `LINK.o`, `LEX.l`, `YACC.y`, `LINT.c` and
+  `PREPROCESS.r`. `OBJC` and `OBJCFLAGS` ran on 4.0 to 4.4.1 and not on 3.81, which has no
+  Objective-C rule. `TEX`, `TANGLE`, `CTANGLE`, `WEAVE` and `CWEAVE` ran on 4.4.1 and on 3.81. The
+  other suffixes of the dotted names are listed by analogy with those run.
   `PYTHONPATH` and `PYTHONUSERBASE` (a `sitecustomize`
   under the first and a `usercustomize` under the second), `PYTHONHOME` (a `sitecustomize` in the
   standard library it names), `PYTHONPYCACHEPREFIX` (an unchecked-hash `.pyc`), `PYTHONEXECUTABLE`
@@ -4809,26 +4838,44 @@ shown by running the program, or not entirely:
   `GNUMAKEFLAGS` or `MFLAGS` with `-f`, `-I` or `SHELL=` on 3.81, and `MAKEFLAGS` with `-f` in any
   spelling (`-f <file>`, `-f<file>`, `--file=`, `--makefile=`, `f <file>`, `-s -f <file>`), `-C`,
   `--directory=` or `-o`, none of which read the file or change directory when they come from
-  `MAKEFLAGS` on 3.81 (the same file passed on the command line does run, so the control holds),
-  `make` implicit-rule variables `ASFLAGS`, `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
-  built-in rule; a recipe that uses `$(CPP)` runs it), `CGO_CXXFLAGS`,
-  `CGO_FFLAGS`, the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
+  `MAKEFLAGS` on 3.81 (the same file passed on the command line does run, so the control holds).
+  On 4.0, 4.2.1, 4.3 and 4.4 the `-f` cases from `MAKEFLAGS` and `GNUMAKEFLAGS` also ran nothing; on
+  4.4.1 alone they ran the file, `--file=` and `f <file>` did too, and `-C /nonexistent` was
+  honoured. The 4.4 tag's `decode_switches` in `src/main.c` has the earlier condition, and 4.4.1's
+  adds `cs->env` to it, which reads from source as the cause. `--eval`, `-E`, `-- SHELL=<helper>`,
+  `SHELL=<helper>` as a variable, `MAKEFILES` and `CC` ran the helper on every version run.
+  `SHELL` in the environment, `MAKESHELL`, `CONFIG_SHELL`, `.SHELLFLAGS`, `MAKE_TERMOUT`,
+  `MAKE_TERMERR`, `-L`, `-l`, `-W` and the `getenv("SHELL")` fallback of an unexecutable recipe ran
+  nothing on 3.81 and on 4.0 to 4.4.1 (`make` does not export `SHELL`). GNU Make 4.1 was not run,
+  and no Guile-enabled build was run (`GUILE_LOAD_PATH` is read by libguile and a `$(guile)` call
+  needs makefile text, so it is reachable only through routes already withheld).
+  `make` implicit-rule variables `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
+  built-in rule; a recipe that uses `$(CPP)` runs it), the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
   `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
   through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
   `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
-  `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `CARGO`, `RUSTFMT`, `COMPILER_PATH`,
+  `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `CARGO`, `RUSTFMT`,
   `CARGO_REGISTRIES_CRATES_IO_CREDENTIAL_PROVIDER` for `cargo login`, `GOPATH` or `GOMODCACHE` holding a
-  toolchain (`go` tried to download it), `GOBIN`, `GOWORK`, `GOAUTH`, `GOPROXY`, `PYTHONSTARTUP` (for `-c`, `-m unittest` and `-m venv`),
+  toolchain (`go` tried to download it), `GOBIN`, `GOWORK`, `GOPROXY`, `PYTHONSTARTUP` (for `-c`, `-m unittest` and `-m venv`),
   `__PYVENV_LAUNCHER__`, `PYTHONBREAKPOINT`, `npm_config_node_options`,
   `npm_config_cache`, `npm_config_git` or `npm_config_prefix` (set to a directory holding the helper as
   `bin/npm` and `bin/node`, for `npm run`, `root -g`, `bin -g`, `prefix -g`, `config get prefix`, `ls`,
   `pack --dry-run`, `install --offline` and `-v`; it is removed anyway as an `npm_config_` name).
   `GNUMAKEFLAGS` and `MFLAGS` are in the suite's list because other versions of `make` read them.
+  `FFLAGS` and `CGO_FFLAGS` are listed from the documentation alone: no Fortran compiler was
+  installed on the host, so neither was run. `GCC_EXEC_PREFIX` is listed from the gcc manual
+  (`invoke.texi`) and ran nothing under Apple clang. `OPENSSL_ENGINES` is listed from the OpenSSL 3.0
+  `openssl-env` manual and was not run; `OPENSSL_MODULES` and `OPENSSL_CONF` are the constants
+  `crates/bedrock/src/credentials.rs` already shared. `PREPROCESS.S` was not run because the host's
+  file system ignores case, so `x.s` and `x.S` are one file; `PREPROCESS.r` was run in its place.
   `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
-  `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it. Windows was not run:
-  the suite runs nothing there. The names a Linux build of `make`, `cargo`, `npm`, `go` and
-  `python3` reads, and their versions, are not recorded; a Linux run of them is tracked by #3811
-  and #3863.
+  `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it.
+  No Linux or Windows run was made. The names a Linux build of `make`, `cargo`, `npm`, `go` and
+  `python3` reads, and their versions, are not recorded. The added names were read from the gcc
+  13.2.0 manual, openssl 3.0 `openssl-env`, the Node v24 command-line documentation, CPython
+  `Modules/main.c`, the go1.27.3 `cmd/go` source and the cargo 1.90.0 documentation, and none is
+  documented as read on Linux only. Windows was not run: the suite runs nothing there. A Linux run
+  of them is tracked by #3811 and #3863.
   Each test runs the program with the variable as the person set it first. Where the program does
   not run the helper, the test prints that it skipped and why, and asserts nothing further: a helper
   the program never reaches proves nothing. Where the control passes, the strict check runs on every
@@ -4840,11 +4887,35 @@ shown by running the program, or not entirely:
   the directory of `usercustomize.py` from `site.getusersitepackages()`, since the directory under a
   base is `lib/python/site-packages` for a macOS framework build and
   `lib/python3.<minor>/site-packages` for other builds. A skipped name stays in the lists and is
-  removed on every host. The results for the `cc` and `pkg-config`
+  removed on every host. The tests of `OBJC` and `OBJCFLAGS` print `skipped` where the `make` on
+  `PATH` is 3.81, which has no Objective-C rule. No test covers `FFLAGS`, `CGO_FFLAGS`,
+  `GCC_EXEC_PREFIX`, `PYTHONPLATLIBDIR` through a start or `OPENSSL_ENGINES`: unit tests pin their
+  kind and value rules. The results for the `cc` and `pkg-config`
   crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
-  `GOAUTH`, `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `COMPILER_PATH`, `RANLIB`,
+  `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `RANLIB`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
+- Names and effects of the make, cargo, npm, go and python3 starts that are not settled, each with the
+  run that would settle it:
+  - Whether a `-fplugin=<library>` value in `FFLAGS`, `ASFLAGS`, `OBJCFLAGS`, `CGO_CXXFLAGS` or
+    `CGO_FFLAGS` loads the library. The five are removed whatever they hold, so the question is
+    whether the removal was needed. A Linux host with gcc and a `.f` rule or a cgo package with a
+    `.cc` file would settle it.
+  - `GCC_EXEC_PREFIX` with a prefix holding a fake `cc1`, on a Linux gcc.
+  - `PYTHONINSPECT=1` with `PYTHONSTARTUP`. With python3 3.15.2, stdin from `/dev/null` and no
+    terminal the startup file did not run. That is weak evidence, since the interpreter had no
+    terminal. It is not listed.
+  - How far node trusts a cache entry a stage wrote under `NODE_COMPILE_CACHE`, and how far go
+    trusts one under `GOCACHE` or `GOMODCACHE`. None is listed. That is a question about the
+    integrity checks of those caches, which a probe of one host does not settle.
+  - Other `npm` names besides `npm_config_`: the public page of npm's configuration could not be
+    retrieved, so the list for npm is `npm_config_` and `NODE_OPTIONS` and `NODE_PATH` only.
+  - On Windows, `CL`, `_CL_` (which the MSVC compiler prepends and appends to its command line, and
+    which can hold `/analyze:plugin <dll>`), `LINK` and `_LINK_`, and the `VCINSTALLDIR`, `VSCMD_ARG_TGT_ARCH` and
+    `VSCMD_ARG_VCVARS_SPECTRE` that the `cc` crate reads to locate a toolset, are not listed and
+    were not run. make's use of `COMSPEC` and `MAKESHELL` on Windows is unread. The `ComSpec` of
+    Python's `subprocess` is used only with `shell=True`.
+  - A GNU Make built with Guile, and GNU Make 4.1.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
