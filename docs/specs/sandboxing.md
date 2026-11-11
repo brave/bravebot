@@ -2316,6 +2316,27 @@ the cargo credential providers each have a test of the same kind against the rea
 on no recorded host, so only the unit test of the list pins its removal
 ([SANDBOX-30](#SANDBOX-30)).
 
+The suite also removes files, which are not variables. Before every unconfined start (a setup stage
+or a stage of the control re-run) it removes `GNUmakefile`, `makefile`, `.cargo/config.toml`,
+`.cargo/config`, `.npmrc` and `.npm-init.js` from the scratch home, the session directory and the
+directory of each file the workflow writes, since `make`, `cargo` and `npm` read these to choose
+code. A removal that fails for any reason other than the file being absent (a directory of that
+name, or a directory that cannot be written) stops the start: the suite is unavailable with the
+error and no program runs. A `.cargo` that is a link is removed as the link and the file behind it
+is not touched. It sets `GOENV=off` and `PYTHONNOUSERSITE=1`, which stop `go`
+and `python3` reading an environment file or a `usercustomize.py` from the home. Only names the
+suite chose are removed and no file is read. `makefile` stays where it is the workflow's `Makefile`
+on a volume that ignores case. The files and the programs' versions are in
+[SANDBOX-30](#SANDBOX-30). The parents of the session directory are not cleaned. The root of the
+suite is the state directory's `doctor-sandbox`, and `target/test-scratch` in the tests, so neither
+is under the system temp directory a confined stage may write. The stage writes the session
+directory and not its parent, which
+`a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one` shows,
+so a `.cargo/config.toml` that `cargo` finds in a parent does not come from a stage. Each attempt,
+confined or control, is made in places created afresh, and the unconfined stages of an attempt
+run before its confined ones, so no unconfined start reads what a confined stage wrote. The
+removal covers the files the workflow lists and what an earlier unconfined stage left.
+
 The variables below were examined for the programs the suite starts and are not removed, because
 planting a file under each and running the program as a stage runs it ran nothing. `xcrun` and the
 `/usr/bin` shims did not run a file planted under any value of `TOOLCHAINS`, `SDKROOT` or
@@ -2480,6 +2501,24 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_settings_file`
+`verified-by: bravebot_agent::usability::a_setup_make_does_not_read_a_gnumakefile_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_cargo_does_not_read_a_cargo_configuration_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_npm_does_not_read_an_npmrc_in_its_directory`
+`verified-by: bravebot_agent::usability::a_configuration_name_that_cannot_be_removed_stops_the_start`
+`verified-by: bravebot_agent::usability::a_configuration_file_in_a_read_only_directory_stops_the_start`
+`verified-by: bravebot_agent::usability::a_linked_cargo_directory_is_removed_and_the_file_behind_it_is_not`
+`verified-by: bravebot_agent::usability::a_setup_python_does_not_import_a_usercustomize_from_the_home`
+`verified-by: bravebot_agent::usability::a_setup_go_does_not_read_an_environment_file_in_the_home`
+`verified-by: bravebot_agent::usability::a_setup_cargo_does_not_run_a_linker_from_a_configuration_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_cargo_does_not_run_a_runner_from_a_configuration_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_cargo_does_not_take_rustflags_from_a_configuration_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_cargo_does_not_read_a_cargo_configuration_in_the_home`
+`verified-by: bravebot_agent::usability::a_setup_npm_does_not_take_node_options_from_an_npmrc_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_npm_does_not_run_an_init_module_from_an_npmrc_in_its_directory`
+`verified-by: bravebot_agent::usability::a_setup_npm_does_not_read_an_npmrc_in_the_home`
+`verified-by: bravebot_agent::usability::a_setup_npm_does_not_run_an_init_script_from_the_home`
+`verified-by: bravebot_agent::usability::a_setup_go_does_not_switch_toolchain_from_an_environment_file_in_the_home`
+`verified-by: bravebot_agent::usability::a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
@@ -4085,7 +4124,7 @@ file. A new spawn that looks a name up through
   one program's list because an asdf or pyenv shim is a `#!/usr/bin/env bash` script that is found
   under the name of the program it stands for (`aws`, `python3`), so any checked start can run one,
   and a bash script runs the code `PS4` and `BASH_FUNC_` carry whatever program it stands for. What
-  each name was shown to run is in the last bullet but one of "What a checked start does not cover".
+  each name was shown to run is in the bullet that begins "A Homebrew or pip `aws` script" in "What a checked start does not cover".
   The pattern `ASDF_<tool>_VERSION` is matched by its shape because the tool is part of the name,
   and `ASDF_DATA_DIR` is judged by its value, so a prefix of `ASDF_` is not used.
 
@@ -4207,7 +4246,7 @@ file. A new spawn that looks a name up through
   [#3811](https://github.com/brave/bravebot/issues/3811) stays open.
   `CC`, `CXX` and `PKG_CONFIG` are in this list and not in the generic table, because the generic
   table is applied to every checked start and only these starts compile or link. A run with a
-  planted helper on the host recorded in the last bullet of "What a checked start does not cover"
+  planted helper on the host recorded in the bullet that begins "The unconfined `make`, `cargo`, `npm`, `go` and `python3`" in "What a checked start does not cover"
   found: go cgo ran `CC`, `CXX` and `PKG_CONFIG`; make's
   built-in rules ran `CC` (compile and link) and `CXX` and never run `pkg-config`; the `cc` crate
   1.2.62 in a cargo build script ran `CC`, `CXX` and `AR`, and the `pkg-config` crate 0.3.33 ran
@@ -4276,9 +4315,11 @@ file. A new spawn that looks a name up through
   | `RANLIBFLAGS` | options | the flags put on the `ranlib` it starts (3658). Read from source, not run |
   | `CC_<target>`, `CXX_<target>`, `AR_<target>`, `RANLIB_<target>`, `NVCC_<target>`, `CFLAGS_<target>`, `CXXFLAGS_<target>`, `ARFLAGS_<target>`, `RANLIBFLAGS_<target>`, `PKG_CONFIG_<target>`, and `HOST_` or `TARGET_` in front of any of the ten | options (a family, matched by `names_a_compiler_for_a_target`) | the `cc` and `pkg-config` crates read each of the ten from the first of these spellings that is set, before the plain name, so each picks the same program or flags the plain name does. A build script ran the helper through ten of them on macOS 26 (`CC_<triple>`, `CC_<triple with _>`, `HOST_CC`, `CXX_<triple>`, `HOST_CXX`, `AR_<triple>`, `HOST_AR`, `CFLAGS_<triple>`, `HOST_CFLAGS`, `CXXFLAGS_<triple>`); the other forms are read from source and pinned by `the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold` |
 
-  Configuration files that can name code, such as `.npmrc` and
-  `.cargo/config.toml` in a directory a stage may write, are not examined by the suite or by the
-  lists; that is tracked by #3858.
+  Configuration files that name code are not in the lists, since they are
+  files and not variables. Before each unconfined start the suite removes the ones that `make`,
+  `cargo` and `npm` read from the directories it chose, and sets `GOENV=off` and
+  `PYTHONNOUSERSITE=1` for `go` and `python3` ([SANDBOX-21](#SANDBOX-21)). The last bullet of "What
+  a checked start does not cover" records each file that ran a helper and each that ran nothing.
   The stored-login `gh` removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite
   also removes `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR`,
   `GOROOT`, `GOENV` and `CARGO_HOME` whatever they hold, and records the names it examined and
@@ -5445,6 +5486,80 @@ shown by running the program, or not entirely:
     were not run. make's use of `COMSPEC` and `MAKESHELL` on Windows is unread. The `ComSpec` of
     Python's `subprocess` is used only with `shell=True`.
   - A GNU Make built with Guile, and GNU Make 4.1.
+- The configuration files of `make`, `cargo`, `npm`, `go` and `python3` were each planted with a
+  helper that only creates a marker file, under `env -i` with `HOME` set to a scratch directory,
+  and the workflows' own commands were run, on macOS 26 (arm64) with GNU Make 3.81, cargo 1.99.0,
+  npm 11.19.1, go 1.27.3 and python3 3.15.2. The helper ran from these files:
+  - `make`: `GNUmakefile` in the directory `make` runs in, including a `-C` directory, ahead of
+    the workflow's `Makefile`; `makefile` in the same places on a volume that is case sensitive
+    (on the default volume `makefile` is the workflow's `Makefile`).
+  - `cargo`: `.cargo/config.toml` and `.cargo/config` in the working directory, and `.cargo/config.toml`
+    in every parent of it and in `$HOME/.cargo`, naming `build.rustc-wrapper`,
+    `build.rustc-workspace-wrapper`, `build.rustc`, `build.rustflags` (`-C linker=`),
+    `target.<triple>.linker`, `target.<triple>.runner` and `target.<triple>.rustflags`.
+  - `npm`: `.npmrc` in the project directory (the nearest directory above the working directory
+    that holds `package.json` or `node_modules`) and `$HOME/.npmrc`, naming `script-shell`,
+    `node-options` and `init-module`; `init-module` also from `$HOME/.npm-init.js`.
+  - `go`: the file `go env GOENV` names, `$HOME/Library/Application Support/go/env` on macOS, with
+    `GOFLAGS=-toolexec=` and `-exec=`, `GOCACHEPROG`, and for a cgo package `CC`, `CXX` and
+    `PKG_CONFIG`.
+  - `python3`: `usercustomize.py` and a `.pth` file with an `import` line in the user site under
+    `$HOME` (`$HOME/Library/Python/3.15/lib/python/site-packages` on a macOS framework build).
+  - pip: `python =` in `pip.conf` under `$HOME/.config/pip`, `$HOME/.pip`,
+    `$HOME/Library/Application Support/pip` and in `PIP_CONFIG_FILE`, when `python3 -m pip` is run.
+    No stage of the suite runs pip.
+
+  The suite removes `GNUmakefile`, `makefile`, `.cargo/config.toml`, `.cargo/config`, `.npmrc`
+  and `.npm-init.js` from the scratch home, the session directory and the directory of each file
+  a workflow writes, before every unconfined start (the setup stages and every stage of the control
+  re-run). It decides from the names it chose and never reads a file. A removal that fails for any
+  reason but the file being absent stops the start with the error, so a directory named `.npmrc`
+  or a file in a directory that cannot be written leaves no program run. A `.cargo` that is a link
+  is removed as the link. `makefile` is kept when it is the
+  workflow's `Makefile` on a volume that ignores case. `stage_command` also sets `GOENV=off`, which
+  is go's own switch for reading no environment file wherever it would be, and
+  `PYTHONNOUSERSITE=1`. `GOTOOLCHAIN=local` stays set; an environment variable wins over the file,
+  and without it a `GOTOOLCHAIN=go1.99.0+path` line in the go environment file ran a `go1.99.0` found
+  on `PATH`. A confined stage is not cleaned, and nothing unconfined starts after one: each attempt
+  is made in places created afresh, and its setup stages run before its confined stages. A confined
+  stage writes the session directory and no other directory
+  of the workflow's places, which
+  `a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one` shows.
+
+  These ran nothing and are not removed:
+  - `make`: `GNUmakefile` and `makefile` in the parent of the working directory or in `HOME`;
+    `.makerc`, `.make`, `.makefile`, `makefile.mk` and `Makefile.in`; an `include` of a file that
+    exists only in the parent.
+  - `cargo`: `.cargo/config.toml` in the directory of the manifest when it is below the working
+    directory; `$XDG_CONFIG_HOME/cargo/config.toml`.
+  - `npm`: `.npmrc` in a parent of the project directory that holds neither `package.json` nor
+    `node_modules`; `script-shell`, `node-options` and `init-module` during `npm pack`,
+    `npm install` of a tarball and `node -e`, which start no script shell, node or initialiser.
+  - `go`: `$HOME/.config/go/env`, `$XDG_CONFIG_HOME/go/env` and `$HOME/go/env` on macOS; a
+    `toolchain` line in `go.mod` or `go.work`, which go rejects when it has the `+path` form and
+    ignores under `GOTOOLCHAIN=local`; `go.work` in a parent, which is read and has no key that runs
+    a program; `GOFLAGS=-vettool=` under `go vet`; `CGO_ENABLED=0`; `GOPROXY` in the file.
+  - `python3`: `sitecustomize.py` in the user site; `sitecustomize.py`, `usercustomize.py` and
+    `.pth` files in the working directory or its parent; `pyvenv.cfg` in the working directory,
+    and a `home =` line in a venv's `pyvenv.cfg`.
+  - pip through `python3 -m venv`: none of the files above. `ensurepip` removes every `PIP_`
+    variable and sets `PIP_CONFIG_FILE` to the null device.
+
+  `cargo` reads `.cargo/config.toml` in every parent of its working directory up to `/`. The
+  working directory is the session directory, and a confined stage writes nothing above it, so the
+  suite does not clean the parents.
+  `npm_config_userconfig` and `npm_config_globalconfig` are removed with the other
+  `npm_config_` names and not set: the default user file is `$HOME/.npmrc`, which is removed, and
+  the default global file is under the prefix npm is installed in, which no stage writes.
+  The Linux file names for `make`, `cargo` and `npm` are the same, from their documentation and not from a run. `go` reads
+  `$XDG_CONFIG_HOME/go/env` or `$HOME/.config/go/env`, and `python3` reads the user site
+  `~/.local/lib/python3.<minor>/site-packages`; `GOENV=off`, `PYTHONNOUSERSITE=1` and the removal of
+  `XDG_CONFIG_HOME` leave neither read. `a_setup_go_does_not_read_an_environment_file_in_the_home`
+  plants both go paths and `a_setup_python_does_not_import_a_usercustomize_from_the_home` takes
+  the user site from `site.getusersitepackages()`, so they run against the Linux locations on
+  Linux. No Linux run was made of any of this: the Linux versions of these programs are not
+  recorded, GNU Make 4.x was not run, and that is tracked by #3811 and #3863. The suite runs
+  nothing on Windows.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`

@@ -265,7 +265,11 @@ SANDBOX-30 text says it was read from documentation or source alone, such as `FF
 `CGO_FFLAGS`, `GCC_EXEC_PREFIX` and `OPENSSL_ENGINES`, was not run, and a name that exists only on
 Linux or Windows is listed from source without a run only where the text says so. The run does not
 show that no other name or version selects code, so a reviewer still reads the launcher for each
-change to the list.
+change to the list. The configuration files those programs read are covered the same way: SANDBOX-30
+records the files that ran a helper and the ones that ran nothing, and the suite removes the files
+that ran one from the directories it chose, or sets the variable that switches the file off. Those
+files were found on one macOS host as well, so a reviewer also reads a program's documentation for
+the files it reads when a workflow starts a new program or a new command of one.
 
 ```rust
 // Wrong: the variables are inherited as the person set them, so a value naming a file a stage
