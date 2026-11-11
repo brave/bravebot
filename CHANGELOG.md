@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Added reporting to [herdr](https://github.com/herdrdev/herdr). A session in a herdr pane tells herdr whether it is idle, working or waiting for an answer, gives it `bravebot --resume <id>` with only the flags that narrow the session so herdr can reopen it after a restart, and frees the pane when you quit. An incognito session sends no resume command, and nothing is sent outside herdr. macOS and Linux only for now.
+
 ## [0.21.0](https://github.com/brave/bravebot/releases/tag/v0.21.0)
 
  - Added `bravebot schedule`, which runs a prompt on a cron expression with `add`, `list`, `remove`, `run-now`, `history`, `pause`, `resume`, `pending` and `clear`. It installs a crontab line, a launchd job (the default on macOS) or a systemd timer, and a scheduled run stops at its first question and keeps it for `pending`. ([#1541](https://github.com/brave/bravebot/issues/1541), [#1546](https://github.com/brave/bravebot/issues/1546))

@@ -7,7 +7,7 @@ governs:
   - crates/herdr/src/transport.rs
   - crates/tui/src/herdr.rs
   - crates/tui/src/app/terminal.rs
-documented-by: none (gap: a page saying a session inside herdr reports to it, owed with the interface reporting its state)
+documented-by: docs/website/docs/using/herdr.md
 ---
 
 ## Scope
