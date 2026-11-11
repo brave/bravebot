@@ -77,13 +77,15 @@ starts reads them to choose the program it runs (`xdg-open` reads `BROWSER` only
 path, and not under GNOME with `gio` installed, where it runs `gio open`)
 ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). The names are removed whatever they hold,
 which is stricter than the terminal client's check of the value, and a bridge started after an open is
-started without them. It does not delete `HOME`, which the application and the agent it starts
-read, so on Linux under a GNOME session the opener Electron starts can still read a `HOME` the
+started without them. It does not delete `HOME`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, which the application and the agent it starts
+read and Electron uses to reach the session bus, so on Linux under a GNOME session the opener Electron starts can still read a `HOME`, a runtime directory or a bus address the
 sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30);
-tracked by [#3904](https://github.com/brave/bravebot/issues/3904)).
+[#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME`, and no issue tracks the other
+two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
+"What a checked start does not cover" in SANDBOX-30 records).
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
-launcher it starts is a script that records which of the six names it was started with. The
+launcher it starts is a script that records which of the fifteen names it was started with. The
 Electron test has a case for `openExternal` and `openPath` and a case for `showItemInFolder`. Neither
 case has been run on Linux since the test was changed, and the `showItemInFolder` case has never
 been run there.

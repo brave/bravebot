@@ -52,13 +52,24 @@ use std::process::Stdio;
 /// command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line 3100), so it is one
 /// file ([`Names::File`]) and is kept only when it is an existing file outside every directory a
 /// stage may write.
-const CODE_SELECTORS: [(&str, Names); 16] = [
+///
+/// `gio open` connects to the session bus, which it finds from `DBUS_SESSION_BUS_ADDRESS` and
+/// otherwise from `XDG_RUNTIME_DIR/bus`. A service a stage runs on a socket it can create answers
+/// as the bus, and what it answers to the calls that choose or start a handler was not shown
+/// to be harmless, so both names are judged by where the socket is. `XDG_RUNTIME_DIR` is one
+/// directory. `DBUS_SESSION_BUS_ADDRESS` is [`Names::BusAddress`]: kept only when every entry is
+/// `unix:path=` with an absolute path outside every directory a stage may write, or
+/// `unix:runtime=yes`. A path is judged where it leads on the disk, a path that does not exist is
+/// removed, and the file at it is not required to be a socket.
+const CODE_SELECTORS: [(&str, Names); 18] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    ("XDG_RUNTIME_DIR", Names::Directory),
+    ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),
     selectors::GIO_EXTRA_MODULES,
     selectors::GIO_MODULE_DIR,
     ("GIO_LAUNCH_DESKTOP", Names::File),
@@ -1083,6 +1094,10 @@ mod tests {
                 std::fs::write(place.join("sycoca"), "").unwrap();
                 place.join("sycoca").display().to_string()
             }
+            "DBUS_SESSION_BUS_ADDRESS" => {
+                std::fs::write(place.join("bus"), "").unwrap();
+                format!("unix:path={}", place.join("bus").display())
+            }
             _ => {
                 std::fs::create_dir_all(place.join("selected")).unwrap();
                 place.join("selected").display().to_string()
@@ -1284,7 +1299,7 @@ mod tests {
     fn the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names() {
         for name in [
             "EDITOR",
-            "XDG_RUNTIME_DIR",
+            "XDG_SESSION_TYPE",
             "DISPLAY",
             "LANG",
             "PATH",
@@ -1298,6 +1313,121 @@ mod tests {
         assert!(!withheld("XDG_DATA_DIRS", "/safe/share"));
         assert!(!withheld("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
         assert!(!withheld("HOME", "/safe/home"));
+        #[cfg(unix)]
+        {
+            assert!(!withheld("XDG_RUNTIME_DIR", "/safe/run"));
+            assert!(!withheld(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/safe/run/bus"
+            ));
+        }
+    }
+
+    /// SANDBOX-30, `gio open`: the session bus it connects to. The regression it rejects: neither
+    /// name in the opener's list, so a socket a stage listens on, named by `XDG_RUNTIME_DIR/bus` or
+    /// by the address, is connected to by the program the opener starts; or `DBUS_SESSION_BUS_ADDRESS`
+    /// removed whatever it holds, which takes the person's own bus from `gio open` too.
+    #[cfg(unix)]
+    #[test]
+    fn the_opener_removes_the_runtime_directory_and_bus_address_that_lead_to_a_socket_a_stage_may_write()
+     {
+        assert!(withheld("XDG_RUNTIME_DIR", "/stage/run"));
+        assert!(withheld("XDG_RUNTIME_DIR", "run"));
+        assert!(withheld("XDG_RUNTIME_DIR", ""));
+        assert!(!withheld("XDG_RUNTIME_DIR", "/safe/run"));
+
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/stage/run/bus"
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus;unix:path=/stage/run/bus"
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:abstract=/tmp/dbus-x"
+        ));
+        assert!(withheld("DBUS_SESSION_BUS_ADDRESS", ""));
+        assert!(!withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus"
+        ));
+        assert!(!withheld("DBUS_SESSION_BUS_ADDRESS", "unix:runtime=yes"));
+    }
+
+    /// SANDBOX-30, `gio open`: a bus address that is not text is removed and not judged by its
+    /// lossy rendering. The regression it rejects: `unix:path=/safe/run/bus` followed by a byte that
+    /// is not UTF-8 read as the path under `/safe` and kept. The same text with the replacement
+    /// character written out is a path of its own and is kept. `XDG_RUNTIME_DIR` is a path, which is
+    /// judged by its bytes whether or not it is text.
+    #[cfg(unix)]
+    #[test]
+    fn a_bus_address_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering() {
+        use std::os::unix::ffi::OsStrExt;
+        let name = "DBUS_SESSION_BUS_ADDRESS";
+
+        assert!(withheld_bytes(
+            name,
+            OsStr::from_bytes(b"unix:path=/safe/run/bus\xff")
+        ));
+        assert!(!withheld(name, "unix:path=/safe/run/bus\u{fffd}"));
+        assert!(withheld_bytes(
+            "XDG_RUNTIME_DIR",
+            OsStr::from_bytes(b"/stage/run\xff")
+        ));
+        assert!(!withheld_bytes(
+            "XDG_RUNTIME_DIR",
+            OsStr::from_bytes(b"/safe/run\xff")
+        ));
+    }
+
+    /// SANDBOX-30, on the disk: a socket path is judged where it leads. The regression it rejects:
+    /// the address compared as written, so a link under an installed directory to a socket a stage
+    /// may write is kept, and a socket that does not exist yet, which whoever can write its
+    /// directory makes first, is kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_bus_socket_is_judged_by_where_it_leads_on_the_disk() {
+        let session = crate::testutil::scratch_dir("opener-bus-session");
+        let safe = crate::testutil::scratch_dir("opener-bus-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let session = session.canonicalize().unwrap();
+        let safe = safe.canonicalize().unwrap();
+        let planted = session.join("bus");
+        let genuine = safe.join("bus");
+        let linked = safe.join("linked");
+        std::fs::write(&planted, "").unwrap();
+        std::fs::write(&genuine, "").unwrap();
+        std::os::unix::fs::symlink(&planted, &linked).unwrap();
+
+        let removed = |name: &str, value: String| {
+            opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from(name), OsString::from(value))],
+                &|path: &Path| {
+                    path.canonicalize()
+                        .is_ok_and(|resolved| !resolved.starts_with(&session))
+                },
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+        let address = |path: &Path| format!("unix:path={}", path.display());
+        let name = "DBUS_SESSION_BUS_ADDRESS";
+
+        assert!(!removed(name, address(&genuine)));
+        assert!(removed(name, address(&planted)));
+        assert!(removed(name, address(&linked)));
+        assert!(removed(name, address(&safe.join("not-yet"))));
+        assert!(!removed("XDG_RUNTIME_DIR", safe.display().to_string()));
+        assert!(removed("XDG_RUNTIME_DIR", session.display().to_string()));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
     }
 
     /// SANDBOX-30, on the disk: `HOME` is removed when it, or the configuration or handler

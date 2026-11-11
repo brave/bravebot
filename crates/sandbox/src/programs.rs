@@ -689,6 +689,15 @@ pub enum Names {
     /// [`Names::Program`] is, alone or followed by ` %s`. An entry with another word, a quote or a
     /// character a shell reads fails the list, since it can run what a file name alone could not.
     Commands,
+    /// A D-Bus address, such as `DBUS_SESSION_BUS_ADDRESS`: entries joined with `;`, each
+    /// `transport:key=value,key=value`. An entry is accepted only as `unix:path=<absolute path>`
+    /// with the path outside every directory a stage may write, or `unix:runtime=yes`, which names
+    /// the bus under `XDG_RUNTIME_DIR`, a variable judged on its own. The `guid` key is allowed. Any
+    /// other transport or key fails the value, as does a repeated key and a `%` in a value, which a
+    /// D-Bus library unescapes into a path this check did not see. `unix:abstract=` is not on disk,
+    /// so no directory is outside it, and `tcp:` can be listened on by anyone who can reach the
+    /// host.
+    BusAddress,
     /// Options for the program or its interpreter, such as `CLOUDSDK_PYTHON_ARGS`. They name no path
     /// to check: `-c <code>` and `-m <module>` run code whatever directory they are in.
     ///
@@ -706,7 +715,10 @@ pub enum Names {
 /// made by whoever writes it first.
 ///
 /// A [`Names::Directories`] value is split on the path separator and passes only when it has an
-/// entry and every entry passes as a [`Names::Directory`]. [`Names::Options`] never passes.
+/// entry and every entry passes as a [`Names::Directory`]. A [`Names::Commands`] value passes when
+/// every entry is one program alone or with a placeholder, and a [`Names::BusAddress`] value when
+/// every entry is a socket outside the directories a stage may write. [`Names::Options`] never
+/// passes. A value that is not text never passes as commands or a bus address.
 pub fn may_be_run(
     names: Names,
     value: &Path,
@@ -744,7 +756,47 @@ pub fn may_be_run(
                         && may_be_run(Names::Program, Path::new(program), outside_stage_writable)
                 })
         }
+        Names::BusAddress => {
+            let Some(value) = value.to_str() else {
+                return false;
+            };
+            !value.is_empty()
+                && value
+                    .split(';')
+                    .all(|entry| bus_entry_is_outside(entry, outside_stage_writable))
+        }
         Names::Options => false,
+    }
+}
+
+/// Whether one `transport:key=value,...` entry of a D-Bus address is a socket outside every
+/// directory a stage may write. See [`Names::BusAddress`].
+fn bus_entry_is_outside(entry: &str, outside_stage_writable: &impl Fn(&Path) -> bool) -> bool {
+    let Some(("unix", keys)) = entry.split_once(':') else {
+        return false;
+    };
+    let mut path = None;
+    let mut runtime = false;
+    let mut seen: Vec<&str> = Vec::new();
+    for pair in keys.split(',') {
+        let Some((key, value)) = pair.split_once('=') else {
+            return false;
+        };
+        if value.contains('%') || seen.contains(&key) {
+            return false;
+        }
+        seen.push(key);
+        match key {
+            "path" => path = Some(Path::new(value)),
+            "runtime" if value == "yes" => runtime = true,
+            "guid" => {}
+            _ => return false,
+        }
+    }
+    match (path, runtime) {
+        (Some(path), false) => path.is_absolute() && outside_stage_writable(path),
+        (None, true) => true,
+        _ => false,
     }
 }
 
@@ -3349,6 +3401,68 @@ mod tests {
         assert!(may_be_run(Names::Program, Path::new("python3"), &|_| {
             false
         }));
+    }
+
+    /// SANDBOX-30. The regression it rejects: a D-Bus address judged as a file (a socket is not a
+    /// regular file, so every address would be removed), as options (the same), or by its text
+    /// without the path, so `unix:path=/stage/bus` is kept; or an entry the check cannot place
+    /// kept, such as an abstract socket, a `tcp:` address, a `%`-escaped path, a repeated `path` or
+    /// one entry of a `;` list that is a stage's.
+    #[cfg(unix)]
+    #[test]
+    fn a_bus_address_holds_only_when_every_entry_is_a_socket_outside_the_stage() {
+        let outside = |path: &Path| path.starts_with("/safe");
+        let judged = |value: &str| may_be_run(Names::BusAddress, Path::new(value), &outside);
+
+        assert!(judged("unix:path=/safe/run/bus"));
+        assert!(judged("unix:path=/safe/run/bus,guid=0123abcd"));
+        assert!(judged("unix:guid=0123abcd,path=/safe/run/bus"));
+        assert!(judged("unix:runtime=yes"));
+        assert!(judged("unix:path=/safe/a;unix:path=/safe/b"));
+
+        assert!(!judged("unix:path=/stage/run/bus"));
+        assert!(!judged("unix:path=/safe/a;unix:path=/stage/b"));
+        assert!(!judged("unix:path=bus"));
+        assert!(!judged("unix:path=/safe/%2e%2e/stage/bus"));
+        assert!(!judged("unix:path=/safe/a,path=/stage/b"));
+        assert!(!judged("unix:path=/safe/a,runtime=yes"));
+        assert!(!judged("unix:runtime=no"));
+        assert!(!judged("unix:abstract=/tmp/dbus-x"));
+        assert!(!judged("unix:dir=/safe/run"));
+        assert!(!judged("unix:tmpdir=/safe"));
+        assert!(!judged("tcp:host=localhost,port=1"));
+        assert!(!judged("launchd:env=DBUS_LAUNCHD_SESSION_BUS_SOCKET"));
+        assert!(!judged("unix:"));
+        assert!(!judged("unix"));
+        assert!(!judged(""));
+        assert!(!judged("unix:path=/safe/a;"));
+        assert!(!may_be_run(
+            Names::BusAddress,
+            Path::new("unix:path=/safe/a"),
+            &|_| false
+        ));
+    }
+
+    /// SANDBOX-30. The regression it rejects: a bus address that is not text judged by its lossy
+    /// rendering, so `unix:path=/safe/run/bus` followed by a byte that is not UTF-8 is read as a
+    /// path under `/safe` and kept. The same text with the replacement character written out is a
+    /// path of its own, and is kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering() {
+        use std::os::unix::ffi::OsStrExt;
+        let outside = |path: &Path| path.starts_with("/safe");
+
+        assert!(!may_be_run(
+            Names::BusAddress,
+            Path::new(OsStr::from_bytes(b"unix:path=/safe/run/bus\xff")),
+            &outside
+        ));
+        assert!(may_be_run(
+            Names::BusAddress,
+            Path::new("unix:path=/safe/run/bus\u{fffd}"),
+            &outside
+        ));
     }
 
     /// SANDBOX-30. The regression it rejects: a `BROWSER` judged as one program name, so

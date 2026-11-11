@@ -4063,12 +4063,27 @@ file. A new spawn that looks a name up through
   `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
   the sandbox usability suite's in `crates/agent/src/usability.rs`.
   The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
-  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP`, `HOME`
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP`, `HOME`,
+  `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
   and the GIO, Qt and KDE names in its table below. `GIO_LAUNCH_DESKTOP` is one file
   (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
   3100, read only when the process is not setuid), so a value is removed unless it is an existing
-  file outside every directory a stage may write. `HOME` is a
+  file outside every directory a stage may write. `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`
+  name the session bus that `gio open` connects to: it uses the address when it is set and
+  otherwise `$XDG_RUNTIME_DIR/bus`. A service that a stage listens for on a socket it can create
+  answers there as the bus, and what it answers to the calls that choose or start a handler is not
+  known to be harmless, so the opener keeps each only when the socket it leads to is outside every
+  directory a stage may write. `XDG_RUNTIME_DIR` is one directory (`Names::Directory`), removed
+  unless it is an existing directory outside every such directory. `DBUS_SESSION_BUS_ADDRESS` is a
+  D-Bus address (`Names::BusAddress`): entries joined with `;`, each of which must be
+  `unix:path=<absolute path>` with the path outside every such directory (the `guid` key is
+  allowed), or `unix:runtime=yes`. A path is judged where it leads, and one that does not exist is
+  removed, since whoever can write the directory it would be in makes it first. The file at the
+  path is not required to be a socket. A value that is not text is removed, since its path is
+  not read from a lossy rendering; `XDG_RUNTIME_DIR` is judged by its bytes.
+  An abstract socket, a `tcp:` or other transport, an unknown or repeated key and a `%` in a value
+  fail the whole value. `HOME` is a
   directory: `gio open`, which `xdg-open` runs under a GNOME session, reads
   `$HOME/.config/mimeapps.list` and `$HOME/.local/share/applications` when `XDG_CONFIG_HOME` and
   `XDG_DATA_HOME` are not set. The opener removes `HOME` when it does not name an existing directory
@@ -4086,11 +4101,18 @@ file. A new spawn that looks a name up through
   deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories and the GIO, Qt and KDE names
   of the opener's table below from its own environment before it asks
   Electron to open an address or a file, since
-  it starts the opener through Electron and not through this start. It does not delete `HOME`: the
-  application reads `HOME` itself, `process.env` is shared with the agent it starts, and a `HOME`
+  it starts the opener through Electron and not through this start. It does not delete `HOME`,
+  `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: the
+  application reads `HOME` itself, Electron reaches the session bus through the other two, the
+  agent's allowed-hosts proxy makes its socket directory under `XDG_RUNTIME_DIR`
+  ([SANDBOX-24](#SANDBOX-24)), `process.env` is shared with the agent it starts, and a value
   put back after the call cannot be shown to follow the moment Electron starts `xdg-open`. On Linux
-  under a GNOME session the application's opener therefore still reads a `HOME` a stage may write.
-  [#3904](https://github.com/brave/bravebot/issues/3904) tracks that. The names another program
+  under a GNOME session the application's opener therefore still reads a `HOME`, a runtime directory
+  or a bus address that a stage may write.
+  [#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME` and
+  [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
+  in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
+  "What a checked start does not cover". The names another program
   reads are added to its start when that program is audited. The usability suite's list
   (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 77 names) adds the names `git`, `make`
   (the programs and flags of its built-in rules, `MAKE_COMMAND`, and `COMPILER_PATH` and
@@ -4359,6 +4381,8 @@ file. A new spawn that looks a name up through
   | `GIO_EXTRA_MODULES` | a list of directories | modules `gio` loads |
   | `GIO_MODULE_DIR` | a directory | the directory `gio` loads modules from |
   | `GIO_LAUNCH_DESKTOP` | a file | the wrapper `gio open` executes with the command line of the handler it starts |
+  | `XDG_RUNTIME_DIR` | a directory | holds the session bus socket `gio open` connects to when `DBUS_SESSION_BUS_ADDRESS` is not set |
+  | `DBUS_SESSION_BUS_ADDRESS` | a D-Bus address | the session bus `gio open` connects to, which answers the calls that choose or start a handler |
   | `QT_PLUGIN_PATH` | a list of directories | where Qt, and so `kde-open`, loads plug-ins from |
   | `QT_QPA_PLATFORM_PLUGIN_PATH` | a directory | where Qt loads the platform plug-in from |
   | `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM`, `QT_STYLE_OVERRIDE` | options | name the plug-in Qt loads from the directories above |
@@ -4720,8 +4744,10 @@ shown by running the program, or not entirely:
     observable on macOS, where `gio/gio-tool-open.c` skips it, and was run on Linux with 2.86.0
     for the four `XDG_` names (the browser opener bullet below). Read in the files named, with no
     load of code found: `GSETTINGS_SCHEMA_DIR`,
-    `GSETTINGS_BACKEND`, `GIO_USE_VFS` (which choose among modules already loaded) and
-    `DBUS_SESSION_BUS_ADDRESS` (selects a bus).
+    `GSETTINGS_BACKEND` and `GIO_USE_VFS` (which choose among modules already loaded). The session
+    bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
+    judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
+    not run or read.
   - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. Its names are
     from source only, read at these commits, none of which is a release tag: kde-cli-tools
     aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
@@ -4803,11 +4829,12 @@ shown by running the program, or not entirely:
   `showItemInFolder` case has never been run on Linux.
 
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
-  the five names, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
+  the names in the opener's list, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
   `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
   launchers whose names are fixed, `KDE_SESSION_VERSION` to complete the name `kde-open5`,
-  `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`, and `XDG_RUNTIME_DIR`
-  for a `flatpak-info` file that switches to `gdbus`. None of those names a file to run.
+  `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`. They also read
+  `XDG_RUNTIME_DIR`, which is in the opener's list, for a `flatpak-info` file that switches to
+  `gdbus`. None of the names in this sentence names a file to run.
   `xdg-mime` 1.2.1 also reads `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX` as file-name prefixes
   (`<desktop>-mimeapps.list`, `<prefix>defaults.list`, `<prefix>mimeinfo.cache`) and
   `KDE_SESSION_VERSION` as a suffix of program names (`kde-open5`, `kbuildsycoca<version>`,
@@ -4831,8 +4858,37 @@ shown by running the program, or not entirely:
   `gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
   holds it on the disk. The other names it reads do not choose a program or directory:
   `GIO_USE_PORTALS` (first character only), `GIO_LAUNCHED_DESKTOP_FILE` (a journal identifier),
-  `PARENT_WINDOW_ID` (read from a launch context, which `gio open` does not pass) and
-  `XDG_RUNTIME_DIR` (used only in a test build of GLib).
+  `PARENT_WINDOW_ID` (read from a launch context, which `gio open` does not pass).
+  `gio open` connects to the session bus before it chooses a handler. A listener bound to
+  `<dir>/bus` received the bytes `\x00AUTH\r\n` from a `gio` 2.86.0 run on Linux with
+  `XDG_RUNTIME_DIR=<dir>`, and the same from a run with
+  `DBUS_SESSION_BUS_ADDRESS=unix:path=<dir>/bus` and no `XDG_RUNTIME_DIR`. That Linux run is
+  unreproduced on this host: it is the measurement in
+  [#3932](https://github.com/brave/bravebot/issues/3932), and no Linux host ran it for this
+  change. The same program on macOS with `gio`
+  installed through Homebrew did not connect to either socket and exited with `Operation not
+  supported`. With `GIO_USE_PORTALS=1`, which makes `gio` use the desktop portal, it connected, and a
+  listener written in Python that
+  answered the D-Bus authentication, `Hello` and `GetNameOwner` received, for
+  `XDG_RUNTIME_DIR=<dir>` and for `DBUS_SESSION_BUS_ADDRESS=unix:path=<dir>/bus` alike, a call of
+  `org.freedesktop.portal.OpenURI.OpenURI` carrying the address `gio open` was given. The listener
+  answered that call with an empty reply, `gio` called `GetNameOwner` once more, and the run was ended by
+  the harness's 8 second timeout, with exit status -15 and no message from `gio`. So a
+  service a stage listens with learns what the person opens through the opener, and both names
+  are in the opener's list for that reason, and
+  `the_opener_removes_the_runtime_directory_and_bus_address_that_lead_to_a_socket_a_stage_may_write`
+  and `a_bus_socket_is_judged_by_where_it_leads_on_the_disk` hold the judgment. Whether a service
+  can make `gio open` run code or choose a handler was not shown, and is not recorded as
+  impossible: the listener did not complete the portal call, the run forced the portal path and
+  not the desktop handler lookup a GNOME session uses, and no Linux host ran it. The names are
+  removed and not recorded as harmless. When
+  `DBUS_SESSION_BUS_ADDRESS` is removed and `XDG_RUNTIME_DIR` is kept, `gio` finds the bus at
+  `$XDG_RUNTIME_DIR/bus`; when both are removed it has no session bus to find, may start one with
+  `dbus-launch`, and otherwise opens the address without the services a bus provides. That is the
+  cost of removing them. It applies to every value the judgment removes: one that leads into a
+  directory a stage may write or that does not exist, a runtime directory that is empty or
+  relative, and an address that is abstract, `tcp:`, `launchd:`, repeated-key, contains `%` or is
+  otherwise refused, whatever it points to.
   `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
   `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
   mirror of the KDE repositories. Those files read `PATH` directly (`desktopexecparser.cpp`
@@ -4849,7 +4905,8 @@ shown by running the program, or not entirely:
   `a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk` runs the judgment on the
   disk. What `gio` does with `HOME` removed was not run: the test removes nothing it can see
   `gio` fall back from, and does not run on a host where the account has handlers of its own.
-  These were not run: the Windows `rundll32` start, which was read, which no test on another
+  These were not run: a D-Bus service that answers `gio open` after the portal call it receives, so
+  that what it can make `gio open` start is unobserved; the Windows `rundll32` start, which was read, which no test on another
   system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
@@ -4869,6 +4926,33 @@ shown by running the program, or not entirely:
   the launchers read is therefore complete only for `xdg-open` and `xdg-mime` 1.2.1 and, for the
   files named above, `gio open` and `kde-open`.
   They are tracked by #3822.
+- **The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`.** The desktop
+  application, the AWS CLI (`crates/bedrock/src/credentials.rs`), the gcloud launcher
+  (`crates/agent/src/gcloud.rs`) and the programs of `doctor --push-identity`
+  (`crates/cli/src/push_identity.rs`) do not judge either name. The application cannot delete
+  them: Electron reaches the session bus through them, the agent's proxy directory is made under
+  `XDG_RUNTIME_DIR` and the agent is started with the application's environment. Deleting them for
+  the span of one call is not shown to reach the moment Electron starts `xdg-open`. The other three
+  start `xdg-open` through Python's `webbrowser` or a credential helper, so under a GNOME session
+  `gio open` connects to the bus the value names, and the run in the `gio open` text above shows
+  that a service there receives the address being opened, which for a sign-in is the sign-in page's.
+  The code gives one reason per start. The tests of the AWS start (`credentials.rs`) and the
+  gcloud start (`gcloud.rs`) say the sign-in or login is run to read `DISPLAY` and
+  `XDG_RUNTIME_DIR`, and the code does not say which program reads `XDG_RUNTIME_DIR` or why. The
+  test of `doctor --push-identity` (`push_identity.rs`) says `HOME`, `SSH_AUTH_SOCK`,
+  `XDG_RUNTIME_DIR` and `DISPLAY` are variables the programs started there are run to read, and
+  gives no reason specific to `XDG_RUNTIME_DIR`. None of the three judges
+  `DBUS_SESSION_BUS_ADDRESS` or says why it is passed on. The sandbox usability suite
+  (`crates/agent/src/usability.rs`) lists neither name, and its list has `BROWSER` for the
+  commands `cargo doc --open` opens the documentation with. The person's own runtime directory is
+  normally outside every directory a stage may write. The cost is that a person whose value leads
+  into such a directory
+  has the address received by a stage that listens there, and whether more than that can happen
+  was not shown. [#3940](https://github.com/brave/bravebot/issues/3940) tracks removing this
+  cost. The tests
+  `the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`,
+  `the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads` and
+  `the_variables_the_programs_started_here_are_run_to_read_are_kept` hold the kept names.
 - `osascript` was run on macOS 26.6 (arm64) with `/usr/bin/osascript` and `env -i
   PATH=/usr/bin:/bin`. A compiled script library `Marker3809.scpt` (built with `osacompile`) in
   `<home>/Library/Script Libraries`, whose handler appends to a marker file, was used with
@@ -5163,7 +5247,13 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the six names set and the same calls on Electron's shell start it with all six; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the fifteen names set and the same calls on Electron's shell start it with all fifteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS, which the application keeps)`
+`verified-by: bravebot_sandbox::programs::a_bus_address_holds_only_when_every_entry_is_a_socket_outside_the_stage`
+`verified-by: bravebot_tui::opener::the_opener_removes_the_runtime_directory_and_bus_address_that_lead_to_a_socket_a_stage_may_write`
+`verified-by: bravebot_tui::opener::a_bus_socket_is_judged_by_where_it_leads_on_the_disk`
+`verified-by: bravebot_tui::opener::a_bus_address_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
+`verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`

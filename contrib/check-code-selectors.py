@@ -64,9 +64,13 @@ APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
 
 # Names in the opener's list that the desktop application's lists leave out, and why. The
 # application and the agent it starts read `HOME`, so deleting it from the application's
-# environment would change both; the opener removes it from its own start instead.
+# environment would change both; the opener removes it from its own start instead. Electron finds
+# the session bus from `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager,
+# portal and notification calls, so deleting them would break those.
 APPLICATION_EXCEPTIONS = {
-    "HOME": "the desktop application and the agent it starts read HOME, so it is not deleted there"
+    "HOME": "the desktop application and the agent it starts read HOME, so it is not deleted there",
+    "XDG_RUNTIME_DIR": "Electron and the agent it starts find the session bus and their runtime files here",
+    "DBUS_SESSION_BUS_ADDRESS": "Electron connects to the session bus it names, so it is not deleted there",
 }
 
 # The file that holds the generic list and the shared names.
@@ -727,9 +731,11 @@ mod tests {
 # The opener's list as opener.rs writes it, with a name taken from the shared module, and the
 # application's two lists of the names the application deletes.
 OPENER_LIST = """\
-const CODE_SELECTORS: [(&str, Names); 4] = [
+const CODE_SELECTORS: [(&str, Names); 6] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
+    ("XDG_RUNTIME_DIR", Names::Directory),
+    ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),
     ("GIO_LAUNCH_DESKTOP", Names::File),
     ("XDG_DATA_HOME", Names::Directory),
 ];
@@ -1166,7 +1172,7 @@ def selftest():
     )
 
     application_cases = [
-        ("the lists agree, apart from HOME", OPENER_LIST, TS_LIST, MJS_LIST, 0),
+        ("the lists agree, apart from the names the application keeps", OPENER_LIST, TS_LIST, MJS_LIST, 0),
         (
             "a name only the opener lists fails in both application lists",
             OPENER_LIST.replace('("HOME", Names::Directory),', '("HOME", Names::Directory),\n    ("NEW", Names::File),'),
@@ -1199,6 +1205,20 @@ def selftest():
             "HOME in the application's list fails",
             OPENER_LIST,
             TS_LIST.replace("  'BROWSER',\n", "  'BROWSER',\n  'HOME',\n"),
+            MJS_LIST,
+            1,
+        ),
+        (
+            "XDG_RUNTIME_DIR in the application's list fails",
+            OPENER_LIST,
+            TS_LIST.replace("  'BROWSER',\n", "  'BROWSER',\n  'XDG_RUNTIME_DIR',\n"),
+            MJS_LIST,
+            1,
+        ),
+        (
+            "DBUS_SESSION_BUS_ADDRESS missing from the opener's list fails the exception",
+            OPENER_LIST.replace('    ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),\n', ""),
+            TS_LIST,
             MJS_LIST,
             1,
         ),

@@ -76,6 +76,25 @@ test('a variable that does not choose a program is left alone', () => {
   assert.deepEqual(removeOpenerSelectors(), [], 'nothing left to take off')
 })
 
+test('the home, runtime directory and session bus address are left set for the application', () => {
+  // The fault is deleting them here, which takes the session bus from Electron and the runtime
+  // directory from the agent it starts. The terminal client's opener judges them instead.
+  const kept = ['HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']
+  const before = kept.map((name) => process.env[name])
+  try {
+    planted()
+    for (const name of kept) process.env[name] = '/stage/' + name
+    removeOpenerSelectors()
+    for (const name of kept) assert.equal(process.env[name], '/stage/' + name, `${name} was deleted`)
+    assert.deepEqual(OPENER_SELECTORS.filter((name) => kept.includes(name)), [])
+  } finally {
+    kept.forEach((name, index) => {
+      if (before[index] === undefined) delete process.env[name]
+      else process.env[name] = before[index]
+    })
+  }
+})
+
 test('only external-open.ts calls the opening functions of electron shell', () => {
   // The fault is a new site that calls `shell.openExternal` directly, which skips the deletion.
   const offenders = []
