@@ -59,7 +59,7 @@ guards:
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 76
+      - crates/core/src/policy.rs: 77
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
       - crates/mcp/tests/openshell.rs: 1
@@ -95,7 +95,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 71
+      - crates/core/src/policy.rs: 72
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -1126,7 +1126,10 @@ arrives at all.
   server's list declares for its argument, drops a row that does not fit, holds a value that is not
   that type or repeats an earlier row, and counts each drop by a reason of a closed set. What comes
   back is the resolved list, labelled with everything it derives from, which the driver carries to
-  the person and to the server and never reads. A hostile entry or answer can choose which of the
+  the person and to the server and never reads. Which calls
+  are kept from the person's ticks, which a failure skips, and whether the list holds any call
+  are worked out in the policy layer too, by `Policy::keep_applied` and `Policy::proposes_nothing`,
+  so the driver makes the calls it is handed by their places in the list. A hostile entry or answer can choose which of the
   calls the plan allows are proposed, within its caps, and nothing else.
 
   Suppose the page a processor read is hostile and talks the processor round. Everything that buys

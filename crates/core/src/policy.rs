@@ -5830,29 +5830,50 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         resolved.clone().declassify(&proof)
     }
 
-    /// Record that the person approved these calls of a resolved list, and no others.
-    ///
-    /// Each grant is bound to the server, the tool and the call's place in the list, so an
-    /// approval cannot be spent on another call or reused.
-    pub fn endorse_applied(
+    /// Whether a resolved list holds no call, and if so whether any row was dropped: no row at all
+    /// is the processor saying nothing needed a call, and rows that were all dropped are a
+    /// proposal nothing could be made of. Counts only, read in the policy layer.
+    pub fn proposes_nothing(
+        &mut self,
+        resolved: &Labelled<crate::apply::Resolved>,
+    ) -> Option<bool> {
+        let proof = Declassification::authorise("whether a resolved list holds any call");
+        let resolved = resolved.clone().declassify(&proof);
+        resolved
+            .calls
+            .is_empty()
+            .then_some(!resolved.dropped.is_empty())
+    }
+
+    /// The calls of a resolved list the person ticked, kept only where every call each depends on
+    /// is kept too, in an [`crate::apply::Applying`] the driver makes them through. A grant is
+    /// minted for each kept call, bound to the server, the tool and the call's place in the list,
+    /// so an approval cannot be spent on another call or reused. Refused where no call is kept.
+    pub fn keep_applied(
         &mut self,
         alias: &str,
         resolved: &Labelled<crate::apply::Resolved>,
-        kept: &[usize],
-    ) {
-        let proof = Declassification::authorise("the names of the tools a person approved");
-        let names: Vec<String> = resolved
-            .clone()
-            .declassify(&proof)
-            .calls
-            .into_iter()
-            .map(|call| call.name)
-            .collect();
-        for index in kept {
-            if let Some(name) = names.get(*index) {
-                self.issue_grant("apply", "call", format!("{alias}:{name}#{index}"));
+        ticked: &[usize],
+    ) -> Gated<crate::apply::Applying> {
+        let proof = Declassification::authorise(
+            "which calls of a resolved list depend on which, and the tools a person approved",
+        );
+        let calls = resolved.clone().declassify(&proof).calls;
+        let applying =
+            crate::apply::Applying::new(calls.iter().map(|call| call.after).collect(), ticked);
+        if applying.is_empty() {
+            return Err(self.deny(
+                "apply",
+                Principle::Confinement,
+                format!("the person declined every call to {alias}"),
+            ));
+        }
+        for (index, call) in calls.iter().enumerate() {
+            if applying.came()[index] == crate::apply::Came::Unmade {
+                self.issue_grant("apply", "call", format!("{alias}:{}#{index}", call.name));
             }
         }
+        Ok(applying)
     }
 
     /// The gate a call of a resolved list passes before it is sent. Returns its tool and its

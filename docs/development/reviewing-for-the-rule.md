@@ -115,8 +115,10 @@ The crate reads an `apply` step's lists and rows the same way, through two more 
 `Policy::number_a_list` hands it a read's reply to number the entries that hold the fields the plan
 takes, and `Policy::resolve_proposal` hands it the processor's answer, which it resolves against the
 plan's shape and those entries, typing each value as the server's list declares and dropping and
-counting each row that does not fit. The driver carries the resolved list to the person's question
-and to the server and reads none of it, so a branch in the driver on a resolved value is a
+counting each row that does not fit. `Policy::keep_applied` works out which calls the person's
+ticks keep and which a failed call takes with it, and `Policy::proposes_nothing` whether there is
+any call. The driver carries the resolved list to the person's question and to the server, and the
+call numbers it is handed, and reads none of it, so a branch in the driver on a resolved value is a
 violation of shape 1.
 The tenth is the trigger listener in `crates/cli/src/trigger.rs`, which is not the driver and holds
 no `declassify`. It decides from the request line and headers only: the framing refusals of

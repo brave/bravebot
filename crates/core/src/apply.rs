@@ -218,9 +218,151 @@ impl Resolved {
     }
 }
 
+/// What became of one call of an approved list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Came {
+    /// The server answered with no failure reported.
+    Made,
+    /// The server reported a failure, or its reply could not be used.
+    Failed,
+    /// It depended on a call that failed, so it was not made.
+    Skipped,
+    /// The person left it out, or a call it depended on.
+    LeftOut,
+    /// The run stopped before it, or at it.
+    Unmade,
+}
+
+/// The calls of an approved list to make, in order, and what became of each.
+///
+/// Built only by the policy layer, from the labelled list and the person's ticks, so the driver
+/// carries call numbers and never reads which call depends on which (LABEL-10). A call is kept
+/// only where every call it depends on is kept too, and a call that fails takes every call that
+/// depends on it, directly or through others, with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Applying {
+    after: Vec<Option<usize>>,
+    kept: Vec<usize>,
+    next: usize,
+    came: Vec<Came>,
+}
+
+impl Applying {
+    pub(crate) fn new(after: Vec<Option<usize>>, ticked: &[usize]) -> Self {
+        let mut kept: Vec<usize> = Vec::new();
+        for (at, before) in after.iter().enumerate() {
+            if ticked.contains(&at) && before.is_none_or(|before| kept.contains(&before)) {
+                kept.push(at);
+            }
+        }
+        let came = (0..after.len())
+            .map(|at| match kept.contains(&at) {
+                true => Came::Unmade,
+                false => Came::LeftOut,
+            })
+            .collect();
+        Self {
+            after,
+            kept,
+            next: 0,
+            came,
+        }
+    }
+
+    /// Whether no call is kept.
+    pub fn is_empty(&self) -> bool {
+        self.kept.is_empty()
+    }
+
+    /// The next call to make, by its place in the list, passing over any a failure skipped.
+    pub fn next_call(&mut self) -> Option<usize> {
+        while let Some(&at) = self.kept.get(self.next) {
+            self.next += 1;
+            if self.came[at] != Came::Skipped {
+                return Some(at);
+            }
+        }
+        None
+    }
+
+    /// Record that the call at `at` was answered with no failure reported.
+    pub fn made(&mut self, at: usize) {
+        self.came[at] = Came::Made;
+    }
+
+    /// Record that the call at `at` failed, and skip every kept call that depends on it.
+    pub fn failed(&mut self, at: usize) {
+        self.came[at] = Came::Failed;
+        let mut gone = BTreeSet::from([at]);
+        for later in at + 1..self.after.len() {
+            if self.after[later].is_some_and(|before| gone.contains(&before)) {
+                gone.insert(later);
+                if self.came[later] == Came::Unmade {
+                    self.came[later] = Came::Skipped;
+                }
+            }
+        }
+    }
+
+    /// What became of each call of the list, in list order.
+    pub fn came(&self) -> &[Came] {
+        &self.came
+    }
+
+    /// How many calls were kept, made, failed and skipped.
+    pub fn tally(&self) -> (usize, usize, usize, usize) {
+        let count = |came: Came| self.came.iter().filter(|c| **c == came).count();
+        (
+            self.kept.len(),
+            count(Came::Made),
+            count(Came::Failed),
+            count(Came::Skipped),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LABEL-10. A call is kept only where every call it depends on is kept too, calls are handed
+    /// out in list order, and a failed call skips every kept call that depends on it, directly or
+    /// through another. The regressions it rejects are a call kept after the call it needs was
+    /// left out, and a failure that skips only the calls depending on it directly.
+    #[test]
+    fn applying_keeps_what_its_dependencies_allow_and_a_failure_skips_its_dependants() {
+        // 0 makes a folder, 1 and 2 depend on it, 3 depends on 2, and 4 stands alone.
+        let after = vec![None, Some(0), Some(0), Some(2), None];
+        let left_out = Applying::new(after.clone(), &[1, 4]);
+        assert_eq!(
+            left_out.tally(),
+            (1, 0, 0, 0),
+            "1 needs 0, which was left out"
+        );
+
+        let mut applying = Applying::new(after, &[0, 1, 2, 3, 4]);
+        assert_eq!(applying.next_call(), Some(0));
+        applying.made(0);
+        assert_eq!(applying.next_call(), Some(1));
+        applying.made(1);
+        assert_eq!(applying.next_call(), Some(2));
+        applying.failed(2);
+        assert_eq!(applying.next_call(), Some(4), "3 depended on 2");
+        applying.made(4);
+        assert_eq!(applying.next_call(), None);
+        assert_eq!(
+            applying.came(),
+            &[
+                Came::Made,
+                Came::Made,
+                Came::Failed,
+                Came::Skipped,
+                Came::Made
+            ]
+        );
+        assert_eq!(applying.tally(), (5, 3, 1, 1));
+        assert!(Applying::new(vec![None], &[]).is_empty());
+    }
 
     fn call(tool: usize, after: Option<usize>) -> Call {
         Call {
