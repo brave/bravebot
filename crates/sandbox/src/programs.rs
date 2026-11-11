@@ -2664,6 +2664,42 @@ mod tests {
         ));
     }
 
+    /// SANDBOX-30, PATH-003. A shim is in the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names only
+    /// where the value and the directory are the same bytes. The regression it rejects: comparing
+    /// them through `to_string_lossy`, which reads `moved-\xff` as `moved-\u{FFFD}`, so a variable
+    /// naming one directory makes a program in the other a shim and `HOME` is judged for the wrong
+    /// program, or is not judged for a shim.
+    #[cfg(unix)]
+    #[test]
+    fn a_shim_root_that_is_not_text_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = Path::new(OsStr::from_bytes(b"moved-\xff"));
+        let lookalike = Path::new("moved-\u{FFFD}");
+        let shim_in = |root: &Path| root.join("shims").join("git");
+        let held = |variable: &str, value: &Path| {
+            vec![(OsString::from(variable), value.as_os_str().to_os_string())]
+        };
+
+        for variable in SHIM_ROOT_VARIABLES {
+            assert!(
+                is_version_manager_shim(&shim_in(not_text), &held(variable, not_text)),
+                "{variable} naming the exact bytes"
+            );
+            assert!(
+                is_version_manager_shim(&shim_in(lookalike), &held(variable, lookalike)),
+                "{variable} naming the lookalike"
+            );
+            assert!(
+                !is_version_manager_shim(&shim_in(not_text), &held(variable, lookalike)),
+                "{variable} naming the lookalike made a shim of the bytes' directory"
+            );
+            assert!(
+                !is_version_manager_shim(&shim_in(lookalike), &held(variable, not_text)),
+                "{variable} naming the bytes made a shim of the lookalike's directory"
+            );
+        }
+    }
+
     /// The regression it rejects: the prefix `BASH_FUNC_` or the pattern `ASDF_<TOOL>_VERSION`
     /// dropped, matched on the start of the name alone, matched only for names the table spells
     /// out, or widened so a neighbouring name is removed. `ASDF_DATA_DIR` is judged by its value, so
