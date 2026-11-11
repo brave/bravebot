@@ -73,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 82] = [
+const CODE_SELECTORS: [(&str, Names); 83] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -162,6 +162,10 @@ const CODE_SELECTORS: [(&str, Names); 82] = [
     ("NODE_PATH", Names::Directories),
     // python3: the program `sys.executable` names, which `-m venv` starts to make the environment.
     ("PYTHONEXECUTABLE", Names::Program),
+    // python3: the name of the module `sysconfig` imports for its build variables. It is imported
+    // from `sys.path`, which holds the working directory for `-c` and `-m`, so a file the stage
+    // wrote there runs. A module name and not a path, so it is judged as options.
+    ("_PYTHON_SYSCONFIGDATA_NAME", Names::Options),
     // go: flags that name a tool to run (`-toolexec`, `-exec`), a program that serves the build
     // cache, and the C compiler, `pkg-config` and linker flags a package that uses cgo is built
     // with. `CC` and `CXX` are also the compilers of make's built-in rules and of the `cc` crate in
@@ -1690,6 +1694,7 @@ mod tests {
             "Npm_Config_Userconfig",
             "npm_config_init_module",
             "GOCACHEPROG",
+            "_PYTHON_SYSCONFIGDATA_NAME",
             "CC",
             "CXX",
             "CGO_LDFLAGS",

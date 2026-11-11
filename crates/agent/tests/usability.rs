@@ -2414,6 +2414,103 @@ fn a_setup_python_venv_is_not_handed_an_executable() {
     );
 }
 
+/// SANDBOX-30 (brave/bravebot#3863): python3 3.15.2 on macOS arm64 imported the module that
+/// `_PYTHON_SYSCONFIGDATA_NAME` names from the working directory, which is on `sys.path` for
+/// `-m`, when `python3 -m venv` read the build variables, and so ran a file a stage had written
+/// there. A plain `python3 -c pass` did not read it. It is a module name, so a start removes it
+/// whatever it holds. The regression it rejects: a setup `python3 -m venv` started with the
+/// module name the person's shell holds.
+#[test]
+fn a_setup_python_venv_is_not_handed_a_sysconfig_module_name() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-sysconfigdata");
+    let marker = planted.join("ran");
+    let module = format!("open('{}', 'w').close()\n", marker.display());
+
+    withheld_from_a_setup_stage(
+        "python-sysconfigdata",
+        "python3",
+        &["-m", "venv", ".venv"],
+        &[("brave_sysconfigdata.py", &module)],
+        &[("_PYTHON_SYSCONFIGDATA_NAME", "brave_sysconfigdata")],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): GNU Make 3.81 on macOS arm64 ran the assembler
+/// `-B<directory>` finds when `ASFLAGS` held `-fno-integrated-as -B<directory>/` and the
+/// built-in rule for a `.S` file ran. A `.s` file ran nothing. gcc, which `cc` is on Linux, takes
+/// `-B` and not `-fno-integrated-as`, so the flag is given on macOS only. It is options, so the
+/// helper is left where no stage can write. The regression it rejects: a setup `make` started with
+/// the assembler flags the person's shell holds.
+#[test]
+fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-rule-asflags");
+    let marker = planted.join("ran");
+    plant(&planted.join("as"), &marker);
+    let value = if cfg!(target_os = "macos") {
+        format!("-fno-integrated-as -B{}/", planted.display())
+    } else {
+        format!("-B{}/", planted.display())
+    };
+
+    withheld_from_a_setup_stage(
+        "make-rule-asflags",
+        "sh",
+        &["-c", "make -s -C {session} || true"],
+        &[("Makefile", "all: x.o\n"), ("x.S", "")],
+        &[("ASFLAGS", &value)],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): `COMPILER_PATH` is a list of directories, and
+/// `GCC_EXEC_PREFIX` a prefix, that the gcc manual ("Environment Variables Affecting GCC") says gcc
+/// searches for the programs it runs (`cc1`, `as`, `ld`), after `-B` and before the standard
+/// directories. The helper is planted as both `as` and `ld`, since gcc runs `as` and Apple clang on
+/// macOS 26 arm64 runs `ld` and has no use for `as`. Apple clang ran the `ld` found through
+/// `COMPILER_PATH` on a plain link and ran nothing for `GCC_EXEC_PREFIX`, so the `COMPILER_PATH`
+/// half of this test runs on macOS. On no recorded host does the `GCC_EXEC_PREFIX` control run the
+/// helper, so it prints `skipped` and that half cannot fail; the unit test of the list pins that
+/// name. `COMPILER_PATH` is a list of directories, so its helper is put in a directory a stage may
+/// write; `GCC_EXEC_PREFIX` is options, so its helper is left where no stage can write. The
+/// regression it rejects: a setup `make` that compiles and links with the directories the person's
+/// shell holds in `COMPILER_PATH`.
+#[test]
+fn a_setup_make_is_not_handed_a_gcc_search_path_for_its_programs() {
+    if !usability::available() {
+        return;
+    }
+    for (variable, writable) in [("COMPILER_PATH", true), ("GCC_EXEC_PREFIX", false)] {
+        let label = format!("make-{}", variable.to_lowercase().replace('_', "-"));
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        plant(&planted.join("as"), &marker);
+        plant(&planted.join("ld"), &marker);
+        let value = format!("{}/", planted.display());
+
+        withheld_from_a_setup_stage(
+            &label,
+            "sh",
+            &["-c", "make -s -C {session} || true"],
+            &[
+                ("Makefile", "all: x\n"),
+                ("x.c", "int main(void) { return 0; }\n"),
+            ],
+            &[(variable, &value)],
+            &marker,
+            writable.then_some(planted.as_path()),
+        );
+    }
+}
+
 /// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 on macOS arm64 searched the directories of `-I` in
 /// `MAKEFLAGS` for a makefile named by `-include`, and ran the `$(shell ...)` in it. `GNUMAKEFLAGS`
 /// and `MFLAGS` are not read by 3.81, so they are not covered here. The regression it rejects: a
