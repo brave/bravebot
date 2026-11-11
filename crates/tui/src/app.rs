@@ -45300,6 +45300,7 @@ mod tests {
     mod chrome;
     mod clicks;
     mod completions;
+    #[cfg(unix)]
     mod herdr;
     mod hints;
     mod history_search;

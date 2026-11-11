@@ -46,7 +46,7 @@ fn ambient() -> Reporter {
 
 /// Tell herdr the session is in `state`.
 pub(crate) fn state(state: State) {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     if script::told(state) {
         return;
     }
@@ -61,7 +61,7 @@ fn tell(reporter: &Reporter, state: State) {
 /// Tell herdr the run has left its pane, waiting a quarter of a second at most for it to have it
 /// ([HERDR-12](../../../docs/specs/herdr.md#HERDR-12)). Nothing is reported after this.
 pub(crate) fn release() {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     if script::released() {
         return;
     }
@@ -69,8 +69,8 @@ pub(crate) fn release() {
 }
 
 /// A reporter a test holds in place of the run's, for one thread, so tests that drive the title
-/// side by side each see only their own reports.
-#[cfg(test)]
+/// side by side each see only their own reports. Only the tests that listen on a Unix socket hold one.
+#[cfg(all(test, unix))]
 pub(crate) mod script {
     use super::{Reporter, State};
     use std::cell::RefCell;
@@ -248,7 +248,7 @@ pub(crate) fn command(id: &str, modes: &Modes) -> Option<Vec<String>> {
 /// Called on every pass of the event loop, so a session that changes is told on the next one.
 pub(crate) fn resume(id: Option<&str>) {
     let Some(id) = id else { return };
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     if resume_script::told(id) {
         return;
     }
@@ -266,7 +266,7 @@ fn offer(reporter: &Reporter, id: &str, modes: &Modes) {
 }
 
 /// A reporter and modes a test holds in place of the run's for [`resume`], for one thread.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod resume_script {
     use super::{Modes, Reporter};
     use std::cell::RefCell;
@@ -303,7 +303,9 @@ pub(crate) mod resume_script {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
+    use super::command_tests::{ID, strings};
     use super::*;
     use crate::title::Title;
     use serde_json::Value;
@@ -441,8 +443,6 @@ mod tests {
 
     // The command that reopens the session (HERDR-9, HERDR-10, HERDR-11).
 
-    const ID: &str = "0193f1d2-7a3b-7c4d-8e5f-6a7b8c9d0e1f";
-
     /// A herdr this thread's resume commands go to, under `modes`, that has been told one state
     /// already, since a resume command rides on a state report.
     fn reporting(modes: Modes) -> (FakeHerdr, Rc<Reporter>, resume_script::Held) {
@@ -452,10 +452,6 @@ mod tests {
         reporter.report(Shown::Idle, None);
         assert_eq!(herdr.next().0, "idle");
         (herdr, reporter, held)
-    }
-
-    fn strings(argv: &[&str]) -> Vec<String> {
-        argv.iter().map(|arg| arg.to_string()).collect()
     }
 
     /// HERDR-9. A plain session is reopened by its id and nothing else, under the plain program
@@ -555,6 +551,19 @@ mod tests {
             params["resume_argv"],
             serde_json::json!(["bravebot", "--resume", NEXT])
         );
+    }
+}
+
+/// What the resume command is built from, which needs no herdr to read.
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub(super) const ID: &str = "0193f1d2-7a3b-7c4d-8e5f-6a7b8c9d0e1f";
+
+    pub(super) fn strings(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|arg| arg.to_string()).collect()
     }
 
     /// HERDR-10. A `--sandbox` mode is carried where the run would be looser without it and it is
