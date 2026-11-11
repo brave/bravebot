@@ -29189,11 +29189,13 @@ fn an_approved_run_executes_and_the_user_saw_what_it_was() {
 }
 
 /// Where nobody can be asked, a line that redirects into a protected path does not run and the
-/// planner is told it was refused (PERM-9, MODE-2). The hook is the destination the line names, so
-/// the question is the person's and an unattended confirmer has no one to put it to.
+/// planner is told it was refused (PERM-9, MODE-2).
 ///
-/// Rejects an unattended path that answers a run because the line is otherwise harmless, and a
-/// refusal the planner is not told about.
+/// An unattended confirmer refuses every run, an ordinary one included
+/// (`an_unattended_turn_runs_no_program`), so this does not show the protected mark is read: it
+/// pins that the hook is left alone and the planner is told, end to end. What rejects a fault that
+/// answers a protected line unasked is `only_bypassing_answers_a_run_with_a_protected_destination`
+/// and `a_run_with_a_protected_destination_is_not_put_to_a_program_that_approves_everything`.
 #[cfg(unix)]
 #[test]
 fn an_unattended_turn_refuses_a_run_into_a_protected_path_and_tells_the_planner() {
