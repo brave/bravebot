@@ -469,7 +469,6 @@ depend on whatever else was changing that directory.
 `verified-by: bravebot_sandbox::windows::a_program_is_refused_a_file_outside_its_grants_and_reads_one_inside`
 `verified-by: bravebot_sandbox::windows::a_program_writes_inside_its_grants_and_not_outside`
 `verified-by: bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_to_where_it_leads`
-`verified-by: bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_a_stage_made`
 
 <a id="SANDBOX-7"></a>
 ### SANDBOX-7: a write grant covers moving a file within it
