@@ -143,6 +143,8 @@ test('a startup that broke the protocol is refused even when a valid initial vie
   await assert.rejects(open([initial(99), initial(0)]), /sequence 99/)
   await assert.rejects(open([{ data: { nonsense: true } }, initial(0)]), ProtocolError)
   await assert.rejects(open([{ event: 'session.view.update', data: initial(1, 'running').data }, initial(0)]), /before the initial view/)
+  // A snapshot starts a view only for a session being taken over, not one being created.
+  await assert.rejects(open([{ event: 'session.view.snapshot', data: { sequence: 4, turn: 0, target: 0, status: 'idle', pending: null, rows: [], omitted: 0 } }, initial(0)]), /a view snapshot arrived before the initial view/)
   const session = await open([initial(0)])
   assert.equal(session.view.ended, null)
 })
@@ -479,8 +481,6 @@ test('a take-over answered before its snapshot, or refused, leaves no session be
   for (const answer of ['nothing', 'refused'] as const) {
     const { client, sent } = aHostHoldingALeftSession(answer)
     await assert.rejects(client.attach('s7'), answer === 'nothing' ? ProtocolError : (error: unknown) => error instanceof RpcError && error.code === 'not_allowed')
-    // A snapshot that arrives now has no attach waiting for it, so it starts nothing.
-    client.receive(JSON.stringify({ event: 'session.view.snapshot', session: 's7', data: { sequence: 4, turn: 2, target: 8, status: 'completed', pending: null, rows: [], omitted: 0 } }) + '\n')
     // The session is not held, so a later attempt is sent rather than refused locally.
     await assert.rejects(client.attach('s7'))
     assert.equal(sent.filter((request) => request.method === 'session.attach').length, 2, answer)
