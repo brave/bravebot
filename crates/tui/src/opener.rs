@@ -62,7 +62,7 @@ use std::process::Stdio;
 /// `unix:runtime=yes`. A path is judged where it leads on the disk, a path that does not exist is
 /// removed, and the file at it is not required to be a socket.
 ///
-/// The last nine names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
+/// The last ten names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
 /// (brave/bravebot#3860). The sources are Wine's and ReactOS's source and Microsoft's
 /// `ShellExecute` page. No run on a Windows host shows that a name chooses the program. Wine's
 /// `url.dll` passes the address to `ShellExecuteA` with no verb, and its `shlexec.c` reads
@@ -70,16 +70,15 @@ use std::process::Stdio;
 /// (`GetEnvironmentVariableW`), so a handler whose command is written with `%ProgramFiles%` or
 /// `%LOCALAPPDATA%` runs whatever those variables name. The directory names listed are those
 /// handlers and profiles are written under: `SystemRoot`, `windir`, `ProgramFiles`,
-/// `ProgramW6432`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, each one directory
-/// ([`Names::Directory`]). Wine's `kernelbase/process.c` starts a batch file through the program
+/// `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, each one
+/// directory ([`Names::Directory`]). Wine's `kernelbase/process.c` starts a batch file through the program
 /// `COMSPEC` names, so it is one file ([`Names::File`]). `PATHEXT` is the list of extensions a
 /// command processor tries for a bare name; none of those sources reads it for this start, and it
 /// is removed whatever it holds ([`Names::Options`]). Whether the start needs it was not run.
 /// `PSModulePath` is not listed: nothing read shows `rundll32` or `ShellExecute` reading it, and the
 /// opener does not start PowerShell. The Windows run test sets it on a control start and records
-/// whether it reaches the helper. `ProgramFiles(x86)` is not listed because
-/// `contrib/check-code-selectors.py` reads names of letters, digits and underscores only.
-const CODE_SELECTORS: [(&str, Names); 27] = [
+/// whether it reaches the helper.
+const CODE_SELECTORS: [(&str, Names); 28] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
@@ -104,6 +103,7 @@ const CODE_SELECTORS: [(&str, Names); 27] = [
     ("windir", Names::Directory),
     ("ProgramFiles", Names::Directory),
     ("ProgramW6432", Names::Directory),
+    ("ProgramFiles(x86)", Names::Directory),
     ("LOCALAPPDATA", Names::Directory),
     ("APPDATA", Names::Directory),
     ("USERPROFILE", Names::Directory),
@@ -1300,6 +1300,9 @@ mod tests {
         assert!(withheld("ProgramW6432", "/stage/dir"));
         assert!(withheld("ProgramW6432", "relative"));
         assert!(!withheld("ProgramW6432", "/safe/dir"));
+        assert!(withheld("ProgramFiles(x86)", "/stage/dir"));
+        assert!(withheld("ProgramFiles(x86)", "relative"));
+        assert!(!withheld("ProgramFiles(x86)", "/safe/dir"));
         assert!(withheld("LOCALAPPDATA", "/stage/dir"));
         assert!(withheld("LOCALAPPDATA", "relative"));
         assert!(!withheld("LOCALAPPDATA", "/safe/dir"));
@@ -1384,6 +1387,7 @@ mod tests {
         assert!(withheld("Windir", r"C:\stage\dir"));
         assert!(withheld("LocalAppData", r"C:\stage\dir"));
         assert!(withheld("ProgramFiles", r"C:\stage\dir"));
+        assert!(withheld("ProgramFiles(x86)", r"C:\stage\dir"));
         assert!(withheld("ComSpec", r"C:\stage\cmd.exe"));
         assert!(withheld("PathExt", ".CMD"));
         assert!(!withheld("Windir", r"C:\safe\dir"));
@@ -1452,24 +1456,24 @@ mod tests {
     }
 
     /// SANDBOX-30, the Windows start (#3860), run on Windows. `rundll32 url.dll,FileProtocolHandler`
-    /// is started through the opener with each of the nine names of the Windows list set to a path
+    /// is started through the opener with each of the ten names of the Windows list set to a path
     /// in a directory a stage may write, `COMSPEC` to a batch file that only creates a marker file
     /// and `PATHEXT` to `.CMD`. The start is made in a child run of this test binary, because the
     /// command takes its environment from the process and a test cannot set one: the parent gives
     /// the child those names with `Command::env`, and the child calls the opener's start against
     /// its own environment, prints the names the command takes off and runs it. The test asserts
-    /// that the child printed a record for every one of the nine and for how the start ended, each
+    /// that the child printed a record for every one of the ten and for how the start ended, each
     /// on a line of its own, and that the marker was not created. The
     /// helper is shown to create the marker when run directly through `cmd`, so an absent marker
     /// is not a helper that cannot run.
     ///
-    /// For each of the nine names and for `PSModulePath`, which the list leaves out, the test then
+    /// For each of the ten names and for `PSModulePath`, which the list leaves out, the test then
     /// makes the same start with only that name set, and the child sets it on the command again
     /// after the opener took it off. It prints whether the marker appeared and how the start
     /// ended. That record is printed and not asserted: a start that does not run the helper is
     /// the result for a name `rundll32` does not read, and it ending badly with `SystemRoot` put
     /// back at a stage's directory says nothing about the opener. A green run therefore shows
-    /// that the opener removes the nine names from the real start and that the marker did not
+    /// that the opener removes the ten names from the real start and that the marker did not
     /// appear, and shows nothing about which names select code; the printed record does.
     ///
     /// The regression it rejects: a name of the list that the command does not take off, such as
@@ -1517,6 +1521,7 @@ mod tests {
             ("windir", directory.clone()),
             ("ProgramFiles", directory.clone()),
             ("ProgramW6432", directory.clone()),
+            ("ProgramFiles(x86)", directory.clone()),
             ("LOCALAPPDATA", directory.clone()),
             ("APPDATA", directory.clone()),
             ("USERPROFILE", directory.clone()),

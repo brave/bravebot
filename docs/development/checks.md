@@ -392,8 +392,8 @@ opener's, the `powershell` starts' or the usability suite's file has no `CODE_SE
 as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
 `ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
 does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
-read them and Electron reaches the session bus through the last two, and the nine Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
-`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
+read them and Electron reaches the session bus through the last two, and the ten Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
+`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
 which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only the second. `make check` runs it and so does CI. It
 cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads

@@ -18,9 +18,9 @@
  * (brave/bravebot#3904 tracks `HOME` and brave/bravebot#3940 tracks the other two, which the bullet "The starts
  * that keep XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS" under "What a checked start does not
  * cover" in SANDBOX-30 records). `external-open.test.mjs` asserts that all three are left set.
- * The nine Windows names of the `rundll32 url.dll,FileProtocolHandler`
+ * The ten Windows names of the `rundll32 url.dll,FileProtocolHandler`
  * start in `opener.rs` (`PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`,
- * `ProgramW6432`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`) are not deleted here. The opener
+ * `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`) are not deleted here. The opener
  * removes them from its own start (brave/bravebot#3860). Electron's own Windows start is not
  * covered: it is given those names as this process holds them.
  * `contrib/check-code-selectors.py` holds these exceptions.

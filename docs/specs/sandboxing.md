@@ -4468,7 +4468,7 @@ file. A new spawn that looks a name up through
   | `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM`, `QT_STYLE_OVERRIDE` | options | name the plug-in Qt loads from the directories above |
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
-  | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
+  | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
   | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds; whether the start needs it was not run |
 
   What was run and what was read for these names is in "What a checked start does not cover".
@@ -4998,14 +4998,14 @@ shown by running the program, or not entirely:
   read, and no source read shows `PATHEXT` being read by this start. No Windows run of this start
   is recorded here. No Wine or ReactOS version is recorded for the source named. The opener
   removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
-  `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
+  `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
   `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
   `comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`, and on
   Windows by `a_windows_name_is_removed_in_whatever_case_it_is_set`. The `sandbox-windows` job in
   `.github/workflows/ci.yml` runs
   `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`, which sets
-  the nine names in a child run of the test binary, asserts that the opener's start removes all
-  nine and that a stage-written batch file does not run, and prints for each name, and for
+  the ten names in a child run of the test binary, asserts that the opener's start removes all
+  ten and that a stage-written batch file does not run, and prints for each name, and for
   `PSModulePath`, whether a start with only that name put back ran the batch file. The child
   begins with a newline and prefixes each record it prints with `windows-start-record: `, and the
   test reads the records from the lines that begin with that prefix, so the check does not depend
