@@ -31,6 +31,7 @@ Minimum supported Rust
 npm lockfile
 Front end
 Mobile app
+SDK
 Desktop on Windows
 Specs
 Security

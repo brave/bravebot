@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GATES = (
     "check-scripts", "check", "check-spec", "check-security", "check-locales", "check-versions",
     "check-narration", "check-docs", "check-npm", "check-deps", "check-msrv", "check-windows",
-    "check-linux", "check-ui", "check-agent-client", "check-mobile", "check-reviewdog",
+    "check-linux", "check-ui", "check-agent-client", "check-sdk", "check-mobile", "check-reviewdog",
 )
 
 
@@ -38,6 +38,8 @@ class CheckTargets(unittest.TestCase):
         (self.root / "extension-trusted/tests/fixture.test.mjs").touch()
         (self.root / "packages/agent-client/test-fixtures/scenarios").mkdir(parents=True)
         (self.root / "packages/agent-client/test-fixtures/scenarios/fixture.json").touch()
+        (self.root / "packages/sdk/tests").mkdir(parents=True)
+        (self.root / "packages/sdk/tests/fixture.test.ts").touch()
         (self.root / "npm/tests").mkdir(parents=True)
         (self.root / "npm/tests/fixture.test.mjs").touch()
         self.bin = self.root / "bin"
@@ -195,6 +197,26 @@ class CheckTargets(unittest.TestCase):
                 expected = commands[:commands.index(failing) + 1] if failing else commands
                 self.assertEqual(self.log.read_text().splitlines(), expected)
 
+    def test_the_sdk_gate_builds_the_binary_before_its_tests_and_preserves_each_failure(self):
+        """The SDK's tests run a built bravebot and never build it, so a binary that fails to build
+        must stop the gate before they run."""
+        commands = ["cargo build -p bravebot-cli --bin bravebot",
+                    "pnpm --dir packages/sdk install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir packages/sdk run check"]
+        for failing in ("", *commands):
+            with self.subTest(failing=failing):
+                result = self.run_make("check-sdk", FAIL_COMMAND=failing)
+                self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
+                expected = commands[:commands.index(failing) + 1] if failing else commands
+                self.assertEqual(self.log.read_text().splitlines(), expected)
+
+    def test_sdk_tests_that_are_no_longer_there_fail_the_gate(self):
+        """A tests directory emptied or renamed must not leave the gate green on nothing."""
+        (self.root / "packages/sdk/tests/fixture.test.ts").unlink()
+        result = self.run_make("check-sdk")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.log.read_text().splitlines(), [])
+
     def test_the_mobile_gate_builds_the_client_before_the_app_checks_and_preserves_each_failure(self):
         """The app resolves the client through its built dist, so a client that fails to build
         must stop the gate before the app is type-checked or tested."""
@@ -244,6 +266,7 @@ class CheckTargets(unittest.TestCase):
                     "pnpm --dir ui install --frozen-lockfile --lockfile-only",
                     "pnpm --dir docs/website install --frozen-lockfile --lockfile-only",
                     "pnpm --dir packages/agent-client install --frozen-lockfile --lockfile-only",
+                    "pnpm --dir packages/sdk install --frozen-lockfile --lockfile-only",
                     "pnpm --dir mobile install --frozen-lockfile --lockfile-only",
                     "python3 contrib/check-pnpm-lockfiles.py"]
         for failing in ("", *commands):

@@ -95,6 +95,7 @@ const PAGES: [Page; 63] = [
     page!("using/interactive-mode"),
     page!("using/manifest-mode"),
     page!("using/rewind"),
+    page!("using/sdk"),
     page!("using/sessions"),
     page!("using/sessions-screen"),
     page!("using/shell-mode"),

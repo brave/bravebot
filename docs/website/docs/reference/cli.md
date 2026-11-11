@@ -703,6 +703,8 @@ without `--input-format lines`. `--approve-input-lines` is also refused with `--
 Under `--incognito` no record is written, so each turn is carried on from the conversation held in
 memory for as long as the process runs. Every result names no session.
 
+A Node program can start this process and read the stream through [the TypeScript SDK](../using/sdk.md).
+
 ## Continuing a session from a one-shot run
 
 ```sh

@@ -1,6 +1,7 @@
 ## Unreleased
 
  - Added reporting to [herdr](https://github.com/herdrdev/herdr). A session in a herdr pane tells herdr whether it is idle, working or waiting for an answer, gives it `bravebot --resume <id>` with only the flags that narrow the session so herdr can reopen it after a restart, and frees the pane when you quit. An incognito session sends no resume command, and nothing is sent outside herdr. macOS and Linux only for now.
+ - Added `packages/sdk`, a TypeScript library that runs `bravebot --json-stream` for one run or `--input-format lines` for a conversation and returns typed events and result objects. It passes only the flags it lists, has no option that approves an effect, and sends the words of a prompt as a program's unless it is started with `trustInputLines`. It is in the repository and is not published. ([#1554](https://github.com/brave/bravebot/issues/1554))
 
 ## [0.21.0](https://github.com/brave/bravebot/releases/tag/v0.21.0)
 
