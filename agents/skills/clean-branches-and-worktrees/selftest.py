@@ -21,6 +21,8 @@ if args[:2] == ["repo", "view"]:
     print(json.dumps({{"defaultBranchRef": {{"name": "main"}}}}))
     sys.exit(0)
 if args[:2] == ["pr", "list"]:
+    if args[args.index("--head") + 1] == os.environ.get("FAKE_GH_FAIL_HEAD"):
+        sys.exit(1)
     prs = json.loads(open(os.environ["FAKE_GH_PRS"]).read())
     print(json.dumps(prs.get(args[args.index("--head") + 1], [])))
     sys.exit(0)
@@ -144,6 +146,15 @@ class Clean(unittest.TestCase):
         self.assertIn("Would delete 1 branch(es).", self.run_script("--dry-run"))
         out = self.run_script()
         self.assertNotIn("removed", self.branches(), out)
+
+    def test_reports_what_it_deleted_when_gh_fails_for_a_later_branch(self):
+        self.branch("a-done")
+        self.branch("b-broken")
+        self.env["FAKE_GH_FAIL_HEAD"] = "b-broken"
+        out = self.run_script()
+        self.assertEqual(self.branches(), {"main", "b-broken"})
+        self.assertIn("- a-done (#1 a-done)", out)
+        self.assertIn("- b-broken: could not look up its pull request", out)
 
     def test_keeps_the_default_branch_when_another_is_checked_out(self):
         self.branch("open", merged=False)

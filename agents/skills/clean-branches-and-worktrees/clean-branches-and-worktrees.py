@@ -317,7 +317,11 @@ def main(argv: list[str] | None = None) -> int:
                 skipped.append((branch, "repository default branch"))
                 continue
 
-            pr = find_merged_pull_request(repo, branch)
+            try:
+                pr = find_merged_pull_request(repo, branch)
+            except (RuntimeError, ValueError) as exc:
+                skipped.append((branch, f"could not look up its pull request: {str(exc).splitlines()[0]}"))
+                continue
             if pr is None:
                 skipped.append((branch, "no merged pull request found"))
                 continue
