@@ -443,7 +443,8 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
     ];
 
     // Where it sits among the others, and the keys for moving, only where there are others. One
-    // row has no position to be in and nowhere to move to.
+    // row has no position to be in and nowhere to move to. `q` goes back only to a list the row
+    // was opened from, and closes a row the view opened straight onto.
     let total = session.watchable().len();
     if total > 1 {
         spans.push(Span::styled(
@@ -453,10 +454,12 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
             ),
             dim(),
         ));
-        spans.push(Span::styled(
-            format!("  ·  {}", t!(watching_keys_back)),
-            dim(),
-        ));
+        let keys = if watching.from_list {
+            t!(watching_keys_back)
+        } else {
+            t!(watching_keys)
+        };
+        spans.push(Span::styled(format!("  ·  {keys}"), dim()));
     } else {
         spans.push(Span::styled(
             format!("  ·  {}", t!(watching_keys_one)),
