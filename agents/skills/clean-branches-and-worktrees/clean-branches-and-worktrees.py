@@ -62,10 +62,8 @@ def ensure_gh_authenticated(repo: Path) -> None:
     run_command(["gh", "auth", "status"], repo, check=True)
 
 
-def fetch_origin(repo: Path, dry_run: bool) -> None:
-    if dry_run:
-        print(f"[dry-run] ({repo}) $ git fetch --prune origin")
-        return
+def fetch_origin(repo: Path) -> None:
+    # A dry run fetches too: it touches only remote-tracking refs, and the plan depends on them.
     run_command(["git", "fetch", "--prune", "origin"], repo, check=True)
 
 
@@ -301,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repo = discover_repo_root()
         ensure_gh_authenticated(repo)
-        fetch_origin(repo, args.dry_run)
+        fetch_origin(repo)
         default_branch = get_default_branch(repo)
         current_branch = get_current_branch(repo)
         worktrees = list_worktrees(repo)

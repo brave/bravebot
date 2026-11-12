@@ -53,10 +53,11 @@ class Clean(unittest.TestCase):
         self.env.update(PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}", FAKE_GH_PRS=str(self.prs_file))
         self.prs = {}
 
-        origin = root / "origin.git"
-        git("init", "-q", "--bare", "-b", "main", str(origin), cwd=root)
+        self.root = root
+        self.origin = root / "origin.git"
+        git("init", "-q", "--bare", "-b", "main", str(self.origin), cwd=root)
         self.clone = root / "clone"
-        git("clone", "-q", str(origin), str(self.clone), cwd=root)
+        git("clone", "-q", str(self.origin), str(self.clone), cwd=root)
         git("commit", "-q", "--allow-empty", "-m", "base", cwd=self.clone)
         git("push", "-q", "origin", "main", cwd=self.clone)
         self.worktrees = self.clone / ".worktrees"
@@ -73,10 +74,12 @@ class Clean(unittest.TestCase):
             git("commit", "-q", "--allow-empty", "-m", name, cwd=self.clone)
             git("checkout", "-q", "main", cwd=self.clone)
         if merged:
-            head = git("rev-parse", name, cwd=self.clone)
-            self.prs[name] = [{"number": 1, "title": name, "url": "u", "mergedAt": "2026-01-01T00:00:00Z",
-                               "headRefName": name, "headRefOid": head}]
+            self.merged(name, git("rev-parse", name, cwd=self.clone))
         return self.worktrees / name
+
+    def merged(self, name, head):
+        self.prs[name] = [{"number": 1, "title": name, "url": "u", "mergedAt": "2026-01-01T00:00:00Z",
+                           "headRefName": name, "headRefOid": head}]
 
     def run_script(self, *args):
         self.prs_file.write_text(json.dumps(self.prs))
@@ -102,6 +105,19 @@ class Clean(unittest.TestCase):
         self.assertIn("done", self.branches())
         self.assertTrue(path.exists())
         self.assertIn("Would delete 1 branch(es).", out)
+
+    def test_dry_run_fetches_a_merged_head_pushed_from_elsewhere(self):
+        """The local branch is behind a head only origin has, so the plan needs the fetch."""
+        self.branch("pushed", merged=False)
+        git("push", "-q", "origin", "pushed", cwd=self.clone)
+        other = self.root / "other"
+        git("clone", "-q", "-b", "pushed", str(self.origin), str(other), cwd=self.root)
+        git("commit", "-q", "--allow-empty", "-m", "from elsewhere", cwd=other)
+        git("push", "-q", "origin", "pushed", cwd=other)
+        self.merged("pushed", git("rev-parse", "HEAD", cwd=other))
+        out = self.run_script("--dry-run")
+        self.assertIn("Would delete 1 branch(es).", out)
+        self.assertIn("pushed", self.branches())
 
     def test_keeps_the_current_and_default_branch_and_unmerged_work(self):
         self.branch("open", merged=False)

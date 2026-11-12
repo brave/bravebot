@@ -16,7 +16,7 @@ allowed-tools: Bash(python3 agents/skills/clean-branches-and-worktrees/clean-bra
 3. When the person agrees, run it again without `--dry-run`.
 4. Report the deleted branches, the removed worktrees, and each skipped branch with its reason.
 
-It fetches `origin` with `--prune`, then for each local branch looks up a merged pull request with that head on GitHub. It deletes the branch with `git branch -D`, so a squash-merged branch is deleted, after removing every linked worktree that holds it. It keeps a branch when:
+It fetches `origin` with `--prune`, in a dry run too, so both runs decide from the same refs. Then, for each local branch, it looks up a merged pull request with that head on GitHub. It deletes the branch with `git branch -D`, so a squash-merged branch is deleted, after removing every linked worktree that holds it. It keeps a branch when:
 
 - it is checked out in the checkout the script runs from, or is the default branch
 - no merged pull request has it as head
