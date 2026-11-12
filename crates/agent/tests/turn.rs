@@ -78784,6 +78784,12 @@ fn a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refu
             answered.contains("resolves outside the workspace"),
             "{operator}: the planner was not told why the destination was not opened: {answered}"
         );
+        // TRUST-10: the link carried the destination out, so no directory is offered at the open
+        // any more than at the check.
+        assert!(
+            !answered.contains("/add-dir"),
+            "{operator}: a destination a link carried out was offered a directory: {answered}"
+        );
     }
 }
 

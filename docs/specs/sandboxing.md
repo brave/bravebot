@@ -2014,6 +2014,18 @@ what a write row covers. The sentence is not said under
 `read-only`, whose own sentence already says a git step writes no session directory, nor on a
 platform with no base.
 
+In every mode that produces it and on every platform, the sentence after a failed line with a step
+that runs a shell (`sh`, `bash`, `dash`, `zsh`, `ksh`, `csh`, `tcsh` or `fish`, judged by the file
+the step resolved to) and an argument the planner wrote that holds `>` also says that a redirection
+inside a shell's command string is opened by the sandboxed shell, which cannot write outside the
+directories it names, and to write the redirection on the `run` line itself, where the driver opens
+the file and a refusal names it ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). It names no path:
+the driver compiled no destination from the command string, and nothing the shell printed is read.
+An argument a filename pattern produced ([CMDLINE-4](tools/command-line.md#CMDLINE-4)) is not
+looked at.
+
+`verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
+
 On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. Under the mode `read-only` it says that programs cannot write the
@@ -3939,7 +3951,9 @@ none to add to.
   no profile to remove and so cannot accept this request.
 - **The planner is told, where the session accepts it.** A write the file tools refuse for leaving
   the workspace, a redirection refused for the same reason, and a `request_path` for writing that
-  is refused unasked each name this argument as the route, and say the person is asked. They name
+  is refused unasked each name this argument as the route, and say the person is asked. A refused
+  redirection names it after whatever remedy it is given, `/add-dir` or none, a credential
+  location's included ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). They name
   it only where the request would be accepted and the front end can ask about it, which the
   terminal interface and a session in lines can, and the desktop and a run with nobody to ask
   cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
@@ -4015,6 +4029,7 @@ refuse the path.
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
+`verified-by: bravebot_agent::tools::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`

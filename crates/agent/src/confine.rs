@@ -1789,8 +1789,12 @@ impl Confinement {
             }
             _ => String::new(),
         };
+        let shell = match steps.iter().any(|step| redirects_inside_a_shell(step)) {
+            true => SHELL_REDIRECTION_SENTENCE,
+            false => "",
+        };
         format!(
-            "{}{}{}{source}{refusal}{}{commit}{git}{launch}{listing}{}",
+            "{}{}{}{source}{refusal}{}{commit}{git}{launch}{listing}{shell}{}",
             self.linked_checkout_sentence(steps, unconfined_offered),
             self.cache_sentence(steps),
             self.reach(steps),
@@ -3074,6 +3078,43 @@ const READ_ONLY_CACHE_OPENING: &str = "Under `read-only` no toolchain cache is w
 
 /// Closes the sentence [`READ_ONLY_CACHE_OPENING`] opens.
 const READ_ONLY_CACHE_CLOSING: &str = " that writes its cache is refused that write. ";
+
+/// Said after a failed step that runs a shell with a command string holding a `>` (CMDLINE-5,
+/// SANDBOX-19). A
+/// redirection inside the shell's command string is opened by the confined shell, so the sandbox
+/// refuses one into a file outside the directories it writes, and the driver knows no destination
+/// to name. A redirection written on the `run` line itself is opened by the driver, which checks
+/// it and names what to do where it is refused. Chosen from the file the step resolved to; nothing
+/// the shell printed is read.
+const SHELL_REDIRECTION_SENTENCE: &str = " A redirection inside a shell's command string, as in \
+     `sh -c '... >> file'`, is opened by the sandboxed shell, which cannot write a file outside the \
+     directories above. Write the redirection on the run line itself, outside the quotes, where \
+     bravebot opens the file and a refusal names it and how to reach it.";
+
+/// Whether a step runs a shell with a command string that redirects, the steps
+/// [`SHELL_REDIRECTION_SENTENCE`] is said for: the file it resolved to is a shell and an argument
+/// the planner wrote holds a `>`. An argument a filename pattern produced is a name read from disk
+/// and is not looked at (CMDLINE-4). Decided from the compiled step alone, as
+/// [`launches_applications`] is; nothing the shell printed is read.
+fn redirects_inside_a_shell(step: &Step) -> bool {
+    let Step {
+        program: _,
+        resolved,
+        started_as: _,
+        args,
+        matched: _,
+        environment: _,
+        expansions: _,
+        routes: _,
+    } = step;
+    ["sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish"]
+        .map(OsStr::new)
+        .contains(&resolved.file_name().unwrap_or_default())
+        && args
+            .iter()
+            .enumerate()
+            .any(|(at, argument)| !step.from_a_pattern(at) && argument.contains('>'))
+}
 
 /// Whether the file a step resolved to is one of the programs [`MACOS_PROCESS_LISTING_SENTENCE`]
 /// names. Decided from the compiled step alone, as [`launches_applications`] is.
@@ -8092,6 +8133,56 @@ mod tests {
         aliased.program = "launch".to_string();
         let said = failed(Prelude::MacOs, true, &[&aliased]);
         assert!(said.contains(MACOS_LAUNCH_UNCONFINED_SENTENCE), "{said}");
+    }
+
+    /// CMDLINE-5, SANDBOX-19: after a failed step that runs a shell with a command string holding
+    /// a `>`, the planner
+    /// is told that a redirection inside the shell's command string is opened by the sandboxed
+    /// shell and to write it on the run line itself. It is chosen from the compiled step, on every
+    /// platform, and names no path: the driver holds none for a redirection inside a
+    /// command string, and nothing the shell printed is read (decision D3 of #3990).
+    ///
+    /// The faults it rejects are the sentence left out for a shell, said for a line with no shell
+    /// or a shell that redirects nothing, matched on the name the line used where the file it
+    /// resolved to is the one to match, and a destination parsed from the command string named.
+    #[test]
+    fn a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell() {
+        let failed = |prelude, steps: &[&Step]| {
+            reading_confinement(prelude, &["/work/project"])
+                .with_mode(SandboxMode::WorkspaceWrite)
+                .profile(steps)
+        };
+        let make = step("/usr/bin/make", &["test"]);
+        let quiet = step("/bin/sh", &["-c", "cargo test"]);
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for without in [&make, &quiet] {
+                assert!(
+                    !failed(prelude, &[without]).contains(SHELL_REDIRECTION_SENTENCE),
+                    "said for a line that redirects inside no shell"
+                );
+            }
+            for shell in ["/bin/sh", "/bin/bash", "/bin/zsh", "/usr/bin/dash"] {
+                let shell = step(shell, &["-c", "echo hi >> /elsewhere/notes.txt"]);
+                let said = failed(prelude, &[&make, &shell]);
+                assert!(said.contains(SHELL_REDIRECTION_SENTENCE), "{said}");
+                assert!(
+                    !said.contains("/elsewhere"),
+                    "named a parsed destination: {said}"
+                );
+            }
+        }
+        let mut renamed = step("/usr/bin/true", &["-c", "echo hi > x"]);
+        renamed.program = "sh".to_string();
+        assert!(!failed(Prelude::MacOs, &[&renamed]).contains(SHELL_REDIRECTION_SENTENCE));
+        let mut aliased = step("/bin/bash", &["-c", "echo hi > x"]);
+        aliased.program = "run-it".to_string();
+        assert!(failed(Prelude::MacOs, &[&aliased]).contains(SHELL_REDIRECTION_SENTENCE));
+        let mut matched = step("/bin/sh", &["a>b.sh"]);
+        matched.matched = vec![true];
+        assert!(
+            !failed(Prelude::MacOs, &[&matched]).contains(SHELL_REDIRECTION_SENTENCE),
+            "read a name a pattern matched on disk"
+        );
     }
 
     /// SANDBOX-8, SANDBOX-19: after a failed step on macOS whose program lists processes, the

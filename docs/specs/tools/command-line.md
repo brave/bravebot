@@ -391,6 +391,44 @@ that is outside every opened directory is asked about under the name it was writ
 session that would accept the request, the refusal says that `unconfined` is the argument that
 makes the write possible.
 
+**What a refused destination is told.** A destination refused for leaving the workspace is given
+the remedy a file tool's write to the same path is given ([TRUST-10](../trust-map.md#TRUST-10)),
+chosen from where the destination lands: the directory it is in, or the directory itself, to open
+with `/add-dir`, with the warning when that directory holds the working directory. It is given no
+directory where `permissions.readsStayInWorkspace` holds, where the directory is or lies inside a
+credential location, for the stores, where the path climbs with `..` above the top of the file
+system, where it lands on a name that is not UTF-8, and where the path as the line wrote it, with
+each `..` taken out, is inside the workspace or an opened directory, which means a link carried it
+out. A destination in a directory the remedy names is let through once that directory is opened.
+It names no `request_path`, whose grant a redirection does not pass. Where nobody can be asked in
+the run ([CLI-1](../cli.md#CLI-1)), a remedy that opens a directory is given as none, and the
+planner is told to say in its reply which path the work needs. The `unconfined` sentence above is
+said with every remedy, a credential location's included, where the session accepts that argument
+and only there. The trail records the remedy the planner was told. The choice reads the line's
+path, the file system and the session's settings, never a byte a file or a program holds.
+
+A redirection inside a shell's command string, as in `sh -c 'echo hi >> file'`, is not a
+destination of the line: the confined shell opens it, and the sandbox refuses it outside the
+directories the stage writes. The driver holds no path for it, so the sentence after such a failed
+step ([SANDBOX-19](../sandboxing.md#SANDBOX-19)) names none and says to write the redirection on the
+`run` line itself.
+
+`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
+`verified-by: bravebot_agent::tools::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
+`verified-by: bravebot_agent::workspace::a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened`
+`verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
+`verified-by: bravebot_agent::workspace::a_redirection_outside_is_offered_the_directory_the_file_tools_offer`
+`verified-by: bravebot_agent::workspace::a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts`
+`verified-by: bravebot_agent::workspace::a_redirection_into_a_credential_location_is_offered_no_directory`
+`verified-by: bravebot_agent::workspace::a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_redirection_outside_where_reads_stay_inside_is_offered_no_directory`
+`verified-by: bravebot_agent::tools::a_redirection_outside_is_given_the_open_remedy_and_one_into_credentials_the_credential_remedy`
+`verified-by: bravebot_agent::tools::a_refused_redirection_writes_its_file_once_the_directory_it_names_is_added`
+`verified-by: bravebot_agent::tools::read_file_and_a_redirection_of_the_same_outside_path_are_offered_the_same_remedy`
+
 **Where the permission mode reaches a path.** While the mode that answers every permission question
 is in force ([MODE-4](../permission-modes.md#MODE-4)), a destination in a directory outside the
 workspace that the file tools reach ([PATHREQ-7](request-path.md#PATHREQ-7)) is not refused for
