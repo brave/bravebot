@@ -98,6 +98,14 @@ pub struct Entries {
     /// one reference at a time rather than as a number: handed a listing of files alone it sees a
     /// tree with no branches.
     pub directories: usize,
+    /// How many files were left out of each directory the per-directory cap cut (LIST-5), in the
+    /// order of the last of `paths`, which are those directories. Counts of directory entries,
+    /// released with `count`, so the turn can say beside the references how much each one holds
+    /// that is not listed.
+    pub left_out: Vec<usize>,
+    /// Whether the listing reached the cap over the whole walk, as against leaving files out by
+    /// the per-directory cap alone. Shape like `count`, from the same release.
+    pub at_the_cap: bool,
 }
 
 /// Content a result carries beside its own text, under a label of its own.
@@ -640,6 +648,37 @@ pub(crate) mod scripted_hosts {
     }
 }
 
+/// The program a unit test has the platform refuse to confine for the runs on its thread, which no
+/// machine's real mechanism does on demand.
+#[cfg(test)]
+pub(crate) mod scripted_unconfinable {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HELD: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    /// Refuse to confine `program` on this thread until the returned guard is dropped.
+    pub(crate) fn hold(program: &str) -> Held {
+        HELD.with(|held| *held.borrow_mut() = Some(program.to_string()));
+        Held
+    }
+
+    pub(super) fn held() -> Option<String> {
+        HELD.with(|held| held.borrow().clone())
+    }
+
+    /// Clears the program when dropped, so a test that fails part way leaves nothing for the next
+    /// test on this thread.
+    pub(crate) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            HELD.with(|held| *held.borrow_mut() = None);
+        }
+    }
+}
+
 /// The filesystem lists a unit test sets for the runs on its thread, read in place of the settled
 /// ones, for the reason [`scripted_hosts`] is.
 #[cfg(all(test, unix))]
@@ -735,6 +774,11 @@ impl<'a> Tools<'a> {
                 .with_host_grants(&self.workspace.granted_hosts())
                 .with_identities(bravebot_config::git_identities::settled())
                 .with_state_directory(self.home.map(std::path::Path::to_path_buf));
+        #[cfg(test)]
+        let confinement = match scripted_unconfinable::held() {
+            Some(program) => confinement.failing_for(&program),
+            None => confinement,
+        };
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -4769,23 +4813,58 @@ fn record_confinement_refusal<S: Sink>(
     }
 }
 
+/// Whether a `read_file` of the path `edit_file` refused would put the vouch question, and who
+/// would answer it (EDIT-2, TRUST-8). Settled from the turn's list, the mode, the trust map and
+/// the path, never from the file's bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadToVouch {
+    /// No read would put the question: the turn is not offered `read_file`, the path was already
+    /// asked about this turn, a yes could not open it, or nobody is there to ask.
+    Not,
+    /// A read puts the question to the person.
+    AsksThePerson,
+    /// A read puts the question and the bypass mode answers it, so nobody is asked.
+    TheModeAnswers,
+}
+
 /// What `edit_file` says of a file it will not edit because the file is not trusted: it is not
 /// vouched for, or untrusted content was written to it (EDIT-2). Fixed text about the path's
 /// state. It holds no byte of the file and no name, and the label is the one the driver assigned.
-/// It names `write_file` and `run` only where the turn is offered them (TOOL-6), and always the
-/// vouch, which is the person's to give. The vouch is named on every turn, a delegate's included,
-/// because nothing on the turn says it cannot ask a person.
-fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label) -> String {
-    let routes = match (policy.writing_is_offered(), policy.running_is_offered()) {
-        (true, true) => {
-            "Write the whole file with write_file, edit it through run, or ask the person to \
-             vouch for the path"
+/// It names `write_file` and `run` only where the turn is offered them (TOOL-6). Where a
+/// `read_file` of the path would put the vouch question, the read is named as the way to put it,
+/// and under bypass as a read the mode vouches for, with no person named. Otherwise the vouch is
+/// named as the person's to give, on every turn, a delegate's included, because nothing on the
+/// turn says it cannot ask a person.
+fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label, read: ReadToVouch) -> String {
+    let tools = match (policy.writing_is_offered(), policy.running_is_offered()) {
+        (true, true) => Some("Write the whole file with write_file, edit it through run"),
+        (true, false) => Some("Write the whole file with write_file"),
+        (false, true) => Some("Edit it through run"),
+        (false, false) => None,
+    };
+    let vouch = match (read, tools.is_some()) {
+        (ReadToVouch::Not, false) => "Only the person can open it, by vouching for the path",
+        (ReadToVouch::Not, true) => "ask the person to vouch for the path",
+        (ReadToVouch::AsksThePerson, false) => {
+            "Read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have"
         }
-        (true, false) => {
-            "Write the whole file with write_file, or ask the person to vouch for the path"
+        (ReadToVouch::AsksThePerson, true) => {
+            "read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have"
         }
-        (false, true) => "Edit it through run, or ask the person to vouch for the path",
-        (false, false) => "Only the person can open it, by vouching for the path",
+        (ReadToVouch::TheModeAnswers, false) => {
+            "Read it with read_file, which in this mode vouches for the path without asking \
+             anybody, and then edit it with edit_file"
+        }
+        (ReadToVouch::TheModeAnswers, true) => {
+            "read it with read_file, which in this mode vouches for the path without asking \
+             anybody, and then edit it with edit_file"
+        }
+    };
+    let routes = match tools {
+        Some(tools) => format!("{tools}, or {vouch}"),
+        None => vouch.to_string(),
     };
     format!(
         "refused: this file is closed to edit_file, label {label}: it is not vouched for, or \
@@ -5276,7 +5355,7 @@ fn list_files<S: Sink>(
         Ok(listing) => {
             let note = note_for(policy, "list_files", &listing, |listing| {
                 tally(
-                    listing.files.len() + listing.directories.len(),
+                    listing.files.len() + listing.directories.len() + listing.partly_listed.len(),
                     "entry",
                     "entries",
                 )
@@ -5323,24 +5402,40 @@ fn list_files<S: Sink>(
                 // The second is what keeps the quarantined listing describing the same tree the
                 // trusted one does, where a directory is rendered with a trailing slash among the
                 // files. The third says whether a pattern selected anything.
-                let (count, directories, files) = {
+                // The fourth is how many files each directory the per-directory cap cut left out,
+                // a count of directory entries like the others.
+                let (count, directories, files, left_out, at_the_cap) = {
                     let shaped = policy.render_in_place("list_files", &listing, |listing| {
                         (
-                            listing.files.len() + listing.directories.len(),
-                            listing.directories.len(),
+                            listing.files.len()
+                                + listing.directories.len()
+                                + listing.partly_listed.len(),
+                            listing.directories.len() + listing.partly_listed.len(),
                             listing.files.len(),
+                            listing
+                                .partly_listed
+                                .iter()
+                                .map(|(_, left_out)| *left_out)
+                                .collect::<Vec<usize>>(),
+                            listing.at_the_cap,
                         )
                     });
                     let proof = policy.authorise_display_release(
-                        "how many entries a listing has, how many of them it stopped at and how \
-                         many are files",
+                        "how many entries a listing has, how many of them it stopped at, how \
+                         many are files, how many files each directory it cut left out and \
+                         whether it reached the cap over the whole walk",
                     );
                     shaped.declassify(&proof)
                 };
-                // The directories last, which is the order the kernel reads the two apart by.
+                // The directories last, which is the order the kernel reads the two apart by. A
+                // directory the per-directory cap cut is a directory reference like one the walk
+                // stopped at, so it is named the only way a quarantined listing names anything.
+                // Those come after the ones the walk stopped at, so which references they are is
+                // decided by the counts alone and `left_out` lines up with the last of them.
                 let paths = policy.render_in_place("list_files", &listing, |listing| {
                     let mut paths = listing.files.clone();
                     paths.extend(listing.directories.iter().cloned());
+                    paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
                     paths
                 });
                 return Produced::new(Labelled::trusted(String::new()), proposed_dir.clone(), note)
@@ -5353,6 +5448,8 @@ fn list_files<S: Sink>(
                         paths,
                         count,
                         directories,
+                        left_out,
+                        at_the_cap,
                     });
             }
 
@@ -5362,13 +5459,24 @@ fn list_files<S: Sink>(
                 let selected_no_file = listing.files.is_empty();
                 let mut entries: Vec<String> = listing.files.clone();
                 entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+                // A directory the per-directory cap cut, with how many of its files are not shown,
+                // so the planner knows to list it by name for the rest (LIST-5).
+                entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
+                    format!(
+                        "{name}/ ({} not listed)",
+                        tally(*left_out, "more file", "more files")
+                    )
+                }));
                 entries.sort();
+                let cut_per_directory = !listing.partly_listed.is_empty();
                 let listing = Listing {
                     files: entries,
                     directories: Vec::new(),
                     truncated: listing.truncated,
+                    at_the_cap: listing.at_the_cap,
                     unreadable: listing.unreadable,
                     links: listing.links,
+                    partly_listed: Vec::new(),
                 };
                 let mut body = if listing.files.is_empty() && listing.links > 0 {
                     // An empty listing beside links is not an empty directory: a skills
@@ -5383,13 +5491,29 @@ fn list_files<S: Sink>(
                     "(no files)".to_string()
                 } else if listing.truncated {
                     // Said plainly, because a model given a silently capped listing will treat
-                    // it as the whole tree and conclude a file does not exist.
-                    format!(
-                        "{}\n\n(this listing stopped at {} files and is incomplete; \
-                         list a subdirectory to see more)",
-                        listing.files.join("\n"),
-                        listing.files.len()
-                    )
+                    // it as the whole tree and conclude a file does not exist. Each cap that left
+                    // files out has its own sentence, as `listing_capped_note` does for a
+                    // quarantined listing: "stopped at N files" misstates a per-directory cut,
+                    // and the per-directory sentence alone hides that the walk stopped as well.
+                    let mut body = listing.files.join("\n");
+                    if listing.at_the_cap || !cut_per_directory {
+                        body.push_str(&format!(
+                            "\n\n(this listing stopped at {} files and is incomplete; \
+                             list a subdirectory to see more)",
+                            listing.files.len()
+                        ));
+                    }
+                    if cut_per_directory {
+                        // A listing of that directory with a depth is cut the same way, so the
+                        // rest is reached with none.
+                        body.push_str(&format!(
+                            "\n\n(this listing took at most {} files from any one directory and \
+                             is incomplete; to see the rest of a directory marked \"not \
+                             listed\", list that directory by its name with no depth)",
+                            crate::workspace::MAX_FILES_PER_DIRECTORY
+                        ));
+                    }
+                    body
                 } else {
                     listing.files.join("\n")
                 };
@@ -5420,6 +5544,12 @@ fn list_files<S: Sink>(
             let glimpsed = policy.render_in_place("list_files", &listing, |listing| {
                 let mut entries: Vec<String> = listing.files.clone();
                 entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+                entries.extend(
+                    listing
+                        .partly_listed
+                        .iter()
+                        .map(|(name, _)| format!("{name}/")),
+                );
                 entries.sort();
                 entries.join("\n")
             });
@@ -7106,7 +7236,28 @@ fn edit_file<S: Sink, C: Confirmer>(
     // inside the process to locate a passage releases nothing; only integrity decides whether
     // this comparison is safe to make.
     let Ok(current) = policy.read_trusted_content("edit_file", &source) else {
-        return Produced::problem(closed_to_editing(policy, source.label()));
+        // Whether a read of this path would put the vouch question, asked with the guards
+        // `read_file` asks before it does, from the path, the map, the mode and the turn's list.
+        // A run with nobody to ask outside bypass gets no question from a read, so it is not sent
+        // to one.
+        let read = if !nobody_to_ask
+            && policy.reading_files_is_offered()
+            && bravebot_filetype::by_name::media_for(&proposed_path).is_none()
+            && workspace.names_a_file(&proposed_path)
+            && {
+                let keyed = workspace.trust_key(&proposed_path);
+                let other_names = workspace.other_trust_keys(&proposed_path);
+                policy.would_offer_vouch(&keyed, &other_names.keys, other_names.complete)
+            } {
+            if mode == crate::PermissionMode::Bypass {
+                ReadToVouch::TheModeAnswers
+            } else {
+                ReadToVouch::AsksThePerson
+            }
+        } else {
+            ReadToVouch::Not
+        };
+        return Produced::problem(closed_to_editing(policy, source.label(), read));
     };
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
@@ -9910,9 +10061,10 @@ const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a 
 /// Unlike [`NOT_ACCEPTING_UNCONFINED`] it says what to do, since the session would accept the
 /// request after a line the sandbox refused.
 const UNCONFINED_BEFORE_A_FAILURE: &str = "refused: run the line with the sandbox first. A request \
-     to run a line with no sandbox is accepted only after a line has run with one and failed, \
-     and that has not happened yet this turn. If it then fails because the sandbox refused it \
-     access, ask again and say in 'why' what was refused.";
+     to run a line with no sandbox is accepted only after a line has run with one and failed, or \
+     a line was refused because its program could not be confined, and neither has happened yet \
+     this turn. If it then fails because the sandbox refused it access, or is refused because it \
+     could not be confined, ask again and say in 'why' what was refused.";
 
 /// Whether this turn may be asked to start one line with no profile (SANDBOX-29).
 ///
@@ -10023,7 +10175,7 @@ fn unconfined_refusals(
 
 /// Whether the administrator's file closed the network, which only a managed pin does here: a person
 /// who closed it in their own settings is the one asked about the line.
-fn network_pinned_closed(settled: Option<&bravebot_config::RunNetwork>) -> bool {
+pub(crate) fn network_pinned_closed(settled: Option<&bravebot_config::RunNetwork>) -> bool {
     settled.is_some_and(|settled| {
         settled.network == bravebot_sandbox::network::Network::Closed
             && matches!(settled.decided, bravebot_config::Decided::Managed(_))
@@ -11028,10 +11180,86 @@ fn remember_the_answer<S: Sink>(
 ///
 /// A line is not known to have done nothing: a later pipeline stage fails after an earlier one was
 /// spawned, a redirection's open fails after its program started (`true | cat > missing/out`), and
-/// the right side of `a && b` fails after `a` has finished. So every failure says the line may have
-/// run in part and the planner is asked to check before repeating it.
-fn failed_line_text(said: &str, error: &crate::exec::ExecError) -> String {
+/// the right side of `a && b` fails after `a` has finished. So a failure says the line may have run
+/// in part and the planner is asked to check before repeating it, except where the failure is one
+/// that comes before its program starts.
+///
+/// A program refused for want of confinement did not start, and repeating the line is refused the
+/// same way until a route the text names is taken or, where it names none, until the session's
+/// settings or the platform change, since those decide the refusal (SANDBOX-17). A program
+/// that could not be started did not start either. What else of the line ran is what exec recorded
+/// on the error from the processes it spawned ([`crate::exec::StartedBefore`]): nothing, a part
+/// joined before this program's pipeline, or the stages before it in that pipeline, which were
+/// stopped. Only the last two say the line may have run in part, and only the first says the line
+/// was not run: the others say the program was not started. `unconfined_offered` is
+/// [`unconfined_is_offered`], so the planner is pointed at `'unconfined': true` and the mode `off`
+/// only where the session would accept the request. Where the refusal is a closed network the
+/// platform cannot deny, which the driver recorded on the error, those routes say the line then
+/// runs with the network open (SANDBOX-29).
+fn failed_line_text(
+    said: &str,
+    error: &crate::exec::ExecError,
+    unconfined_offered: bool,
+) -> String {
+    use crate::exec::StartedBefore;
+    let ran = |before: &StartedBefore| match before {
+        StartedBefore::Nothing => "Nothing of the line started.",
+        StartedBefore::EarlierPart => {
+            "No stage of its pipeline started, so the line may have run in part only where a part \
+             before it, joined with `&&`, `||` or `;`, or a `$(...)` it read, ran; check what that \
+             part did before running the line again."
+        }
+        StartedBefore::EarlierStages => {
+            "The stages before it in its pipeline had started and were stopped, so the line may \
+             have run in part only in those stages and in a part before them; check what they \
+             did before running the line again."
+        }
+    };
+    // The line was not run only where nothing of it started; otherwise it is the program that
+    // was not started, which the error's own text says.
+    let head = |before: &StartedBefore| match before {
+        StartedBefore::Nothing => format!("error: `{said}` was not run: {error}."),
+        StartedBefore::EarlierPart | StartedBefore::EarlierStages => {
+            format!("error: `{said}` stopped at a program that was not started: {error}.")
+        }
+    };
     match error {
+        crate::exec::ExecError::NotConfined {
+            before,
+            network_closed,
+            ..
+        } => {
+            let ran = ran(before);
+            let head = head(before);
+            let until = match unconfined_offered {
+                true => "until the person makes one of the changes that follow.",
+                false => "until the session's settings or the platform change.",
+            };
+            let routes = match unconfined_offered {
+                true => {
+                    " The person can let it start: run the same line with 'unconfined': true and \
+                     say in 'why' that the sandbox could not confine it, and the person is asked \
+                     to approve that one line, every time, to run with no sandbox; or the person \
+                     can choose the sandbox mode off with /sandbox off or --sandbox off, where the \
+                     administrator allows it."
+                }
+                false => "",
+            };
+            let open = match (unconfined_offered, network_closed) {
+                (true, true) => {
+                    " Either way the line runs with the network open, since only the sandbox \
+                     holds it closed."
+                }
+                _ => "",
+            };
+            format!(
+                "{head} {ran} Running the same line again is refused the same way \
+                 {until}{routes}{open}"
+            )
+        }
+        crate::exec::ExecError::NotStarted { before, .. } => {
+            format!("{} {}", head(before), ran(before))
+        }
         crate::exec::ExecError::Cancelled => format!(
             "error: `{said}` was started and then {error}; it may have run in part, so check \
              what it did before running it again"
@@ -11048,6 +11276,22 @@ fn failed_line_text(said: &str, error: &crate::exec::ExecError) -> String {
              again"
         ),
     }
+}
+
+/// [`failed_line_text`] for a line `run` started, in the foreground or the background, after
+/// noting a program refused for want of confinement. That refusal is a line the sandbox refused,
+/// so it earns one request for a line with none, as a confined line that failed does
+/// (SANDBOX-29). The note is read off the error's kind, which the driver chose.
+fn noted_failure_text<S: Sink>(
+    policy: &Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    said: &str,
+    error: &crate::exec::ExecError,
+) -> String {
+    if matches!(error, crate::exec::ExecError::NotConfined { .. }) {
+        tools.confined_failures.note();
+    }
+    failed_line_text(said, error, unconfined_is_offered(policy, tools))
 }
 
 /// Run a program, after a person approves the exact arguments.
@@ -11537,8 +11781,18 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 .started_in_the_background(name, tools.jobs.is_kept(), tools.beside)
                 .having_run_a_program()
             }
-            Err(error) => Produced::problem(format!("error: `{said}` did not start: {error}"))
-                .having_started_a_program(),
+            // A program refused for want of confinement is told as a foreground one is and earns
+            // the same request (SANDBOX-17, SANDBOX-29). Read off the error's kind, which the
+            // driver chose.
+            Err(error) => {
+                let text = match error {
+                    crate::exec::ExecError::NotConfined { .. } => {
+                        noted_failure_text(policy, tools, &said, &error)
+                    }
+                    _ => format!("error: `{said}` did not start: {error}"),
+                };
+                Produced::problem(text).having_started_a_program()
+            }
         };
     }
 
@@ -11996,7 +12250,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 &plan.directory,
                 (!at_the_root).then_some(told_directory.as_str()),
             );
-            let text = failed_line_text(&said, &error);
+            let text = noted_failure_text(policy, tools, &said, &error);
             let mut produced = Produced::problem(text);
             produced.changed_a_file = changed_a_file;
             match stopped {
@@ -15409,36 +15663,182 @@ mod tests {
         assert!(!offers_an_edit(false, Label::untrusted_public()));
     }
 
+    /// RUN-13, SANDBOX-17: a failure after a stage started says the line may have run in part,
+    /// and a program that could not be started says so only where exec recorded that something
+    /// before it had started. The regressions it rejects are a failure after a start told as not
+    /// run, and a program that could not be started told as a line that may have run in part when
+    /// nothing of it started.
     #[test]
-    fn a_failed_line_is_never_reported_as_not_run() {
-        use crate::exec::ExecError;
+    fn a_failed_line_says_it_may_have_run_in_part_only_where_a_stage_had_started() {
+        use crate::exec::{ExecError, StartedBefore};
         let errors = [
             ExecError::Cancelled,
             ExecError::Io("broken pipe".into()),
-            ExecError::NotStarted {
-                program: "missing-tool".into(),
-                detail: "not found".into(),
-            },
-            ExecError::NotConfined {
-                program: "make".into(),
-                detail: "no profile".into(),
-            },
             ExecError::Redirection {
                 path: "missing/out.txt".into(),
                 detail: "no such directory".into(),
             },
         ];
         for error in &errors {
-            let text = failed_line_text("make && missing-tool", error);
+            let text = failed_line_text("make && missing-tool", error, true);
             assert!(text.contains("may have run in part"), "{error:?}: {text}");
             assert!(!text.contains("did not run"), "{error:?}: {text}");
         }
-        assert!(failed_line_text("sleep 30", &errors[0]).contains("was started"));
-        let gone = failed_line_text("git status", &ExecError::DirectoryGone);
+        assert!(failed_line_text("sleep 30", &errors[0], true).contains("was started"));
+        let gone = failed_line_text("git status", &ExecError::DirectoryGone, true);
         assert!(
             gone.contains("no longer exists") && !gone.contains("may have run in part"),
             "{gone}"
         );
+
+        let missing = |before| ExecError::NotStarted {
+            program: "missing-tool".into(),
+            detail: "not found".into(),
+            before,
+        };
+        let alone = failed_line_text("missing-tool", &missing(StartedBefore::Nothing), true);
+        assert!(alone.contains("was not run"), "{alone}");
+        assert!(alone.contains("could not be started"), "{alone}");
+        assert!(alone.contains("Nothing of the line started"), "{alone}");
+        assert!(!alone.contains("may have run in part"), "{alone}");
+        assert!(!alone.contains("check what"), "{alone}");
+        assert!(!alone.contains("unconfined"), "{alone}");
+        let joined = failed_line_text(
+            "make && missing-tool",
+            &missing(StartedBefore::EarlierPart),
+            true,
+        );
+        assert!(
+            joined.contains("No stage of its pipeline started"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("may have run in part only where a part"),
+            "{joined}"
+        );
+        assert!(!joined.contains("was not run"), "{joined}");
+        assert!(
+            joined.contains("stopped at a program that was not started"),
+            "{joined}"
+        );
+        let piped = failed_line_text(
+            "cat x | missing-tool",
+            &missing(StartedBefore::EarlierStages),
+            true,
+        );
+        assert!(
+            piped.contains("The stages before it in its pipeline"),
+            "{piped}"
+        );
+        assert!(!piped.contains("was not run"), "{piped}");
+        assert!(
+            piped.contains("stopped at a program that was not started"),
+            "{piped}"
+        );
+    }
+
+    /// SANDBOX-17, SANDBOX-29: a program refused for want of confinement is told as not started,
+    /// with nothing of a one-program line run and only an earlier part of a longer one, and as
+    /// refused again if repeated. The routes that let it start are named only where the session
+    /// would accept `unconfined`. The regressions it rejects are the refusal told as a line that
+    /// may have run in part, which sends the planner to check for effects that cannot exist; a
+    /// one-program line told an earlier part may have run; a refusal that does not say repeating
+    /// it is refused again, which the planner then retries; and a route named where the request
+    /// would be refused.
+    #[test]
+    fn a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist() {
+        use crate::exec::{ExecError, StartedBefore};
+        let refused = |before| ExecError::NotConfined {
+            program: "python3".into(),
+            detail: "the network is closed for this session (run.network)".into(),
+            before,
+            network_closed: false,
+        };
+        let alone = failed_line_text("python3 script.py", &refused(StartedBefore::Nothing), true);
+        assert!(!alone.contains("may have run in part"), "{alone}");
+        assert!(!alone.contains("check what it did"), "{alone}");
+        assert!(alone.contains("was not run"), "{alone}");
+        assert!(alone.contains("Nothing of the line started"), "{alone}");
+        assert!(alone.contains("run.network"), "{alone}");
+        assert!(
+            alone.contains(
+                "Running the same line again is refused the same way until the person makes one \
+                 of the changes that follow. The person can let it start"
+            ),
+            "{alone}"
+        );
+        assert!(alone.contains("'unconfined': true"), "{alone}");
+        assert!(
+            alone.contains("asked to approve that one line, every time"),
+            "{alone}"
+        );
+        assert!(
+            alone.contains("/sandbox off") && alone.contains("--sandbox off"),
+            "{alone}"
+        );
+
+        let joined = failed_line_text(
+            "make && python3 script.py",
+            &refused(StartedBefore::EarlierPart),
+            true,
+        );
+        assert!(!joined.contains("Nothing of the line started"), "{joined}");
+        assert!(!joined.contains("was not run"), "{joined}");
+        assert!(
+            joined.contains("stopped at a program that was not started"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("No stage of its pipeline started"),
+            "{joined}"
+        );
+        let piped = failed_line_text(
+            "cat x | python3 script.py",
+            &refused(StartedBefore::EarlierStages),
+            true,
+        );
+        assert!(!piped.contains("was not run"), "{piped}");
+        assert!(
+            piped.contains("The stages before it in its pipeline"),
+            "{piped}"
+        );
+
+        let unoffered =
+            failed_line_text("python3 script.py", &refused(StartedBefore::Nothing), false);
+        assert!(!unoffered.contains("unconfined"), "{unoffered}");
+        assert!(!unoffered.contains("sandbox off"), "{unoffered}");
+        assert!(
+            unoffered.contains(
+                "Running the same line again is refused the same way until the session's \
+                 settings or the platform change."
+            ),
+            "{unoffered}"
+        );
+        assert!(!alone.contains("network open"), "{alone}");
+    }
+
+    /// SANDBOX-29: a refusal for a closed network the platform cannot deny, where the session
+    /// names the routes to no sandbox, says the line then runs with the network open, and says
+    /// nothing of the network where no route is named. The regression it rejects is the person
+    /// asked to approve a line with no sandbox, or to turn the sandbox off, without being told
+    /// that removes the closed network the setting asked for.
+    #[test]
+    fn a_refused_closed_network_says_a_line_with_no_sandbox_has_the_network_open() {
+        use crate::exec::{ExecError, StartedBefore};
+        let closed = ExecError::NotConfined {
+            program: "python3".into(),
+            detail: "the network is closed for this session (run.network)".into(),
+            before: StartedBefore::Nothing,
+            network_closed: true,
+        };
+        let offered = failed_line_text("python3 script.py", &closed, true);
+        assert!(offered.contains("'unconfined': true"), "{offered}");
+        assert!(
+            offered.contains("the line runs with the network open"),
+            "{offered}"
+        );
+        let unoffered = failed_line_text("python3 script.py", &closed, false);
+        assert!(!unoffered.contains("network open"), "{unoffered}");
     }
 
     /// CMDLINE-17, PATH-001: a file a substitution could not open is told under the directory as
@@ -25451,6 +25851,87 @@ mod tests {
             assert_eq!(told, "(no files)");
         }
 
+        /// LIST-5 for a listing the planner may read: a directory the per-directory cap cut is
+        /// named with how many of its files are not shown, and the closing sentence says the cut
+        /// was per directory. The regressions it rejects: the cut directory missing from the body,
+        /// its count dropped, and the whole-walk sentence ("stopped at N files") for a listing that
+        /// stopped at no such cap.
+        #[test]
+        fn a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out() {
+            let scratch = Scratch::new("list-cut-trusted");
+            std::fs::create_dir(scratch.path.join("crowded")).unwrap();
+            for n in 0..201 {
+                std::fs::write(scratch.path.join(format!("crowded/f{n:03}.txt")), "x").unwrap();
+            }
+            std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "depth": 2}),
+            );
+            assert!(produced.incomplete, "a per-directory cut was not reported");
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(
+                told.lines()
+                    .any(|line| line == "crowded/ (1 more file not listed)"),
+                "the cut directory was not named with its count: {told}"
+            );
+            assert!(
+                told.contains("took at most 200 files from any one directory"),
+                "the listing did not say the cut was per directory: {told}"
+            );
+            assert!(
+                !told.contains("stopped at"),
+                "a per-directory cut was worded as the cap over the whole walk: {told}"
+            );
+            assert!(
+                told.contains(
+                    "to see the rest of a directory marked \"not listed\", list that directory \
+                     by its name with no depth"
+                ),
+                "the listing did not point at the cut directory as the one to list: {told}"
+            );
+        }
+
+        /// LIST-4 and LIST-5 for a listing the planner may read that both cut directories and
+        /// reached the cap over the whole walk: each cap that left files out is said. The
+        /// regression it rejects: the per-directory sentence alone, which tells the planner the
+        /// walk saw every directory when it stopped before some of them.
+        #[test]
+        fn a_bounded_listing_cut_per_directory_and_at_the_cap_says_both() {
+            let scratch = Scratch::new("list-cut-and-capped-trusted");
+            for d in 0..11 {
+                let dir = scratch.path.join(format!("d{d:02}"));
+                std::fs::create_dir(&dir).unwrap();
+                for n in 0..201 {
+                    std::fs::write(dir.join(format!("f{n:03}.txt")), "x").unwrap();
+                }
+            }
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "depth": 2}),
+            );
+            assert!(produced.incomplete, "a capped listing was not reported");
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(
+                told.contains("took at most 200 files from any one directory"),
+                "the per-directory cut was not said: {told}"
+            );
+            assert!(
+                told.contains("this listing stopped at"),
+                "the cap over the whole walk was not said: {told}"
+            );
+        }
+
         /// LIST-6 for a listing the planner may not read: the count travels beside the references,
         /// because a sentence written into the quarantined body reaches nobody. The regression it
         /// rejects: the count kept only for the trusted rendering.
@@ -26895,7 +27376,8 @@ mod tests {
         }
 
         /// SANDBOX-29: a request for a line with no sandbox is refused, with a sentence that says
-        /// to run the line with the sandbox first, until a line has run with one and failed in the
+        /// to run the line with the sandbox first, until a line has run with one and failed, or was
+        /// refused because its program could not be confined, in the
         /// turn, and the trail records the refusal under `sandbox`. Each failure earns one request:
         /// after the person is asked once, the next request is refused again. The regressions it
         /// rejects are a request accepted before any line failed, a refusal that does not say what
@@ -26908,18 +27390,23 @@ mod tests {
             let (said, refused, _, note) =
                 run_in("run-unconfined-first", &asks, session_under(WorkspaceWrite));
             assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
+            assert!(
+                said.contains("a line was refused because its program could not be confined"),
+                "the refusal does not say a refused program earns the request: {said}"
+            );
             assert_eq!(
                 sandbox_refusals(&refused),
                 [
-                    "run.unconfined: the request was refused and the line did not run: the line \
-                     has not run with a sandbox and failed this turn"
+                    "run.unconfined: the request was refused and the line did not run: no line \
+                     has run with a sandbox and failed, or been refused because it could not be \
+                     confined, this turn"
                 ],
                 "{refused:?}"
             );
             assert_eq!(
                 note,
-                "refused, 'unconfined' is not accepted: the line has not run with a sandbox and \
-                 failed this turn",
+                "refused, 'unconfined' is not accepted: no line has run with a sandbox and \
+                 failed, or been refused because it could not be confined, this turn",
                 "the person watching was not told why"
             );
 
@@ -27015,6 +27502,285 @@ mod tests {
                 assert!(
                     !text.contains("run the line with the sandbox first"),
                     "a declined prompt spent the earned request: {said:?}"
+                );
+            }
+        }
+
+        /// SANDBOX-29: a line whose program the platform could not confine earns one request for a
+        /// line with no sandbox, as a confined line that exited non-zero does, so the
+        /// `'unconfined': true` its refusal names is put to the person rather than refused. The
+        /// regression it rejects is a refusal for want of confinement that earns nothing, which
+        /// points the planner at the argument and then refuses it as asked before any failure.
+        #[test]
+        fn a_program_that_could_not_be_confined_earns_one_request_for_no_sandbox() {
+            use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            let scratch = Scratch::new("run-unconfinable-earns");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            trust.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+
+            let _held = crate::tools::scripted_unconfinable::hold("echo");
+            let (text, earned) = with_tools(&workspace, |tools| {
+                tools.confine_runs = true;
+                tools.sandbox = WorkspaceWrite;
+                tools.profile = Some(std::path::Path::new("/profile"));
+                let produced = run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveRuns,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"command": "echo hi"}),
+                );
+                (produced.text, tools.confined_failures.has_one())
+            });
+            let said = told(&mut policy, &text);
+            assert!(
+                said.contains("could not be confined"),
+                "the line was not refused for want of confinement: {said}"
+            );
+            assert!(
+                earned,
+                "a program that could not be confined earned no request for no sandbox: {said}"
+            );
+        }
+
+        /// SANDBOX-17, SANDBOX-29: a line left running in the background whose program could not be
+        /// confined is told what the same line in the foreground is told and earns the one
+        /// request for no sandbox, and a background program that could not be started at all,
+        /// which fails where exec launches it, still says it did not start and earns nothing. The
+        /// regressions it rejects are the background arm telling the refusal only as a job that
+        /// did not start, with no routes and no request earned, and a launch failure that is not a
+        /// refusal of the sandbox earning a request.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is() {
+            use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            use std::os::unix::fs::PermissionsExt;
+            let scratch = Scratch::new("run-unconfinable-background");
+            // Executable, so the line compiles, and its interpreter is missing, so exec's launch
+            // of it fails.
+            let bad = scratch.path.join("bad");
+            std::fs::write(&bad, "#!/bravebot-no-such-interpreter\n").expect("a program");
+            std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            trust.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+
+            let _held = crate::tools::scripted_unconfinable::hold("echo");
+            let ran = |policy: &mut Policy<'_, RecordingSink>, arguments: Value, confined| {
+                let (text, earned) = with_tools(&workspace, |tools| {
+                    tools.confine_runs = confined;
+                    tools.sandbox = WorkspaceWrite;
+                    tools.asks_about_unconfined = true;
+                    tools.profile = Some(std::path::Path::new("/profile"));
+                    let produced = run(
+                        policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &arguments,
+                    );
+                    (produced.text, tools.confined_failures.has_one())
+                });
+                (told(policy, &text), earned)
+            };
+            let (foreground, _) = ran(&mut policy, json!({"command": "echo hi"}), true);
+            let (background, earned) = ran(
+                &mut policy,
+                json!({"command": "echo hi", "background": true}),
+                true,
+            );
+            assert!(
+                background.contains("could not be confined"),
+                "the line was not refused for want of confinement: {background}"
+            );
+            assert_eq!(
+                background, foreground,
+                "the background line was not told what the foreground one is"
+            );
+            assert!(
+                background.contains("Running the same line again is refused the same way until"),
+                "{background}"
+            );
+            assert!(background.contains("'unconfined': true"), "{background}");
+            assert!(
+                earned,
+                "a background program that could not be confined earned no request: {background}"
+            );
+
+            // With no profile, so the start that fails is exec's own launch of the program and not
+            // a wrapper that starts and then fails to run it.
+            let (launched, earned) = ran(
+                &mut policy,
+                json!({"command": "./bad", "background": true}),
+                false,
+            );
+            assert!(
+                launched.contains("bad` did not start")
+                    && launched.contains("'./bad' could not be started"),
+                "a background launch failure was not told as a job that did not start: {launched}"
+            );
+            assert!(!launched.contains("could not be confined"), "{launched}");
+            assert!(
+                !earned,
+                "a launch failure that the sandbox did not refuse earned a request: {launched}"
+            );
+        }
+
+        /// SANDBOX-17, SANDBOX-19, SANDBOX-29: a line refused because its one program could not be
+        /// confined, run through `run`, is told that nothing of it started, is not sent to check
+        /// what it did, carries no account of a profile it never ran under, and names
+        /// `'unconfined': true` and the mode `off` only where the session would accept the request.
+        /// The regressions it rejects are the planner asked to check for effects of a line that
+        /// never started, which it may be unable to do when the listing is quarantined, and a
+        /// route named in a session that refuses it: a front end that cannot ask, or `strict`.
+        #[test]
+        fn a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it() {
+            use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+            for (mode, asks, offered) in [
+                (WorkspaceWrite, true, true),
+                (WorkspaceWrite, false, false),
+                (Strict, true, false),
+            ] {
+                let scratch = Scratch::new("run-unconfinable-routes");
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "run a command");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::ShellExec]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_trust(trust);
+
+                let _held = crate::tools::scripted_unconfinable::hold("echo");
+                let text = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.sandbox = mode;
+                    tools.asks_about_unconfined = asks;
+                    tools.profile = Some(std::path::Path::new("/profile"));
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"command": "echo hi"}),
+                    )
+                    .text
+                });
+                let said = told(&mut policy, &text);
+                assert!(said.contains("could not be confined"), "{mode}: {said}");
+                assert!(!said.contains("network open"), "{mode}: {said}");
+                assert!(
+                    said.contains("Nothing of the line started"),
+                    "{mode}: {said}"
+                );
+                assert!(!said.contains("may have run in part"), "{mode}: {said}");
+                assert!(!said.contains("check what"), "{mode}: {said}");
+                assert!(!said.contains("Confinement:"), "{mode}: {said}");
+                assert!(
+                    said.contains("Running the same line again is refused the same way until"),
+                    "{mode}: {said}"
+                );
+                assert_eq!(
+                    said.contains("until the person makes one of the changes that follow"),
+                    offered,
+                    "{mode}: {said}"
+                );
+                assert_eq!(
+                    said.contains("'unconfined': true"),
+                    offered,
+                    "{mode}, asks {asks}: the unconfined route was not named exactly where it is \
+                     accepted: {said}"
+                );
+                assert_eq!(said.contains("/sandbox off"), offered, "{mode}: {said}");
+            }
+        }
+
+        /// SANDBOX-17: a program the platform cannot confine, after an earlier part of the line or
+        /// an earlier stage of its pipeline started, is told as a program that was not started and
+        /// says which of those may have run, as `run` gives it to the planner. The regressions it
+        /// rejects are exec dropping the position where the stage is refused, so the planner is
+        /// told nothing of the line started when `true` did, and the line told as not run.
+        #[test]
+        fn a_program_refused_after_part_of_its_line_started_says_which_part_may_have_run() {
+            use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            for (line, expected) in [
+                ("true && echo hi", "No stage of its pipeline started"),
+                (
+                    "true | echo hi",
+                    "The stages before it in its pipeline had started",
+                ),
+            ] {
+                let scratch = Scratch::new("run-unconfinable-after-a-part");
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "run a command");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::ShellExec]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_trust(trust);
+
+                let _held = crate::tools::scripted_unconfinable::hold("echo");
+                let text = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.sandbox = WorkspaceWrite;
+                    tools.profile = Some(std::path::Path::new("/profile"));
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"command": line}),
+                    )
+                    .text
+                });
+                let said = told(&mut policy, &text);
+                assert!(said.contains("could not be confined"), "{line}: {said}");
+                assert!(said.contains(expected), "{line}: {said}");
+                assert!(
+                    said.contains("stopped at a program that was not started"),
+                    "{line}: {said}"
+                );
+                assert!(!said.contains("was not run"), "{line}: {said}");
+                assert!(
+                    !said.contains("Nothing of the line started"),
+                    "{line}: {said}"
                 );
             }
         }

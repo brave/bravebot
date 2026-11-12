@@ -127,7 +127,6 @@ type DirectoryIdentity = fn(&Path) -> Option<(u64, u64)>;
 pub(crate) use resolve::destination;
 pub use resolve::expand_home;
 use resolve::{named_home, refuse_unkeyable, written_below};
-pub(crate) use results::MAX_ENTRIES;
 pub use results::{
     ContextLine, FileTally, Listing, MAX_SEARCH_CONTEXT, MAX_SEARCH_FILES, Match, Matches, Page,
     Paging, RepoMap, SearchOutput,
@@ -136,6 +135,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
+pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
@@ -2706,12 +2706,17 @@ struct Collected<'a> {
     /// of the tree, and what it points at is not read, so the count is all a caller can say. It
     /// is taken from the entry's file type and from nothing in a file.
     links: usize,
+    /// The most files taken from any one directory, or `None` for no such cap. Set only by a
+    /// depth-bounded listing (LIST-5).
+    per_directory: Option<usize>,
+    /// Directories `per_directory` cut, each with how many of its files were left out.
+    partly_listed: Vec<(String, usize)>,
 }
 
 impl Collected<'_> {
     /// How much of the cap has been spent.
     fn len(&self) -> usize {
-        self.files.len() + self.stopped_at.len()
+        self.files.len() + self.stopped_at.len() + self.partly_listed.len()
     }
 }
 
@@ -2915,13 +2920,35 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
+                // Only a bounded listing, whose purpose is the shape of the tree. An unbounded one
+                // asked for every file, and keeps the one cap over the whole walk.
+                per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                partly_listed: Vec::new(),
             };
-            let _ =
-                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &rules, &mut collected)?;
+            // The name the root is reported under if the per-directory cap cuts it: `.` for the
+            // workspace root, whose relative name is empty, and its relative name otherwise. Taken
+            // once from the resolved directory argument, the value `under` already holds, and
+            // passed into the walk, so no subdirectory's name is tested for it.
+            let root_shown = if under.is_empty() {
+                "."
+            } else {
+                under.as_str()
+            };
+            let _ = self.walk_filtered(
+                &root,
+                root_shown,
+                wanted,
+                depth,
+                MAX_ENTRIES,
+                &rules,
+                &mut collected,
+            )?;
             let unreadable = collected.unreadable;
             let links = collected.links;
+            let mut partly_listed = std::mem::take(&mut collected.partly_listed);
             found.sort();
             stopped_at.sort();
+            partly_listed.sort();
 
             // Labelled after the walk, because which paths were visited is not known before it. A
             // listing is trusted only if every path in it is. A directory name is a name out of the
@@ -2938,6 +2965,8 @@ impl Workspace {
             // outside the boundary like the walk, and it can only lower the label.
             let mut keyed = self.walked_keys(&walk_names, &relative, &root, &found, true);
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &stopped_at, false));
+            let cut: Vec<String> = partly_listed.iter().map(|(name, _)| name.clone()).collect();
+            keyed.extend(self.walked_keys(&walk_names, &relative, &root, &cut, false));
             // The walk above reads directory entries and no file's bytes, and runs outside the
             // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
             // names, and the label of a name is the map's answer for its path, taken inside the
@@ -2960,17 +2989,24 @@ impl Workspace {
             // the same order every time, which is the walk's doing rather than this sort's: what
             // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
             // kept.
-            let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
+            //
+            // A directory the per-directory cap cut leaves files out as the whole-walk cap does, so
+            // the listing is reported as truncated either way (LIST-4).
+            let at_the_cap = found.len() + stopped_at.len() + partly_listed.len() > MAX_ENTRIES;
+            let truncated = at_the_cap || !partly_listed.is_empty();
             found.truncate(MAX_ENTRIES);
             stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
+            partly_listed.truncate(MAX_ENTRIES.saturating_sub(found.len() + stopped_at.len()));
 
             Ok(Labelled::new(
                 Listing {
                     files: found,
                     directories: stopped_at,
                     truncated,
+                    at_the_cap,
                     unreadable,
                     links,
+                    partly_listed,
                 },
                 label,
             ))
@@ -3032,9 +3068,12 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
+                per_directory: None,
+                partly_listed: Vec::new(),
             };
             let hit_the_cap = self.walk_filtered(
                 &root,
+                &under,
                 wanted,
                 None,
                 self.search_files,
@@ -3335,9 +3374,12 @@ impl Workspace {
                     withheld: false,
                     unreadable: false,
                     links: 0,
+                    per_directory: None,
+                    partly_listed: Vec::new(),
                 };
                 let unvisited = self.walk_filtered(
                     &root,
+                    &under,
                     wanted,
                     None,
                     self.search_files,
@@ -4275,9 +4317,19 @@ impl Workspace {
     /// reaches contributes its own contents before the walk disappears into the first subtree
     /// under it. A partial answer cannot be helped once the cap is reached. Which part it
     /// is can.
+    ///
+    /// `shown` is the name `directory` is reported under if the per-directory cap cuts it. The
+    /// caller supplies it: the first call passes the root's name, and each recursive call passes
+    /// the relative name it already built for the subdirectory. So the walk tests no name to tell
+    /// the root from a subdirectory.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk's arguments plus the name a cut directory is reported under"
+    )]
     fn walk_filtered<S: Sink>(
         &self,
         directory: &Path,
+        shown: &str,
         wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
@@ -4321,6 +4373,9 @@ impl Workspace {
         files.sort();
         directories.sort();
 
+        // Files this directory gave the listing, and files past `per_directory` it did not.
+        let mut taken = 0;
+        let mut left_out = 0;
         for path in files {
             if collected.len() > limit {
                 return Ok(true);
@@ -4343,7 +4398,17 @@ impl Workspace {
                 collected.withheld = true;
                 continue;
             }
+            // Counted after the include and the rules, so the number left out is of files the
+            // listing would have shown, and the cap is decided from that count alone.
+            if collected.per_directory.is_some_and(|most| taken >= most) {
+                left_out += 1;
+                continue;
+            }
+            taken += 1;
             collected.files.push(relative);
+        }
+        if left_out > 0 {
+            collected.partly_listed.push((shown.to_string(), left_out));
         }
 
         for path in directories {
@@ -4373,6 +4438,7 @@ impl Workspace {
             // records only that it did, which a caller says without a name.
             match self.walk_filtered(
                 &path,
+                &relative,
                 wanted,
                 remaining.map(|left| left - 1),
                 limit,

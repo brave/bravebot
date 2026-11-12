@@ -12051,6 +12051,125 @@ fn a_quarantined_listing_tells_the_model_it_was_capped() {
     );
 }
 
+/// LIST-5 for a listing the planner may not read: a directory the per-directory cap cut is handed
+/// over as a reference, and how many of its files were left out travels beside the references,
+/// paired with that reference, since a sentence in the body reaches nobody. The regressions it
+/// rejects: the count dropped, so the planner reads 200 files as the whole directory; the
+/// whole-walk wording for a listing that stopped at no such cap; and the directory's name in the
+/// sentence.
+#[test]
+fn a_quarantined_listing_says_how_many_files_each_cut_directory_left_out() {
+    let scratch = Scratch::new("list-cut-quarantined");
+    std::fs::write(scratch.path.join("file-tango.txt"), "x").unwrap();
+    std::fs::create_dir(scratch.path.join("dir-crowded")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("dir-crowded/f{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for name in ["file-tango", "dir-crowded", "f000.txt"] {
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        second.contains("Its 202 entries are quarantined"),
+        "the cut directory was not counted among the entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files from any one directory")
+            && second.contains("Not listed: 1 file of [ref:202]."),
+        "the count of files left out did not reach the planner beside the reference: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a per-directory cut was worded as the cap over the whole walk: {second}"
+    );
+    assert!(
+        second.contains("the files left out are in it")
+            && second.contains("list it by its name with no depth"),
+        "the sentence did not point at the cut directory as the one to list: {second}"
+    );
+}
+
+/// LIST-4 and LIST-5 for a listing the planner may not read, cut per directory and holding exactly
+/// the whole-walk cap's number of entries without passing it. The walk left nothing out at that
+/// cap, so only the per-directory cut is said. The regression it rejects: deciding the whole-walk
+/// cap from `count >= MAX_ENTRIES` when the walk itself reports it by `>`.
+#[test]
+fn a_quarantined_listing_of_exactly_the_cap_cut_per_directory_says_only_the_cut() {
+    let scratch = Scratch::new("list-cut-exactly-cap-quarantined");
+    // Nine directories of 201 files give 1800 files and nine cut directories; 191 files beside
+    // them make 2000 entries, which is the cap and not past it.
+    for d in 0..9 {
+        let dir = scratch.path.join(format!("d{d}"));
+        std::fs::create_dir(&dir).unwrap();
+        for n in 0..201 {
+            std::fs::write(dir.join(format!("f{n:03}.txt")), "x").unwrap();
+        }
+    }
+    for n in 0..191 {
+        std::fs::write(scratch.path.join(format!("r{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("Its 2000 entries are quarantined"),
+        "the fixture does not hold exactly the cap's number of entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files from any one directory"),
+        "the per-directory cut was not said: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a listing that did not pass the whole-walk cap was told it stopped at it: {second}"
+    );
+}
+
 /// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
 /// as a number and with no name. The regression it rejects: a count kept only in the body, which
 /// reaches nobody when the entries are handed over as references, so a directory made of links
@@ -13191,14 +13310,184 @@ fn editing_an_untrusted_file_is_refused() {
     );
     assert!(
         second.contains(
-            "Write the whole file with write_file, edit it through run, or ask the person to \
-             vouch for the path"
+            "Write the whole file with write_file, edit it through run, or read it with \
+             read_file, which asks the person to vouch for the path, and edit it with edit_file \
+             once they have"
         ),
         "the model was not told what is open: {second}"
     );
     assert!(
         !second.contains("Use a reference"),
         "the model was sent to a reference that edit_file cannot take: {second}"
+    );
+}
+
+/// EDIT-2, TRUST-8, MODE-4. Under bypass a read of an unvouched file is vouched for by the mode,
+/// so the refusal to edit it names that read and does not send the planner to a person nobody
+/// will ask. Without it a bypass session scripted its edits through `run`.
+#[test]
+fn under_bypass_the_refusal_to_edit_an_unread_file_names_the_read_that_vouches_for_it() {
+    let scratch = Scratch::new("edit-unread-bypass");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("edit a.txt").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [_first, second] = requests.as_slice() else {
+        panic!("two requests, for two rounds: {requests:?}");
+    };
+    assert!(
+        second.contains(
+            "or read it with read_file, which in this mode vouches for the path without asking \
+             anybody, and then edit it with edit_file"
+        ),
+        "the model was not sent to the read that vouches for the file: {second}"
+    );
+    assert!(
+        !second.contains("ask the person"),
+        "the model was sent to a person bypass mode does not ask: {second}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "keep\nold\n",
+        "the file was edited"
+    );
+}
+
+/// EDIT-2, TRUST-8, MODE-4. The read the bypass refusal names is the whole route: one `read_file`
+/// of an unvouched file under bypass vouches for it without asking anybody, and the `edit_file`
+/// after it is applied. Without it a bypass session edited through scripts it wrote and ran.
+#[test]
+fn under_bypass_one_read_makes_an_unread_file_editable_without_asking() {
+    let scratch = Scratch::new("edit-after-read-bypass");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("edit a.txt").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert!(
+        offered.lock().unwrap().is_empty(),
+        "a person was asked to vouch under bypass"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "keep\nnew\n",
+        "the edit after the read was not applied"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.contains("closed to edit_file")),
+        "the edit after the read was refused: {requests:?}"
+    );
+}
+
+/// TRUST-8, EDIT-2. A path the person was already asked about this turn is not put to them again
+/// by a read, so the refusal to edit it after they said no does not send the planner to that read.
+#[test]
+fn the_refusal_to_edit_a_file_already_asked_about_does_not_name_the_read() {
+    let scratch = Scratch::new("edit-already-asked");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let mut person = VouchesForFiles::new(false);
+    let offered = person.offered.clone();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("edit a.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert_eq!(
+        offered.lock().unwrap().len(),
+        1,
+        "the read did not put the vouch question once"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    // The vouch check is a request to the same server, so the refusal is in the last request.
+    let Some(third) = requests.last() else {
+        panic!("no requests: {requests:?}");
+    };
+    assert!(
+        third.contains(
+            "and an edit has to compare its text. Write the whole file with write_file, edit it \
+             through run, or ask the person to vouch for the path"
+        ),
+        "the refusal after a declined vouch is not the person's route: {third}"
+    );
+    assert!(
+        !third.contains("read it with read_file"),
+        "the model was sent to a read that asks nothing this turn: {third}"
     );
 }
 
@@ -13263,32 +13552,63 @@ fn editing_a_file_a_program_wrote_is_refused() {
         ),
         "the model was not told why the file is closed to edit_file: {third}"
     );
+    // A read of a file a program wrote puts the vouch question as for an unread one, so the
+    // refusal names that read in the same words.
+    assert!(
+        third.contains(
+            "or read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have"
+        ),
+        "the model was not sent to the read that asks about a file a program wrote: {third}"
+    );
     assert!(
         !third.contains("Use a reference"),
         "the model was sent to a reference that edit_file cannot take: {third}"
     );
 }
 
-/// TOOL-6. The refusal of an untrusted file names `write_file` and `run` only where the turn is
-/// offered them, and says that only the person can open the file where it is offered neither.
+/// TOOL-6. The refusal of an untrusted file names `write_file`, `run` and `read_file` only where
+/// the turn is offered them, and says that only the person can open the file where it is offered
+/// none of the three.
 #[test]
 fn the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered() {
     let cases = [
         (
             "kind: worker\ntools: read_file, edit_file, write_file, run\n",
+            "Write the whole file with write_file, edit it through run, or read it with \
+             read_file, which asks the person to vouch for the path, and edit it with edit_file \
+             once they have",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, write_file\n",
+            "Write the whole file with write_file, or read it with read_file, which asks the \
+             person to vouch for the path, and edit it with edit_file once they have",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, run\n",
+            "Edit it through run, or read it with read_file, which asks the person to vouch for \
+             the path, and edit it with edit_file once they have",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file\n",
+            "Read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have",
+        ),
+        (
+            "kind: worker\ntools: edit_file, write_file, run\n",
             "Write the whole file with write_file, edit it through run, or ask the person to \
              vouch for the path",
         ),
         (
-            "kind: worker\ntools: read_file, edit_file, write_file\n",
+            "kind: worker\ntools: edit_file, write_file\n",
             "Write the whole file with write_file, or ask the person to vouch for the path",
         ),
         (
-            "kind: worker\ntools: read_file, edit_file, run\n",
+            "kind: worker\ntools: edit_file, run\n",
             "Edit it through run, or ask the person to vouch for the path",
         ),
         (
-            "kind: worker\ntools: read_file, edit_file\n",
+            "kind: worker\ntools: edit_file\n",
             "Only the person can open it, by vouching for the path",
         ),
     ];

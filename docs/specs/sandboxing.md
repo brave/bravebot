@@ -1522,9 +1522,32 @@ in the background, and a stage of a plan a subagent runs. The profile is applied
 environment is set and scrubbed and before its standard streams are connected, so it is the process
 that reads its arguments that is confined. A stage the platform cannot confine, because the backend
 is unavailable or will not apply the policy, is not started, the pipeline's other stages are
-stopped, and the turn is told the program was not started since it could not be confined. The one way a
-program is started with no profile is the mode `off` ([SANDBOX-22](#SANDBOX-22)), which a person
-chose by name in their own settings or on the command line, and which a window never reads.
+stopped, and the turn is told the program was not started since it could not be confined. A line
+left running in the background is told this in the same words as a line run in the foreground.
+Where nothing of the line had started, the result says the line was not run; otherwise it says the
+line stopped at a program that was not started. It also says that running the same line again is
+refused the same way until one of the changes it names next is made, or, where it names none,
+until the session's settings or the platform change. What else of the line it says may have run is
+read off the processes the executor had started before the refused program, and nothing a program
+printed: where none had, it says nothing of the line started; where a part joined before the
+program's pipeline with `&&`, `||` or `;`, or a `$(...)` it read, had started, it says only that
+part may have run; where stages before it in its pipeline had started and were stopped, it says
+only those stages and a part before them may have run. A program that could not be started at all,
+because it is missing or the system refused to start it, is told the same way in the foreground,
+as not run where nothing of the line had started and as a program that was not started otherwise,
+with what else of the line had started; in the background it is told that the line did not start.
+Neither says more of the line may have run than that, or asks the planner to check what a program
+that never started did. Where the session would accept `'unconfined': true`
+([SANDBOX-29](#SANDBOX-29)), it names that request, which the person is asked about for that one
+line every time, and the mode `off` through `/sandbox off` or `--sandbox off` where the
+administrator allows it; elsewhere it names neither. A program inside a `$(...)` that is refused
+for want of confinement, or could not be started, is not told this way: in the foreground the line
+is told that the command substitution did not produce a value and that the line may have run in
+part, in the background that the line did not start, the routes are not named, and the refusal
+earns no request for no sandbox. [#4018](https://github.com/brave/bravebot/issues/4018) tracks
+telling it as a program that was not started. The one way a program is started with no profile is
+the mode `off` ([SANDBOX-22](#SANDBOX-22)), which a person chose by name in their own settings or on
+the command line, and which a window never reads.
 
 On Linux every program the backend starts, a stage among them, is made the leader of a session of
 its own before the policy is applied, and is not started if that fails. A process with no controlling
@@ -1603,6 +1626,14 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_agent::confine::a_program_left_running_is_confined_as_well`
 `verified-by: bravebot_agent::confine::a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
 `verified-by: bravebot_agent::confine::a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
+`verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
+`verified-by: bravebot_agent::tools::a_failed_line_says_it_may_have_run_in_part_only_where_a_stage_had_started`
+`verified-by: bravebot_agent::tools::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
+`verified-by: bravebot_agent::exec::a_program_that_could_not_be_started_says_what_of_the_line_had_started`
+`verified-by: bravebot_agent::exec::a_repointed_link_after_an_earlier_part_records_that_the_part_had_started`
+`verified-by: bravebot_agent::confine::a_job_refused_at_its_second_stage_records_that_the_first_had_started`
+`verified-by: bravebot_agent::tools::a_program_refused_after_part_of_its_line_started_says_which_part_may_have_run`
+`verified-by: bravebot_agent::tools::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
 `verified-by: bravebot_sandbox::windows::the_job_carries_every_ui_limit_whatever_the_policy`
 `verified-by: bravebot_sandbox::windows::a_job_that_cannot_be_limited_refuses_the_stage_naming_the_cause`
 `verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
@@ -1973,8 +2004,16 @@ two never say different things. The description
 reads that fact as each turn starts and this sentence reads it when the result is composed. The
 sentence is the same words for exit 1 and exit 2.
 A result whose steps all
-exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
-([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
+exited zero carries no such sentence. The sentence is composed from the same two decisions the
+policy is ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
+
+A line refused before its program started, because the program could not be confined or could not
+be started, carries no such sentence either, since no step ran under a profile. Its result says
+what [SANDBOX-17](#SANDBOX-17) gives instead: that the program was not started, what else of the
+line had started, that the same line is refused again the same way, and the routes that let it
+start. `'unconfined': true` and the mode `off` are named only where the session would accept the
+request ([SANDBOX-29](#SANDBOX-29)), and a closed network the platform cannot deny names the setting
+[SANDBOX-20](#SANDBOX-20) gives. It does not ask the planner to check what such a program did.
 
 The sentence ends with fixed text, in every mode that produces it, saying that a credential
 location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`,
@@ -2136,6 +2175,7 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::turn::a_failed_job_that_lists_processes_is_told_what_a_failed_run_of_it_is_told`
 `verified-by: bravebot_agent::confine::the_sentences_about_loopback_and_listing_processes_name_no_tool`
 `verified-by: bravebot_sandbox::macos::process_listing_programs_fail_under_both_bases_whether_or_not_what_they_seek_runs`
+`verified-by: bravebot_agent::tools::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -2202,7 +2242,10 @@ window opens later does not close it, and neither does a settings file a window 
 
 Where the backend cannot deny the network ([SANDBOX-5](#SANDBOX-5): Linux on a kernel that refuses
 the namespace [SANDBOX-3](#SANDBOX-3) describes) a stage that would lose egress is not started, and the result says that the network is closed and the platform cannot
-deny it, the refusal [SANDBOX-17](#SANDBOX-17) already gives. The planner is told once, in the `run`
+deny it, the refusal [SANDBOX-17](#SANDBOX-17) already gives. The refusal names what lets the program
+start: `--run-network open`, or `run.network` set to `open` in the person's own settings where no
+project settings file closes it. Where the administrator's managed file closed the network, it says
+so and names no setting, since none of the person's opens it. The planner is told once, in the `run`
 description, that the network is closed and which kinds of stage keep it. The failure sentence
 ([SANDBOX-19](#SANDBOX-19)) names the setting beside the directories. A closed network is named on
 the opening screen, in `/status` with the layer that closed it, in `doctor`, in the run prompt once, with each
@@ -2230,6 +2273,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_agent::confine::a_closed_network_is_not_reopened_by_what_a_stage_is_started_with`
 `verified-by: bravebot_agent::confine::a_closed_network_is_told_to_the_planner_and_an_open_one_is_not`
 `verified-by: bravebot_agent::confine::a_backend_that_cannot_deny_the_network_refuses_a_closed_stage`
+`verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_agent::confine::the_trail_names_the_stages_that_kept_a_closed_network_by_place_and_reason`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
@@ -3812,16 +3856,25 @@ none to add to.
   LaunchServices and Apple Events, so launching an application, opening a URL in one or scripting
   one needs the line run again with the argument.
 - **Accepted after a failure.** The driver accepts the request only while a line has run with the
-  sandbox in this turn and exited non-zero, and each such failure earns one request: accepting one
-  spends it, so a request the person declines, or a plan the policy then refuses, leaves it. The
-  failed line need not be the line the request names. A request with none earned is refused before
-  anybody is asked, with a sentence that says to run the line with the sandbox first, and the trail
-  records the refusal under `sandbox` naming that cause, which the person watching is also told in a
-  note beside the sentence. The count comes from
-  exit codes and whether the deadline stopped the line, and nothing a program printed is read. A line
-  stopped at its deadline or by the person, a line that ran with no sandbox and a line moved to the
-  background earn nothing. A line whose own redirection leaves the workspace is accepted without one, since the
-  sandbox refuses it before anything runs and so no run can fail at it.
+  sandbox in this turn and exited non-zero, or a line whose program the platform could not confine
+  ([SANDBOX-17](#SANDBOX-17)) was refused, in the foreground or the background, and each such
+  failure earns one request: accepting one spends it, so a request the person declines, or a plan
+  the policy then refuses, leaves it. Where that refusal is a closed `run.network` the platform
+  cannot deny, the result that names the request and the mode `off` also says that either way the
+  line runs with the network open, since only the sandbox holds it closed. Under a managed
+  `run.network` of `closed` the session accepts neither route, so neither is named. The failed line
+  need not be the line the request names. A request with none earned is refused before anybody is
+  asked, with a sentence that says to run the line with the sandbox first and that a line which
+  failed with one, or was refused because its program could not be confined, earns the request,
+  and the trail records the refusal under `sandbox` naming that cause, which the person watching is
+  also told in a note beside the sentence. The count comes from exit codes, whether the deadline
+  stopped the line and whether a program was refused for want of confinement, and nothing a program
+  printed is read. A line stopped at its deadline or by the person, a line that ran with no sandbox
+  and a line moved to the background after it started earn nothing. A program refused for want of
+  confinement inside a `$(...)` earns nothing either ([SANDBOX-17](#SANDBOX-17),
+  [#4018](https://github.com/brave/bravebot/issues/4018)). A line whose own redirection leaves the
+  workspace is accepted without one, since the sandbox refuses it before anything runs and so no
+  run can fail at it.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
 - The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
@@ -3843,6 +3896,9 @@ refuse the path.
 `verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
 `verified-by: bravebot_agent::tools::each_confined_failure_earns_one_request_for_no_sandbox`
+`verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_earns_one_request_for_no_sandbox`
+`verified-by: bravebot_agent::tools::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
+`verified-by: bravebot_agent::tools::a_refused_closed_network_says_a_line_with_no_sandbox_has_the_network_open`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`
 `verified-by: bravebot_agent::tools::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
 `verified-by: bravebot_agent::turn::a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox`

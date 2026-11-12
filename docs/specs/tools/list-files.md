@@ -128,11 +128,17 @@ Output is capped, and the cap is reported. Reported to the planner whether or no
 names, since a listing handed over as one reference per entry is exactly the case where a notice
 inside the body reaches nobody.
 
+A listing given a depth shares the cap across directories: it takes at most 200 files from any one
+directory ([LIST-5](#LIST-5)), and a listing that left files out that way is reported as truncated
+too.
+
 **Why.** Silence would let the planner conclude a file does not exist when the answer was cut off.
 
 `verified-by: bravebot_agent::workspace::a_listing_past_the_cap_reports_truncation`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
 `verified-by: bravebot_agent::workspace::a_listing_within_the_cap_reports_no_truncation`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_it_was_capped`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
 
 <a id="LIST-5"></a>
 ### LIST-5: a listing walks the whole tree unless it is given a depth, and says where it stopped
@@ -152,6 +158,16 @@ A quarantined listing names them the only way it names anything, as one of the r
 walk stopped at, as a run with a count and its first and last reference. A reference standing for a
 directory is refused where a path is expected, so the difference is enforced and not only stated.
 
+A bounded walk takes at most 200 files from any one directory, counted after the pattern and the
+permission rules. A directory with more is named in the result with how many of its files were left
+out, the way a directory the walk stopped at is named, and listing it with no depth shows the rest.
+The count comes from directory entries and no file's bytes. A walk with no depth is not held to this,
+since it asked for every file, and keeps only the cap of [LIST-4](#LIST-4). In a quarantined listing
+the directory is a directory reference after the ones the walk stopped at, and the count travels
+beside the references paired with that reference, as the link count of [LIST-6](#LIST-6) does. It
+is released with the entry count and adds no use of `declassify`, and the reference it is paired
+with is chosen by position, never by a name.
+
 **Why.** Without a bound the only listing on offer is every path at every depth, which in a real
 repository is thousands of them. That is paid for in the planner's context, again on every round
 that resends it, and again in each delegate handed the same question. The common question is what
@@ -166,11 +182,21 @@ places. A reference standing for a directory while reading like a file is the ot
 it sends the planner to open bytes that are not there, and a write aimed at one asks a person to
 endorse a file over a directory they own.
 
+**Why the per-directory cap.** Without one, a walk in name order spends the whole cap on the first
+directory that holds thousands of files and lists no directory after it. Those entries are paid for
+in the planner's context on every round that resends them.
+
 `verified-by: bravebot_agent::workspace::a_listing_given_a_depth_descends_no_further_than_that`
 `verified-by: bravebot_agent::workspace::a_depth_limited_listing_names_the_directories_it_stopped_at`
 `verified-by: bravebot_agent::workspace::a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at`
 `verified-by: bravebot_agent::workspace::a_listing_with_no_depth_walks_the_whole_tree`
 `verified-by: bravebot_agent::workspace::a_depth_of_two_or_more_walks_that_many_levels_and_names_where_it_stopped`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
+`verified-by: bravebot_agent::workspace::an_unbounded_listing_takes_every_file_of_a_large_directory`
+`verified-by: bravebot_agent::workspace::a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name`
+`verified-by: bravebot_agent::tools::a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::sentences::a_listing_cut_per_directory_names_each_reference_with_what_it_left_out`
 `verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
 `verified-by: bravebot_core::policy::an_entry_that_is_a_directory_is_not_offered_as_a_file`
 `verified-by: bravebot_core::policy::a_directory_reference_is_refused_where_a_path_is_expected`

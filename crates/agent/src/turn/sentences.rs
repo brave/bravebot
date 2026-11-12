@@ -41,6 +41,50 @@ pub(super) fn capped_note(tool: &str, incomplete: bool, paging: Option<Paging>) 
     }
 }
 
+/// What a quarantined listing says about a cap, beside its references for the reason `capped_note`
+/// is. `at_the_cap` is whether the listing holds as many entries as the cap over the whole walk
+/// allows, and `cut` is each directory the per-directory cap cut, as its reference and how many of
+/// its files were left out (LIST-5). References and numbers, never a name.
+pub(super) fn listing_capped_note(
+    incomplete: bool,
+    at_the_cap: bool,
+    cut: &[(String, usize)],
+) -> String {
+    if !incomplete {
+        return String::new();
+    }
+    let mut said = String::new();
+    if cut.is_empty() || at_the_cap {
+        said.push_str(
+            " The listing stopped at that many entries and is incomplete: list a subdirectory to \
+             see the rest.",
+        );
+    }
+    if !cut.is_empty() {
+        let each: Vec<String> = cut
+            .iter()
+            .map(|(reference, left_out)| {
+                format!(
+                    "{} of [{reference}]",
+                    crate::tools::tally(*left_out, "file", "files")
+                )
+            })
+            .collect();
+        said.push_str(&format!(
+            " The listing took at most {} files from any one directory and is incomplete. Not \
+             listed: {}. Each of those references is a directory the walk entered and cut, not \
+             one it stopped at, and the files left out are in it. No argument takes a reference \
+             to a directory, so to see the rest of one, list it by its name with no depth if you \
+             know the name; otherwise list the directory you named with no depth, which walks the \
+             whole tree up to {} entries.",
+            crate::workspace::MAX_FILES_PER_DIRECTORY,
+            each.join(", "),
+            crate::workspace::MAX_ENTRIES
+        ));
+    }
+    said
+}
+
 /// What a result says about the symbolic links its walk did not enter, written beside the reference
 /// for the reason `capped_note` is: the body that would carry it reaches nobody. A number and never a
 /// name, from the count the walk kept while it read file types.
@@ -390,6 +434,36 @@ mod tests {
         assert!(
             capped_note("search", true, Some(Paging::PastTheEnd { found: 3 }))
                 .contains("stopped at a cap")
+        );
+    }
+
+    /// LIST-5: a quarantined listing cut per directory names each cut directory's reference with
+    /// how many of its files were left out. The regressions it rejects: the whole-walk wording
+    /// ("stopped at that many entries") for a listing that stopped at no such cap, a count dropped
+    /// or paired with the wrong reference, and the sentence said for a complete listing.
+    #[test]
+    fn a_listing_cut_per_directory_names_each_reference_with_what_it_left_out() {
+        let cut = [("ref:7".to_string(), 1_801), ("ref:8".to_string(), 1)];
+        let said = listing_capped_note(true, false, &cut);
+        assert_eq!(
+            said,
+            " The listing took at most 200 files from any one directory and is incomplete. Not \
+             listed: 1801 files of [ref:7], 1 file of [ref:8]. Each of those references is a \
+             directory the walk entered and cut, not one it stopped at, and the files left out \
+             are in it. No argument takes a reference to a directory, so to see the rest of one, \
+             list it by its name with no depth if you know the name; otherwise list the directory \
+             you named with no depth, which walks the whole tree up to 2000 entries."
+        );
+        assert_eq!(listing_capped_note(false, false, &[]), "");
+        assert_eq!(
+            listing_capped_note(true, false, &[]),
+            " The listing stopped at that many entries and is incomplete: list a subdirectory to \
+             see the rest."
+        );
+        let both = listing_capped_note(true, true, &cut);
+        assert!(
+            both.contains("stopped at that many entries") && both.contains("1 file of [ref:8]"),
+            "a listing cut both ways did not say both: {both}"
         );
     }
 
