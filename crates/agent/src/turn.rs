@@ -4219,12 +4219,16 @@ where
                 // and the planner is not being given the body: it gets the references, and a
                 // capped sample of a tree read as the whole of it is how a planner concludes a
                 // file it cannot find does not exist.
-                let capped = if output.incomplete {
-                    " The listing stopped at that many entries and is incomplete: list a \
-             subdirectory to see the rest."
-                } else {
-                    ""
-                };
+                // The directories the per-directory cap cut are the last references, so each is
+                // paired with its count by position and never by a name.
+                let cut: Vec<(String, usize)> = ids
+                    [ids.len().saturating_sub(entries.left_out.len())..]
+                    .iter()
+                    .map(ToString::to_string)
+                    .zip(entries.left_out.iter().copied())
+                    .collect();
+                let capped =
+                    sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
                 // The pattern's own sentence, which the tool wrote from the pattern the planner

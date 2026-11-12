@@ -98,6 +98,14 @@ pub struct Entries {
     /// one reference at a time rather than as a number: handed a listing of files alone it sees a
     /// tree with no branches.
     pub directories: usize,
+    /// How many files were left out of each directory the per-directory cap cut (LIST-5), in the
+    /// order of the last of `paths`, which are those directories. Counts of directory entries,
+    /// released with `count`, so the turn can say beside the references how much each one holds
+    /// that is not listed.
+    pub left_out: Vec<usize>,
+    /// Whether the listing reached the cap over the whole walk, as against leaving files out by
+    /// the per-directory cap alone. Shape like `count`, from the same release.
+    pub at_the_cap: bool,
 }
 
 /// Content a result carries beside its own text, under a label of its own.
@@ -5260,7 +5268,7 @@ fn list_files<S: Sink>(
         Ok(listing) => {
             let note = note_for(policy, "list_files", &listing, |listing| {
                 tally(
-                    listing.files.len() + listing.directories.len(),
+                    listing.files.len() + listing.directories.len() + listing.partly_listed.len(),
                     "entry",
                     "entries",
                 )
@@ -5307,24 +5315,40 @@ fn list_files<S: Sink>(
                 // The second is what keeps the quarantined listing describing the same tree the
                 // trusted one does, where a directory is rendered with a trailing slash among the
                 // files. The third says whether a pattern selected anything.
-                let (count, directories, files) = {
+                // The fourth is how many files each directory the per-directory cap cut left out,
+                // a count of directory entries like the others.
+                let (count, directories, files, left_out, at_the_cap) = {
                     let shaped = policy.render_in_place("list_files", &listing, |listing| {
                         (
-                            listing.files.len() + listing.directories.len(),
-                            listing.directories.len(),
+                            listing.files.len()
+                                + listing.directories.len()
+                                + listing.partly_listed.len(),
+                            listing.directories.len() + listing.partly_listed.len(),
                             listing.files.len(),
+                            listing
+                                .partly_listed
+                                .iter()
+                                .map(|(_, left_out)| *left_out)
+                                .collect::<Vec<usize>>(),
+                            listing.at_the_cap,
                         )
                     });
                     let proof = policy.authorise_display_release(
-                        "how many entries a listing has, how many of them it stopped at and how \
-                         many are files",
+                        "how many entries a listing has, how many of them it stopped at, how \
+                         many are files, how many files each directory it cut left out and \
+                         whether it reached the cap over the whole walk",
                     );
                     shaped.declassify(&proof)
                 };
-                // The directories last, which is the order the kernel reads the two apart by.
+                // The directories last, which is the order the kernel reads the two apart by. A
+                // directory the per-directory cap cut is a directory reference like one the walk
+                // stopped at, so it is named the only way a quarantined listing names anything.
+                // Those come after the ones the walk stopped at, so which references they are is
+                // decided by the counts alone and `left_out` lines up with the last of them.
                 let paths = policy.render_in_place("list_files", &listing, |listing| {
                     let mut paths = listing.files.clone();
                     paths.extend(listing.directories.iter().cloned());
+                    paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
                     paths
                 });
                 return Produced::new(Labelled::trusted(String::new()), proposed_dir.clone(), note)
@@ -5337,6 +5361,8 @@ fn list_files<S: Sink>(
                         paths,
                         count,
                         directories,
+                        left_out,
+                        at_the_cap,
                     });
             }
 
@@ -5346,13 +5372,24 @@ fn list_files<S: Sink>(
                 let selected_no_file = listing.files.is_empty();
                 let mut entries: Vec<String> = listing.files.clone();
                 entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+                // A directory the per-directory cap cut, with how many of its files are not shown,
+                // so the planner knows to list it by name for the rest (LIST-5).
+                entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
+                    format!(
+                        "{name}/ ({} not listed)",
+                        tally(*left_out, "more file", "more files")
+                    )
+                }));
                 entries.sort();
+                let cut_per_directory = !listing.partly_listed.is_empty();
                 let listing = Listing {
                     files: entries,
                     directories: Vec::new(),
                     truncated: listing.truncated,
+                    at_the_cap: listing.at_the_cap,
                     unreadable: listing.unreadable,
                     links: listing.links,
+                    partly_listed: Vec::new(),
                 };
                 let mut body = if listing.files.is_empty() && listing.links > 0 {
                     // An empty listing beside links is not an empty directory: a skills
@@ -5367,13 +5404,29 @@ fn list_files<S: Sink>(
                     "(no files)".to_string()
                 } else if listing.truncated {
                     // Said plainly, because a model given a silently capped listing will treat
-                    // it as the whole tree and conclude a file does not exist.
-                    format!(
-                        "{}\n\n(this listing stopped at {} files and is incomplete; \
-                         list a subdirectory to see more)",
-                        listing.files.join("\n"),
-                        listing.files.len()
-                    )
+                    // it as the whole tree and conclude a file does not exist. Each cap that left
+                    // files out has its own sentence, as `listing_capped_note` does for a
+                    // quarantined listing: "stopped at N files" misstates a per-directory cut,
+                    // and the per-directory sentence alone hides that the walk stopped as well.
+                    let mut body = listing.files.join("\n");
+                    if listing.at_the_cap || !cut_per_directory {
+                        body.push_str(&format!(
+                            "\n\n(this listing stopped at {} files and is incomplete; \
+                             list a subdirectory to see more)",
+                            listing.files.len()
+                        ));
+                    }
+                    if cut_per_directory {
+                        // A listing of that directory with a depth is cut the same way, so the
+                        // rest is reached with none.
+                        body.push_str(&format!(
+                            "\n\n(this listing took at most {} files from any one directory and \
+                             is incomplete; to see the rest of a directory marked \"not \
+                             listed\", list that directory by its name with no depth)",
+                            crate::workspace::MAX_FILES_PER_DIRECTORY
+                        ));
+                    }
+                    body
                 } else {
                     listing.files.join("\n")
                 };
@@ -5404,6 +5457,12 @@ fn list_files<S: Sink>(
             let glimpsed = policy.render_in_place("list_files", &listing, |listing| {
                 let mut entries: Vec<String> = listing.files.clone();
                 entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+                entries.extend(
+                    listing
+                        .partly_listed
+                        .iter()
+                        .map(|(name, _)| format!("{name}/")),
+                );
                 entries.sort();
                 entries.join("\n")
             });
@@ -25666,6 +25725,87 @@ mod tests {
             let told = super::arguments::told(&mut policy, &produced.text);
             assert_eq!(produced.links, 0);
             assert_eq!(told, "(no files)");
+        }
+
+        /// LIST-5 for a listing the planner may read: a directory the per-directory cap cut is
+        /// named with how many of its files are not shown, and the closing sentence says the cut
+        /// was per directory. The regressions it rejects: the cut directory missing from the body,
+        /// its count dropped, and the whole-walk sentence ("stopped at N files") for a listing that
+        /// stopped at no such cap.
+        #[test]
+        fn a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out() {
+            let scratch = Scratch::new("list-cut-trusted");
+            std::fs::create_dir(scratch.path.join("crowded")).unwrap();
+            for n in 0..201 {
+                std::fs::write(scratch.path.join(format!("crowded/f{n:03}.txt")), "x").unwrap();
+            }
+            std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "depth": 2}),
+            );
+            assert!(produced.incomplete, "a per-directory cut was not reported");
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(
+                told.lines()
+                    .any(|line| line == "crowded/ (1 more file not listed)"),
+                "the cut directory was not named with its count: {told}"
+            );
+            assert!(
+                told.contains("took at most 200 files from any one directory"),
+                "the listing did not say the cut was per directory: {told}"
+            );
+            assert!(
+                !told.contains("stopped at"),
+                "a per-directory cut was worded as the cap over the whole walk: {told}"
+            );
+            assert!(
+                told.contains(
+                    "to see the rest of a directory marked \"not listed\", list that directory \
+                     by its name with no depth"
+                ),
+                "the listing did not point at the cut directory as the one to list: {told}"
+            );
+        }
+
+        /// LIST-4 and LIST-5 for a listing the planner may read that both cut directories and
+        /// reached the cap over the whole walk: each cap that left files out is said. The
+        /// regression it rejects: the per-directory sentence alone, which tells the planner the
+        /// walk saw every directory when it stopped before some of them.
+        #[test]
+        fn a_bounded_listing_cut_per_directory_and_at_the_cap_says_both() {
+            let scratch = Scratch::new("list-cut-and-capped-trusted");
+            for d in 0..11 {
+                let dir = scratch.path.join(format!("d{d:02}"));
+                std::fs::create_dir(&dir).unwrap();
+                for n in 0..201 {
+                    std::fs::write(dir.join(format!("f{n:03}.txt")), "x").unwrap();
+                }
+            }
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "depth": 2}),
+            );
+            assert!(produced.incomplete, "a capped listing was not reported");
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(
+                told.contains("took at most 200 files from any one directory"),
+                "the per-directory cut was not said: {told}"
+            );
+            assert!(
+                told.contains("this listing stopped at"),
+                "the cap over the whole walk was not said: {told}"
+            );
         }
 
         /// LIST-6 for a listing the planner may not read: the count travels beside the references,

@@ -11670,6 +11670,125 @@ fn a_quarantined_listing_tells_the_model_it_was_capped() {
     );
 }
 
+/// LIST-5 for a listing the planner may not read: a directory the per-directory cap cut is handed
+/// over as a reference, and how many of its files were left out travels beside the references,
+/// paired with that reference, since a sentence in the body reaches nobody. The regressions it
+/// rejects: the count dropped, so the planner reads 200 files as the whole directory; the
+/// whole-walk wording for a listing that stopped at no such cap; and the directory's name in the
+/// sentence.
+#[test]
+fn a_quarantined_listing_says_how_many_files_each_cut_directory_left_out() {
+    let scratch = Scratch::new("list-cut-quarantined");
+    std::fs::write(scratch.path.join("file-tango.txt"), "x").unwrap();
+    std::fs::create_dir(scratch.path.join("dir-crowded")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("dir-crowded/f{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for name in ["file-tango", "dir-crowded", "f000.txt"] {
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        second.contains("Its 202 entries are quarantined"),
+        "the cut directory was not counted among the entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files from any one directory")
+            && second.contains("Not listed: 1 file of [ref:202]."),
+        "the count of files left out did not reach the planner beside the reference: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a per-directory cut was worded as the cap over the whole walk: {second}"
+    );
+    assert!(
+        second.contains("the files left out are in it")
+            && second.contains("list it by its name with no depth"),
+        "the sentence did not point at the cut directory as the one to list: {second}"
+    );
+}
+
+/// LIST-4 and LIST-5 for a listing the planner may not read, cut per directory and holding exactly
+/// the whole-walk cap's number of entries without passing it. The walk left nothing out at that
+/// cap, so only the per-directory cut is said. The regression it rejects: deciding the whole-walk
+/// cap from `count >= MAX_ENTRIES` when the walk itself reports it by `>`.
+#[test]
+fn a_quarantined_listing_of_exactly_the_cap_cut_per_directory_says_only_the_cut() {
+    let scratch = Scratch::new("list-cut-exactly-cap-quarantined");
+    // Nine directories of 201 files give 1800 files and nine cut directories; 191 files beside
+    // them make 2000 entries, which is the cap and not past it.
+    for d in 0..9 {
+        let dir = scratch.path.join(format!("d{d}"));
+        std::fs::create_dir(&dir).unwrap();
+        for n in 0..201 {
+            std::fs::write(dir.join(format!("f{n:03}.txt")), "x").unwrap();
+        }
+    }
+    for n in 0..191 {
+        std::fs::write(scratch.path.join(format!("r{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("Its 2000 entries are quarantined"),
+        "the fixture does not hold exactly the cap's number of entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files from any one directory"),
+        "the per-directory cut was not said: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a listing that did not pass the whole-walk cap was told it stopped at it: {second}"
+    );
+}
+
 /// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
 /// as a number and with no name. The regression it rejects: a count kept only in the body, which
 /// reaches nobody when the entries are handed over as references, so a directory made of links

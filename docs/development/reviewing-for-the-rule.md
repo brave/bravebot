@@ -128,6 +128,34 @@ the other shape facts of the result (the cap, the unreadable-directory flag) thr
 name or target in that sentence, or that read the target to decide what to say, would be a violation
 of shape 1 or 3 and is not covered by this paragraph.
 
+The same holds for the count of files a bounded listing left out of each directory it cut (LIST-5).
+In `walk_filtered` in `crates/agent/src/workspace.rs` the walk sorts a directory's files by name,
+drops each file the include pattern does not match or a permission rule covers, and keeps the first
+200 of the rest. Which 200 are kept is decided by that name order, which is the order that already
+decides what the cap over the whole walk keeps. The count of files left out is taken after the
+include pattern and the rules, which the walk applies to every file it reports whether or not a cap
+applies. A cut directory is recorded under the name its caller passes to `walk_filtered`.
+`Workspace::list` passes the walk root's name once, `.` when the resolved directory argument is the
+workspace root and its relative name otherwise, and each recursive call passes the relative name it
+built for the subdirectory. No name read from a directory entry is tested to tell the root from a
+subdirectory. Each cut directory counts as one entry against the cap over the whole walk, in
+`Collected::len` during the walk and in `at_the_cap` after it. `Workspace::list` sets `at_the_cap`
+when the files, the directories stopped at and the cut directories together pass that cap, and sets
+`truncated` to `at_the_cap || !partly_listed.is_empty()`. It sorts the cut directories by name and
+truncates them to what the cap leaves after the files and the directories stopped at, the same sort
+by name and truncation it applies to those two lists. Each count and `at_the_cap` are released
+inside the existing release in `list_files`, and each count reaches the planner as a number beside
+the directory's reference. The driver branches on them in these places: the comparison of the
+files taken from a directory with 200, and whether its count is above zero, in the walk; whether
+any directory was cut and `at_the_cap`, which together choose the sentences in `list_files`
+(`listing.at_the_cap || !cut_per_directory`) and in `listing_capped_note` in
+`crates/agent/src/turn/sentences.rs` (`cut.is_empty() || at_the_cap`); and each count's value,
+which `tally` compares with 1 to write "file" or "files". Apart from the include pattern, the
+rules, the resolved directory argument and the name order above, no name is in any of these
+conditions. A change that put the directory's name in the sentence, or chose which directories to
+cut or how to word the sentence from a name, would be a violation of shape 1 or 3 and is not
+covered by this paragraph.
+
 A measurement of file names, lengths and modification times that the driver compares and reduces to
 one bool is not a branch on untrusted content, for the same reason an exit status is not. The work
 record's write signal for a `run` line (`crates/agent/src/workspace/tree_mark.rs`) is one: the

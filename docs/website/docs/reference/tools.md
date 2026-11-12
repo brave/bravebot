@@ -216,7 +216,10 @@ references. To see what is behind a link, list the directory it points to by its
 The glob is literal and the matcher does not backtrack. Matching is case-sensitive, and a brace
 group such as `{r,R}eadme*` covers both cases. A call with a `pattern` whose result holds no file
 says so, and names a character class, an extended glob or a leading `!` as syntax the matcher does
-not have. A truncated listing says it was truncated.
+not have. A truncated listing says it was truncated. A listing given a `depth` takes at most 200
+files from any one directory and names a directory it cut with how many of its files it left out;
+where the names are quarantined, that count comes beside the directory's reference. Listing it with
+no depth shows the rest, up to the cap of 2,000 entries.
 
 ## `repo_map`
 
