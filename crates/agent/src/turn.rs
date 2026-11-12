@@ -2010,10 +2010,13 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     true => " To read a file, use read_file.",
                     false => "",
                 };
+                // Worded as a run's result words it (RUN-14). The reference's description above
+                // names `spawn_processor` wherever the list holds it, so this sentence does not.
+                let delegate = sentences::delegate_note(beside);
                 format!(
                     "{told} What it printed could not be shown to you: {}{looked}\n\nThis is about who \
                      answered for the command rather than about what it printed.{to_see}{then}\
-                     {read_file}",
+                     {delegate}{read_file}",
                     reference.describe()
                 )
             }

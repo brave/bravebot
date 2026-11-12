@@ -17976,6 +17976,45 @@ mod tests {
         assert_eq!(lacks(&delegate), "");
     }
 
+    /// brave/bravebot#3986. A delegate is quarantined exactly as the planner is (DELEGATE-1), so
+    /// the description of `spawn_agent` promises a build's failures only for output the planner
+    /// may read, says that delegating a run whose output it may not read does not make that output
+    /// readable, and points to `spawn_processor` and to vouching for the command instead. It names
+    /// `spawn_processor` only where the turn's list holds it (TOOL-6).
+    ///
+    /// Rejects: the build example promising what failed whatever the label, so a planner holding a
+    /// reference delegates the run again and its delegate gets the same reference; a description
+    /// that names the rule and no way on; and one that names `spawn_processor` to a list without it.
+    #[test]
+    fn the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either() {
+        let everything = description_of(&the_table_without(&[]), "spawn_agent");
+        assert!(
+            everything.contains(
+                "That is what this is for: running a build reads the whole log, and asking a \
+                 delegate to run a build whose output you may read tells you what failed. A \
+                 delegate is quarantined exactly as you are, so delegating a run whose output \
+                 you may not read does not make that output readable. Give its reference to \
+                 spawn_processor for a bounded question about it instead, or have a person vouch \
+                 for the command. Use it when finding"
+            ),
+            "{everything}"
+        );
+        assert!(
+            !everything.contains("run the build tells you"),
+            "{everything}"
+        );
+
+        let without = description_of(&the_table_without(&["spawn_processor"]), "spawn_agent");
+        assert!(
+            without.contains(
+                "does not make that output readable. Have a person vouch for the command \
+                 instead. Use it when finding"
+            ),
+            "{without}"
+        );
+        assert!(!names_the_tool(&without, "spawn_processor"), "{without}");
+    }
+
     /// Being shown private content does not close the processor, so no description tells the
     /// planner it does: not the tools that show output, not `spawn_agent`, and not the kind text
     /// that says what a reader does.

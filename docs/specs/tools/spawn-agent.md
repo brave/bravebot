@@ -47,11 +47,22 @@ do not repeat it: a kind is what a delegate may hold, and these four are left ou
 `reader` kind text does not promise processors without condition
 ([DELEGATE-8](../delegation.md#DELEGATE-8)).
 
+The description says that a delegate is quarantined exactly as the planner is
+([DELEGATE-1](../delegation.md#DELEGATE-1)), so delegating a run whose output the planner may not
+read does not make that output readable. It points instead to `spawn_processor` for a bounded
+question about the output and to a person vouching for the command. `spawn_processor` is named only
+where the turn's list holds it, and the vouching advice names no tool
+([TOOL-6](tool-surface.md#TOOL-6)). Its example of a build run by a delegate promises what failed
+only for output the planner may read. A planner told only that example started a delegate to run
+a command whose output it held as a reference, and the delegate was handed the same reference
+([RUN-14](run.md#RUN-14)).
+
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
 `verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
 `verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either`
 `verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
 
 <a id="AGENT-2"></a>

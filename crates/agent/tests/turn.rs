@@ -40597,8 +40597,11 @@ fn an_ended_job_account_where_a_check_answers(mode: bravebot_agent::PermissionMo
     let told = message_from(body, "you started as job:1 has finished");
     let told = format!("[{mode:?}] {told}");
     assert!(
-        told.contains("call read_output with the reference. To read a file, use read_file.")
-            && !told.contains("kept back"),
+        told.contains(
+            "call read_output with the reference. A delegate is quarantined exactly as you \
+             are, so delegating this run does not make what it printed readable. To read a file, \
+             use read_file."
+        ) && !told.contains("kept back"),
         "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
@@ -40683,8 +40686,11 @@ fn what_an_ended_job_from_a_remembered_line_where_a_check_answers_leaves_who_ans
     );
     let told = message_from(body, "you started as job:1 has finished");
     assert!(
-        told.contains("call read_output with the reference. To read a file, use read_file.")
-            && !told.contains("kept back"),
+        told.contains(
+            "call read_output with the reference. A delegate is quarantined exactly as you \
+             are, so delegating this run does not make what it printed readable. To read a file, \
+             use read_file."
+        ) && !told.contains("kept back"),
         "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
@@ -40743,6 +40749,75 @@ fn what_an_ended_job_printed_says_how_to_stop_being_asked() {
     assert!(
         told.contains("To read a file, use read_file."),
         "the planner was not pointed at the tool that reads a file visibly: {told}"
+    );
+}
+
+/// brave/bravebot#3986, RUN-14: the account of an ended job whose output is quarantined tells a
+/// list holding `spawn_agent` that a delegate is quarantined exactly as the planner is, as a run's
+/// result does. `spawn_processor` is named once, by the reference's own description, and the
+/// delegate sentence does not repeat it.
+///
+/// Rejects: the account worded apart from the run advice and silent about delegating, so a planner
+/// handed a reference to what a job printed starts a delegate to run the command again, and the
+/// delegate is handed the same reference.
+#[test]
+fn what_an_ended_job_printed_says_a_delegate_cannot_read_it_either() {
+    let scratch = Scratch::new("background-finish-delegate-advice");
+    std::fs::write(scratch.path.join("notes.txt"), "SENTINEL-DELEGATE-PLUGH\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let first = sent.first().expect("the request that asked to run");
+    for tool in ["spawn_agent", "spawn_processor", "read_output"] {
+        assert!(
+            first.contains(&format!(r#""name":"{tool}""#)),
+            "the turn was not offered {tool}, so this says nothing: {first}"
+        );
+    }
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    assert!(
+        !body.contains("SENTINEL-DELEGATE-PLUGH"),
+        "the output reached the planner without anyone reading it"
+    );
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains(
+            " A delegate is quarantined exactly as you are, so delegating this run does not make \
+             what it printed readable. To read a file, use read_file."
+        ),
+        "the account of an ended job did not say a delegate cannot read it either: {told}"
+    );
+    assert_eq!(
+        told.matches("spawn_processor").count(),
+        1,
+        "spawn_processor is named other than once, by the reference's description: {told}"
     );
 }
 

@@ -896,9 +896,10 @@ stop being asked: it calls `read_output` with the reference, and a person vouchi
 of the exact command makes what it prints visible from then on. It is also pointed at `read_file`
 for a file. Each of these names is said only where the turn's list holds the tool
 ([TOOL-6](tool-surface.md#TOOL-6)): `read_output` for the reference, `spawn_processor` for working
-with the output, `read_file` for a file. Where the list holds none of them the planner is told only
-that the quarantine is about the command and not about running programs, and the vouching sentence,
-which names no tool, where a person is asked about runs and no record stops the asking. Where the
+with the output, `read_file` for a file, `spawn_agent` for the sentence about a delegate below.
+Where the list holds none of them the planner is told only that the quarantine is about the command
+and not about running programs, and the vouching sentence, which names no tool, where a person is
+asked about runs and no record stops the asking. Where the
 mode answers runs without asking, as bypassing permissions does with or without screening, the
 vouching sentence is left out of such a turn's run and job results and of the account of an ended
 job, and they say instead that what was printed cannot be shown in this turn, since no prompt is
@@ -908,6 +909,17 @@ drawn and a run the mode approved vouches for no program
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
 return there for a person to answer, and `read_output` is then the whole of what is said.
+
+**A delegate does not lift it.** Where the list holds `spawn_agent`, every quarantined result a
+command produced also says that a delegate is quarantined exactly as the planner is
+([DELEGATE-1](../delegation.md#DELEGATE-1)), so delegating the run does not make what it printed
+readable. The sentence names no tool: the reference's own description already names
+`spawn_processor` wherever the list holds it, and the sentence does not repeat it. The sentence carries no
+vouching advice, so it adds none where a record stops the asking or where no vouch stops an asking,
+and it names no mode. A job's result is worded by the same advice, so it carries the sentence too.
+The account the turn gives of an ended job carries the same sentence. Without it, a
+planner handed a reference to a run's output started a delegate to run the command again, and the
+delegate was handed the same reference and could not read it either.
 
 **Who answers is stated once, in the description.** The `read_output` description is built for each
 request from the session as it stands, so a mode the person changes in the middle of a turn is what
@@ -990,6 +1002,9 @@ with its own three wordings ([VET-5](vet-content.md#VET-5)).
 `verified-by: bravebot_agent::turn::sentences::a_list_holding_every_tool_reads_the_text_it_always_did`
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_pointed_at_it_in_any_arm`
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_file_is_not_pointed_at_it`
+`verified-by: bravebot_agent::turn::sentences::a_quarantined_run_says_a_delegate_cannot_read_what_it_printed_either`
+`verified-by: bravebot_agent::turn::sentences::the_delegate_sentence_follows_the_list`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_a_delegate_cannot_read_it_either`
 `verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_told_of_vouching_where_the_mode_answers_runs`

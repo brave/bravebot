@@ -230,7 +230,10 @@ sends text made from it to the processor names `spawn_processor` only where the 
 
 The texts a tool writes into its result are written the same way. The advice on a run's quarantined
 result names `read_output`, `spawn_processor` and `read_file` each only where the list holds it, and
-says only what the quarantine is about where it holds none of them ([RUN-14](run.md#RUN-14)). The
+says only what the quarantine is about where it holds none of them ([RUN-14](run.md#RUN-14)). It
+and the account of an ended job say that a delegate cannot read the output either only where the
+list holds `spawn_agent`, and that sentence names no other tool, since the reference it follows
+names `spawn_processor` wherever the list holds it. The
 sentence on git history names `read_git`, and the account of an ended job names `read_output` and
 `read_file`, only where the list holds them. The notes that start a job, move a line to the
 background and remind a later turn of a kept job name `job_output` only where the list holds it,
@@ -258,7 +261,8 @@ notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_process
 `vet_content` names `spawn_processor`, each only where the list holds it. The description of
 `spawn_agent` names `vet_content`, `ask_user`, `fetch_url` and `download_url`, as the tools a
 delegate cannot call, each only where the list holds it, and says nothing of them where it holds
-none ([AGENT-1](spawn-agent.md#AGENT-1)).
+none, and names `spawn_processor`, for output a delegate cannot read either, only where the list
+holds it ([AGENT-1](spawn-agent.md#AGENT-1)).
 
 Two refusals are written from the list rather than from the policy's general denial. That denial
 ends "Use a reference to it instead", which neither tool can follow: neither returns a reference at

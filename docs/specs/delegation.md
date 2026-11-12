@@ -56,6 +56,11 @@ capabilities and it holds no untrusted content. Content it may not read is quara
 handed a reference, exactly as its parent would be, so there is no point in the run where
 untrusted bytes and a capability are in the same context.
 
+The planner is told this where it would otherwise delegate to get past a quarantine: the
+`spawn_agent` description and a quarantined run result say that a delegate is quarantined exactly
+as the planner is, so delegating a run whose output the planner may not read does not make that
+output readable ([AGENT-1](tools/spawn-agent.md#AGENT-1), [RUN-14](tools/run.md#RUN-14)).
+
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_only_the_tools_its_capabilities_reach`
 `verified-by: bravebot_agent::turn::what_a_delegate_could_not_read_is_quarantined_from_it_too`
 

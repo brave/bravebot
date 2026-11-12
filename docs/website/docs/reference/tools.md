@@ -1045,6 +1045,11 @@ call a worker makes to a server's tool is put to you as the turn's own is. What 
 vouched for inside one comes back to the session, because that answer was about your machine rather
 than about the run that happened to be going.
 
+Delegation does not lift a quarantine either. A delegate is quarantined exactly as the planner is,
+so a run whose output the planner may not read gives the delegate the same reference. The
+`spawn_agent` description says so and points to [`spawn_processor`](#spawn_processor) for a bounded
+question about the output, or to you vouching for the command. A quarantined run result says so too.
+
 Nothing but the report crosses back: the exchange, the tool results and the quarantine end with the
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
 [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
