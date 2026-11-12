@@ -935,6 +935,196 @@ mod tests {
         }
     }
 
+    /// A shared library whose constructor creates `marker`, which is what the loader does for a
+    /// module `gio` finds in a directory named by `GIO_EXTRA_MODULES` or `GIO_MODULE_DIR`. Says
+    /// whether `cc` built it.
+    #[cfg(target_os = "linux")]
+    fn a_library_that_records_its_load(directory: &Path, marker: &Path) -> bool {
+        let source = directory.join("module.c");
+        std::fs::write(
+            &source,
+            format!(
+                "#include <fcntl.h>\n#include <unistd.h>\n\
+                 __attribute__((constructor)) static void run(void) {{\n\
+                 \x20   int fd = open(\"{}\", O_WRONLY | O_CREAT | O_APPEND, 0600);\n\
+                 \x20   if (fd >= 0) close(fd);\n}}\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::process::Command::new("cc")
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(directory.join("libmarker.so"))
+            .arg(&source)
+            .output()
+            .is_ok_and(|built| built.status.success())
+    }
+
+    /// The installed `xdg-open` run under `XDG_CURRENT_DESKTOP=GNOME`, so that it runs `gio open`
+    /// on an address whose scheme only an installed handler opens, with `variable` naming a
+    /// wrapper (`GIO_LAUNCH_DESKTOP`) or a directory of modules (`GIO_EXTRA_MODULES`,
+    /// `GIO_MODULE_DIR`). Says whether what a directory a stage may write holds ran and whether what
+    /// an installed directory holds ran, or `None` where `cc` cannot build the module.
+    ///
+    /// Each side's wrapper or module records its own marker in the session directory. The
+    /// wrapper runs the handler's command line afterwards, as `gio-launch-desktop` does, and the
+    /// handler is an installed script.
+    #[cfg(target_os = "linux")]
+    fn gio_run_by(test: &str, variable: &str, opener: &Path) -> Option<(bool, bool)> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let label = test.rsplit("::").next().unwrap_or(test);
+        let name = variable.to_ascii_lowercase();
+        let session = crate::testutil::scratch_dir(&format!("opener-{label}-{name}-session"));
+        let installed = crate::testutil::scratch_dir(&format!("opener-{label}-{name}-installed"));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        let applications = installed.join("data/applications");
+        let home = installed.join("home");
+        for directory in [&session, &applications, &home] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let handler = installed.join("handler.sh");
+        std::fs::write(
+            &handler,
+            format!(
+                "#!/bin/sh\n: > '{}'\n",
+                session.join("handler-ran").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&handler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            applications.join("handler.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=handler\nExec={} %u\n",
+                handler.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            applications.join("mimeapps.list"),
+            "[Default Applications]\nx-scheme-handler/bravebot-test=handler.desktop\n",
+        )
+        .unwrap();
+        let mut selected = Vec::new();
+        for (root, marker) in [(&session, "planted-ran"), (&installed, "genuine-ran")] {
+            let side = root.join("selected");
+            std::fs::create_dir_all(&side).unwrap();
+            let recorded = session.join(marker);
+            if variable == "GIO_LAUNCH_DESKTOP" {
+                let wrapper = side.join("gio-launch-desktop");
+                std::fs::write(
+                    &wrapper,
+                    format!("#!/bin/sh\n: > '{}'\nexec \"$@\"\n", recorded.display()),
+                )
+                .unwrap();
+                std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+                selected.push(wrapper.into_os_string());
+            } else {
+                if !a_library_that_records_its_load(&side, &recorded) {
+                    let _ = std::fs::remove_dir_all(&session);
+                    let _ = std::fs::remove_dir_all(&installed);
+                    return None;
+                }
+                selected.push(side.into_os_string());
+            }
+        }
+        for value in selected {
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", test, "--test-threads=1", "--nocapture"])
+                .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
+                .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
+                .env(
+                    "BRAVEBOT_TEST_BROWSER_ADDRESS",
+                    "bravebot-test://example.invalid/",
+                )
+                .env("HOME", &home)
+                .env_remove("BRAVEBOT_HOME")
+                .env("XDG_DATA_DIRS", installed.join("data"))
+                .env_remove("XDG_DATA_HOME")
+                .env_remove("XDG_CONFIG_HOME")
+                .env_remove("XDG_CONFIG_DIRS")
+                .env("XDG_CURRENT_DESKTOP", "GNOME")
+                .env_remove("GIO_EXTRA_MODULES")
+                .env_remove("GIO_MODULE_DIR")
+                .env_remove("GIO_LAUNCH_DESKTOP")
+                .env(variable, value);
+            let child = command.output().unwrap();
+            assert!(
+                child.status.success(),
+                "{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !session.join("genuine-ran").exists() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let ran = (
+            session.join("planted-ran").exists(),
+            session.join("genuine-ran").exists(),
+        );
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        Some(ran)
+    }
+
+    /// SANDBOX-30, through the installed `xdg-open` and `gio open` on Linux. The regression it
+    /// rejects: the opener left `GIO_LAUNCH_DESKTOP`, `GIO_EXTRA_MODULES` or `GIO_MODULE_DIR` as the
+    /// person set it, so a wrapper or a shared library a stage wrote in the path it names runs when
+    /// the sign-in opens a page, outside the sandbox. The same wrapper or library in an installed
+    /// directory runs, which shows that each name makes `gio` run code here and that a safe value
+    /// still works. Each run starts from a `HOME` and `XDG_DATA_DIRS` the test made, so the
+    /// account's own handlers are not read. It prints `skipped` and passes where `xdg-open`, `gio`
+    /// or `cc` is missing or the installed side did not run, except with `CI` set, where each
+    /// fails it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome()
+    {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let (Some(opener), Some(_gio)) = (
+            bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
+            bravebot_sandbox::programs::find(OsStr::new("gio")),
+        ) else {
+            assert!(
+                !the_runner_must_run_the_handlers(),
+                "CI is set and xdg-open or gio is not installed"
+            );
+            println!("skipped: no xdg-open and gio on this host");
+            return;
+        };
+        for variable in ["GIO_LAUNCH_DESKTOP", "GIO_EXTRA_MODULES", "GIO_MODULE_DIR"] {
+            let ran = gio_run_by(
+                "opener::tests::a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome",
+                variable,
+                &opener,
+            );
+            match ran {
+                None => {
+                    assert!(
+                        !the_runner_must_run_the_handlers(),
+                        "{variable}: CI is set and cc could not build the module"
+                    );
+                    println!("skipped {variable}: no C compiler");
+                }
+                Some((_, false)) => {
+                    assert!(
+                        !the_runner_must_run_the_handlers(),
+                        "{variable}: the gio here did not run what the installed directory holds"
+                    );
+                    println!("skipped {variable}: the gio here does not run what it names");
+                }
+                Some(ran) => assert_eq!(ran, (false, true), "{variable}"),
+            }
+        }
+    }
+
     /// SANDBOX-30, through the installed `xdg-open` in generic-desktop mode, where it reads the
     /// handler for the address from the directories the four `XDG_` names select and does not hand
     /// the address to `gio open`. The regression it rejects: the opener left `XDG_CONFIG_DIRS`,
