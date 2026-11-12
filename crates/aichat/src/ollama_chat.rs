@@ -438,13 +438,16 @@ impl<'a> OllamaChatClient<'a> {
             }
 
             progress(Progress {
-                written: Labelled::new(&reply.text[written_before..], label),
+                written: Labelled::new(reply.text.get(written_before..).unwrap_or_default(), label),
                 output_tokens: reply.output_so_far(),
                 calling: reply
                     .calls
                     .last()
                     .map(|call| Labelled::new(call.function.name.as_str(), label)),
-                thinking: Labelled::new(&reply.thinking[thought_before..], label),
+                thinking: Labelled::new(
+                    reply.thinking.get(thought_before..).unwrap_or_default(),
+                    label,
+                ),
                 counted_by_server: reply.usage.is_some(),
                 prose: Progress::has_prose(&reply.text),
                 ..Progress::quiet(attempt)
