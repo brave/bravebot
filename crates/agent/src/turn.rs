@@ -1906,9 +1906,11 @@ const LIVE_LINES: usize = 200;
 /// Nothing here reads what a job printed. The handle and the status are the driver's own structure,
 /// worked out from a name it minted and the exit codes it collected, and the output goes through
 /// the same gate as any other result: a job nobody vouched for hands the planner a reference.
+/// Where the job's latest look asked to read, the account is released by `release`, the turn's
+/// `read_output` path, and presented as that call's result would be (RUN-22).
 #[expect(
     clippy::too_many_arguments,
-    reason = "the jobs, the cap, the mode's answer, who answers a read and the list's tools are separate inputs"
+    reason = "the jobs, the cap, the mode's answer, who answers a read and the list's tools are separate inputs, and the release is the turn's read_output path lent for a job whose look asked to read"
 )]
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
@@ -1919,6 +1921,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
+    release: &mut ReleaseEnded<'_, S, R>,
 ) -> Result<(), TurnError> {
     let finished = jobs.ended(output_cap);
     // Every finish is told before any is presented. A presentation that fails ends the turn, and a
@@ -1965,6 +1968,50 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     .map_err(|d| TurnError::Precommit(d.to_string()))?,
             ),
             _ => None,
+        };
+
+        // The job's latest look asked to read, and read_output's answer is already given: the
+        // account is released by read_output's own path, as that look's result would have been
+        // (RUN-22). Decided from the planner's boolean, who answers, and the size the slot states,
+        // so no byte of the output is read to decide. Past the cap, or where the release is kept
+        // back, the account stays a reference.
+        //
+        // Recorded first, once, as the result path does, whether or not the account is released:
+        // read_output releases only a slot a program printed, and the slot is this look's, so a
+        // later look at the job lists it among the earlier ones. A released slot keeps its name and
+        // its bytes, so it is as much a place to find those lines again as a quarantined one.
+        // Counts and names the driver minted; `record_look` drops it if the job is no longer held.
+        if let Some(Presentation::Quarantined(reference)) = &presented {
+            policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
+            jobs.record_look(&ended.name, reference.slot.to_string());
+        }
+        let mut released_from = None;
+        let presented = match presented {
+            Some(Presentation::Quarantined(reference))
+                if ended.read_asked
+                    && read_output_is != ReadOutputIs::Asked
+                    && reference
+                        .bytes
+                        .is_some_and(|bytes| bytes != 0 && bytes <= output_cap) =>
+            {
+                match release(policy, conversation.quarantine(), reporter, &reference.slot) {
+                    Some(text) => {
+                        let shown = policy
+                            .present(
+                                "job_output",
+                                reference.slot.clone(),
+                                &origin,
+                                &text,
+                                conversation.quarantine(),
+                            )
+                            .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                        released_from = Some(reference.slot.to_string());
+                        Some(shown)
+                    }
+                    None => Some(Presentation::Quarantined(reference)),
+                }
+            }
+            presented => presented,
         };
 
         // The transcript says the job is over, because nothing else in it does: the row drawn when
@@ -2041,10 +2088,6 @@ fn collect_jobs<S: Sink, R: Reporter>(
                 )
             }
             Some(Presentation::Quarantined(reference)) => {
-                policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
-                // The reference is this look's, so a later look at the job lists it. Counts and
-                // names the driver minted; `record_look` drops it if the job is no longer held.
-                jobs.record_look(&ended.name, reference.slot.to_string());
                 let looked = ended.look.note(&ended.name);
                 // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
                 // the reason a run's result leaves it out. Where a check's word answers in the
@@ -2090,14 +2133,27 @@ fn collect_jobs<S: Sink, R: Reporter>(
         conversation.push_composed_from(
             Message::user(body),
             Composed::Notice,
-            presented.as_ref().map_or(Provenance::Driver, |presented| {
-                provenance_of(presented, "job output")
-            }),
+            match (&presented, released_from) {
+                (_, Some(slot)) => Provenance::Released(slot),
+                (None, None) => Provenance::Driver,
+                (Some(presented), None) => provenance_of(presented, "job output"),
+            },
         );
         conversation.observed(policy.context_label());
     }
     Ok(())
 }
+
+/// How [`collect_jobs`] releases the account of a job whose latest look asked to read: the slot's
+/// bytes at the label `read_output` gives them, or `None` where they stay quarantined. The turn's
+/// is [`tools::read_in_the_result`] with its accounting.
+pub(super) type ReleaseEnded<'a, S, R> = dyn FnMut(
+        &mut Policy<'_, S>,
+        &bravebot_core::SlotStore,
+        &mut R,
+        &bravebot_core::SlotId,
+    ) -> Option<Labelled<String>>
+    + 'a;
 
 /// Say which jobs the session kept from an earlier turn are still running, and under which names
 /// (RUN-15).
@@ -4521,10 +4577,10 @@ where
                 // nothing for a check to read, so the result takes the route of a run that
                 // printed nothing (RUN-24) and the trail says why no check was made.
                 let output_cap = task.output_cap.unwrap_or(tools::OUTPUT_CAP);
-                // Who answers a read of this result: read_output's answer for a run, and
-                // vet_content's for `fetch_url` and a server's tool, each asked of the list that
-                // holds the release the read makes a round early.
-                let a_run = output.tool == "run";
+                // Who answers a read of this result: read_output's answer for a run and a look at
+                // a job, and vet_content's for `fetch_url` and a server's tool, each asked of the
+                // list that holds the release the read makes a round early.
+                let a_run = output.tool == "run" || output.tool == "job_output";
                 let read_gate = if a_run {
                     read_output_is()
                 } else {
@@ -4536,7 +4592,11 @@ where
                     && reference.bytes == Some(0)
                 {
                     policy.record_empty_output(
-                        if a_run { "run" } else { "vet_content" },
+                        if a_run {
+                            output.tool.as_str()
+                        } else {
+                            "vet_content"
+                        },
                         &reference.slot,
                     );
                 }
@@ -6697,6 +6757,7 @@ mod tests {
                 &mut policy,
                 &mut conversation,
                 &mut reporter,
+                &mut |_, _, _, _| None,
             )
         };
 

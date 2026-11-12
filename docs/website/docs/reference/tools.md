@@ -24,7 +24,7 @@ that is merely carried.
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
-| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit` | none | no |
+| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit`, `read` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
 | [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
 | [`spawn_processor`](#spawn_processor) | `reads`, `about`, `choose_upto` | `instruction` | no |
@@ -690,6 +690,13 @@ Hands back a slice of what a [background job](run-tool.md#leaving-a-pipeline-run
 | `kill` | stop the pipeline |
 | `wait_seconds` | sit and watch for up to this long ([below](#a-look-may-wait)) |
 | `until_exit` | with `wait_seconds`, wait for the job to end and not for its output ([below](#a-look-may-wait)) |
+| `read` | ask for the slice as text in this result, where `read_output` would hand it back without asking you |
+
+`read: true` works as it does on [`run`](run-tool.md): where permissions are bypassed with no
+screening, or a check answers and says the output is safe, the slice comes back as text the agent can
+read in the same result, with no `read_output` call. Anywhere else it changes nothing, and a slice
+longer than one result may hold still comes back as a reference. When the job ends, the account the
+turn gives of it is released the same way if the job's latest look passed `read: true`.
 
 Each look hands back a slice: the bytes the job printed since the previous look, and whether the job
 has ended. A line is counted once, by the look that holds its first byte, and the next look begins

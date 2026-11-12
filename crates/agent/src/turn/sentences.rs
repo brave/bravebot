@@ -167,10 +167,12 @@ pub(super) fn left_out_note(left_out: usize) -> String {
 /// so the call does not read as a quarantined result with no
 /// explanation, and without saying why.
 ///
-/// `read` is an argument of run alone, so it is offered on a run's
-/// result and not on a job's. It is not offered again where it was
-/// asked for: the output was then too long for one result, which is
-/// said, or its release was refused, which read_output reports.
+/// `read` is an argument of run and of job_output. A result is pointed
+/// at it only on a run's, where the sentence names run's own call; a
+/// look at a job is not told to pass it. It is not offered again where
+/// it was asked for: the output was then too long for one result, which
+/// is said on a run's result and on a job's alike, or its release was
+/// refused, which read_output reports.
 ///
 /// Too long is said with where the rest is. Told only that, a planner
 /// took read_output's result to be held to the same size and ran a
@@ -222,9 +224,12 @@ pub(super) fn run_advice(
         ""
     };
     let delegate = delegate_note(beside);
-    // A run that asked to read, where the mode or a check answers, already gets the size sentence
-    // in the arm for that case.
-    let costs = if tool == "run" && read_asked && read_output_is != ReadOutputIs::Asked {
+    // A run or a look at a job that asked to read, where the mode or a check answers, already gets
+    // the size sentence in the arm for that case, so it is not told twice.
+    let costs = if read_asked
+        && (tool == "run" || tool == "job_output")
+        && read_output_is != ReadOutputIs::Asked
+    {
         String::new()
     } else {
         crate::tools::read_output_cost(bytes, cap, beside)
@@ -248,14 +253,13 @@ pub(super) fn run_advice(
             )
         }
         (true, _, ReadOutputIs::Unasked) => {
-            let in_the_result = match (tool == "run", read_asked) {
-                (false, _) => "",
-                (true, false) => {
+            let in_the_result = match (tool, read_asked) {
+                ("run", false) => {
                     " To have what a command prints come back in \
                          the result that ran it, call run with read: \
                          true."
                 }
-                (true, true) if bytes.is_none_or(|bytes| bytes > cap) => {
+                ("run" | "job_output", true) if bytes.is_none_or(|bytes| bytes > cap) => {
                     " It is longer than a run's result may hold, so \
                          it was left out of this one. read_output is not \
                          held to that size and hands back all of it. To \
@@ -264,7 +268,7 @@ pub(super) fn run_advice(
                          100 or grep, stdin_ref set to the reference, \
                          and read: true."
                 }
-                (true, true) => "",
+                _ => "",
             };
             format!(
                 "\n\nThis is about the command rather than about what \
@@ -274,7 +278,8 @@ pub(super) fn run_advice(
             )
         }
         (true, _, ReadOutputIs::ByACheck) => {
-            let not_returned = match (tool == "run" && read_asked, bytes) {
+            let not_returned = match ((tool == "run" || tool == "job_output") && read_asked, bytes)
+            {
                 (false, _) => "",
                 (true, Some(bytes)) if bytes <= cap => {
                     " Your read: true did not return it in this \
@@ -591,23 +596,18 @@ mod tests {
         );
     }
 
+    /// A look at a job that asked to read is told so as a run is: `job_output` takes `read` too.
     #[test]
-    fn a_check_answering_says_the_output_was_not_returned_only_for_a_run_that_asked() {
-        assert_eq!(
-            advice(
-                true,
-                false,
-                ReadOutputIs::ByACheck,
-                "run",
-                true,
-                Some(1),
-                10
-            ),
-            format!(
-                "{ABOUT} Your read: true did not return it in this result, so read_output is the way to see it.{DELEGATE} To read a file, use read_file."
-            )
-        );
-        for (tool, asked) in [("run", false), ("job_output", true)] {
+    fn a_check_answering_says_the_output_was_not_returned_only_for_a_run_or_a_look_that_asked() {
+        for tool in ["run", "job_output"] {
+            assert_eq!(
+                advice(true, false, ReadOutputIs::ByACheck, tool, true, Some(1), 10),
+                format!(
+                    "{ABOUT} Your read: true did not return it in this result, so read_output is the way to see it.{DELEGATE} To read a file, use read_file."
+                )
+            );
+        }
+        for (tool, asked) in [("run", false), ("job_output", false)] {
             assert_eq!(
                 advice(
                     true,
@@ -707,6 +707,39 @@ mod tests {
             assert!(!text.contains("bytes of it"), "{is:?}: {text}");
             assert_eq!(text.matches("tail -n 100").count(), 1, "{is:?}: {text}");
         }
+    }
+
+    /// RUN-21 and RUN-22 for `job_output`: a look that asked to read past the cap is told it is
+    /// longer than a result may hold, where the rest is, and the cost once, wherever the mode or a
+    /// check answers. The sentence is chosen by the tool's name and the size the slot states.
+    /// The regression it rejects is the sentence keyed on `run` alone, which left an unscreened
+    /// bypass look with no word of why its `read` returned nothing.
+    #[test]
+    fn a_job_look_that_asked_to_read_past_the_cap_is_told_why_once() {
+        for is in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            let text = advice(true, true, is, "job_output", true, Some(400_000), 10);
+            assert!(
+                text.contains("It is longer than a run's result may hold"),
+                "{is:?}: {text}"
+            );
+            assert!(!text.contains("bytes of it"), "{is:?}: {text}");
+            assert_eq!(text.matches("tail -n 100").count(), 1, "{is:?}: {text}");
+            assert!(
+                !text.contains("call run with read: true."),
+                "{is:?}: {text}"
+            );
+        }
+        // Within the cap and not asked: nothing about read on a job's result.
+        let text = advice(
+            true,
+            true,
+            ReadOutputIs::Unasked,
+            "job_output",
+            false,
+            Some(1),
+            10,
+        );
+        assert!(!text.contains("read: true"), "{text}");
     }
 
     /// The regression it rejects: the filter half said to a list that cannot call `run`.

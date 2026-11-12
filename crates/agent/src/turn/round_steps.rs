@@ -313,7 +313,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
 
     // And whatever exited while it was running, for the same reason and in the same place:
     // the finish of a background job is news the turn is told rather than something the
-    // planner has to remember to ask about (CMDLINE-14).
+    // planner has to remember to ask about (CMDLINE-14). A job whose latest look asked to read
+    // has its account released as that look was (RUN-22), with the check's cost the turn's.
+    let mut stopped = None;
     collect_jobs(
         state.jobs,
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
@@ -323,7 +325,44 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         policy,
         conversation,
         reporter,
+        &mut |policy, slots, reporter, slot| {
+            let mut chat = crate::processor::Chat::new(config, egress, task.account_session())
+                .spending(state.subscription.as_mut())
+                .on(state.turn_model.as_deref())
+                .stoppable_by(cancel);
+            let released = tools::read_in_the_result(
+                policy,
+                slots,
+                task.permission_mode.get(),
+                task.auto_vetting,
+                &mut *confirmer,
+                &mut chat,
+                reporter,
+                &mut state.objections,
+                slot,
+            );
+            if let Some(interval) = released.waited {
+                reporter.inference_interval(interval);
+                state.spent.inference += interval.duration();
+            }
+            state.account.add_call(released.usage, released.completed);
+            if released.stopped.is_some() {
+                stopped = released.stopped;
+            }
+            reporter.spent(crate::outcome::Spent {
+                timing: state.spent.finish(&state.account),
+                ..state.account
+            });
+            released.text
+        },
     )?;
+    // A stop during the check ends the turn once the account is in the conversation, as one
+    // during a run's release does. The slot stays quarantined and unrefused.
+    if let Some(stopped) = stopped {
+        return Err(TurnError::Cancelled {
+            attempts: stopped.attempts,
+        });
+    }
 
     show_what_running_jobs_have_printed(state.jobs, policy, reporter);
 

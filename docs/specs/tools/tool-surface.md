@@ -47,7 +47,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
-| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit` | none | a slice of what it has printed since the previous look, with the count of lines that begin in it, the number of the first, and the references of the earlier looks |
+| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit`, `read` | none | a slice of what it has printed since the previous look, with the count of lines that begin in it, the number of the first, and the references of the earlier looks |
 | [`fetch_url`](fetch-url.md) | `url`, `read` | none | a reference |
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
@@ -267,6 +267,9 @@ holds it ([AGENT-1](spawn-agent.md#AGENT-1)).
 `search` and `list_files` lose their `read` argument where the list lacks `vet_content`, since
 `read` asks for the release `vet_content` makes ([VET-6](vet-content.md#VET-6)).
 
+`job_output` names `read_output` in its `read` argument only where the list holds it, as `run`
+does ([RUN-22](run.md#RUN-22)).
+
 Two refusals are written from the list rather than from the policy's general denial. That denial
 ends "Use a reference to it instead", which neither tool can follow: neither returns a reference at
 the point of refusal, and a turn offered no processor cannot use one. The
@@ -307,8 +310,7 @@ the tool list is the one that is true.
 Not every text is written this way yet. Some results and refusals still name `run`, `read_file`,
 `edit_file`, `read_output`, `job_output`, `lsp`, `search_skills`, `load_skill`, `download_url`,
 `apply_checkout` or `read_git` without reading the list: the decoding note of a page read, the
-result of an approved `request_path`, the unconfined way out that a refused write names, some
-refusals of `read_output` and `job_output`, the checkout notes of `spawn_agent`, the descriptions of
+result of an approved `request_path`, the unconfined way out that a refused write names, the checkout notes of `spawn_agent`, the descriptions of
 `load_skill`, `search_skills`, `download_url` and `ask_user`, the notice about `search_skills`, the
 planning, person-facing and environment prompts, the reminder of a kept skill after compaction, and
 the refusals of a checkout. A text of this kind is to be written from the list when it is found, and
@@ -318,6 +320,7 @@ tool as the control.
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::ask_user_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
@@ -358,6 +361,7 @@ tool as the control.
 `verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word`
+`verified-by: bravebot_agent::tools::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_read_file_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_edit_file_description_names_write_file_only_where_the_list_holds_it`

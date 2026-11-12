@@ -1012,6 +1012,10 @@ struct Job {
     /// asking for this line (RUN-19). Decides whether the account of its finish may advise
     /// vouching for the command (RUN-14).
     covered_by_record: bool,
+    /// Whether the latest `job_output` look at it asked, with `read`, for its output in the result.
+    /// The planner's own boolean, carried to the account of its end, which no call carries
+    /// (RUN-22).
+    read_asked: bool,
     /// The token the person sets to stop this job, read here at the turn's next step.
     stop: bravebot_core::cancel::JobStop,
     /// How long it had run when the person's stop was carried out, so a look after the account
@@ -1197,6 +1201,9 @@ pub struct Ended {
     /// Whether a record of remembered lines stopped the asking for this line (RUN-19), in which
     /// case the account of a quarantined output leaves out the advice about vouching (RUN-14).
     pub covered_by_record: bool,
+    /// Whether the job's latest `job_output` look asked to read its output in the result, so the
+    /// account is released as that look would have been (RUN-22).
+    pub read_asked: bool,
 }
 
 impl Jobs {
@@ -1263,6 +1270,7 @@ impl Jobs {
                 drawn: crate::exec::Seen::default(),
                 reported: false,
                 covered_by_record,
+                read_asked: false,
                 stop: stop.clone(),
                 stopped_by_the_person: None,
                 confinement: None,
@@ -1371,6 +1379,7 @@ impl Jobs {
                 whole,
                 look,
                 covered_by_record: job.covered_by_record,
+                read_asked: job.read_asked,
             });
         }
         finished
@@ -3678,7 +3687,9 @@ pub(crate) fn accept_named_reference<S: Sink>(
     .collect();
     let held = if known.is_empty() {
         match listing {
-            NamesToList::Output => "No run has printed anything under a reference yet.".to_string(),
+            NamesToList::Output => {
+                "No program has printed anything under a reference yet.".to_string()
+            }
             NamesToList::Choices => "No processor has made a choice yet.".to_string(),
             NamesToList::Text => "No reference has been given yet.".to_string(),
         }
@@ -8020,9 +8031,15 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         } else {
             ""
         };
+        // `run` is named only where the turn's list holds it (TOOL-6).
+        let only = if tools.running.offered() {
+            "Only a reference that came back from run can be read this way."
+        } else {
+            "Only a reference to what a program printed can be read this way."
+        };
         return Produced::problem(format!(
             "refused: {slot} is not something a program printed, so there is nothing to show. \
-             Only a reference that came back from run can be read this way.{route}"
+             {only}{route}"
         ));
     }
 
@@ -8085,8 +8102,13 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
             "refused: a pattern searches output you may already read, and {slot} is quarantined. \
              Which lines matched, how many there are and where the result stopped are all worked \
              out from the bytes, so searching this one would answer with numbers nobody vouched \
-             for. Without a pattern, {}, and run can put the output through a program instead.{}",
+             for. Without a pattern, {}{}.{}",
             whole_of_it(tools),
+            if tools.running.offered() {
+                ", and run can put the output through a program instead"
+            } else {
+                ""
+            },
             stated_cost(tools, &slot)
         ));
     }
@@ -12970,6 +12992,13 @@ fn job_output<S: Sink, R: Reporter>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
+    // Refused before anything happens, so a planner that believed it had asked is not handed a
+    // reference instead, and a kill in the same call is not carried out (RUN-22).
+    let read_asked = match read_asked_of(arguments) {
+        Ok(read_asked) => read_asked,
+        Err(refusal) => return *refusal,
+    };
+
     let (wait, until_exit) = match wait_from(arguments).and_then(|wait| {
         until_exit_from(arguments, wait, kill).map(|until_exit| (wait, until_exit))
     }) {
@@ -13002,11 +13031,20 @@ fn job_output<S: Sink, R: Reporter>(
                  working."
             ));
         }
+        // `run` is named only where the turn's list holds it (TOOL-6).
+        let handed_back = if tools.running.offered() {
+            "run handed back"
+        } else {
+            "handed back"
+        };
         return Produced::problem(format!(
-            "error: there is no background job called '{name}'. Only a job name run handed back \
+            "error: there is no background job called '{name}'. Only a job name {handed_back} \
              in this turn can be read, and they do not outlive the turn."
         ));
     };
+
+    // The latest look's answer is the one the account of the job's end follows (RUN-22).
+    job.read_asked = read_asked;
 
     // None where there was nothing to wait for: a caller with unseen output already waiting for it
     // asked to be told about output, and it is here. Whether there is any is byte counts the driver
@@ -13105,6 +13143,7 @@ fn job_output<S: Sink, R: Reporter>(
         .capped(whole.is_some());
     produced.whole = whole;
     produced.untrusted = !label.is_trusted();
+    produced.read_asked = read_asked;
     produced.look = Some(look);
     // So a person can be asked to read it later, and can see which command they are reading. This is
     // also the one place the window a wait watched is said to the planner, which the note above is
@@ -18764,6 +18803,28 @@ mod tests {
                     "{file_gone} {program_gone} {neither} comparing two looks needs a later look."
                 )
             )
+        );
+    }
+
+    /// TOOL-6. The `read` argument of `job_output` names `read_output` only where the list holds
+    /// it, as `run`'s does, and says the account of the job's end follows the latest look.
+    #[test]
+    fn the_job_output_read_argument_names_read_output_only_where_the_list_holds_it() {
+        let full = argument_of(&the_table_without(&[]), "job_output", "read");
+        assert!(names_the_tool(&full, "read_output"), "{full}");
+        assert!(
+            full.contains(
+                "The account of the job's end that the turn gives you follows your \
+                           latest look's read."
+            ),
+            "{full}"
+        );
+        let without = argument_of(&the_table_without(&["read_output"]), "job_output", "read");
+        assert!(!names_the_tool(&without, "read_output"), "{without}");
+        assert_eq!(
+            without,
+            "Ask to read what the job printed in this result. This changes nothing in this turn: \
+             output you may not read comes back as a reference. Defaults to false."
         );
     }
 
@@ -29751,7 +29812,7 @@ mod tests {
 
             let (told, _) = read_output_answer("7", &[("ref:1", false)], false);
             assert!(
-                told.contains("No run has printed anything under a reference yet."),
+                told.contains("No program has printed anything under a reference yet."),
                 "{told}"
             );
         }
@@ -30038,6 +30099,101 @@ mod tests {
                 "refused: ref:1 is not something a program printed, so there is nothing to show. \
                  Only a reference that came back from run can be read this way. Where you have to \
                  read it yourself, vet_content is how to ask for it.",
+            );
+        }
+
+        /// TOOL-6. The refusals of `read_output` for a reference no program printed and for a
+        /// `pattern` on quarantined output, and the refusal of `job_output` for a name that is no
+        /// job, name `run` only where the turn's list holds it. Each is asserted whole beside the
+        /// full list as the control. The regression it rejects is a refusal written without reading
+        /// the list, which sends a turn left without `run` to a tool it does not have.
+        #[test]
+        fn read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one() {
+            let scratch = Scratch::new("refusals-name-run");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let refused = |running: Running, arguments: Value, from_command: bool| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.running = running;
+                    tools.beside = Beside::every().without(Named::VetContent);
+                    let id = bravebot_core::slot::SlotId::new("ref:1");
+                    let label = if from_command {
+                        bravebot_core::label::Label::untrusted_private()
+                    } else {
+                        bravebot_core::label::Label::trusted_private()
+                    };
+                    tools
+                        .slots
+                        .writer_for(id.clone(), label)
+                        .expect("a writer")
+                        .write("bytes")
+                        .expect("written");
+                    if from_command {
+                        policy.came_from_command(&id, "a command", tools.slots);
+                    }
+                    if arguments.get("job").is_some() {
+                        job_output(
+                            &mut policy,
+                            tools,
+                            &mut crate::report::IgnoreReports,
+                            &arguments,
+                        )
+                    } else {
+                        read_output(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveWrites,
+                            &mut crate::report::IgnoreReports,
+                            &arguments,
+                        )
+                    }
+                });
+                assert!(produced.failed, "{arguments}: the call was not refused");
+                told(&mut policy, &produced.text)
+            };
+
+            let not_output = json!({"ref": "ref:1"});
+            assert_eq!(
+                refused(Running::Offered, not_output.clone(), false),
+                "refused: ref:1 is not something a program printed, so there is nothing to show. \
+                 Only a reference that came back from run can be read this way.",
+            );
+            assert_eq!(
+                refused(Running::Withheld, not_output, false),
+                "refused: ref:1 is not something a program printed, so there is nothing to show. \
+                 Only a reference to what a program printed can be read this way.",
+            );
+
+            let pattern = json!({"ref": "ref:1", "pattern": "x"});
+            let with_run = refused(Running::Offered, pattern.clone(), true);
+            assert!(
+                with_run.starts_with("refused: a pattern searches output you may already read")
+                    && with_run.contains(", and run can put the output through a program instead."),
+                "{with_run}"
+            );
+            let without_run = refused(Running::Withheld, pattern, true);
+            assert!(
+                without_run.starts_with("refused: a pattern searches output you may already read")
+                    && !without_run.contains("run can put"),
+                "{without_run}"
+            );
+            assert_eq!(
+                without_run,
+                with_run.replace(", and run can put the output through a program instead", ""),
+                "the refusal changed beyond the sentence naming run"
+            );
+
+            let no_job = json!({"job": "job:9"});
+            assert_eq!(
+                refused(Running::Offered, no_job.clone(), false),
+                "error: there is no background job called 'job:9'. Only a job name run handed \
+                 back in this turn can be read, and they do not outlive the turn.",
+            );
+            assert_eq!(
+                refused(Running::Withheld, no_job, false),
+                "error: there is no background job called 'job:9'. Only a job name handed back \
+                 in this turn can be read, and they do not outlive the turn.",
             );
         }
 

@@ -557,6 +557,26 @@ fn run_read_description(beside: &dyn Fn(&str) -> bool) -> String {
     }
 }
 
+/// The description of `job_output`'s `read` argument, naming `read_output` only where `beside`
+/// says it is on the list, for the reason [`run_read_description`] does.
+fn job_output_read_description(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("read_output") {
+        "Ask to read what the job printed in this result. Where read_output would hand it to you \
+         without asking the user, or would hand it back at once, it comes back here as text you \
+         can read, and there is no read_output call to make. Where it would be kept back, it \
+         still comes back as a reference. Output too long for one result still comes back as a \
+         reference, with its size, and read_output is not held to that size. Everywhere else \
+         this changes nothing, and output you may not read still comes back as a reference. The \
+         account of the job's end that the turn gives you follows your latest look's read. \
+         Defaults to false."
+            .to_string()
+    } else {
+        "Ask to read what the job printed in this result. This changes nothing in this turn: \
+         output you may not read comes back as a reference. Defaults to false."
+            .to_string()
+    }
+}
+
 /// The paragraph of the `read_file` description on pictures and PDFs, naming `spawn_processor`
 /// only where `beside` says it is on the list.
 fn read_file_pictures(beside: &dyn Fn(&str) -> bool) -> String {
@@ -700,7 +720,16 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             "read_output" => tool.function.description = read_output_description(&beside),
             "fetch_url" => state_fetch_url_beside(tool, &beside),
             "search" | "list_files" => remove_read_without_vet_content(tool, &beside),
-            "job_output" => tool.function.description = job_output_description(&beside),
+            "job_output" => {
+                tool.function.description = job_output_description(&beside);
+                if let Some(read) = tool
+                    .function
+                    .parameters
+                    .pointer_mut("/properties/read/description")
+                {
+                    *read = json!(job_output_read_description(&beside));
+                }
+            }
             "spawn_agent" => {
                 for (full, narrowed) in [
                     (spawn_agent_lacks(&|_| true), spawn_agent_lacks(&beside)),
@@ -1900,6 +1929,10 @@ fn table(
                                         one answer. If the job is still running at the bound, \
                                         you are told so. Defaults to false, which returns at \
                                         the job's next output."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": job_output_read_description(&|_| true)
                     }
                 },
                 "required": ["job"]
