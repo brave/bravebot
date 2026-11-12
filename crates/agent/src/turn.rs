@@ -128,7 +128,9 @@ enum ReadOutputIs {
     /// behind its reference with nobody asked.
     ByACheck,
     /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
-    /// the output and decides.
+    /// the output and decides. A turn not offered `read_output` is told this whatever the mode, so
+    /// what its results say of vouching is decided by whether the mode asks a person about runs,
+    /// and where it does not, they say the output cannot be shown in this turn instead (RUN-14).
     Asked,
 }
 
@@ -183,6 +185,11 @@ impl ReadOutputIs {
 /// is left out where a record already stops the asking for that exact line (RUN-14).
 const STOP_BEING_ASKED: &str = "To stop being asked, a person vouching for every stage of the \
      exact command makes what it prints visible from then on.";
+
+/// What a turn not offered `read_output` is told in place of [`STOP_BEING_ASKED`] where the mode
+/// answers runs: no prompt is drawn and a run the mode approved vouches for nothing, so nothing
+/// will make the output visible in this turn. It names no mode (RUN-14, MODE-3).
+const NOT_SHOWN_THIS_TURN: &str = "What it printed cannot be shown to you in this turn.";
 
 /// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
 fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
@@ -1834,9 +1841,14 @@ const LIVE_LINES: usize = 200;
 /// Nothing here reads what a job printed. The handle and the status are the driver's own structure,
 /// worked out from a name it minted and the exit codes it collected, and the output goes through
 /// the same gate as any other result: a job nobody vouched for hands the planner a reference.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the jobs, the cap, the mode's answer, who answers a read and the list's tools are separate inputs"
+)]
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
     output_cap: usize,
+    runs_asked: bool,
     read_output_is: ReadOutputIs,
     beside: tools::Beside,
     policy: &mut Policy<'_, S>,
@@ -1975,11 +1987,18 @@ fn collect_jobs<S: Sink, R: Reporter>(
                 // decided it (RUN-14). Where somebody is asked, the account says how to stop being
                 // asked, as a run's result does (RUN-14), unless a record already stops the asking
                 // for this exact line: no prompt will return there for a person to answer, and
-                // read_output is then the whole of what is said.
-                let then = match (read_output_is, ended.covered_by_record) {
-                    (ReadOutputIs::Asked, false) => format!(" {STOP_BEING_ASKED}"),
-                    _ => String::new(),
-                };
+                // read_output is then the whole of what is said. A list without `read_output` is
+                // told `Asked` whatever the mode, so there the mode decides: where it answers runs,
+                // no vouch stops an asking that does not happen, and the account says the output
+                // cannot be shown in this turn instead.
+                let then = sentences::vouching(
+                    runs_asked,
+                    read_output_is,
+                    beside,
+                    ended.covered_by_record,
+                )
+                .map(|sentence| format!(" {sentence}"))
+                .unwrap_or_default();
                 // Each tool named is one the turn's list holds (TOOL-6). A list without
                 // `read_output` has nothing to call for a look at it, so the sentence says only
                 // whose answer the quarantine is about.
@@ -4816,6 +4835,7 @@ where
                             sentences::run_advice(
                                 output.printed_by.is_some(),
                                 output.covered_by_record,
+                                !task.permission_mode.get().answers_a_run_unasked(),
                                 read_output_is(),
                                 beside,
                                 &output.tool,
@@ -6414,6 +6434,7 @@ mod tests {
             collect_jobs(
                 &mut jobs,
                 tools::OUTPUT_CAP,
+                true,
                 ReadOutputIs::Asked,
                 tools::Beside::every(),
                 &mut policy,

@@ -317,6 +317,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     collect_jobs(
         state.jobs,
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+        !task.permission_mode.get().answers_a_run_unasked(),
         read_output_is(),
         plan.beside,
         policy,

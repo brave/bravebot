@@ -31417,6 +31417,150 @@ fn a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers() 
         !told.contains("kept back"),
         "a turn with no read_output was told what read_output returns: {told}"
     );
+    assert!(
+        !told.contains("vouching for every stage of the exact command"),
+        "a screened bypass was told a vouch would stop an asking that does not happen: {told}"
+    );
+    assert!(
+        told.contains("What it printed cannot be shown to you in this turn."),
+        "a screened bypass was not told the output cannot be shown in this turn: {told}"
+    );
+}
+
+/// RUN-14, MODE-4 (brave/bravebot#3982): the account of an ended job whose output is quarantined,
+/// in a turn left without `read_output` where permissions are bypassed, is not told that a vouch
+/// would stop the asking, as a run's result is not. The mode draws no prompt and a job it approved
+/// vouches for nothing.
+#[test]
+fn what_an_ended_job_printed_is_not_told_of_vouching_where_permissions_are_bypassed() {
+    let scratch = Scratch::new("background-finish-bypassed");
+    let home = Scratch::new("background-finish-bypassed-home");
+    define(&home, "runner", "kind: worker\ntools: run\n", "RUN-IT");
+    std::fs::write(scratch.path.join("notes.txt"), "SENTINEL-BYPASSED-JOB\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &addressed("start it", &home, "runner")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let first = sent.first().expect("the request that asked to run");
+    assert!(
+        !first.contains(r#""name":"read_output""#),
+        "the definition was offered read_output, so this says nothing: {first}"
+    );
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains("What it printed could not be shown to you"),
+        "the job's output was not quarantined, so this says nothing: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage of the exact command"),
+        "a bypassed turn was told a vouch would stop an asking that does not happen: {told}"
+    );
+    assert!(
+        told.contains("What it printed cannot be shown to you in this turn."),
+        "a bypassed turn was not told the output cannot be shown in this turn: {told}"
+    );
+    assert!(
+        !told.contains("SENTINEL-BYPASSED-JOB"),
+        "what the job printed reached the planner: {told}"
+    );
+}
+
+/// RUN-14, MODE-4 (brave/bravebot#3982): a turn left without `read_output` in a bypass with no
+/// screening is not told that a vouch would stop the asking. The mode draws no prompt and a run it
+/// approved vouches for nothing, so the result says the output cannot be shown in this turn.
+#[test]
+fn a_turn_left_without_read_output_is_not_told_of_vouching_where_permissions_are_bypassed() {
+    let scratch = Scratch::new("run-advice-confined-bypassed");
+    let home = Scratch::new("run-advice-confined-bypassed-home");
+    define(&home, "runner", "kind: worker\ntools: run\n", "RUN-IT");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-BYPASSED\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &addressed("find out", &home, "runner")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let asked_to_run = sent.first().expect("the request that asked to run");
+    assert!(
+        !asked_to_run.contains(r#""name":"read_output""#),
+        "the definition was offered read_output, so this says nothing: {asked_to_run}"
+    );
+    let told = message_from(
+        sent.last().expect("the round after the run"),
+        "Result of run could not be shown to you",
+    );
+    assert!(
+        told.contains("This is about the command rather than about what it printed."),
+        "the result no longer says whose answer the quarantine is about: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage of the exact command"),
+        "a bypassed turn was told a vouch would stop an asking that does not happen: {told}"
+    );
+    assert!(
+        told.contains("What it printed cannot be shown to you in this turn."),
+        "a bypassed turn was not told the output cannot be shown in this turn: {told}"
+    );
+    assert!(
+        !told.contains("SENTINEL-BYPASSED"),
+        "what the run printed reached the planner: {told}"
+    );
 }
 
 /// TOOL-6, RUN-14: the advice on a quarantined run result names a tool only where the turn's list
