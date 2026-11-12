@@ -185,7 +185,9 @@ a place in a file reaches the model and the text at it stays confined.
 
 A plan approval is asked once per manifest run, before its first step. The card shows the
 task and every step. An approval covers that plan only and does not approve its writes: each
-write is still asked about when its step is reached. What a run releases for a screen can be
+write is still asked about when its step is reached. It answers the calls to a server's tools
+the card shows, unless a rule, the server's declaration, plan mode or private data in the call
+asks about one at its step. What a run releases for a screen can be
 a file's text, so the window draws it as plain text in a marked container and never formats
 it. A run is not part of the conversation and is left out of an export.
 

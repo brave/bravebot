@@ -495,7 +495,7 @@ to no model and to no step. Pictures and other parts of the answer are not shown
 The step `mcp_read` makes the same call to a tool the list the person vouched for marks read-only,
 which is the server's own `readOnlyHint` annotation, drawn with the tool when the person was asked
 about the list. Its alias, tool and arguments are what a call's are, routed, fixed and checked the
-same way, and it is asked about at its step as a call is. It is a read: it comes before every action
+same way, and it is decided at its step as a call is. It is a read: it comes before every action
 and names the slot its reply fills, quarantined as anything a read fetched is
 ([MANIFEST-8](#MANIFEST-8)), so a transform can read that slot and an answer can show what the
 transform made. It names no slot it takes from, so its arguments are still the plan's literals.
@@ -552,9 +552,8 @@ call with these arguments, and nothing the run reads can change either. A plan b
 was seen by nobody, so its calls are decided by the mode as a turn's are. What would put the
 question in spite of a standing answer still puts it at the step: an `ask` rule about the tool, a
 call carrying private data, and plan mode ([MODE-3](permission-modes.md#MODE-3)). So does a call
-whose arguments hold a character the plan's line would draw as nothing, since the step's question
-writes each one out ([PROMPT-13](prompting.md#PROMPT-13)) and the line the person approved could
-not. The egress gate decides as it does there.
+whose arguments hold a character the step's question writes out
+([PROMPT-13](prompting.md#PROMPT-13)), since the line the person approved could not show it. The egress gate decides as it does there.
 
 A server declared to ask every call ([SERVERS-21](mcp-servers.md#SERVERS-21)) is asked at the step,
 in every mode, bypassing included, and no answer to it lasts. The plan is not refused for holding

@@ -1023,7 +1023,7 @@ fn bypassing_does_not_answer_a_planned_call_to_a_server_asked_every_call() {
 }
 
 /// A plan bypass mode approved was seen by nobody, so its approval answers no call for a person:
-/// the mode answers each call as it does in a turn, and the trail credits the mode, never the plan.
+/// the mode answers each call as it does in a turn, and the trail never credits the plan.
 ///
 /// Rejects an implementation that takes the mode's approval of a plan for a person's, which would
 /// let the calls of a plan nobody read go unasked after a switch to asking.
@@ -1049,9 +1049,8 @@ fn a_plan_bypass_approved_answers_no_call_for_a_person() {
     );
 }
 
-/// A call whose arguments hold a character the plan's line draws as nothing is asked at its step,
-/// where the question writes each such character out, since the line the person approved could not
-/// show it.
+/// A call whose arguments hold a character the step's question writes out (PROMPT-13) is asked at
+/// its step, since the line the person approved could not show it.
 ///
 /// Rejects an implementation that lets approving a plan answer arguments the person could not read.
 #[test]

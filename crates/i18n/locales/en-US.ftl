@@ -2633,8 +2633,8 @@ plan-explained =
     drop one, or send anything anywhere this plan does not already name.
 plan-not-its-writes =
     approving the plan answers the calls to a server's tools it shows, and is not approving its
-    writes. each write is still put to you as it comes up, as is a call a rule or a server's
-    declaration asks about.
+    writes. each write is still put to you as it comes up, as is a call something else asks
+    about, such as a rule or a server's declaration.
 plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it

@@ -2261,7 +2261,7 @@ plan-explained =
 plan-not-its-writes =
     approuver le plan répond aux appels aux outils d'un serveur qu'il montre, et n'approuve pas
     ses écritures. chaque écriture vous sera encore soumise le moment venu, comme un appel
-    qu'une règle ou la déclaration d'un serveur demande de soumettre.
+    que quelque chose d'autre demande de soumettre, comme une règle ou la déclaration d'un serveur.
 plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
