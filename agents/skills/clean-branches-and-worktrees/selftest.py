@@ -180,6 +180,14 @@ class Clean(unittest.TestCase):
         self.assertIn("more", self.branches())
         self.assertIn("local branch has commits beyond the merged PR head", out)
 
+    def test_keeps_a_branch_with_new_commits_when_a_tag_shares_its_name(self):
+        path = self.branch("same", worktree=True)
+        git("tag", "same", "same", cwd=self.clone)
+        git("commit", "-q", "--allow-empty", "-m", "after merge", cwd=path)
+        out = self.run_script()
+        self.assertIn("same", self.branches())
+        self.assertIn("local branch has commits beyond the merged PR head", out)
+
     def test_keeps_a_branch_whose_worktree_is_dirty(self):
         path = self.branch("dirty", worktree=True)
         (path / "wip.txt").write_text("wip\n")

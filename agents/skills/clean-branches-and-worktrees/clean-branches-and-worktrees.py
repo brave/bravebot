@@ -187,7 +187,7 @@ def branch_matches_merged_pr(repo: Path, branch: str, pr_head_sha: str) -> tuple
     local_head = get_branch_head(repo, branch)
     if local_head == pr_head_sha:
         return True, ""
-    counts = diff_counts(repo, pr_head_sha, branch)
+    counts = diff_counts(repo, pr_head_sha, f"refs/heads/{branch}")
     if counts is None:
         return False, f"could not compare local branch against merged PR head {pr_head_sha[:12]}"
     _, branch_only = counts
@@ -206,7 +206,7 @@ def branch_has_unpushed_commits(repo: Path, branch: str, upstream: str) -> tuple
     # should not block local cleanup once the PR-head safety gate has passed.
     if try_resolve_revision(repo, upstream) is None:
         return (False, 0, 0)
-    counts = diff_counts(repo, branch, upstream)
+    counts = diff_counts(repo, f"refs/heads/{branch}", upstream)
     if counts is None:
         return None
     ahead, behind = counts
