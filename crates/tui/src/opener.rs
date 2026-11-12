@@ -68,7 +68,9 @@ use std::process::Stdio;
 ///
 /// The last ten names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
 /// (brave/bravebot#3860). The sources are Wine's and ReactOS's source and Microsoft's
-/// `ShellExecute` page. No run on a Windows host shows that a name chooses the program. Wine's
+/// `ShellExecute` page. The `sandbox-windows` job ran the start on a Windows Server 2025 runner
+/// (10.0.26100) and it did not show that a name chooses the program, because the test registers no
+/// handler whose command expands one of the names ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). Wine's
 /// `url.dll` passes the address to `ShellExecuteA` with no verb, and its `shlexec.c` reads
 /// `%name%` in the command template of the handler it runs from the process's environment
 /// (`GetEnvironmentVariableW`), so a handler whose command is written with `%ProgramFiles%` or
@@ -78,7 +80,8 @@ use std::process::Stdio;
 /// directory ([`Names::Directory`]). Wine's `kernelbase/process.c` starts a batch file through the program
 /// `COMSPEC` names, so it is one file ([`Names::File`]). `PATHEXT` is the list of extensions a
 /// command processor tries for a bare name; none of those sources reads it for this start, and it
-/// is removed whatever it holds ([`Names::Options`]). Whether the start needs it was not run.
+/// is removed whatever it holds ([`Names::Options`]). The Windows runs removed it and `rundll32`
+/// exited with status 0; whether a page opened without it was not observed.
 /// `PSModulePath` is not listed: nothing read shows `rundll32` or `ShellExecute` reading it, and the
 /// opener does not start PowerShell. The Windows run test sets it on a control start and records
 /// whether it reaches the helper.
@@ -2125,7 +2128,8 @@ mod tests {
     /// `ProgramFiles` dropped from [`CODE_SELECTORS`], or a start that does not remove a name
     /// under the case the environment holds it in. It does not reject a name that selects code
     /// and is in neither the list nor this test, which is found by reading the program. It has
-    /// not been run: no Windows host ran it for this change.
+    /// not shown which names select code: the test registers no handler whose command expands a
+    /// listed name. It runs in the `sandbox-windows` job of `ci.yml`.
     #[cfg(windows)]
     #[test]
     fn the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it() {
