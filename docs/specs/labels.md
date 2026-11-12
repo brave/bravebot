@@ -263,6 +263,30 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/core/src/policy.rs: 6
+  - symbol: Policy::number_a_list
+    sites:
+      - crates/choice/src/lib.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::resolve_proposal
+    sites:
+      - crates/choice/src/lib.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::proposal_for_display
+    sites:
+      - crates/agent/src/server_calls.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::proposes_nothing
+    sites:
+      - crates/agent/src/server_calls.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::keep_applied
+    sites:
+      - crates/agent/src/server_calls.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::carry_applied_call
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/core/src/policy.rs: 1
   - symbol: Carried::into_wire
     sites:
       - crates/core/src/policy.rs: 4
@@ -1042,7 +1066,8 @@ arrives at all.
   ([MCP-13](mcp.md#MCP-13)). The driver tells the planner in its own words that the call failed. In
   a plan run ([MANIFEST-15](manifest.md#MANIFEST-15)) it reads one distinction in these, which is
   whether a reply arrived. Every reply is on the same side of it, whatever it holds, so the steps
-  after one run. A call that got no reply, because its connection closed or its bound passed, ends
+  after one run, except that an `apply` step skips its calls that depend on a call the server
+  reported failed ([MANIFEST-16](manifest.md#MANIFEST-16)). A call that got no reply, because its connection closed or its bound passed, ends
   the run. [MCP-5](mcp.md#MCP-5) says which failures are replies.
 
   Suppose a server, or a page that steers a tool the server relays, is hostile. Everything that buys
@@ -1069,6 +1094,9 @@ arrives at all.
     connection or stays silent past its bound ends the run at that call, so the approved steps after
     it do not run. Nothing it sends changes which steps run, and it cannot make a step run that the
     plan did not hold. A server that is not there ends a run the same way.
+  - **Skip an `apply` step's calls that depend on a call, by reporting that call failed.** The
+    step's line counts them as skipped, and the person sees what became of each. The server could
+    leave the calls undone as well by not acting on them.
 
   That is a few counts, a choice among four words and whether a plan run goes on, for each call, in
   the driver's sentences. A server could already set each by choosing what to return and whether to
@@ -1126,11 +1154,11 @@ arrives at all.
   server's list declares for its argument, drops a row that does not fit, holds a value that is not
   that type or repeats an earlier row, and counts each drop by a reason of a closed set. What comes
   back is the resolved list, labelled with everything it derives from, which the driver carries to
-  the person and to the server and never reads. Which calls
-  are kept from the person's ticks, which a failure skips, and whether the list holds any call
+  the server and reads only through `Policy::proposal_for_display`, to draw it for the person. Which
+  calls are kept from the person's ticks, which a failure skips, and whether the list holds any call
   are worked out in the policy layer too, by `Policy::keep_applied` and `Policy::proposes_nothing`,
-  so the driver makes the calls it is handed by their places in the list. A hostile entry or answer can choose which of the
-  calls the plan allows are proposed, within its caps, and nothing else.
+  so the driver makes the calls it is handed by their places in the list. A hostile entry or answer
+  can choose which of the calls the plan allows are proposed, within its caps, and nothing else.
 
   Suppose the page a processor read is hostile and talks the processor round. Everything that buys
   it is on this list:

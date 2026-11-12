@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/manifest.rs
   - crates/core/src/apply.rs
+  - crates/choice/src/rows.rs
   - crates/core/src/policy.rs
   - crates/agent/src/manifest.rs
   - crates/agent/src/connectors.rs
@@ -567,7 +568,8 @@ A reply that arrived ends nothing, whatever it holds. That covers a result, a to
 that it failed, a JSON-RPC error, a reply this client cannot read, an HTTP status that is not a
 success, and a line past the bound ([MCP-5](mcp.md#MCP-5), [MCP-13](mcp.md#MCP-13)). The steps
 after it run, because the steps were fixed before the server was reached and what a server returns
-does not change them. A tool's account of its own failure is drawn in the margin
+does not change them. Within an `apply` step, a call the server reported failed skips the calls of
+that step that depend on it ([MANIFEST-16](#MANIFEST-16)). A tool's account of its own failure is drawn in the margin
 ([MANIFEST-13](#MANIFEST-13)). A reply this client could not use is drawn as nothing, since the
 client holds none of it, and the step's line says that the call failed and its reply could not be
 used. No word of the reply is in the line or in the record of the run.
@@ -645,24 +647,28 @@ server names that tool and argument with it ([mcp-servers.md](mcp-servers.md#SER
 plan that gives one the declaration does not name is refused before it is put to anybody. So is a
 step that gives no argument such a kind, since its calls would take nothing from the list.
 
-An isolated processor reads the lists, each numbered from 1, and answers with rows: a tool by its
-number, each entry by its list and number, new text by its number, an earlier row by its number. A
-row holds no address, alias or path. The answer is read by the reader that reads a processor's
-number ([processors.md](processors.md)), outside the driver. A row it cannot read, or that gives an
-argument in a way the plan does not allow, names what is not there, repeats a call or passes a cap
-(`max_rows`, 50 by default and at most 100; `max_new`, 12 by default and at most 50), is dropped and
-counted by reason. So is a row giving a value that is not the type the server's list declares for
-its argument, and every value is sent as that type. New text is one line of at most 64 characters
-with every control and every character that draws as nothing made a space. A call depends on at most
-one earlier call, the one whose new text it uses.
+An isolated processor reads the lists, each numbered from 1, and answers with rows. Only the entries
+holding a field an argument takes from that list are numbered, the first 999 of them. A row names a
+tool by its number, each entry by its list and number, new text by its number, an earlier row by its
+number. A row holds no address, alias or path. The answer is read by the reader that reads a
+processor's number ([processors.md](processors.md)), outside the driver. A row it cannot read, or
+that gives an argument in a way the plan does not allow, names what is not there, repeats a call or
+passes a cap (`max_rows`, 50 by default and at most 100; `max_new`, 12 by default and at most 50),
+is dropped and counted by reason. So is a row giving a value that is not the type the server's list
+declares for its argument, and every value is sent as that type. An answer with no row, `none`
+included, or whose rows were all dropped, makes no call and ends the step without failing the run.
+An answer with no content is asked for once more, and a second ends the step the same way: unlike a
+process step's ([MANIFEST-8](#MANIFEST-8)), it fills no slot a later step needs. New text is one
+line of at most 64 characters with every control and every character that draws as nothing made a
+space. A call depends on at most one earlier call, the one whose new text it uses.
 
 The resolved calls are put to the person as one question, each value drawn with where it came from
 and as untrusted content is drawn, and no rule, standing answer or mode answers it, bypassing
-included. Where nobody can be asked the step is refused. The calls the person keeps are made in row
-order, each through a grant bound to its server, tool and place in the list, and a `deny` rule is
-read before each. A call whose tool reports a failure skips the calls that depend on it and ends
-nothing. A call refused or not made ends the run. What became of every call is drawn after them, and
-reaches no model.
+included. Only the terminal interface puts the list; in any other client, and where nobody can be
+asked, the step is refused. The calls the person keeps are made in row order, each through a grant
+bound to its server, tool and place in the list, and a `deny` rule is read before each. A call whose
+tool reports a failure skips the calls that depend on it and ends nothing. A call refused or not
+made ends the run. What became of every call is drawn after them, and reaches no model.
 
 **Why.** The planner cannot know which items a task touches without reading them, and must never
 read them. Numbers leave nothing to imitate, so every target a call acts on is copied from a list a
@@ -743,7 +749,10 @@ stdio server, so no egress gate stands between the step and it.
   not a success or a line past the bound run, since stopping on any of them would let the server's
   reply decide which steps happen. A plan whose later steps depend on an earlier call having worked
   runs them anyway. The person sees a tool's account of its failure in the margin as it goes, and
-  for a reply this client could not use only a line saying so (MANIFEST-15).
+  for a reply this client could not use only a line saying so (MANIFEST-15). An `apply` step's
+  calls that depend on a failed call are the exception: they are skipped (MANIFEST-16).
+- **Only the terminal interface puts an `apply` step's list.** The desktop application, line mode
+  and a one-shot run cannot draw it, so an `apply` step there is refused (MANIFEST-16).
 - **A server that sends no reply can end a plan run.** A call whose connection closes before any
   reply, or that is not answered within its bound, ends the run at that step, so a server decides
   by not answering whether the later steps run. No byte it wrote takes part, a server that is not

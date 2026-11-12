@@ -470,7 +470,7 @@ word for it. The read is the ninth of the
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 `verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
 `verified-by: bravebot_agent::turn::a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms`
-`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all of an answer that leaves the policy layer, and labels.md pins its uses file by file, so a second reader of an answer is a moved count that check-spec fails on)`
+`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all of an answer that leaves the policy layer through it, and labels.md pins its uses file by file, so a second reader of an answer is a moved count that check-spec fails on)`
 
 ## Known costs
 
