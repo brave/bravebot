@@ -5701,10 +5701,19 @@ shown by running the program, or not entirely:
   its `PATH`. Closing this takes a record that outlives the process, which holds a path a session
   once wrote and nothing it removed. It is not built. [#3901](https://github.com/brave/bravebot/issues/3901)
   tracks it.
-- What a confined `git` stage opened in a subdirectory reads or runs from the enclosing `.git`
-  (hooks, `core.fsmonitor`) has not been traced. It depends on the read grants of the sandbox
-  backend, which were not followed for this case. [#3901](https://github.com/brave/bravebot/issues/3901)
-  tracks it.
+- A stage opened in a subdirectory of a checkout, `git` included, reads the enclosing `.git` and
+  writes none of it. Under `workspace-write` and `read-only` the run base reads the whole machine
+  except the credential locations, so the enclosing `.git/config`, its hooks and the values of
+  `core.fsmonitor` and `core.hooksPath` are readable. No write row covers the checkout above the
+  session directory, so a `git config` or a hook written there is refused. Lifting the `.git`
+  refusal for a git stage changes nothing there, because the lift acts beneath a write row.
+  Under bypass the rows of [SANDBOX-22](#SANDBOX-22) cover the checkout, and so does a path the
+  person granted to write. A program the enclosing configuration names, such as `core.fsmonitor`,
+  runs in the profile of the stage that started git, because a child inherits the confinement. In
+  `strict` mode a stage reads only its listed rows, and the enclosing checkout is not among them.
+  Only the reads and the refused writes under the default mode have a test. It is not gated on a
+  platform, and its recorded runs are on Linux. Nothing runs `strict` mode, bypass or a program the
+  configuration names.
 - The lookups and the check of a `--settings` file on Windows have no test and no run.
   The checkout is found with the same function there, and `programs::program_name`
   reads a Windows executable name, but no test of this clause runs on Windows.
@@ -6047,6 +6056,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_sandbox::checkout_in_search::a_mercurial_or_jujutsu_checkout_is_not_recognised`
 `verified-by: bravebot_agent::confine::the_checkout_above_the_session_directory_is_a_place_the_plan_could_have_written`
 `verified-by: bravebot_agent::confine::a_git_in_the_checkout_above_the_session_directory_does_not_write_a_git_directory`
+`verified-by: bravebot_agent::confine::a_stage_in_a_subdirectory_reads_the_enclosing_git_directory_and_writes_none_of_it`
 `verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_carries_no_scope_by_its_name`
 `verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_does_not_keep_a_closed_network_by_its_name`
 `verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_relative_path_entry_is_judged_under_the_directory_the_stage_runs_in`

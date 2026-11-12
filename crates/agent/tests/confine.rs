@@ -1089,6 +1089,75 @@ fn only_git_writes_a_repositorys_hooks_and_configuration_on_macos() {
     assert!(configuration.contains("probe = yes"), "{configuration}");
 }
 
+/// SANDBOX-18, SANDBOX-30, #3901: a stage opened in a subdirectory of a checkout reads the checkout's
+/// `.git` and writes nothing in it, whatever its program is. git runs what the configuration and the
+/// hooks of that `.git` name, so a write there is code outside the confinement the next time
+/// anybody runs git. The regression it rejects is a row for the enclosing checkout, which would let
+/// a stage that is not given that directory change its configuration or plant a hook, and which
+/// the stage whose program is git would reach on macOS as well, since its profile lifts the `.git`
+/// refusal. The unconfined run of each line is the control that the file is writable, and the
+/// confined `git config --get` is the control that git finds the enclosing repository at all.
+#[cfg(unix)]
+#[test]
+fn a_stage_in_a_subdirectory_reads_the_enclosing_git_directory_and_writes_none_of_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("git-enclosing");
+    let checkout = places.session.parent().expect("a parent").to_path_buf();
+    let initialised = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&checkout)
+        .status();
+    if !initialised.is_ok_and(|status| status.success()) {
+        return;
+    }
+    let confinement = places.confinement();
+
+    let beside = places.run(&touch("made.txt"), Some(&confinement));
+    assert!(
+        beside.ended_well && places.session.join("made.txt").exists(),
+        "the stage could not write the session, so a refusal below means nothing: {beside:?}"
+    );
+    let read = places.run("git config --get core.bare", Some(&confinement));
+    assert!(
+        read.ended_well && read.stdout == "false\n",
+        "git did not read the enclosing repository's configuration: {read:?}"
+    );
+    let cat = places.run(
+        &cat(checkout.join(".git/config").display()),
+        Some(&confinement),
+    );
+    assert!(
+        cat.ended_well && cat.stdout.contains("[core]"),
+        "the enclosing configuration was not read: {cat:?}"
+    );
+
+    let hook = checkout.join(".git/hooks/post-checkout");
+    let hook_line = format!("sh -c 'printf x > {}'", hook.display());
+    for (line, file) in [
+        (
+            "git config bravebot.probe yes".to_string(),
+            checkout.join(".git/config"),
+        ),
+        (hook_line, hook),
+    ] {
+        let before = std::fs::read(&file).ok();
+        let confined = places.run(&line, Some(&confinement));
+        assert!(
+            !confined.ended_well && std::fs::read(&file).ok() == before,
+            "`{line}` wrote {}: {confined:?}",
+            file.display()
+        );
+        let control = places.run(&line, None);
+        assert!(
+            control.ended_well && std::fs::read(&file).ok() != before,
+            "`{line}` does not write {} without the sandbox: {control:?}",
+            file.display()
+        );
+    }
+}
+
 /// SANDBOX-22 under bypass: a stage writes beside the working directory with no request, which is
 /// where a run failed before the planner could ask. The regression it rejects is the flag never
 /// reaching the profile, so the write is refused as it is without bypass; the stage without the
