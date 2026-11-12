@@ -3296,6 +3296,45 @@ fn auth_status_bedrock_starts_no_aws_from_the_checkout_it_runs_in() {
     assert!(stdout.starts_with("bedrock work: signed in: "), "{stdout}");
 }
 
+/// SANDBOX-30 over the process: `doctor` reports the sign-in of each AWS account before it has read
+/// the workspace, and the AWS CLI it asks is the installed one, not one in a `bin` of the checkout
+/// or of the directory it runs in. Nothing but the record `main` makes before the command is
+/// dispatched leaves those directories out at that point.
+///
+/// Rejects a `doctor` that records the directory only where it reads the workspace, which is after
+/// the report of the backends: the planted `aws` is then started and its marker is made.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_the_checkout_or_the_directory_it_runs_in() {
+    let scratch = Scratch::new("cli-running-doctor-aws-planted-twice").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#,
+    );
+    std::fs::write(scratch.path.join("aws-work"), "").expect("sign in to work");
+    let installed = AWS_WITH_A_LAPSED_PROFILE.trim_start_matches("#!/bin/sh\n");
+    let planted = plant_and_install(&scratch, &[("aws", installed)]);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", planted.path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "lapsed"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(&scratch.path, &planted.here, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not asked: {stdout}"
+    );
+}
+
 /// `path` with the system directories behind it, so `script` is found when the command is run at a
 /// terminal. The planted and installed programs come first.
 #[cfg(unix)]
