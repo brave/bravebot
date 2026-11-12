@@ -9274,6 +9274,32 @@ struct Standing {
     prior: bravebot_core::label::Integrity,
 }
 
+/// What a refusal of a program named by a relative path adds: where that path was looked for, and
+/// whether the directory was carried from an earlier call (CMDLINE-12). Empty for any other
+/// refusal, since a bare name is looked for on `$PATH` and an absolute path names itself.
+///
+/// `told` is the directory as the planner typed it, `None` at the workspace root; where a link led
+/// is never named (LABEL-3). Every branch reads the planner's own line and argument and the
+/// driver's record of which call named the directory, never a byte of a file.
+fn looked_for_in(refused: &crate::cmdline::Refused, told: Option<&str>, carried: bool) -> String {
+    if refused.reason != crate::cmdline::Reason::NotAtPath
+        || !std::path::Path::new(&refused.text).is_relative()
+    {
+        return String::new();
+    }
+    match (told, carried) {
+        (None, _) => {
+            ". It was looked for at the workspace root; pass `directory` to look elsewhere"
+                .to_string()
+        }
+        (Some(told), false) => format!(". It was looked for in '{told}'"),
+        (Some(told), true) => format!(
+            ". It was looked for in '{told}', carried from the last run that named a directory; \
+             pass `directory` to change it"
+        ),
+    }
+}
+
 /// The name the planner is told for a destination a line opened.
 ///
 /// A destination under the directory the line ran in is told as that directory spelled the way
@@ -11138,6 +11164,9 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
+    // Whether the directory below is one this call named or the one the last call left, which a
+    // refusal of a program named by a relative path says (CMDLINE-12). The planner's own argument.
+    let carried = named.is_none();
     let (directory, told_directory) = match named {
         Some(proposed) => {
             // Read through the same gate the command line is, for the same reason: this is
@@ -11221,8 +11250,16 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
         Err(crate::cmdline::Stopped::Compile(refused)) => {
+            // Chosen from the planner's spelling, not from where the directory landed, because a
+            // link in a tree nobody vouched for may lead to the root (LABEL-3). `told` is empty
+            // at the root a turn starts at and where the planner named the directory as "".
+            let looked_in = looked_for_in(
+                &refused,
+                (!told_directory.is_empty()).then_some(told_directory.as_str()),
+                carried,
+            );
             return Produced::problem(format!(
-                "error: {}",
+                "error: {}{looked_in}",
                 refused.said(tools.beside.holds(Named::EditFile))
             ));
         }

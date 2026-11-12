@@ -903,6 +903,14 @@ a carried directory that no longer exists. A link in a tree nobody vouched for c
 leads to ([LABEL-3](../labels.md#LABEL-3), [CMDLINE-4](#CMDLINE-4)). The auto mode's classifier is a
 model, and is shown the same spelling ([AUTO-5](../auto-mode.md#AUTO-5)).
 
+A program named by a relative path that is not there is refused, and the refusal says where the path
+was looked for: in the directory as told above, or at the workspace root. Where the call named no
+directory and the line would have run in one an earlier call named, it says the directory was carried
+from that call and that passing `directory` changes it. At the root it says to pass `directory` to
+look elsewhere. A bare name is looked for on `$PATH` and an absolute path names its own place, so
+their refusals name no directory. What decides the sentence is the planner's line and whether this
+call named a directory, and nothing read from the tree.
+
 The carrying lasts a turn. It is not written into the session record, so the next turn starts at the
 root again. That is short of what this clause describes, and is left to the change that gives a
 session somewhere to keep one ([RUN-9](run.md#RUN-9)).
@@ -928,6 +936,11 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 `verified-by: bravebot_agent::cmdline::a_word_that_only_looks_like_a_shell_builtin_is_not_refused`
 `verified-by: bravebot_agent::turn::a_directory_removed_during_the_approval_is_reported_as_removed`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
+`verified-by: bravebot_agent::turn::a_program_named_by_a_relative_path_that_is_not_found_says_where_it_was_looked_for`
+`verified-by: bravebot_agent::turn::a_bare_name_or_an_absolute_path_that_is_not_found_names_no_directory`
+`verified-by: bravebot_agent::turn::a_relative_program_not_found_in_a_carried_directory_is_told_as_typed`
+`verified-by: bravebot_agent::turn::a_relative_program_not_found_in_a_link_to_the_root_is_told_as_typed`
+`verified-by: bravebot_agent::turn::a_relative_program_not_found_inside_a_substitution_says_where_it_was_looked_for`
 
 <a id="CMDLINE-13"></a>
 ### CMDLINE-13: a call may name its own deadline, under a ceiling

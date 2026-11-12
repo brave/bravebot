@@ -67836,6 +67836,215 @@ fn a_delegate_runs_under_the_deadlines_of_the_turn_that_spawned_it() {
     );
 }
 
+/// What the planner was told about each `run` of a turn in `workspace`, trusted and with every
+/// run approved, after the calls in `calls`: the body of the request after the last call.
+fn told_after_runs(workspace: &Workspace, calls: Vec<String>) -> String {
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut sequence: Vec<_> = calls
+        .iter()
+        .map(|arguments| tool_request("run", arguments))
+        .collect();
+    sequence.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(sequence);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("run the tool"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+    std::iter::from_fn(|| received.try_recv().ok())
+        .last()
+        .expect("the round after the last call")
+}
+
+/// CMDLINE-12: a program named by a relative path that is not there is refused naming the
+/// directory it was looked for in, and saying when that directory was carried from an earlier
+/// call. The three cases are a carried `sub`, a named `sub`, and the workspace root, with the file
+/// at the root each time, which is where a planner that forgot the carried directory expects it.
+///
+/// The regressions it rejects: a refusal naming no directory (the planner retries at random); one
+/// saying carried for a directory this call named, or never saying it; and one at the root that
+/// prints an empty name instead of saying the workspace root.
+#[test]
+fn a_program_named_by_a_relative_path_that_is_not_found_says_where_it_was_looked_for() {
+    let scratch = Scratch::new("cmdline-12-not-found-relative");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("scripts")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let refused = "`./scripts/tool.sh` at offset 0: is not a program that could be found";
+
+    let carried = told_after_runs(
+        &workspace,
+        vec![
+            r#"{"command":"cargo --version","directory":"sub"}"#.to_string(),
+            r#"{"command":"./scripts/tool.sh"}"#.to_string(),
+        ],
+    );
+    assert!(
+        carried.contains(refused)
+            && carried.contains(
+                "It was looked for in 'sub', carried from the last run that named a directory; \
+                 pass `directory` to change it"
+            ),
+        "the refusal did not say the carried directory it looked in: {carried}"
+    );
+
+    let named = told_after_runs(
+        &workspace,
+        vec![r#"{"command":"./scripts/tool.sh","directory":"sub"}"#.to_string()],
+    );
+    assert!(
+        named.contains(refused) && named.contains("It was looked for in 'sub'"),
+        "the refusal did not say the named directory it looked in: {named}"
+    );
+    assert!(
+        !named.contains("carried from"),
+        "a directory this call named was told as carried: {named}"
+    );
+
+    let root = told_after_runs(
+        &workspace,
+        vec![r#"{"command":"./scripts/missing.sh"}"#.to_string()],
+    );
+    assert!(
+        root.contains("It was looked for at the workspace root"),
+        "the refusal at the root did not say the workspace root: {root}"
+    );
+    assert!(
+        !root.contains("looked for in ''") && !root.contains("carried from"),
+        "the refusal at the root named an empty or carried directory: {root}"
+    );
+}
+
+/// CMDLINE-12: a bare name and an absolute path are not looked for in the working directory, so
+/// their refusal names none. The regression it rejects is the sentence added to every refusal of a
+/// program that could not be found, which would tell the planner the directory mattered.
+#[test]
+fn a_bare_name_or_an_absolute_path_that_is_not_found_names_no_directory() {
+    let scratch = Scratch::new("cmdline-12-not-found-bare");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let absolute = scratch.path.join("sub").join("missing-tool");
+    let told = told_after_runs(
+        &workspace,
+        vec![
+            r#"{"command":"no-such-program-anywhere-3983","directory":"sub"}"#.to_string(),
+            format!(
+                r#"{{"command":"{}"}}"#,
+                absolute.to_str().expect("utf-8 path")
+            ),
+        ],
+    );
+    assert!(
+        told.contains("is not a program that could be found: nothing runnable is at that path"),
+        "the absolute path was not refused: {told}"
+    );
+    assert!(
+        !told.contains("It was looked for"),
+        "a refusal not about a relative path named a directory: {told}"
+    );
+}
+
+/// CMDLINE-12: a program named by a relative path that is not there is refused naming the
+/// carried directory as the planner typed it, not where a link in a tree nobody vouched for led.
+#[cfg(unix)]
+#[test]
+fn a_relative_program_not_found_in_a_carried_directory_is_told_as_typed() {
+    let scratch =
+        a_workspace_nobody_vouched_for_with_a_linked_directory("linked-directory-not-found");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p note.txt","directory":"docs"}"#,
+        ),
+        tool_request("run", r#"{"command":"./scripts/tool.sh"}"#),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_turn_approving_runs_once(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the refusal");
+    assert!(
+        last.contains("It was looked for in 'docs', carried from the last run"),
+        "the planner was not told the carried directory as it typed it: {last}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains(LINKED_TARGET)),
+        "where a link led reached the planner through a refusal: {bodies:?}"
+    );
+}
+
+/// CMDLINE-12: a named directory that is a link to the workspace root is told as the planner typed
+/// it when a program named by a relative path is not found there. The regression it rejects is the
+/// sentence chosen from where the link landed, which lets a link in a tree nobody vouched for
+/// decide what the planner is told (LABEL-3).
+#[cfg(unix)]
+#[test]
+fn a_relative_program_not_found_in_a_link_to_the_root_is_told_as_typed() {
+    let scratch = Scratch::new("cmdline-12-not-found-link-to-root");
+    std::fs::create_dir_all(scratch.path.join("scripts")).unwrap();
+    std::os::unix::fs::symlink(".", scratch.path.join("lnk")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let told = told_after_runs(
+        &workspace,
+        vec![r#"{"command":"./scripts/tool.sh","directory":"lnk"}"#.to_string()],
+    );
+    assert!(
+        told.contains("It was looked for in 'lnk'"),
+        "the refusal did not name the directory as typed: {told}"
+    );
+    assert!(
+        !told.contains("at the workspace root"),
+        "where the link landed chose the sentence: {told}"
+    );
+}
+
+/// CMDLINE-12: a program named by a relative path inside a substitution in an assignment is looked
+/// for in the same directory as the step around it, so its refusal says that directory and that it
+/// was carried. A substitution is accepted only in bypass mode, so the turn runs in it. The
+/// regression it rejects is a substitution's refusal that names no directory, or names the
+/// workspace root while the line would have run in the carried one.
+#[cfg(unix)]
+#[test]
+fn a_relative_program_not_found_inside_a_substitution_says_where_it_was_looked_for() {
+    let scratch = Scratch::new("cmdline-12-not-found-substitution");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("scripts")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"/bin/echo hi","directory":"sub"}"#),
+        tool_request_2(
+            "run",
+            r#"{"command":"BRAVEBOT_TEST_X=\"$(./scripts/tool.sh)\" /bin/echo done"}"#,
+        ),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_bypass_turn(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the refusal");
+    assert!(
+        last.contains("is not a program that could be found: nothing runnable is at that path")
+            && last.contains(
+                "It was looked for in 'sub', carried from the last run that named a directory; \
+                 pass `directory` to change it"
+            ),
+        "the substitution's refusal did not say the carried directory it looked in: {last}"
+    );
+}
+
 /// CMDLINE-12: A call may name a directory to run in, inside the workspace.
 /// Absent one, a line runs where the last one ran, and the first runs at the workspace root.
 #[test]
