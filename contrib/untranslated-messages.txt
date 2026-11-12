@@ -37,6 +37,7 @@ fr:command-lsp
 fr:command-outputs
 fr:command-sessions
 fr:command-unfinished
+fr:commit-message-untrusted
 fr:configured-start-heading
 fr:doctor-embeddings
 fr:doctor-embeddings-answered
