@@ -13,8 +13,8 @@ that is merely carried.
 | Tool | Routing | Content | Asks you? |
 |---|---|---|---|
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
-| [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
-| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | no |
+| [`list_files`](#list_files) | `directory`, `pattern`, `depth`, `read` | none | no |
+| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output`, `read` | none | no |
 | [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
@@ -186,6 +186,7 @@ Lists files under a directory.
 | `directory` | workspace-relative; `.` for the root |
 | `pattern` | optional glob: `*`, `?`, `**` and brace groups like `**/*.{rs,toml}`. One with a `/` may be written from `directory` or from the workspace root |
 | `depth` | optional; how many directory levels below `directory` to walk, `1` being that directory and no further |
+| `read` | `true` to ask for a quarantined listing in the result of this call, given only where the session is offered `vet_content` ([Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call)) |
 
 Set a `depth`. Without one the walk reaches every file underneath, which in a real repository is
 thousands of paths. You pay for them in the planner's context, again on every round that resends it,
@@ -267,6 +268,7 @@ Finds lines matching a **regular expression** in workspace files.
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
 | `context` | lines to show before and after each match, as `grep -C` does: none unless given, at most 10 |
 | `output` | `lines` (the default), `files` for only the paths of the files with a match, or `count` for the matching lines per file and in all. The last two ignore `offset` and `context` and are not held to the match cap ([below](#files-and-counts)) |
+| `read` | `true` to ask for a quarantined result in the result of this call, given only where the session is offered `vet_content` ([Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call)) |
 
 Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and negation,
 `\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to

@@ -4238,7 +4238,16 @@ where
             let mut message_sent: Option<Composed> = None;
             // Set in each arm below, where the presentation that decides it is in scope.
             let result_from: Provenance;
-            let body = if let Some(entries) = &output.entries {
+            // A listing whose call asked to read, where the mode or a check answers vet_content,
+            // takes the route of any other result: one slot holding the listing as one document,
+            // released below by vet_content's path (VET-6). Decided by the planner's argument, the
+            // mode and the offered tools; nothing the listing holds is read to decide.
+            let a_listing_to_release = output.read_asked
+                && output.tool == "list_files"
+                && setup::vet_content_is(task, plan.offers_vet_content) != ReadOutputIs::Asked;
+            let body = if let Some(entries) =
+                output.entries.as_ref().filter(|_| !a_listing_to_release)
+            {
                 // A listing the planner may not see. The names never come out: it gets one
                 // reference per entry, and can read through and write back to the ones
                 // that stand for files without ever being told what any of them is called.
@@ -4904,6 +4913,14 @@ where
                         let capped =
                             sentences::capped_note(&output.tool, output.incomplete, output.paging);
                         let linked = sentences::links_note(&output.tool, output.links);
+                        // A listing that asked to read and was kept back is one reference, so the
+                        // pattern's sentence the per-entry arm carries goes here (LIST-7). Only a
+                        // quarantined listing sets it, from the pattern the planner typed.
+                        let unmatched = output
+                            .unmatched
+                            .as_deref()
+                            .map(|note| format!("\n\n{note}"))
+                            .unwrap_or_default();
                         // How to see this one and how to stop being asked, for a run and only for a run:
                         // the reasoning is on `sentences::run_advice`.
                         let advice_beside = |beside: tools::Beside| {
@@ -4957,7 +4974,7 @@ where
                         };
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{history}",
                                 output.tool,
                             )
                         };

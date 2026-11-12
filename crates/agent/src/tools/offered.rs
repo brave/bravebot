@@ -699,6 +699,7 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
             "fetch_url" => state_fetch_url_beside(tool, &beside),
+            "search" | "list_files" => remove_read_without_vet_content(tool, &beside),
             "job_output" => tool.function.description = job_output_description(&beside),
             "spawn_agent" => {
                 for (full, narrowed) in [
@@ -768,8 +769,29 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
 /// [`state_what_is_beside`] for `fetch_url`.
 fn state_fetch_url_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
     tool.function.description = fetch_url_description(beside);
-    // `read` asks for the release `vet_content` makes, so a list without it has nothing for the
-    // argument to ask.
+    remove_read_without_vet_content(tool, beside);
+}
+
+/// What `read` says on `search`: the release `vet_content` makes, asked for in the result of the
+/// walk. Planner-facing, so it is English in the code and not in a catalog (localization.md). It
+/// says nothing of who answers or whether a check is made (VET-5).
+const READ_A_WALK: &str = "Ask to have a result that would come back quarantined released in \
+                           this result, as vet_content would release it, so there is no \
+                           vet_content call to make. Where it would be kept back, or it is too \
+                           long for one result, it still comes back as a reference. Defaults to \
+                           false.";
+
+/// What `read` says on `list_files`: [`READ_A_WALK`] for a listing, which comes back kept back as
+/// one reference or as one per entry depending on who answers vet_content (LIST-2).
+const READ_A_LISTING: &str = "Ask to have a listing that would come back quarantined released in \
+                              this result, as vet_content would release it, so there is no \
+                              vet_content call to make. Where it would be kept back, or it is \
+                              too long for one result, it still comes back quarantined, as \
+                              references. Defaults to false.";
+
+/// `read` asks for the release `vet_content` makes, so a list without it has nothing for the
+/// argument to ask.
+fn remove_read_without_vet_content(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
     if !beside("vet_content")
         && let Some(properties) = tool
             .function
@@ -1017,6 +1039,10 @@ fn table(
                             per = crate::workspace::MAX_FILES_PER_DIRECTORY
                         ),
                         "minimum": 1
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": READ_A_LISTING
                     }
                 },
                 "required": ["directory"]
@@ -1275,6 +1301,10 @@ fn table(
                                         where something occurs without paying for the lines; \
                                         they ignore offset and context and are not held to the \
                                         match cap."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": READ_A_WALK
                     }
                 },
                 "required": ["pattern"]

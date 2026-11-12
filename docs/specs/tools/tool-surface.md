@@ -34,8 +34,8 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | Tool | Routing arguments | Content arguments | Result |
 |---|---|---|---|
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
-| [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
-| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | matching lines, files or counts, or a reference |
+| [`list_files`](list-files.md) | `directory`, `pattern`, `depth`, `read` | none | the paths, or a reference per entry |
+| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output`, `read` | none | matching lines, files or counts, or a reference |
 | [`repo_map`](repo-map.md) | `directory`, `budget` | none | the map text, from files a person vouched for |
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
@@ -48,7 +48,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
 | [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit` | none | a slice of what it has printed since the previous look, with the count of lines that begin in it, the number of the first, and the references of the earlier looks |
-| [`fetch_url`](fetch-url.md) | `url` | none | a reference |
+| [`fetch_url`](fetch-url.md) | `url`, `read` | none | a reference |
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
 | [`search_skills`](search-skills.md) | `query` | none | matching skills' names and descriptions, or a count of further matches |
@@ -264,6 +264,9 @@ delegate cannot call, each only where the list holds it, and says nothing of the
 none, and names `spawn_processor`, for output a delegate cannot read either, only where the list
 holds it ([AGENT-1](spawn-agent.md#AGENT-1)).
 
+`search` and `list_files` lose their `read` argument where the list lacks `vet_content`, since
+`read` asks for the release `vet_content` makes ([VET-6](vet-content.md#VET-6)).
+
 Two refusals are written from the list rather than from the policy's general denial. That denial
 ends "Use a reference to it instead", which neither tool can follow: neither returns a reference at
 the point of refusal, and a turn offered no processor cannot use one. The
@@ -354,6 +357,7 @@ tool as the control.
 `verified-by: bravebot_agent::tools::the_notes_that_start_a_job_name_job_output_only_where_it_is_offered`
 `verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word`
 `verified-by: bravebot_agent::tools::the_read_file_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_edit_file_description_names_write_file_only_where_the_list_holds_it`

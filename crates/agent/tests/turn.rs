@@ -95604,6 +95604,627 @@ fn an_unscreened_unattended_fetch_that_asks_to_read_is_handed_the_page_in_the_sa
     );
 }
 
+/// What a turn that made one `search` or `list_files` call over files nobody vouched for left
+/// behind, in the shape [`fetch_asking_to_read`] leaves it.
+fn walk_asking_to_read(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    tool: &str,
+    arguments: &str,
+) -> FetchedAskingToRead {
+    walk_asking_to_read_within(mode, auto_vetting, checks, tool, arguments, None, false)
+}
+
+/// [`walk_asking_to_read`] with `task.output_cap` set to `cap`, and with one symbolic link beside
+/// the file where `linked`, so a walk has a link it did not enter to report.
+fn walk_asking_to_read_within(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    tool: &str,
+    arguments: &str,
+    cap: Option<usize>,
+    linked: bool,
+) -> FetchedAskingToRead {
+    walk_asking_to_read_over(mode, auto_vetting, checks, tool, arguments, cap, |root| {
+        std::fs::write(
+            root.join("SENTINEL-LISTED-NAME.rs"),
+            "needle SENTINEL-SEARCH-HIT\n",
+        )
+        .unwrap();
+        if linked {
+            // A directory too, so a bounded listing whose pattern selects no file still has a
+            // quarantined entry.
+            std::fs::create_dir(root.join("SENTINEL-LISTED-DIR")).unwrap();
+            std::os::unix::fs::symlink(
+                root.join("SENTINEL-LISTED-NAME.rs"),
+                root.join("a-link.rs"),
+            )
+            .unwrap();
+        }
+    })
+}
+
+/// [`walk_asking_to_read_within`] over a tree `populate` lays out in an empty directory.
+fn walk_asking_to_read_over(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    tool: &str,
+    arguments: &str,
+    cap: Option<usize>,
+    populate: impl FnOnce(&std::path::Path),
+) -> FetchedAskingToRead {
+    // One directory a call, since the tests that use this run at once in one process.
+    static WALKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let scratch = Scratch::new(&format!(
+        "walk-read-{}",
+        WALKS.fetch_add(1, Ordering::SeqCst)
+    ));
+    populate(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let script = vec![tool_request_2(tool, arguments), reply_with("done")];
+    let (endpoint, received) = match checks {
+        Some(checks) => serve_sequence_answering_checks_with(checks, script),
+        None => serve_sequence_losing_every_check(script),
+    };
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut inner = ApprovesFetchesAndWrites::default();
+    {
+        let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, auto_vetting);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find it")
+                .with_output_cap(cap)
+                .with_permission_mode(mode)
+                .with_auto_vetting(auto_vetting),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            // Nothing vouched for, so the walk's result is quarantined.
+            bravebot_core::trust::TrustStore::new(workspace.root()),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    }
+    FetchedAskingToRead {
+        sent: received.try_iter().collect(),
+        sink,
+        vets: inner.vets.len(),
+        fetched: 0,
+    }
+}
+
+const A_SEARCH_ASKING_TO_READ: &str = r#"{"pattern":"needle","directory":".","read":true}"#;
+const A_LISTING_ASKING_TO_READ: &str = r#"{"directory":".","read":true}"#;
+
+/// VET-6 for `search` and `list_files` (#3995). Bypassing permissions with no screening, a walk
+/// over files nobody vouched for that asks to read is handed its result in the same result, by
+/// `vet_content`'s own path: nobody asked, no check made, the trail crediting the mode under that
+/// gate, and the label `vet_content` gives.
+///
+/// A wrong implementation ignores the flag on these tools (the result stays behind its
+/// references), credits the release to `read_output`, or makes a check in a mode that reads no
+/// verdict.
+#[test]
+fn an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result() {
+    for (tool, arguments, sentinel) in [
+        ("search", A_SEARCH_ASKING_TO_READ, "SENTINEL-SEARCH-HIT"),
+        (
+            "list_files",
+            A_LISTING_ASKING_TO_READ,
+            "SENTINEL-LISTED-NAME",
+        ),
+    ] {
+        let walked = walk_asking_to_read(
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            tool,
+            arguments,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            after.contains(sentinel),
+            "{tool}: the result did not come back in the result that asked for it: {after}"
+        );
+        assert_eq!(
+            walked.vets, 0,
+            "{tool}: somebody was asked to let it through"
+        );
+        assert_eq!(
+            walked.checks_made(),
+            0,
+            "{tool}: a check was made in the mode that reads no verdict"
+        );
+        let released = how_a_slot_was_released(&walked.sink, "vet_content");
+        assert!(
+            released.contains("permissions are being bypassed with no screening asked for"),
+            "{tool}: the trail does not credit the mode with the release: {released}"
+        );
+        assert!(
+            released.contains("so the planner is given (T,priv)"),
+            "{tool}: the result reached the planner at a label vet_content would not give: \
+             {released}"
+        );
+        assert!(
+            releases_of_output(&walked.sink).is_empty(),
+            "{tool}: the release was credited to read_output"
+        );
+    }
+}
+
+/// VET-6: without `read` the same walk in the same mode stays quarantined, so the flag and not the
+/// mode is what releases it.
+///
+/// A wrong implementation releases every quarantined walk result in bypass whether or not the
+/// planner asked.
+#[test]
+fn a_search_or_listing_that_does_not_ask_to_read_stays_quarantined_in_bypass() {
+    for (tool, arguments, sentinel) in [
+        (
+            "search",
+            r#"{"pattern":"needle","directory":"."}"#,
+            "SENTINEL-SEARCH-HIT",
+        ),
+        ("list_files", r#"{"directory":"."}"#, "SENTINEL-LISTED-NAME"),
+    ] {
+        let walked = walk_asking_to_read(
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            tool,
+            arguments,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            !after.contains(sentinel),
+            "{tool}: a result nobody asked to read reached the planner: {after}"
+        );
+        let releases = walked.sink.events().iter().filter(|event| {
+            matches!(event, Event::GatePassed { gate, detail }
+                if *gate == "vet_content" && detail.contains("so the planner is given"))
+        });
+        assert_eq!(
+            releases.count(),
+            0,
+            "{tool}: a release was recorded for a call that did not ask"
+        );
+    }
+}
+
+/// VET-6's other branch (R10 of #3995): with auto-vetting on, a check that answers `safe` releases
+/// the walk's result in the same result and the trail credits the check.
+///
+/// A wrong implementation releases without a check, or credits the mode for a release the check
+/// made.
+#[test]
+fn a_screened_search_or_listing_that_asks_to_read_is_handed_it_where_the_check_finds_nothing() {
+    for (tool, arguments, sentinel) in [
+        ("search", A_SEARCH_ASKING_TO_READ, "SENTINEL-SEARCH-HIT"),
+        (
+            "list_files",
+            A_LISTING_ASKING_TO_READ,
+            "SENTINEL-LISTED-NAME",
+        ),
+    ] {
+        let walked = walk_asking_to_read(
+            bravebot_agent::PermissionMode::Ask,
+            true,
+            Some(a_safe_check()),
+            tool,
+            arguments,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            after.contains(sentinel),
+            "{tool}: the result did not come back after a safe word: {after}"
+        );
+        assert_eq!(
+            walked.vets, 0,
+            "{tool}: somebody was asked after a safe word"
+        );
+        assert_eq!(walked.checks_made(), 1, "{tool}: released without a check");
+        let released = how_a_slot_was_released(&walked.sink, "vet_content");
+        assert!(
+            released.contains("auto-vetting is on and the check found nothing"),
+            "{tool}: the trail does not credit the check: {released}"
+        );
+    }
+}
+
+/// VET-6: where a person answers vet_content, `read` changes nothing: the result stays behind its
+/// reference, nobody is asked, and the planner is told `read` did not return it. A listing keeps
+/// its one reference per entry.
+///
+/// A wrong implementation draws a prompt for the read, releases without the person, or turns a
+/// kept-back listing into one reference.
+#[test]
+fn asking_to_read_a_search_or_listing_changes_nothing_where_a_person_answers_for_it() {
+    for (tool, arguments, sentinel) in [
+        ("search", A_SEARCH_ASKING_TO_READ, "SENTINEL-SEARCH-HIT"),
+        (
+            "list_files",
+            A_LISTING_ASKING_TO_READ,
+            "SENTINEL-LISTED-NAME",
+        ),
+    ] {
+        let walked = walk_asking_to_read(
+            bravebot_agent::PermissionMode::Ask,
+            false,
+            None,
+            tool,
+            arguments,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            !after.contains(sentinel),
+            "{tool}: the result reached the planner without the person: {after}"
+        );
+        assert_eq!(walked.vets, 0, "{tool}: a prompt was drawn for the read");
+        assert_eq!(walked.checks_made(), 0, "{tool}: a check was made");
+        if tool == "list_files" {
+            assert!(
+                after.contains("quarantined, one reference each"),
+                "{tool}: a kept-back listing lost its references: {after}"
+            );
+        }
+    }
+}
+
+/// VET-6 / RUN-22: a `read` that is not a boolean is refused rather than taken as no.
+///
+/// A wrong implementation ignores the malformed argument and returns the result as a reference.
+#[test]
+fn a_search_or_listing_whose_read_is_not_a_boolean_is_refused() {
+    for (tool, arguments) in [
+        (
+            "search",
+            r#"{"pattern":"needle","directory":".","read":"yes"}"#,
+        ),
+        ("list_files", r#"{"directory":".","read":"yes"}"#),
+    ] {
+        let walked = walk_asking_to_read(
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            None,
+            tool,
+            arguments,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            after.contains("'read' must be true or false"),
+            "{tool}: a malformed read was not refused: {after}"
+        );
+    }
+}
+
+/// VET-6 for `search` and `list_files` (R15, R16 of #3995). A check that does not say `safe`
+/// keeps the result back. The planner is told `read` did not return it, a listing comes back as
+/// the one reference the release would have covered, and the sentences about links and an
+/// unmatched pattern still reach it beside that reference. Nothing of the check does.
+///
+/// A wrong implementation drops the link or pattern sentence from a kept-back one-slot listing,
+/// omits the read-not-returned sentence, or relays the check's reason.
+#[test]
+fn a_search_or_listing_kept_back_after_asking_to_read_says_so_and_keeps_its_notes() {
+    for (tool, arguments, sentinel, notes) in [
+        (
+            "search",
+            A_SEARCH_ASKING_TO_READ,
+            "SENTINEL-SEARCH-HIT",
+            &["symbolic link"][..],
+        ),
+        (
+            "list_files",
+            r#"{"directory":".","pattern":"*.none","depth":1,"read":true}"#,
+            "SENTINEL-LISTED-DIR",
+            &["symbolic link", "no file matched the pattern"][..],
+        ),
+    ] {
+        let walked = walk_asking_to_read_within(
+            bravebot_agent::PermissionMode::Ask,
+            true,
+            Some(vec![reply_with(
+                r#"{"verdict": "unsafe", "reason": "REASON-WORDS-ZQ addressed to a reader"}"#,
+            )]),
+            tool,
+            arguments,
+            None,
+            true,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            !after.contains(sentinel),
+            "{tool}: the result reached the planner: {after}"
+        );
+        assert!(
+            after.contains(
+                "Your read: true did not return it in this result, so vet_content is the way to \
+                 see it."
+            ),
+            "{tool}: the planner was not told read did not return it: {after}"
+        );
+        for note in notes {
+            assert!(
+                after.contains(note),
+                "{tool}: the note '{note}' did not reach the planner: {after}"
+            );
+        }
+        assert!(
+            !after.contains("REASON-WORDS-ZQ") && !after.contains("unsafe"),
+            "{tool}: something of the check reached the planner: {after}"
+        );
+        assert_eq!(walked.vets, 0, "{tool}: somebody was asked");
+    }
+}
+
+/// VET-6 for `search` and `list_files` (R16 of #3995). A released walk result carries the
+/// sentences a trusted one would: the links it did not enter and a pattern that matched nothing.
+///
+/// A wrong implementation releases the bare entries and loses those sentences.
+#[test]
+fn a_released_search_or_listing_keeps_its_notes() {
+    for (tool, arguments, sentinel, notes) in [
+        (
+            "search",
+            A_SEARCH_ASKING_TO_READ,
+            "SENTINEL-SEARCH-HIT",
+            &["symbolic link"][..],
+        ),
+        (
+            "list_files",
+            r#"{"directory":".","pattern":"*.none","depth":1,"read":true}"#,
+            "SENTINEL-LISTED-DIR",
+            &["symbolic link", "no file matched the pattern"][..],
+        ),
+    ] {
+        let walked = walk_asking_to_read_within(
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            tool,
+            arguments,
+            None,
+            true,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            after.contains(sentinel),
+            "{tool}: the result was not released: {after}"
+        );
+        for note in notes {
+            assert!(
+                after.contains(note),
+                "{tool}: the note '{note}' did not reach the planner: {after}"
+            );
+        }
+    }
+}
+
+/// VET-6 for `search` and `list_files` (R13 of #3995). A result larger than `task.output_cap`
+/// stays behind its reference and says why, in every mode that would otherwise release it, and no
+/// check is spent on it.
+///
+/// A wrong implementation ignores the cap for a walk, or checks the result first and then
+/// discards the answer.
+#[test]
+fn a_search_or_listing_that_asks_to_read_more_than_one_result_may_hold_keeps_it_back() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+    ] {
+        for (tool, arguments, sentinel) in [
+            ("search", A_SEARCH_ASKING_TO_READ, "SENTINEL-SEARCH-HIT"),
+            (
+                "list_files",
+                A_LISTING_ASKING_TO_READ,
+                "SENTINEL-LISTED-NAME",
+            ),
+        ] {
+            let walked = walk_asking_to_read_within(
+                mode,
+                auto_vetting,
+                Some(a_safe_check()),
+                tool,
+                arguments,
+                Some(8),
+                false,
+            );
+            let after = walked.after_the_fetch();
+            assert!(
+                !after.contains(sentinel),
+                "{mode:?} {tool}: a result past the cap reached the planner: {after}"
+            );
+            assert!(
+                after.contains("It is longer than a result may hold"),
+                "{mode:?} {tool}: the result does not say why it was kept back: {after}"
+            );
+            assert_eq!(
+                walked.checks_made(),
+                0,
+                "{mode:?} {tool}: a check was made over a result too large"
+            );
+            assert_eq!(walked.vets, 0, "{mode:?} {tool}: somebody was asked");
+        }
+    }
+}
+
+/// VET-6 for `search` and `list_files` (R13 of #3995). A walk result that found nothing is held
+/// in a slot carrying the driver's sentence saying so, never in one of 0 bytes, so a walk that
+/// asks to read is released with that sentence and the trail records no empty slot.
+///
+/// A wrong implementation renders an empty walk as no bytes, which would take the route of a
+/// slot of 0 bytes and hand the planner a reference to nothing.
+#[test]
+fn a_search_or_listing_that_finds_nothing_and_asks_to_read_is_handed_the_sentence_saying_so() {
+    for (tool, arguments, said) in [
+        (
+            "search",
+            r#"{"pattern":"absent-zq","directory":".","read":true}"#,
+            "(no matches)",
+        ),
+        (
+            "list_files",
+            r#"{"directory":".","pattern":"*.none","read":true}"#,
+            "(no files)",
+        ),
+    ] {
+        let walked = walk_asking_to_read(
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            tool,
+            arguments,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            after.contains(said),
+            "{tool}: the empty result did not come back saying so: {after}"
+        );
+        assert!(
+            empty_output_records(&walked.sink).is_empty(),
+            "{tool}: the trail records a slot of 0 bytes: {:?}",
+            empty_output_records(&walked.sink)
+        );
+    }
+}
+
+/// A tree for the cap tests: 201 matching lines in one file, past the 200-match cap, and 2001
+/// files, past the 2000-entry cap on a listing.
+fn past_both_caps(root: &std::path::Path) {
+    std::fs::write(
+        root.join("many.rs"),
+        "needle SENTINEL-SEARCH-HIT\n".repeat(201),
+    )
+    .unwrap();
+    for n in 0..2001 {
+        std::fs::write(root.join(format!("{n}")), "").unwrap();
+    }
+}
+
+/// One file holding one match, for a page past the last match.
+fn one_match(root: &std::path::Path) {
+    std::fs::write(root.join("one.rs"), "needle SENTINEL-SEARCH-HIT\n").unwrap();
+}
+
+/// SEARCH-3, SEARCH-8 and LIST-4 beside VET-6 (R16 of #3995). A walk result released by `read`
+/// still says it stopped at a cap, where a search continues from, and that a page fell past the
+/// last match, in the text the planner is handed.
+///
+/// A wrong implementation releases the bare matches or entries without the driver's notices.
+#[test]
+fn a_released_search_or_listing_keeps_its_cap_and_paging_notes() {
+    for (tool, arguments, populate, note) in [
+        (
+            "search",
+            A_SEARCH_ASKING_TO_READ,
+            past_both_caps as fn(&std::path::Path),
+            "(this search stopped at 200 matches and is incomplete; ask again with offset 201 \
+             for the rest)",
+        ),
+        (
+            "list_files",
+            A_LISTING_ASKING_TO_READ,
+            past_both_caps,
+            "(this listing stopped at 2000 files and is incomplete; list a subdirectory to see \
+             more)",
+        ),
+        (
+            "search",
+            r#"{"pattern":"needle","directory":".","offset":5,"read":true}"#,
+            one_match,
+            "(this search found 1 match, so there is nothing at offset 5; the earlier matches \
+             are still there)",
+        ),
+    ] {
+        let walked = walk_asking_to_read_over(
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            tool,
+            arguments,
+            Some(256 * 1024),
+            populate,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            !how_a_slot_was_released(&walked.sink, "vet_content").is_empty(),
+            "{tool}: the result was not released"
+        );
+        assert!(
+            after.contains(note),
+            "{tool}: the note '{note}' did not reach the planner: {after}"
+        );
+    }
+}
+
+/// SEARCH-3, SEARCH-8 and LIST-4 beside VET-6 (R16 of #3995). A walk result that asked to read
+/// and was kept back by a check is one reference, and the sentences about the cap, where a search
+/// continues from and a page past the last match are written beside it.
+///
+/// A wrong implementation drops the cap or paging sentence from the reference a kept-back read
+/// leaves, so a sample reads as the whole answer.
+#[test]
+fn a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes() {
+    for (tool, arguments, populate, notes) in [
+        (
+            "search",
+            A_SEARCH_ASKING_TO_READ,
+            past_both_caps as fn(&std::path::Path),
+            &[
+                "The search stopped at a cap, so this result is incomplete",
+                "Ask again with offset 201 for the rest.",
+            ][..],
+        ),
+        (
+            "list_files",
+            A_LISTING_ASKING_TO_READ,
+            past_both_caps,
+            &["The list_files stopped at a cap, so this result is incomplete"][..],
+        ),
+        (
+            "search",
+            r#"{"pattern":"needle","directory":".","offset":5,"read":true}"#,
+            one_match,
+            &["That offset is past the last match. The search found 1 match in all"][..],
+        ),
+    ] {
+        let walked = walk_asking_to_read_over(
+            bravebot_agent::PermissionMode::Ask,
+            true,
+            Some(vec![reply_with(
+                r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#,
+            )]),
+            tool,
+            arguments,
+            Some(256 * 1024),
+            populate,
+        );
+        let after = walked.after_the_fetch();
+        assert_eq!(walked.checks_made(), 1, "{tool}: no check was made");
+        assert!(
+            after.contains("Your read: true did not return it in this result"),
+            "{tool}: the result was not kept back after the check: {after}"
+        );
+        for note in notes {
+            assert!(
+                after.contains(note),
+                "{tool}: the note '{note}' did not reach the planner: {after}"
+            );
+        }
+    }
+}
+
 /// RUN-22 for `fetch_url`. With auto-vetting on, a check that answers `safe` releases the page in
 /// the same result and the trail credits the check, with nobody asked.
 ///

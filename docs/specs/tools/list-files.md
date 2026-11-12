@@ -13,8 +13,10 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Listing what is in a directory. `directory`, `pattern` and `depth` are routing; there are no
-content arguments. The result is the paths, or one reference per entry when the planner may not
-see them.
+content arguments. `read` is the planner's request, as `fetch_url`'s is, for a quarantined listing
+to be released in the result that returned it ([VET-6](vet-content.md#VET-6)); it names no path and
+decides no label. The result is the paths, or one reference per entry when the planner may not see
+them, or one reference for the listing when the call asked to read and the release was not made.
 
 ## Clauses
 
@@ -24,6 +26,11 @@ see them.
 A listing is trusted only if every file it touched is, each asked about under every name it has, as
 a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). A file can be named to read like an
 instruction, so the names are treated as content and not shown to the planner.
+
+A call with `read: true` has an untrusted listing released in the same result where the mode or a
+check answers `vet_content`, with the label and trail entry a `vet_content` call on it would give
+([VET-6](vet-content.md#VET-6)). The names then reach the planner as a trusted listing's do, with
+the same sentences about a cap, a pattern, a directory that could not be opened and links.
 
 **The same bytes come back from a language server, and [LSP-3](lsp.md#LSP-3) treats them the same
 way.** An answer naming a file nobody vouched for is quarantined whole, because a location is a name
@@ -35,11 +42,21 @@ would have typed a path, carries no position.
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
 `verified-by: bravebot_agent::workspace::a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted`
 `verified-by: bravebot_agent::workspace::a_listing_of_a_hard_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result`
 
 <a id="LIST-2"></a>
 ### LIST-2: a quarantined listing returns one reference per entry, not one for the listing
 
 The planner passes the reference where it would have typed a path, and is never told a filename.
+
+One case returns a single reference instead. A call with `read: true`, where the mode or a check
+answers `vet_content`, has the listing held as one slot, as the planner would read it, so that one
+release covers it ([VET-6](vet-content.md#VET-6)). Where that release is not made (a check that does
+not say `safe`, a slot past the output cap) the planner is given that one reference, with the cap,
+link and pattern sentences beside it. Where a person answers `vet_content`, `read` changes nothing
+and the listing comes back one reference per entry. Which shape a listing takes is decided by the
+planner's argument, the mode, the auto-vetting setting and whether `vet_content` is offered, never by
+what the listing holds.
 
 That covers what a call says about itself as well as what it returns. A tool asked to act on a
 reference reports its result, its refusal and its failure about the reference, never about the file
@@ -112,6 +129,8 @@ until a read works.
 `verified-by: bravebot_agent::tools::a_read_by_reference_to_a_removed_file_does_not_name_the_file`
 `verified-by: bravebot_agent::workspace::a_listing_leaves_out_a_directory_it_cannot_open_and_says_so`
 `verified-by: bravebot_agent::tools::a_listing_that_cannot_open_a_directory_does_not_name_it`
+`verified-by: bravebot_agent::turn::asking_to_read_a_search_or_listing_changes_nothing_where_a_person_answers_for_it`
+`verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_says_so_and_keeps_its_notes`
 
 <a id="LIST-3"></a>
 ### LIST-3: the glob is literal and the matcher does not backtrack
@@ -171,6 +190,8 @@ too.
 `verified-by: bravebot_agent::workspace::a_listing_within_the_cap_reports_no_truncation`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_it_was_capped`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_cap_and_paging_notes`
+`verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes`
 
 <a id="LIST-5"></a>
 ### LIST-5: a listing walks the whole tree unless it is given a depth, and says where it stopped

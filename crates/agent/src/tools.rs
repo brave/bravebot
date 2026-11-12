@@ -2986,16 +2986,34 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         }
         "load_tool" if loads_a_tool => load_tool(policy, tools.mcp, &arguments),
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
-        "list_files" => match ahead
-            .take()
-            .filter(|read| read.reading == Reading::ListFiles)
-        {
-            Some(read) => read.rejoin(policy),
-            None => list_files(policy, tools.workspace, &arguments),
+        // `read` asks for vet_content's release in the result, so it is checked to be a boolean
+        // and carried, as fetch_url's is, and a delegate's is ignored as fetch_url's would be
+        // were it offered one (VET-6).
+        "list_files" => match read_asked_of(&arguments) {
+            Ok(read_asked) => {
+                let mut produced = match ahead
+                    .take()
+                    .filter(|read| read.reading == Reading::ListFiles)
+                {
+                    Some(read) => read.rejoin(policy),
+                    None => list_files(policy, tools.workspace, &arguments),
+                };
+                produced.read_asked = read_asked && !tools.delegated;
+                produced
+            }
+            Err(refusal) => *refusal,
         },
-        "search" => match ahead.take().filter(|read| read.reading == Reading::Search) {
-            Some(read) => read.rejoin(policy),
-            None => search(policy, tools.workspace, &arguments),
+        "search" => match read_asked_of(&arguments) {
+            Ok(read_asked) => {
+                let mut produced = match ahead.take().filter(|read| read.reading == Reading::Search)
+                {
+                    Some(read) => read.rejoin(policy),
+                    None => search(policy, tools.workspace, &arguments),
+                };
+                produced.read_asked = read_asked && !tools.delegated;
+                produced
+            }
+            Err(refusal) => *refusal,
         },
         "read_git" => read_git(policy, tools, confirmer, &arguments),
         "repo_map" => repo_map(policy, tools.workspace, &arguments),
@@ -5445,7 +5463,16 @@ fn list_files<S: Sink>(
                     paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
                     paths
                 });
-                return Produced::new(Labelled::trusted(String::new()), proposed_dir.clone(), note)
+                // A call that asked to read gets the listing as one document too, under the
+                // listing's label, for the turn to release in this result where the mode or a
+                // check answers vet_content (VET-6). The planner's argument decides, and the turn
+                // hands the planner the entries instead wherever the release is not made.
+                let text = if read_asked_of(arguments).unwrap_or(false) {
+                    render_listing(policy, &listing, had_pattern, &unmatched_note)
+                } else {
+                    Labelled::trusted(String::new())
+                };
+                return Produced::new(text, proposed_dir.clone(), note)
                     .of_content()
                     .capped(incomplete)
                     .linked(links)
@@ -5460,92 +5487,7 @@ fn list_files<S: Sink>(
                     });
             }
 
-            let rendered = policy.render_in_place("list_files", &listing, |listing| {
-                // Before the directories are folded in among the files below: a pattern selects
-                // files, and a bounded walk lists its directories whatever the pattern says.
-                let selected_no_file = listing.files.is_empty();
-                let mut entries: Vec<String> = listing.files.clone();
-                entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
-                // A directory the per-directory cap cut, with how many of its files are not shown,
-                // so the planner knows to list it by name for the rest (LIST-5).
-                entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
-                    format!(
-                        "{name}/ ({} not listed)",
-                        tally(*left_out, "more file", "more files")
-                    )
-                }));
-                entries.sort();
-                let cut_per_directory = !listing.partly_listed.is_empty();
-                let listing = Listing {
-                    files: entries,
-                    directories: Vec::new(),
-                    truncated: listing.truncated,
-                    at_the_cap: listing.at_the_cap,
-                    unreadable: listing.unreadable,
-                    links: listing.links,
-                    partly_listed: Vec::new(),
-                };
-                let mut body = if listing.files.is_empty() && listing.links > 0 {
-                    // An empty listing beside links is not an empty directory: a skills
-                    // directory made only of links read as one, and the model went looking
-                    // elsewhere for files that were one step away.
-                    format!(
-                        "(no files; {} not entered, so this does not say the directory is \
-                         empty)",
-                        tally(listing.links, "symbolic link was", "symbolic links were")
-                    )
-                } else if listing.files.is_empty() {
-                    "(no files)".to_string()
-                } else if listing.truncated {
-                    // Said plainly, because a model given a silently capped listing will treat
-                    // it as the whole tree and conclude a file does not exist. Each cap that left
-                    // files out has its own sentence, as `listing_capped_note` does for a
-                    // quarantined listing: "stopped at N files" misstates a per-directory cut,
-                    // and the per-directory sentence alone hides that the walk stopped as well.
-                    let mut body = listing.files.join("\n");
-                    if listing.at_the_cap || !cut_per_directory {
-                        body.push_str(&format!(
-                            "\n\n(this listing stopped at {} files and is incomplete; \
-                             list a subdirectory to see more)",
-                            listing.files.len()
-                        ));
-                    }
-                    if cut_per_directory {
-                        // A listing of that directory with a depth is cut the same way, so the
-                        // rest is reached with none.
-                        body.push_str(&format!(
-                            "\n\n(this listing took at most {} files from any one directory and \
-                             is incomplete; to see the rest of a directory marked \"not \
-                             listed\", list that directory by its name with no depth)",
-                            crate::workspace::MAX_FILES_PER_DIRECTORY
-                        ));
-                    }
-                    body
-                } else {
-                    listing.files.join("\n")
-                };
-                if had_pattern && selected_no_file {
-                    body.push_str(&format!("\n\n{unmatched_note}"));
-                }
-                if listing.unreadable {
-                    // Said without a name: the directory's own name is a filename out of the
-                    // tree, and this sentence is the driver's to word (LIST-2).
-                    body.push_str(
-                        "\n\n(part of this tree could not be read and is not in this \
-                         listing, so it says nothing about what is there)",
-                    );
-                }
-                if listing.links > 0 && !listing.files.is_empty() {
-                    // A number and no names, like the sentence above: a link's name is a
-                    // filename out of the tree (LIST-2).
-                    body.push_str(&format!(
-                        "\n\n({} not entered and {} not in this listing)",
-                        tally(listing.links, "symbolic link was", "symbolic links were"),
-                        if listing.links == 1 { "is" } else { "are" }
-                    ));
-                }
-                body
-            });
+            let rendered = render_listing(policy, &listing, had_pattern, &unmatched_note);
             // The entries alone: "(no files)" and the notices after a listing are the driver's
             // words and are not glimpsed (VIEW-24).
             let glimpsed = policy.render_in_place("list_files", &listing, |listing| {
@@ -5571,6 +5513,103 @@ fn list_files<S: Sink>(
         // Worded about the name typed. The error carries where it landed, which a link can choose.
         Err(e) => file_tool_problem(policy, "list_files", "directory", &e, &proposed_dir),
     }
+}
+
+/// A listing as the planner reads it where it may: one entry a line, a directory with a trailing
+/// slash, and the driver's sentences about a cap, a pattern that matched nothing, a directory that
+/// could not be opened and links not entered. Rendered inside the kernel under the listing's label.
+fn render_listing<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    listing: &Labelled<Listing>,
+    had_pattern: bool,
+    unmatched_note: &str,
+) -> Labelled<String> {
+    policy.render_in_place("list_files", listing, |listing| {
+        // Before the directories are folded in among the files below: a pattern selects
+        // files, and a bounded walk lists its directories whatever the pattern says.
+        let selected_no_file = listing.files.is_empty();
+        let mut entries: Vec<String> = listing.files.clone();
+        entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+        // A directory the per-directory cap cut, with how many of its files are not shown,
+        // so the planner knows to list it by name for the rest (LIST-5).
+        entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
+            format!(
+                "{name}/ ({} not listed)",
+                tally(*left_out, "more file", "more files")
+            )
+        }));
+        entries.sort();
+        let cut_per_directory = !listing.partly_listed.is_empty();
+        let listing = Listing {
+            files: entries,
+            directories: Vec::new(),
+            truncated: listing.truncated,
+            at_the_cap: listing.at_the_cap,
+            unreadable: listing.unreadable,
+            links: listing.links,
+            partly_listed: Vec::new(),
+        };
+        let mut body = if listing.files.is_empty() && listing.links > 0 {
+            // An empty listing beside links is not an empty directory: a skills
+            // directory made only of links read as one, and the model went looking
+            // elsewhere for files that were one step away.
+            format!(
+                "(no files; {} not entered, so this does not say the directory is \
+                         empty)",
+                tally(listing.links, "symbolic link was", "symbolic links were")
+            )
+        } else if listing.files.is_empty() {
+            "(no files)".to_string()
+        } else if listing.truncated {
+            // Said plainly, because a model given a silently capped listing will treat
+            // it as the whole tree and conclude a file does not exist. Each cap that left
+            // files out has its own sentence, as `listing_capped_note` does for a
+            // quarantined listing: "stopped at N files" misstates a per-directory cut,
+            // and the per-directory sentence alone hides that the walk stopped as well.
+            let mut body = listing.files.join("\n");
+            if listing.at_the_cap || !cut_per_directory {
+                body.push_str(&format!(
+                    "\n\n(this listing stopped at {} files and is incomplete; \
+                     list a subdirectory to see more)",
+                    listing.files.len()
+                ));
+            }
+            if cut_per_directory {
+                // A listing of that directory with a depth is cut the same way, so the
+                // rest is reached with none.
+                body.push_str(&format!(
+                    "\n\n(this listing took at most {} files from any one directory and \
+                     is incomplete; to see the rest of a directory marked \"not \
+                     listed\", list that directory by its name with no depth)",
+                    crate::workspace::MAX_FILES_PER_DIRECTORY
+                ));
+            }
+            body
+        } else {
+            listing.files.join("\n")
+        };
+        if had_pattern && selected_no_file {
+            body.push_str(&format!("\n\n{unmatched_note}"));
+        }
+        if listing.unreadable {
+            // Said without a name: the directory's own name is a filename out of the
+            // tree, and this sentence is the driver's to word (LIST-2).
+            body.push_str(
+                "\n\n(part of this tree could not be read and is not in this \
+                         listing, so it says nothing about what is there)",
+            );
+        }
+        if listing.links > 0 && !listing.files.is_empty() {
+            // A number and no names, like the sentence above: a link's name is a
+            // filename out of the tree (LIST-2).
+            body.push_str(&format!(
+                "\n\n({} not entered and {} not in this listing)",
+                tally(listing.links, "symbolic link was", "symbolic links were"),
+                if listing.links == 1 { "is" } else { "are" }
+            ));
+        }
+        body
+    })
 }
 
 /// `repo_map`: the declarations of the source files beneath a directory that the trust map
@@ -17841,6 +17880,78 @@ mod tests {
                 !words.iter().any(|word| word == forbidden),
                 "the fetch_url text names '{forbidden}': {mentioned}"
             );
+        }
+    }
+
+    /// VET-6 and TOOL-6 for `search` and `list_files` (R12, R17 of #3995). `read` is offered only
+    /// on a list that holds `vet_content`, the other arguments stay where it is removed, nothing
+    /// on a list without it names `vet_content`, and the text names `vet_content` and neither the
+    /// mode nor the check (VET-5).
+    ///
+    /// A wrong implementation offers `read` to a delegate, removes the routing arguments with it,
+    /// or says in the shared text that a check reads the result.
+    #[test]
+    fn search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word() {
+        for (tool, kept) in [("search", "pattern"), ("list_files", "directory")] {
+            let properties_of = |offered: &[bravebot_aichat::protocol::Tool]| {
+                offered
+                    .iter()
+                    .find(|offered| offered.function.name == tool)
+                    .expect("the tool is offered")
+                    .function
+                    .parameters["properties"]
+                    .clone()
+            };
+            let with = the_table_without(&[]);
+            let properties = properties_of(&with);
+            assert_eq!(
+                properties["read"]["type"], "boolean",
+                "{tool}: a list holding vet_content was not offered read"
+            );
+            let without = the_table_without(&["vet_content"]);
+            let left = properties_of(&without);
+            assert!(
+                left.get("read").is_none(),
+                "{tool}: read was offered on a list with no vet_content: {left}"
+            );
+            assert!(
+                left.get(kept).is_some() && left.get("why").is_some(),
+                "{tool}: the other arguments were lost with read: {left}"
+            );
+            assert!(
+                !names_the_tool(&description_of(&without, tool), "vet_content")
+                    && !names_the_tool(&left.to_string(), "vet_content"),
+                "{tool}: a list without vet_content was pointed at it"
+            );
+            let read = properties["read"]["description"].as_str().unwrap_or("");
+            assert!(
+                names_the_tool(read, "vet_content"),
+                "{tool}: read does not say which tool it asks the release of: {read}"
+            );
+            let words: Vec<String> = read
+                .to_ascii_lowercase()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .map(str::to_string)
+                .collect();
+            for forbidden in [
+                "bypass",
+                "bypassed",
+                "auto-vetting",
+                "screening",
+                "permissions",
+                "check",
+                "checked",
+                "safe",
+                "unsafe",
+                "verdict",
+                "classifier",
+                "injection",
+            ] {
+                assert!(
+                    !words.iter().any(|word| word == forbidden),
+                    "{tool}: read names '{forbidden}': {read}"
+                );
+            }
         }
     }
 
