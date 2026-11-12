@@ -99,6 +99,28 @@ class Clean(unittest.TestCase):
         self.assertIn("Deleted 1 branch(es).", out)
         self.assertIn("Removed 1 linked worktree(s).", out)
 
+    def test_deletes_a_squash_merged_branch_that_tracks_the_default_branch(self):
+        git("branch", "--track", "squashed", "origin/main", cwd=self.clone)
+        git("checkout", "-q", "squashed", cwd=self.clone)
+        git("commit", "-q", "--allow-empty", "-m", "squashed", cwd=self.clone)
+        git("checkout", "-q", "main", cwd=self.clone)
+        self.merged("squashed", git("rev-parse", "squashed", cwd=self.clone))
+        out = self.run_script()
+        self.assertNotIn("squashed", self.branches(), out)
+
+    def test_keeps_a_branch_ahead_of_its_own_upstream(self):
+        self.branch("ahead", merged=False)
+        git("push", "-q", "-u", "origin", "ahead", cwd=self.clone)
+        self.merged("ahead", git("rev-parse", "ahead", cwd=self.clone))
+        git("checkout", "-q", "ahead", cwd=self.clone)
+        git("commit", "-q", "--allow-empty", "-m", "unpushed", cwd=self.clone)
+        git("checkout", "-q", "main", cwd=self.clone)
+        # The PR head moves to the unpushed commit so only the upstream check can keep the branch.
+        self.merged("ahead", git("rev-parse", "ahead", cwd=self.clone))
+        out = self.run_script()
+        self.assertIn("ahead", self.branches())
+        self.assertIn("1 unpushed tracked commit", out)
+
     def test_dry_run_deletes_nothing(self):
         path = self.branch("done", worktree=True)
         out = self.run_script("--dry-run")

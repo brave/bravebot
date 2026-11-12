@@ -331,7 +331,9 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             upstream = get_tracking_branch(repo, branch)
-            if upstream is not None:
+            # A squash merge leaves a branch tracking the default branch ahead of it, and the
+            # merged-head check above already holds every one of those commits.
+            if upstream is not None and upstream != f"origin/{default_branch}":
                 unpushed_result = branch_has_unpushed_commits(repo, branch, upstream)
                 if unpushed_result is None:
                     skipped.append((branch, f"{format_pr(pr)}: could not compare branch against upstream {upstream}"))
