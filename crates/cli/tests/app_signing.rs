@@ -59,7 +59,6 @@ for path in "$@"; do
 done
 "#;
 
-/// Copies a tree.
 const FAKE_DITTO: &str = r#"#!/bin/sh
 TOOL=ditto
 cp -R "$1" "$2"
