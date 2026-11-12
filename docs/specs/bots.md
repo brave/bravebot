@@ -895,8 +895,8 @@ list later if the list looks too packed.
   run in without a `/cd`.** A continued conversation there takes its map from its record, as any
   resume does ([BOT-9](#BOT-9), [KEPT-001](../best-practices/carried-grants.md#KEPT-001)).
 - **The GUI's rewind confirmation says a bot's memory is not rolled back, and the restore it
-  calls puts the memory file back.** The text in `ui/src/renderer/components/Rewind.tsx` dates from
-  when a bot's memory was a file the app owned. This design does not change it.
+  calls puts the memory file back.** A person who reads the confirmation expects the memory to stay
+  as it is, and the restore puts an earlier text back ([BOT-14](#BOT-14)).
 - **A bot cannot run in a folder that holds the home directory, or with the home directory opened
   beside the session, and the refusal does not say why.** The agent leaves its definition unread
   there ([SKILL-3](skills.md#SKILL-3)), and trusting the folder does not change that. In the home
