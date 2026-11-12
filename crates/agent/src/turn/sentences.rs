@@ -4,7 +4,7 @@
 //! short, how a command was run, and the size of what it printed. None reads the content that was
 //! quarantined, which is why they can live apart from the presentation of it in `one_turn`.
 
-use super::{ReadOutputIs, STOP_BEING_ASKED};
+use super::{NOT_SHOWN_THIS_TURN, ReadOutputIs, STOP_BEING_ASKED};
 use crate::tools::{Beside, Named};
 use crate::workspace::Paging;
 
@@ -39,6 +39,50 @@ pub(super) fn capped_note(tool: &str, incomplete: bool, paging: Option<Paging>) 
     } else {
         String::new()
     }
+}
+
+/// What a quarantined listing says about a cap, beside its references for the reason `capped_note`
+/// is. `at_the_cap` is whether the listing holds as many entries as the cap over the whole walk
+/// allows, and `cut` is each directory the per-directory cap cut, as its reference and how many of
+/// its files were left out (LIST-5). References and numbers, never a name.
+pub(super) fn listing_capped_note(
+    incomplete: bool,
+    at_the_cap: bool,
+    cut: &[(String, usize)],
+) -> String {
+    if !incomplete {
+        return String::new();
+    }
+    let mut said = String::new();
+    if cut.is_empty() || at_the_cap {
+        said.push_str(
+            " The listing stopped at that many entries and is incomplete: list a subdirectory to \
+             see the rest.",
+        );
+    }
+    if !cut.is_empty() {
+        let each: Vec<String> = cut
+            .iter()
+            .map(|(reference, left_out)| {
+                format!(
+                    "{} of [{reference}]",
+                    crate::tools::tally(*left_out, "file", "files")
+                )
+            })
+            .collect();
+        said.push_str(&format!(
+            " The listing took at most {} files from any one directory and is incomplete. Not \
+             listed: {}. Each of those references is a directory the walk entered and cut, not \
+             one it stopped at, and the files left out are in it. No argument takes a reference \
+             to a directory, so to see the rest of one, list it by its name with no depth if you \
+             know the name; otherwise list the directory you named with no depth, which walks the \
+             whole tree up to {} entries.",
+            crate::workspace::MAX_FILES_PER_DIRECTORY,
+            each.join(", "),
+            crate::workspace::MAX_ENTRIES
+        ));
+    }
+    said
 }
 
 /// What a result says about the symbolic links its walk did not enter, written beside the reference
@@ -135,21 +179,30 @@ pub(super) fn left_out_note(left_out: usize) -> String {
 ///
 /// A turn whose list lacks `read_output` has nothing to be pointed at, and none of the sentences
 /// that name it, or that lean on a release it makes, is said to it (TOOL-6). What is left is the
-/// statement that the quarantine is about the command, the vouching sentence where it applies,
-/// which names no tool, `spawn_processor` as the way to work with the output where the list holds
-/// it, and `read_file` where the list holds it. The same holds for `read_file`:
-/// its sentence is said only to a list that holds it.
+/// statement that the quarantine is about the command, the vouching sentence where a person is
+/// asked about runs and no record stops the asking, which names no tool, `spawn_processor` as the
+/// way to work with the output where the list holds it, and `read_file` where the list holds it.
+/// The same holds for `read_file`: its sentence is said only to a list that holds it.
 ///
-/// `printed_by` is whether a command produced the result, `bytes` is the size of what it printed
-/// where that is known, `cap` is the largest result a run may hold, and `beside` is which of the
-/// tools named here the turn's list holds.
+/// That list is told `read_output_is` as `Asked` whatever the mode, so the vouching sentence there
+/// is decided by `runs_asked` instead: where the mode answers runs, no prompt is drawn and a run
+/// it approved vouches for nothing (MODE-4), so the sentence is left out as the other arms leave
+/// it out, and the result says that what was printed cannot be shown in this turn, in words that
+/// name no mode (MODE-3).
+///
+/// `printed_by` is whether a command produced the result, `runs_asked` is whether a person is
+/// asked about a run in the mode as it stands, `bytes` is the size of what it printed where that
+/// is known, `cap` is the largest result a run may hold, and `beside` is which of the tools named
+/// here the turn's list holds.
 #[expect(
     clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
     reason = "the facts of the result, the mode's answer and the list's tools are separate inputs"
 )]
 pub(super) fn run_advice(
     printed_by: bool,
     covered_by_record: bool,
+    runs_asked: bool,
     read_output_is: ReadOutputIs,
     beside: Beside,
     tool: &str,
@@ -174,11 +227,10 @@ pub(super) fn run_advice(
         // Whatever the mode says, a list without `read_output` has no release for a `read` to make
         // early and nothing to call for a look at the output.
         (true, _, _) if !beside.holds(Named::ReadOutput) => {
-            let vouching = if covered_by_record {
-                String::new()
-            } else {
-                format!(" {STOP_BEING_ASKED}")
-            };
+            // That list is told `Asked` whatever the mode, so `read_output_is` adds nothing here.
+            let vouching = vouching(runs_asked, ReadOutputIs::Asked, beside, covered_by_record)
+                .map(|sentence| format!(" {sentence}"))
+                .unwrap_or_default();
             let processor = if beside.holds(Named::SpawnProcessor) {
                 " To work with what it printed, give the reference to spawn_processor."
             } else {
@@ -253,6 +305,26 @@ pub(super) fn run_advice(
     }
 }
 
+/// The sentence a quarantined run's or job's result says about vouching, or `None`.
+///
+/// Where a person is asked about runs and about reading what they printed, and no record already
+/// stops the asking for this line, it says how to stop being asked. Where the mode answers runs and
+/// the list lacks `read_output`, no prompt is drawn and no vouch stops it, so it says the output
+/// cannot be shown in this turn, naming no mode (MODE-3, MODE-4). Elsewhere it says nothing.
+/// `run_advice` and the account of a finished job both take it from here.
+pub(super) fn vouching(
+    runs_asked: bool,
+    read_output_is: ReadOutputIs,
+    beside: Beside,
+    covered_by_record: bool,
+) -> Option<&'static str> {
+    match (runs_asked, read_output_is, covered_by_record) {
+        (false, _, _) if !beside.holds(Named::ReadOutput) => Some(NOT_SHOWN_THIS_TURN),
+        (true, ReadOutputIs::Asked, false) => Some(STOP_BEING_ASKED),
+        _ => None,
+    }
+}
+
 /// What a result says when `read: true` was asked of `fetch_url` or a server's tool and the
 /// content still came back as a reference.
 ///
@@ -316,6 +388,7 @@ mod tests {
         run_advice(
             printed_by,
             covered_by_record,
+            true,
             read_output_is,
             Beside::every(),
             tool,
@@ -361,6 +434,36 @@ mod tests {
         assert!(
             capped_note("search", true, Some(Paging::PastTheEnd { found: 3 }))
                 .contains("stopped at a cap")
+        );
+    }
+
+    /// LIST-5: a quarantined listing cut per directory names each cut directory's reference with
+    /// how many of its files were left out. The regressions it rejects: the whole-walk wording
+    /// ("stopped at that many entries") for a listing that stopped at no such cap, a count dropped
+    /// or paired with the wrong reference, and the sentence said for a complete listing.
+    #[test]
+    fn a_listing_cut_per_directory_names_each_reference_with_what_it_left_out() {
+        let cut = [("ref:7".to_string(), 1_801), ("ref:8".to_string(), 1)];
+        let said = listing_capped_note(true, false, &cut);
+        assert_eq!(
+            said,
+            " The listing took at most 200 files from any one directory and is incomplete. Not \
+             listed: 1801 files of [ref:7], 1 file of [ref:8]. Each of those references is a \
+             directory the walk entered and cut, not one it stopped at, and the files left out \
+             are in it. No argument takes a reference to a directory, so to see the rest of one, \
+             list it by its name with no depth if you know the name; otherwise list the directory \
+             you named with no depth, which walks the whole tree up to 2000 entries."
+        );
+        assert_eq!(listing_capped_note(false, false, &[]), "");
+        assert_eq!(
+            listing_capped_note(true, false, &[]),
+            " The listing stopped at that many entries and is incomplete: list a subdirectory to \
+             see the rest."
+        );
+        let both = listing_capped_note(true, true, &cut);
+        assert!(
+            both.contains("stopped at that many entries") && both.contains("1 file of [ref:8]"),
+            "a listing cut both ways did not say both: {both}"
         );
     }
 
@@ -585,6 +688,7 @@ mod tests {
         let text = run_advice(
             true,
             true,
+            true,
             ReadOutputIs::Asked,
             without(&["run"]),
             "job_output",
@@ -688,7 +792,17 @@ mod tests {
                 (true, "run", true, Some(11)),
                 (false, "job_output", false, None),
             ] {
-                let text = run_advice(true, record, is, Beside::every(), tool, asked, bytes, 10);
+                let text = run_advice(
+                    true,
+                    record,
+                    true,
+                    is,
+                    Beside::every(),
+                    tool,
+                    asked,
+                    bytes,
+                    10,
+                );
                 assert!(text.starts_with(ABOUT), "{is:?}: {text}");
                 assert!(text.ends_with(" To read a file, use read_file."), "{text}");
             }
@@ -715,6 +829,7 @@ mod tests {
                 let text = run_advice(
                     true,
                     record,
+                    true,
                     is,
                     without(&["read_output"]),
                     tool,
@@ -744,6 +859,7 @@ mod tests {
             run_advice(
                 true,
                 false,
+                true,
                 ReadOutputIs::Asked,
                 beside,
                 "run",
@@ -757,6 +873,7 @@ mod tests {
             run_advice(
                 true,
                 true,
+                true,
                 ReadOutputIs::Asked,
                 beside,
                 "run",
@@ -768,11 +885,56 @@ mod tests {
         );
     }
 
+    /// The fault (brave/bravebot#3982): a list without `read_output`, where the mode answers runs,
+    /// is told a vouch would stop the asking, though nobody is asked and a run the mode approved
+    /// vouches for nothing. That list is told `Asked` as who answers a read whatever the mode, so
+    /// every record state and both tools are checked with it, and the sentence that takes its place
+    /// names no mode.
+    #[test]
+    fn a_list_without_read_output_is_not_told_of_vouching_where_the_mode_answers_runs() {
+        let beside = without(&["read_output", "spawn_processor"]);
+        for record in [false, true] {
+            for tool in ["run", "job_output"] {
+                assert_eq!(
+                    run_advice(
+                        true,
+                        record,
+                        false,
+                        ReadOutputIs::Asked,
+                        beside,
+                        tool,
+                        false,
+                        None,
+                        10
+                    ),
+                    "\n\nThis is about the command rather than about what it printed. What it printed cannot be shown to you in this turn. To read a file, use read_file.",
+                    "{tool}, record {record}"
+                );
+            }
+        }
+        let with_processor = run_advice(
+            true,
+            false,
+            false,
+            ReadOutputIs::Asked,
+            without(&["read_output", "read_file"]),
+            "run",
+            true,
+            Some(1),
+            10,
+        );
+        assert_eq!(
+            with_processor,
+            "\n\nThis is about the command rather than about what it printed. What it printed cannot be shown to you in this turn. To work with what it printed, give the reference to spawn_processor."
+        );
+    }
+
     /// The fault: a list without `read_output` is left with no way forward even where it holds
     /// `spawn_processor`, or is pointed at `spawn_processor` where it lacks it.
     #[test]
     fn a_list_without_read_output_is_pointed_at_spawn_processor_only_where_it_holds_it() {
         let with = run_advice(
+            true,
             true,
             true,
             ReadOutputIs::Asked,
@@ -787,6 +949,7 @@ mod tests {
             "\n\nThis is about the command rather than about what it printed. To work with what it printed, give the reference to spawn_processor."
         );
         let without_it = run_advice(
+            true,
             true,
             true,
             ReadOutputIs::Asked,
@@ -808,7 +971,7 @@ mod tests {
             ReadOutputIs::ByACheck,
             ReadOutputIs::Asked,
         ] {
-            let text = run_advice(true, true, is, beside, "run", false, Some(1), 10);
+            let text = run_advice(true, true, true, is, beside, "run", false, Some(1), 10);
             assert!(!text.contains("read_file"), "{is:?}: {text}");
             assert!(
                 text.contains("call read_output with the reference"),
@@ -817,6 +980,7 @@ mod tests {
         }
         assert_eq!(
             run_advice(
+                true,
                 true,
                 true,
                 ReadOutputIs::Asked,
@@ -831,6 +995,7 @@ mod tests {
         let neither = without(&["read_output", "read_file", "spawn_processor"]);
         assert_eq!(
             run_advice(
+                true,
                 true,
                 true,
                 ReadOutputIs::Asked,
@@ -858,6 +1023,7 @@ mod tests {
             run_advice(
                 false,
                 false,
+                true,
                 ReadOutputIs::Asked,
                 without(&["read_output", "read_file"]),
                 "read_file",

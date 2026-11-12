@@ -68,7 +68,10 @@ sits on the same footing as the fields beside it. A routing argument naming a **
 than a path is bound to the context the planner named it in, so a turn whose context has met
 untrusted content can name no reference at all.
 
-An unknown tool is reported to the planner rather than ignored.
+An unknown tool is reported to the planner rather than ignored. So is an argument a built-in tool
+does not take: the call is refused before it runs, and nobody is asked about it. The refusal names
+the argument and lists the ones the tool takes. For [`run`](#run) it also says that a variable is
+set by writing `NAME=value` in front of the program. A server's tool is sent its arguments as given.
 
 When the planner asks for several calls in one reply, they run in the order it asked, except that two
 or more consecutive [`list_files`](#list_files) and [`search`](#search) calls are read at the same
@@ -216,7 +219,10 @@ references. To see what is behind a link, list the directory it points to by its
 The glob is literal and the matcher does not backtrack. Matching is case-sensitive, and a brace
 group such as `{r,R}eadme*` covers both cases. A call with a `pattern` whose result holds no file
 says so, and names a character class, an extended glob or a leading `!` as syntax the matcher does
-not have. A truncated listing says it was truncated.
+not have. A truncated listing says it was truncated. A listing given a `depth` takes at most 200
+files from any one directory and names a directory it cut with how many of its files it left out;
+where the names are quarantined, that count comes beside the directory's reference. Listing it with
+no depth shows the rest, up to the cap of 2,000 entries.
 
 ## `repo_map`
 
@@ -516,6 +522,9 @@ decision may be taken only from trusted content. A file that is not vouched for,
 content was written to, is refused with a sentence saying the file is closed to `edit_file`. The
 sentence names the routes that are open: the whole file with `write_file`, an edit through `run`, or
 your vouching for the path. It names `write_file` and `run` only when the session offers them.
+Where a `read_file` of the file would ask you to vouch for it, the sentence names that read and then
+`edit_file`. In bypass mode the read is vouched for without asking anybody, so the sentence names
+the read and does not send the agent to you.
 
 ### Notebook cells
 

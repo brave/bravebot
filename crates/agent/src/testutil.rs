@@ -58,6 +58,10 @@ pub(crate) mod repository;
 #[path = "../test-support/chatgpt_host.rs"]
 mod chatgpt_host;
 
+/// A temporary directory in no repository, shared with the terminal's tests.
+#[path = "../test-support/no_repository.rs"]
+pub(crate) mod no_repository;
+
 /// What a stage puts at the name of a directory once it has moved the directory.
 #[cfg(unix)]
 pub(crate) type PutThere<'a> = Box<dyn Fn(&Path) + 'a>;

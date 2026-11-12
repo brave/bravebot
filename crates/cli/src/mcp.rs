@@ -1816,33 +1816,20 @@ pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
     })
 }
 
+/// A temporary directory in no repository, shared with the agent crate's tests.
+#[cfg(test)]
+#[path = "../../agent/test-support/no_repository.rs"]
+mod no_repository;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A new directory under the system temporary directory, which no repository holds, for a test
-    /// to declare a server's directory in. The scratch directory under `target/` is inside this
-    /// checkout.
-    fn outside_any_repository(name: &str) -> PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or_default();
-        // Named for this process and moment, and made with create_dir so a name another run holds
-        // is refused rather than shared.
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let temporary = std::env::temp_dir();
-        let path = temporary.join(format!("bravebot-{name}-{}-{stamp}", std::process::id()));
-        std::fs::create_dir(&path).expect("a directory of its own under the temporary directory");
-        let path = path
-            .canonicalize()
-            .expect("the directory just made resolves");
-        assert_eq!(
-            bravebot_agent::servers::repository_holding(&path),
-            None,
-            "the temporary directory is inside a repository"
-        );
-        path
+    /// A new directory under a temporary directory no repository holds, for a test to declare a
+    /// server's directory in. The scratch directory under `target/` is inside this checkout. `None`
+    /// where no temporary directory of the host's is outside a repository.
+    fn outside_any_repository(name: &str) -> Option<PathBuf> {
+        no_repository::outside_any_repository(name, bravebot_agent::servers::repository_holding)
     }
 
     fn approved(directory: &Path, declaration: &Declaration) -> bool {
@@ -1937,8 +1924,12 @@ mod tests {
             eprintln!("SKIPPED (no confinement here)");
             return;
         };
-        let directory = outside_any_repository("get-policy");
-        let work = outside_any_repository("get-policy-work");
+        let Some(directory) = outside_any_repository("get-policy") else {
+            return;
+        };
+        let Some(work) = outside_any_repository("get-policy-work") else {
+            return;
+        };
         let work_text = work.display().to_string();
         let (outcome, _) = typing(
             &directory,
@@ -2606,7 +2597,9 @@ mod tests {
     /// spells it, with the flags before it read the same and every word after it the server's.
     #[test]
     fn a_bare_double_dash_declares_the_program_after_it() {
-        let directory = outside_any_repository("cli-mcp-bare-dashes");
+        let Some(directory) = outside_any_repository("cli-mcp-bare-dashes") else {
+            return;
+        };
         let place = directory.to_str().unwrap();
         let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None).ok();
 
@@ -2644,7 +2637,9 @@ mod tests {
     /// which repository, rather than leaving the refusal to the first session.
     #[test]
     fn add_declares_no_directory_inside_a_repository() {
-        let root = outside_any_repository("cli-mcp-dir-in-a-repository");
+        let Some(root) = outside_any_repository("cli-mcp-dir-in-a-repository") else {
+            return;
+        };
         let inside = root.join("checkout").join("server");
         std::fs::create_dir_all(&inside).unwrap();
         std::fs::create_dir_all(root.join("checkout").join(".git")).unwrap();

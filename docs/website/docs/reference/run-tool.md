@@ -352,10 +352,13 @@ write it, and a checkout's file may too, since it only asks for more.
 ## Asking for no sandbox
 
 A line is run with the sandbox first. A request to run a line with `unconfined: true` is accepted only
-after a line in the same turn ran with the sandbox and exited non-zero, and each such failure earns
+after a line in the same turn ran with the sandbox and exited non-zero, or a line was refused because
+the platform could not confine its program, and each such failure earns
 one request. The failed line need not be the one the request names. A request made before any line
-has failed is refused without asking you, and the planner is told to run the line with the sandbox
-first. A request you decline keeps the one it earned, and accepting one spends it.
+has failed or been refused that way is refused without asking you, and the planner is told to run
+the line with the sandbox first. Where the refusal was a closed `run.network` this platform cannot
+deny, the planner is told that a line with no sandbox, or the mode `off`, runs with the network
+open. A request you decline keeps the one it earned, and accepting one spends it.
 
 A line stopped at its deadline or by you, a line that already ran with no sandbox and a line moved
 to the background earn nothing. A line whose own redirection leaves the workspace is the exception:

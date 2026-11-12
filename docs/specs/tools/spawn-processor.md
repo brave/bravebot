@@ -99,6 +99,7 @@ that the planner could write the file itself.
 
 `verified-by: bravebot_agent::tools::a_processor_call_naming_its_references_wrongly_is_told_what_is_wrong`
 `verified-by: bravebot_agent::tools::a_processor_given_nothing_to_read_is_pointed_at_write_file`
+`verified-by: bravebot_agent::turn::a_processor_call_sending_read_is_told_the_argument_is_reads_in_a_whole_turn`
 
 <a id="SPAWN-6"></a>
 ### SPAWN-6: the description says that text made from content the planner was not shown is a processor's to write
