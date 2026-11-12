@@ -4592,6 +4592,8 @@ with a window this machine cannot hold, and the block's own figures outrank it s
 `verified-by: bravebot_aichat::models::an_ollama_model_that_cannot_call_tools_is_not_offered`
 `verified-by: bravebot_aichat::client::an_ollama_roster_reads_each_models_window_from_show`
 `verified-by: bravebot_config::provider::a_model_an_ollama_entry_lists_without_a_window_is_held_to_ollamas_own_assumed_one`
+`verified-by: bravebot_tui::app::a_run_adopts_the_window_a_provider_block_states_for_its_models`
+`verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_takes_the_window_a_provider_block_states`
 
 <a id="BACKEND-72"></a>
 ### BACKEND-72: an entry naming an Ollama SDK is reached at Ollama's own chat API, asking for a window above the session's budget

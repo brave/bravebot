@@ -5735,6 +5735,20 @@ mod tests {
 
         assert_eq!(config.context_budget, 65_536);
         assert!(!config.budget_is_guessed());
+
+        // In Ollama's own protocol a fifth is kept for the reply (BACKEND-73), since each request
+        // asks the server for the window and a prompt past it is cut short rather than refused.
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"ollama": {"npm": "ollama-ai-provider-v2",
+                "options": {"baseURL": "http://localhost:11434/api", "contextWindow": 65536},
+                "models": {"tiny": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+
+        adopt_listing_for_model(&mut config, "ollama/tiny");
+
+        assert_eq!(config.context_budget, 52_429);
     }
 
     /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file
