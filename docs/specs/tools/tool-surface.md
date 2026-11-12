@@ -133,6 +133,7 @@ a turn arranging a look ([SCHED-4](schedule-next.md#SCHED-4)).
 `verified-by: bravebot_agent::turn::an_undeclared_argument_is_refused_by_any_built_in_tool`
 `verified-by: bravebot_agent::turn::a_call_giving_why_is_not_refused_as_undeclared`
 `verified-by: bravebot_agent::turn::a_stdin_ref_that_is_not_a_string_keeps_its_own_refusal`
+`verified-by: bravebot_agent::turn::a_download_given_a_path_reference_gets_its_own_refusal_and_a_blank_one_none`
 `verified-by: bravebot_agent::turn::a_call_with_an_undeclared_argument_is_not_read_ahead`
 `verified-by: bravebot_agent::mcp::a_server_tool_is_sent_an_argument_its_schema_does_not_declare`
 

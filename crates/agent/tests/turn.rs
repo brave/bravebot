@@ -18566,6 +18566,71 @@ fn a_watch_with_a_blank_path_reference_arms_and_a_real_reference_is_refused() {
     );
 }
 
+/// TOOL-3: `download_url` reads `path_ref` though its schema does not declare it, so a real
+/// reference gets the tool's own refusal, which says to name the file, and a blank one is let by
+/// to the destination question.
+///
+/// The destination is declined, so nothing is fetched, and the count at the stand-in host shows it.
+#[test]
+fn a_download_given_a_path_reference_gets_its_own_refusal_and_a_blank_one_none() {
+    let scratch = Scratch::new("download-path-reference");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"body"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin","path_ref":""}}"#),
+        ),
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path_ref":"ref:1"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut confirmer = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        ..Default::default()
+    };
+
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("save the data"),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "the turn made {} rounds", bodies.len());
+    let blank = newest_tool_result(bodies[1].clone());
+    assert!(
+        !blank.contains("path_ref") && !blank.contains("no reference"),
+        "a blank reference was refused: {blank}"
+    );
+    assert!(
+        blank.contains("did not approve"),
+        "the blank reference did not reach the destination question: {blank}"
+    );
+    let real = newest_tool_result(bodies[2].clone());
+    assert!(
+        real.contains("download_url takes 'path' and no reference"),
+        "a real reference did not get the tool's own refusal: {real}"
+    );
+    assert!(
+        !real.contains("takes no argument"),
+        "a real reference was refused as undeclared: {real}"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a declined download was fetched"
+    );
+}
+
 /// ARM-5: a run that does not say it keeps watches, which is how a one-shot run and a planned run
 /// start, answers a call to arm one as an unknown name and arms nothing, though the same call arms
 /// where the surface keeps them. The first run is the control.
