@@ -1523,7 +1523,7 @@ fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
     );
 
     assert!(
-        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("run.network")),
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, network_closed: true, .. }) if detail.contains("run.network")),
         "{refused:?}"
     );
 }
