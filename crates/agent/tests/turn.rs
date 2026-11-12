@@ -14930,6 +14930,86 @@ fn the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries() {
     }
 }
 
+/// LIST-2. A quarantined listing holding a file a person vouched for and one nobody did tells the
+/// planner that the vouched file is read with read_file through its reference, and that read
+/// comes back as the file's text. The planner is never told a name, so a header saying read_file
+/// has nothing to add for every file sent it to guess names until a read worked. Which entry comes
+/// first is not fixed, so the stand-in model reads both references, and each file takes a turn as
+/// the vouched one.
+#[test]
+fn a_trusted_entry_of_a_mixed_listing_is_read_through_its_reference() {
+    for vouched in ["a.txt", "z.txt"] {
+        let scratch = Scratch::new("list-mixed-labels-read");
+        let other = if vouched == "a.txt" { "z.txt" } else { "a.txt" };
+        std::fs::write(scratch.path.join(vouched), "shown-body-marker\n").unwrap();
+        std::fs::write(scratch.path.join(other), "hidden-body-marker\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(vouched);
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("list_files", r#"{"directory":".","depth":1}"#),
+            tool_request_2("read_file", r#"{"path_ref":"ref:1"}"#),
+            tool_request_2("read_file", r#"{"path_ref":"ref:2"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        turns::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("read what is at the top level"),
+            &mut bravebot_agent::Unattended,
+            &mut reporter,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        let start = second
+            .find("could not be shown to you")
+            .expect("the listing was answered with a reference result");
+        let listing = &second[start..];
+        assert_eq!(
+            listing.matches("read_file has nothing to add").count(),
+            1,
+            "with {vouched} vouched for: {listing}"
+        );
+        assert!(
+            listing.contains("A file labelled (U,...)")
+                && listing.contains("A file labelled (T,...)")
+                && listing.contains("name its reference as path_ref"),
+            "with {vouched} vouched for, the listing does not say the vouched file can be read: \
+             {listing}"
+        );
+        // Requests to the classifier screening a read go to the same stand-in, so only the
+        // planner's are kept.
+        let planner: Vec<String> = std::iter::from_fn(|| received.try_recv().ok())
+            .filter(|request| !request.contains("prompt-injection classifier"))
+            .collect();
+        assert!(
+            planner
+                .iter()
+                .any(|request| request.contains("shown-body-marker")),
+            "with {vouched} vouched for, a read through its reference did not show it: \
+             {planner:?}"
+        );
+        assert!(
+            !planner
+                .iter()
+                .any(|request| request.contains("hidden-body-marker")),
+            "with {vouched} vouched for, the file nobody vouched for was shown: {planner:?}"
+        );
+    }
+}
+
 /// A turn is several requests when the model calls tools, and each re-sends the whole history.
 /// One round's count would understate what the turn cost, so they are summed.
 #[test]

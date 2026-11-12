@@ -199,9 +199,18 @@ A listing of a directory nobody vouched for is quarantined, because a filename i
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
 process it and write it back without ever being told what it is called. The directories a bounded
 walk stopped at are entries too. The result says once what a reference to a file and a reference to a
-directory are for, gives each file a line with its reference, and gives the directories as a count
-with the first and last reference. There is nothing behind a directory to read, and the way to what
-is inside it is another listing with a greater depth.
+directory are for, gives each file a line with its reference and label, and gives the directories as
+a count with the first and last reference. There is nothing behind a directory to read, and the way
+to what is inside it is another listing with a greater depth.
+
+What a reference to a file is for depends on the label its line shows, and the result says it once
+for each label among the files. A file labelled untrusted is one nobody vouched
+for, and its reference already is the file, so `read_file` has nothing to add. A file labelled
+trusted is one its label lets the planner read, which is usually a file you vouched for, and
+`read_file` shows its lines when the planner names its reference
+as `path_ref`. A picture or a PDF still comes back as a reference, as
+[above](#read_file), and so does a file that is no longer trusted when it is read. A run that is
+not offered `read_file` is not told to use it.
 
 A walk does not enter a fixed list of directories, at any depth, and its result does not say that it
 left them out: version control (`.git`, `.hg`, `.svn`), build output and caches (`target`, `dist`,

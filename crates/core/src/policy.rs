@@ -2529,10 +2529,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         } else {
             reference.without_writing()
         };
-        if self.reading_offered {
+        let reference = if self.reading_offered {
             reference
         } else {
             reference.without_reading()
+        };
+        if self.reading_files_offered {
+            reference
+        } else {
+            reference.without_read_file()
         }
     }
 
