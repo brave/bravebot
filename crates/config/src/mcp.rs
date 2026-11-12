@@ -4047,6 +4047,26 @@ mod tests {
         );
     }
 
+    /// SERVERS-26. What a row may fill is part of what an approval binds to only where the
+    /// declaration names any, so a declaration with none digests as it did before; a change of it is
+    /// named as the field that changed; and it survives the file. The regressions it rejects are an
+    /// edit that adds an argument a row may fill and keeps the approval, and a file that drops it.
+    #[test]
+    fn apply_arguments_are_in_the_digest_only_where_there_are_any() {
+        let applies: ApplyArguments = BTreeMap::from([(
+            "group_tabs".to_string(),
+            BTreeMap::from([("urls".to_string(), "entries".to_string())]),
+        )]);
+        let none = weather().applying(ApplyArguments::new()).expect("none");
+        let some = weather().applying(applies).expect("some");
+        assert_eq!(none.digest(), weather().digest());
+        assert_ne!(some.digest(), none.digest());
+        assert_eq!(none.changes(&some), vec![Field::ApplyArguments]);
+        let read = Declaration::from_value(&some.to_value()).expect("what was written reads back");
+        assert_eq!(read, some);
+        assert!(none.to_value().get("apply_arguments").is_none());
+    }
+
     /// SERVERS-22. The arguments are part of what an approval binds to only where there are any, so
     /// a declaration that asks every call and names none digests as it did before, and the order
     /// they were written in is not part of it while the pairing of a tool with an argument is. The

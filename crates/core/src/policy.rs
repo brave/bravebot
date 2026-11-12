@@ -9709,6 +9709,48 @@ mod tests {
         .collect()
     }
 
+    /// MANIFEST-16. Each call of an approved list is carried once, and only a call the person's
+    /// ticks kept: a call they left out, a call past the list and a call carried twice are refused.
+    /// The regressions it rejects are a grant not bound to the call's place, and one spent twice.
+    #[test]
+    fn an_applied_call_is_carried_once_and_only_where_the_person_kept_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let call = |name: &str| crate::apply::Call {
+            tool: 0,
+            name: name.to_string(),
+            arguments: Vec::new(),
+            sent: Vec::new(),
+            after: None,
+        };
+        let resolved = Labelled::new(
+            crate::apply::Resolved {
+                calls: vec![call("make"), call("move")],
+                dropped: Default::default(),
+            },
+            Label::untrusted_public(),
+        );
+        policy
+            .keep_applied("brave", &resolved, &[0])
+            .expect("one call kept");
+        assert!(
+            policy.carry_applied_call("brave", 1, &resolved).is_err(),
+            "left out"
+        );
+        assert!(
+            policy.carry_applied_call("brave", 2, &resolved).is_err(),
+            "past the list"
+        );
+        assert!(
+            policy.carry_applied_call("brave", 0, &resolved).is_ok(),
+            "kept"
+        );
+        assert!(
+            policy.carry_applied_call("brave", 0, &resolved).is_err(),
+            "carried twice"
+        );
+    }
+
     fn open_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
         Policy::begin(
             routing_with("task", "summarise the readme"),

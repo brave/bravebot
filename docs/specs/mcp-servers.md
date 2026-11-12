@@ -2572,4 +2572,5 @@ person's to say about each tool. A server asking every call has said each of its
 own, which a list of calls would undo.
 
 `verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
+`verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
 `verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`
