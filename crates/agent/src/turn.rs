@@ -5346,6 +5346,18 @@ mod tests {
         assert_eq!(setup::arming_for(&plain(Task::new("x"))), allowed);
     }
 
+    /// DELEGATE-17: a `wake_after` above the number of delegates a call starts asks for all of
+    /// them, and one of 0 is the default of 1. The parser keeps a large figure as written, so
+    /// `Batch::of_call` is where it is held to the call's size; a count left above the size could
+    /// never be reached and the wait would not wake until a cancel.
+    #[test]
+    fn a_wake_count_above_the_calls_size_is_all_of_its_delegates() {
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 2, 40).wake_after, 2);
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 2, 2).wake_after, 2);
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 3, 2).wake_after, 2);
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 2, 0).wake_after, 1);
+    }
+
     /// ARM-6: a run limited by `--tools` to a list without `watch_file` is not told by the
     /// read's description that a watch is the better answer, since none can be armed.
     #[test]
