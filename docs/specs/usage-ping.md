@@ -92,6 +92,7 @@ cannot each resolve the switches in a different order.
 `verified-by: bravebot_config::usage_ping::which_variable_values_turn_the_ping_off`
 `verified-by: bravebot_config::managed::a_managed_usage_ping_false_is_a_pin_and_nothing_else_is`
 `verified-by: bravebot_usage_ping::sending::a_variable_that_is_not_text_sends_nothing`
+`verified-by: bravebot_usage_ping::lib::a_released_build_refuses_an_address_that_is_not_text`
 `verified-by: bravebot_config::settings::only_the_persons_own_file_says_whether_the_usage_ping_goes`
 `verified-by: bravebot_config::settings::only_a_boolean_answers_for_the_usage_ping`
 `verified-by: bravebot_config::settings::the_usage_ping_key_is_not_reported_as_unread`

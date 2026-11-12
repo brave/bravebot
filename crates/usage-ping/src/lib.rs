@@ -375,9 +375,17 @@ fn request(url: &str) -> bool {
 /// A development build has none unless the variable names one, so neither `cargo run` nor a test
 /// that starts the program is counted as a person's launch.
 fn base_url() -> Option<String> {
+    base_url_from(
+        std::env::var_os(bravebot_config::env_var::USAGE_PING_URL),
+        cfg!(debug_assertions),
+    )
+}
+
+/// The base URL for the variable's value `named`, in a development build where `development`.
+fn base_url_from(named: Option<std::ffi::OsString>, development: bool) -> Option<String> {
     // An address named in something other than text is refused rather than read as unset, which
     // in a released build would send to the default the person meant to replace.
-    let named = match std::env::var_os(bravebot_config::env_var::USAGE_PING_URL) {
+    let named = match named {
         None => None,
         Some(value) => Some(value.into_string().ok()?),
     }
@@ -385,7 +393,7 @@ fn base_url() -> Option<String> {
     .filter(|value| !value.is_empty());
     match named {
         Some(named) => Some(named),
-        None if cfg!(debug_assertions) => None,
+        None if development => None,
         None => Some(BASE_URL.to_string()),
     }
 }
@@ -591,6 +599,22 @@ mod tests {
             backend: Backend::Brave,
             premium: false,
         }
+    }
+
+    /// A released build sends to the default when no address is named, and to none when the one
+    /// named is not text, rather than to the default the person meant to replace.
+    #[cfg(unix)]
+    #[test]
+    fn a_released_build_refuses_an_address_that_is_not_text() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = std::ffi::OsStr::from_bytes(b"\xff\xfe").to_os_string();
+        assert_eq!(base_url_from(None, false), Some(BASE_URL.to_string()));
+        assert_eq!(base_url_from(Some(not_text.clone()), false), None);
+        assert_eq!(base_url_from(Some(not_text), true), None);
+        assert_eq!(
+            base_url_from(Some("http://example.test/ ".into()), false),
+            Some("http://example.test".to_string())
+        );
     }
 
     /// The first ping sets every flag.
