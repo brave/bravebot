@@ -51,13 +51,16 @@ A symbolic link is not named either. The walk counts the links it meets and does
 result carries that count ([LIST-6](#LIST-6)).
 
 The result says once what its references are: where the entries are from, what a reference to a file
-is for, and what a reference to a directory is for. Each file then has a line of its own with its
-reference and label. The directories a bounded walk stopped at ([LIST-5](#LIST-5)) are given as a
-run, a count with the first and last reference and the label they share, and a directory whose label
-differs from its neighbour's starts a new run. Every reference in a run is a directory, and each is
-still a reference the planner can name. Which entries are files and which are directories comes from
-where the entry sits in the listing, never from its name. The header names only the tools the run is
-offered, as the description of a single reference does.
+is for, and what a reference to a directory is for. Files that sit next to each other and share a
+label are given as a run, a count with the first and last reference and the label they share, and a
+file on its own has a line with its reference and label. The directories a bounded walk stopped at
+([LIST-5](#LIST-5)) are given as runs the same way. A run is cut where the label changes and where
+files end and directories start, so a run never mixes the two. Where some line is a range, the
+header says once that every reference in a range is what its line says, and each is still a
+reference the planner can name.
+Which entries are files and which are directories comes from where the entry sits in the listing,
+never from its name. The header names only the tools the run is offered, as the description of a
+single reference does.
 
 What a reference to a file is for depends on the entry's label, which comes from the trust map when
 the entry is reserved and which the entry's line already shows. The header has one sentence for each
@@ -75,13 +78,22 @@ trusted, one sentence covers every file and names no label.
 use, and it would guess globs to see which came back empty. Describing every entry in full repeats
 the same sentence for each one, and the result is sent again every round: at 110 entries that is
 about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
+A line per file costs the same way: 2000 files nobody vouched for were about 40k characters a
+round. A file's line carries no name, so files that share a label differ only in their references,
+and a range keeps every one of those.
 
 **Why the label.** A single sentence telling the planner read_file has nothing to add for every file
 leaves it unable to read a trusted file, since it holds a reference and no name, so it guesses names
 until a read works.
 
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
-`verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`
+`verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_run_of_files_and_one_per_run_of_directories`
+`verified-by: bravebot_core::reference::a_run_of_files_that_share_a_label_is_one_line_with_a_count`
+`verified-by: bravebot_core::reference::a_listing_of_one_file_is_one_line_and_mentions_no_range`
+`verified-by: bravebot_core::reference::files_with_different_labels_are_not_counted_together`
+`verified-by: bravebot_core::reference::a_listing_that_mixes_files_and_directories_cuts_a_run_at_each_change_of_kind`
+`verified-by: bravebot_core::reference::a_run_of_references_that_skips_a_slot_id_is_caught`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_of_many_files_gives_them_as_one_run`
 `verified-by: bravebot_core::reference::directories_with_different_labels_are_not_counted_together`
 `verified-by: bravebot_core::reference::the_header_of_a_listing_names_only_the_moves_the_run_is_offered`
 `verified-by: bravebot_core::reference::a_listing_of_one_directory_is_one_line_and_names_no_file_move`
@@ -175,7 +187,7 @@ answer might be rather than an answer.
 
 A quarantined listing names them the only way it names anything, as one of the references
 [LIST-2](#LIST-2) hands over per entry, and the result says which of them stand for a directory the
-walk stopped at, as a run with a count and its first and last reference. A reference standing for a
+walk stopped at, in runs given as [LIST-2](#LIST-2) gives them. A reference standing for a
 directory is refused where a path is expected, so the difference is enforced and not only stated.
 
 A bounded walk takes at most 200 files from any one directory, counted after the pattern and the

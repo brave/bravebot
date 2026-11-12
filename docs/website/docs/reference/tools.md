@@ -199,9 +199,10 @@ A listing of a directory nobody vouched for is quarantined, because a filename i
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
 process it and write it back without ever being told what it is called. The directories a bounded
 walk stopped at are entries too. The result says once what a reference to a file and a reference to a
-directory are for, gives each file a line with its reference and label, and gives the directories as
-a count with the first and last reference. There is nothing behind a directory to read, and the way
-to what is inside it is another listing with a greater depth.
+directory are for. Files that sit next to each other and share a label are given as one line, a count
+with the first and last reference and the label, and so are the directories; a file or directory on
+its own has a line with its reference and label. There is nothing behind a directory to read, and the
+way to what is inside it is another listing with a greater depth.
 
 What a reference to a file is for depends on the label its line shows, and the result says it once
 for each label among the files. A file labelled untrusted is one nobody vouched

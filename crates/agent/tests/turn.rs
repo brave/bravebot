@@ -14872,6 +14872,59 @@ fn a_large_quarantined_listing_says_what_its_references_are_once() {
     );
 }
 
+/// A quarantined listing of more files than the walk keeps, all unvouched, is a few lines: the
+/// files share a label, so they are one run with a count. One line per file made the result for
+/// 2000 files about 40k characters, resent with every later round.
+#[test]
+fn a_quarantined_listing_of_many_files_gives_them_as_one_run() {
+    let scratch = Scratch::new("list-many-files-quarantined");
+    for n in 0..2_500 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), "").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("files"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let start = second
+        .find("could not be shown to you")
+        .expect("the listing was answered with a reference result");
+    let result = second[start..]
+        .split("\",\"role\"")
+        .next()
+        .expect("the message ends");
+    assert!(
+        result.contains("[ref:1] to [ref:2000]: 2000 files (U,priv)"),
+        "the files are not given as one run: {result}"
+    );
+    assert!(
+        !result.contains("] file ("),
+        "a file of the run has a line of its own: {result}"
+    );
+    assert!(
+        result.len() < 3_000,
+        "the result for 2000 files is {} bytes: {result}",
+        result.len()
+    );
+}
+
 /// LABEL-10. Entries in one quarantined listing carry different labels when a person vouched for
 /// some of the files, and the preview the person is shown states a label that covers all of them.
 /// Which entry comes first is not fixed by the test, so each of the two files takes a turn as the
