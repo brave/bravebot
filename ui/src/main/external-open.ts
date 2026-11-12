@@ -8,8 +8,9 @@
  * does not read `BROWSER` and executes the wrapper `GIO_LAUNCH_DESKTOP` names with the handler's
  * command line. Under KDE they run `kde-open`. GLib loads modules from `GIO_EXTRA_MODULES` and
  * `GIO_MODULE_DIR`, and Qt loads plug-ins from the `QT_` names and the service cache from
- * `KDESYCOCA`. A program the person approved with `run` may have written the file any of these
- * name, and the opener then runs it outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
+ * `KDESYCOCA` or, when that is not set, the `XDG_CACHE_HOME` directory. A program the person
+ * approved with `run` may have written the file any of these name, and the opener then runs it
+ * outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
  * `crates/tui/src/opener.rs`, which also judges `HOME`, `XDG_RUNTIME_DIR` and
  * `DBUS_SESSION_BUS_ADDRESS` and removes them from the opener's own start.
  * Those three are not deleted here: this process and the agent it starts read them, and Electron
@@ -46,6 +47,7 @@ export const OPENER_SELECTORS = [
   'XDG_DATA_DIRS',
   'XDG_CONFIG_HOME',
   'XDG_CONFIG_DIRS',
+  'XDG_CACHE_HOME',
   'GIO_EXTRA_MODULES',
   'GIO_MODULE_DIR',
   'QT_PLUGIN_PATH',
@@ -57,11 +59,29 @@ export const OPENER_SELECTORS = [
   'KDESYCOCA',
 ] as const
 
-/** Delete each opener selector from `env`, and return the names that were set. */
+/**
+ * Variables `xdg-mime` joins to a file name without checking it (`<desktop>-mimeapps.list`,
+ * `<prefix>defaults.list`, `<prefix>mimeinfo.cache`), so a value with a `/` in it reads a file
+ * outside the directories above. They are deleted only then, as in `FILE_NAME_PREFIXES` in
+ * `crates/tui/src/opener.rs`: `XDG_CURRENT_DESKTOP` also tells `xdg-open` which desktop it is on,
+ * and a value without a `/` stays inside the directory it is joined to.
+ */
+export const FILE_NAME_PREFIXES = ['XDG_CURRENT_DESKTOP', 'XDG_MENU_PREFIX'] as const
+
+/**
+ * Delete each opener selector from `env`, and each file-name prefix whose value contains a `/`, and
+ * return the names that were set.
+ */
 export function removeOpenerSelectors(env: NodeJS.ProcessEnv = process.env): string[] {
   const removed: string[] = []
   for (const name of OPENER_SELECTORS) {
     if (Object.prototype.hasOwnProperty.call(env, name)) {
+      delete env[name]
+      removed.push(name)
+    }
+  }
+  for (const name of FILE_NAME_PREFIXES) {
+    if (env[name]?.includes('/')) {
       delete env[name]
       removed.push(name)
     }

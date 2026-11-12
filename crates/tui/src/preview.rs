@@ -10,7 +10,8 @@
 //!
 //! The terminal is asked what it can draw once, at start-up ([`sense`]). Where it cannot be asked,
 //! or `NO_COLOR` is set, or the picture will not decode, there is no picture and the screen is what
-//! it was before.
+//! it was before. Inside tmux that includes a tmux whose `allow-passthrough` is not on: bravebot
+//! does not turn it on, because that would start `tmux` ([`sense`]).
 //!
 //! # Decoding a picture nobody vouched for
 //!
@@ -72,6 +73,14 @@ static PICKER: OnceLock<Option<Picker>> = OnceLock::new();
 /// off the tty, so it must not overlap the background-colour query (which does the same) and it
 /// must not run once the event loop is reading, which would take the replies as keystrokes. Both
 /// give up after a timeout, so a terminal that answers neither costs a short pause and no more.
+///
+/// No `tmux` is started, whatever `TERM` and `TERM_PROGRAM` hold. ratatui-image 11.1.0 ran
+/// `tmux set -p allow-passthrough on` here when either named tmux, found through the `PATH` and with
+/// the whole environment, and it did not go through `bravebot_sandbox::programs::start`
+/// (SANDBOX-30). The copy in `third_party/ratatui-image` has that start removed. It still detects
+/// tmux and wraps its queries and pictures for it, so inside tmux a picture is drawn only where the
+/// person has set `allow-passthrough` themselves; tmux drops the sequences otherwise and the screen
+/// is what it was without pictures.
 pub fn sense() {
     PICKER.get_or_init(|| {
         // The same request that stills the colours stills the pictures: a person who asked for a

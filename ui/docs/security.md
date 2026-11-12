@@ -71,12 +71,18 @@ asked about; [the sandboxing spec](../../docs/specs/sandboxing.md#programs-a-per
 records that. The check reads the file's name and mode and no other metadata.
 `scripts/open-in-app.test.mjs` holds this.
 Every call to `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` in `src/main` goes
-through `src/main/external-open.ts`, which deletes the fifteen names of `OPENER_SELECTORS` (`BROWSER`, `GIO_LAUNCH_DESKTOP`, `XDG_DATA_HOME`,
-`XDG_CONFIG_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, the GIO, Qt and `KDESYCOCA` names in the opener's table in
-[SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)) from the main process environment first, because the opener Electron
+through `src/main/external-open.ts`, which deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_`
+directories, `XDG_CACHE_HOME` and the GIO, Qt and KDE names of `OPENER_SELECTORS` (sixteen in all,
+the names in the opener's table in [SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30); the
+terminal client's list in `crates/tui/src/opener.rs` has the same names and also `HOME`,
+`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the ten Windows names of the `rundll32` start)
+from the main process environment first, because the opener Electron
 starts reads them to choose the program it runs (`xdg-open` reads `BROWSER` only in its generic
 path, and not under GNOME with `gio` installed, where it runs `gio open`)
-([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). The names are removed whatever they hold,
+([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX`, which `xdg-mime` joins to a file name without checking
+it, are deleted only when their value contains a `/`, as in the terminal client (a value without one
+stays inside the directory it is joined to, and `XDG_CURRENT_DESKTOP` also tells `xdg-open` which
+desktop it is on). The other names are removed whatever they hold,
 which is stricter than the terminal client's check of the value, and a bridge started after an open is
 started without them. It does not delete `HOME`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, which the application and the agent it starts
 read and Electron uses to reach the session bus. Without `HOME`, `gio` reads the account's passwd
@@ -93,16 +99,19 @@ two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_
 run.
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
-launcher it starts is a script that records which of the fifteen names it was started with. The
-Electron test has a case for `openExternal` and `openPath` and a case for `showItemInFolder`. Neither
-case has been run on Linux since the test was changed, and the `showItemInFolder` case has never
-been run there. In Electron v44.9.3 (`shell/common/platform_util_linux.cc`, read, not run)
-`showItemInFolder` asks the portal and `org.freedesktop.FileManager1` over the session bus first and
-runs `xdg-open .` in the folder that holds the file when neither is available or a call fails; the
-child gets Electron's environment, so the deletion applies to it. The case sets
-`DBUS_SESSION_BUS_ADDRESS` to a missing socket to reach that fallback. Whether a missing socket
-leaves a null bus connection, which starts no `xdg-open`, is not shown by the source read, and the
-case fails when no start is seen.
+launcher it starts is a script that records which of the sixteen names it was started with. The
+Electron test has a case for `openExternal` and `openPath` and a case for `showItemInFolder`. Both
+passed on Linux, and were not skipped, in CI run 43104226342 (the `Front end` job,
+`make check-ui-build`, on `ubuntu-latest` with `xvfb`, `libgtk-3-0`, `libnss3` and
+`libasound2t64` installed and Electron 44.9.3 downloaded by `postinstall`). On Linux
+with `CI` set the test fails, rather than skips, when Electron or `xvfb-run` is missing. On Linux
+`showItemInFolder` asks the session bus whether the portal or the file manager is running
+(`platform_util_linux.cc`, `ShowItemHelper`, Electron 44.9.3). With neither, which is the case when
+the test points `DBUS_SESSION_BUS_ADDRESS` at a missing socket, or when a call to either fails,
+it calls `OpenParentFolderFallback`,
+which runs `xdg-open` on the folder, so the case sees at least one start and the start carries the
+environment of the main process. With a portal or file manager running, as in a desktop session, it
+sends the path over D-Bus and starts no `xdg-open`, so the deletion has nothing to do there.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 

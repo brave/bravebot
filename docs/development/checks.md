@@ -220,6 +220,10 @@ workflows under the sandbox default, so a default change cannot break `git`, `gh
 the variables that choose code to run removed or checked, so a value the person's environment
 holds does not run in a setup stage or a control run, which have the person's access
 ([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21), [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)).
+Before each of those starts it also removes the configuration files `make`, `cargo` and `npm` read
+to choose code (`CONFIGURATION_FILES` in `crates/agent/src/usability.rs`) from the directories it
+chose. `make check-code-selectors` does not read that list: the files are not variables, and
+`a_setup_make_does_not_read_a_gnumakefile_in_its_directory` and the tests beside it plant each one.
 
 These are local checks, not a promise that every CI environment passes. Windows Clippy
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;

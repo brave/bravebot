@@ -882,6 +882,847 @@ fn a_setup_cargo_is_not_handed_a_wrapper_or_target_flags() {
     }
 }
 
+/// An executable at `path` that writes `marker` and then runs its arguments, so that a program
+/// that starts it as a wrapper or a linker still works and leaves proof.
+fn plant_passthrough(path: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().expect("a directory")).expect("directory");
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n: > '{}'\nexec \"$@\"\n", marker.display()),
+    )
+    .expect("planted file");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): GNU Make 3.81 reads `GNUmakefile` ahead of `Makefile` in the
+/// directory it runs in, and `$(shell ...)` in it runs a command while it is parsed. A file in the
+/// session directory is read by the next unconfined `make` started there. The regression it
+/// rejects: a setup `make` started in a directory that holds a `GNUmakefile` no workflow wrote. The
+/// control shows this `make` runs the file when it is left in place.
+#[test]
+fn a_setup_make_does_not_read_a_gnumakefile_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("gnumakefile");
+    let marker = planted.join("ran");
+    let gnumakefile = format!("$(shell : > '{}')\nall:\n\t@true\n", marker.display());
+
+    withheld_from_a_setup_stage(
+        "gnumakefile",
+        "make",
+        &["-s", "all"],
+        &[
+            ("Makefile", "all:\n\t@true\n"),
+            ("GNUmakefile", &gnumakefile),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 reads `.cargo/config.toml` and `.cargo/config`
+/// in its working directory and runs the `build.rustc-wrapper` they name. A file in the session
+/// directory is read by the next unconfined `cargo` started there. The regression it rejects: a
+/// setup `cargo` started in a directory that holds a `.cargo` directory no workflow wrote. Each name
+/// is a case, since a start that removes one still reads the other. The control shows this `cargo`
+/// runs the wrapper when the file is left in place.
+#[test]
+fn a_setup_cargo_does_not_read_a_cargo_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    for (name, file) in [
+        ("cargo-config-toml", ".cargo/config.toml"),
+        ("cargo-config-bare", ".cargo/config"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant_passthrough(&helper, &marker);
+        let configuration = format!("[build]\nrustc-wrapper = \"{}\"\n", helper.display());
+        withheld_from_a_setup_stage(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &[
+                (
+                    "demo/Cargo.toml",
+                    "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+                ),
+                ("demo/src/main.rs", "fn main() {}\n"),
+                (file, &configuration),
+            ],
+            &[],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 reads `.npmrc` in the project root and runs the
+/// shell its `script-shell` names for a script. A file in the session directory is read by the
+/// next unconfined `npm` started there. The regression it rejects: a setup `npm` started in a
+/// directory that holds an `.npmrc` no workflow wrote. The control shows this `npm` runs the shell
+/// when the file is left in place.
+#[test]
+fn a_setup_npm_does_not_read_an_npmrc_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("npmrc");
+    let marker = planted.join("ran");
+    let shell = planted.join("shell");
+    plant(&shell, &marker);
+    let npmrc = format!("script-shell={}\n", shell.display());
+
+    withheld_from_a_setup_stage(
+        "npmrc",
+        "npm",
+        &["--prefix", "{session}", "run", "-s", "start"],
+        &[
+            (
+                "package.json",
+                "{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{\"start\":\"true\"}}\n",
+            ),
+            (".npmrc", &npmrc),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// The marker shows whether a setup stage started after the suite could not remove a
+/// configuration file, which must stop the start before any program runs.
+fn marking_stage(marker: &Path) -> Stage {
+    Stage::new(
+        "sh",
+        &["-c", format!(": > '{}'", marker.display()).as_str()],
+    )
+}
+
+/// Gives a directory its mode back when it goes out of scope, so a test that made one read-only
+/// leaves a tree the next run can delete.
+struct Restored(PathBuf);
+
+impl Drop for Restored {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): a configuration file that cannot be removed is still read by
+/// the program about to start. The regression it rejects: ignoring a failed removal, so that a
+/// directory named `.npmrc`, which `remove_file` refuses to remove, lets the setup stage run.
+#[test]
+fn a_configuration_name_that_cannot_be_removed_stops_the_start() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("unremovable-name");
+    let marker = planted.join("ran");
+    let workflow = Workflow::new("test", "a directory named .npmrc")
+        .file(".npmrc/inside", "x\n")
+        .setup(marking_stage(&marker))
+        .stage(Stage::new("true", &[]));
+
+    let _environment = Environment::held(&[], &[]);
+    let root = root("unremovable-name");
+    let _ = std::fs::remove_dir_all(&root);
+    let refused = usability::run(&root, &[workflow]);
+
+    assert!(
+        matches!(refused, Err(Unavailable::Io(_))),
+        "expected the suite to be unavailable, got {refused:?}"
+    );
+    assert!(!marker.exists(), "a program started with the file in place");
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): as for a name that is a directory, with a configuration file
+/// in a directory that cannot be written, which no removal can unlink. The first setup stage makes
+/// the directory, the second must not start.
+#[test]
+fn a_configuration_file_in_a_read_only_directory_stops_the_start() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("read-only-parent");
+    let marker = planted.join("ran");
+    let root = root("read-only-parent");
+    let _ = std::fs::remove_dir_all(&root);
+    let workflow = Workflow::new("test", "a read-only .cargo")
+        .setup(Stage::new(
+            "sh",
+            &[
+                "-c",
+                "mkdir -p '{session}/.cargo' && : > '{session}/.cargo/config.toml' \
+                 && chmod 555 '{session}/.cargo'",
+            ],
+        ))
+        .setup(marking_stage(&marker))
+        .stage(Stage::new("true", &[]));
+
+    let _environment = Environment::held(&[], &[]);
+    let refused = usability::run(&root, &[workflow]);
+    let _restored = Restored(root.join("00-confined/session/.cargo"));
+
+    assert!(
+        matches!(refused, Err(Unavailable::Io(_))),
+        "expected the suite to be unavailable, got {refused:?}"
+    );
+    assert!(!marker.exists(), "a program started with the file in place");
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): `.cargo` linked to a directory elsewhere is read by cargo as
+/// that directory's `config.toml`. The removal takes the link away and does not unlink the file it
+/// leads to. The regression it rejects: removing `{session}/.cargo/config.toml` through the link,
+/// which deletes a file outside the places the suite made.
+#[test]
+fn a_linked_cargo_directory_is_removed_and_the_file_behind_it_is_not() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let root = root("linked-cargo");
+    let _ = std::fs::remove_dir_all(&root);
+    let workflow = Workflow::new("test", "a linked .cargo")
+        .setup(Stage::new(
+            "sh",
+            &[
+                "-c",
+                "mkdir -p '{beside}/elsewhere' && : > '{beside}/elsewhere/config.toml' \
+                 && ln -s '{beside}/elsewhere' '{session}/.cargo'",
+            ],
+        ))
+        .setup(Stage::new(
+            "sh",
+            &[
+                "-c",
+                "test -f '{beside}/elsewhere/config.toml' && test ! -e '{session}/.cargo'",
+            ],
+        ))
+        .stage(Stage::new("true", &[]));
+
+    let _environment = Environment::held(&[], &[]);
+    let report = usability::run(&root, &[workflow]).expect("the suite runs");
+
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].outcome, Outcome::Passed, "{:?}", report.rows);
+    assert!(
+        root.join("00-confined/beside/elsewhere/config.toml")
+            .exists()
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): `python3` imports `usercustomize` from the user site under
+/// `HOME` when it starts. The regression it rejects: a setup `python3` started without
+/// `PYTHONNOUSERSITE`, so that a `usercustomize.py` in the scratch home's user site runs. The
+/// first setup stage writes the file where this `python3` names its user site, the second starts
+/// `python3` again. The control shows a `python3` with another home and the file in its user site
+/// runs it.
+#[test]
+fn a_setup_python_does_not_import_a_usercustomize_from_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("usercustomize");
+    let marker = planted.join("ran");
+    let write = format!(
+        "import os, site\nd = site.getusersitepackages()\nos.makedirs(d, exist_ok=True)\n\
+         open(os.path.join(d, 'usercustomize.py'), 'w').write(\"open('{}', 'w').close()\\n\")\n",
+        marker.display()
+    );
+
+    // The control: the same file in the user site of a home of this test's.
+    let home = planted.join("control-home");
+    std::fs::create_dir_all(&home).expect("control home");
+    let home_text = home.to_str().expect("utf-8");
+    let Some(site) = python_output(
+        &["-c", "import site; print(site.getusersitepackages())"],
+        &[("HOME", home_text)],
+    ) else {
+        return skipped("python3 is not installed");
+    };
+    let site = PathBuf::from(site.trim());
+    std::fs::create_dir_all(&site).expect("user site");
+    std::fs::write(
+        site.join("usercustomize.py"),
+        format!("open('{}', 'w').close()\n", marker.display()),
+    )
+    .expect("usercustomize.py");
+    let _ = python_output(&["-c", "pass"], &[("HOME", home_text)]);
+    let control = marker.exists();
+    let _ = std::fs::remove_file(&marker);
+    if !control {
+        return skipped("python3 here does not import usercustomize from the user site");
+    }
+
+    let workflow = Workflow::new("test", "a setup python")
+        .setup(Stage::new("python3", &["-c", &write]))
+        .setup(Stage::new("python3", &["-c", "pass"]))
+        .stage(Stage::new("true", &[]));
+    run_with_planted("usercustomize", &[], workflow, &marker);
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): go 1.27.3 reads an environment file under the home, and
+/// `GOFLAGS=-toolexec=<helper>` in it runs the helper for every tool the build starts. The file is
+/// `Library/Application Support/go/env` on macOS and `.config/go/env` elsewhere, and both are
+/// planted. The regression it rejects: a setup `go` started with the scratch home holding a file
+/// that no workflow wrote. The control shows this `go` runs the helper from a file `GOENV` names.
+#[test]
+fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("go-env-file");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant_passthrough(&helper, &marker);
+    let content = format!("GOFLAGS=-toolexec={}\n", helper.display());
+    let environment_file = planted.join("env");
+    std::fs::write(&environment_file, &content).expect("environment file");
+    let files = [
+        ("go.mod", "module probe\n\ngo 1.20\n"),
+        ("main.go", "package main\n\nfunc main() {}\n"),
+    ];
+    let args = ["-C", "{session}", "build", "./..."];
+
+    match runs_the_helper_when_given(
+        "go-env-file",
+        "go",
+        &args,
+        &files,
+        &[
+            ("GOENV", environment_file.to_str().expect("utf-8")),
+            ("GOTOOLCHAIN", "local"),
+        ],
+        &marker,
+    ) {
+        None => {
+            eprintln!("skipped go-env-file: go is not installed");
+            return;
+        }
+        Some(false) => return skipped("go here does not run -toolexec from a GOENV file"),
+        Some(true) => {}
+    }
+
+    let plant_files = format!(
+        "for d in '{{home}}/Library/Application Support/go' '{{home}}/.config/go'; do \
+         mkdir -p \"$d\" && printf '%s\\n' 'GOFLAGS=-toolexec={}' > \"$d/env\"; done",
+        helper.display()
+    );
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup go"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(Stage::new("sh", &["-c", &plant_files]))
+        .setup(Stage::new("go", &args))
+        .stage(Stage::new("true", &[]));
+    run_with_planted("go-env-file", &[], workflow, &marker);
+}
+
+/// An executable at `path` that writes `marker` and then links as `cc` would, so that a cargo build
+/// that names it as its linker still works and leaves proof.
+fn plant_linker(path: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().expect("a directory")).expect("directory");
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n: > '{}'\nexec cc \"$@\"\n", marker.display()),
+    )
+    .expect("planted file");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+}
+
+/// A setup stage that writes `lines` to `file` under the scratch home, the way a program a stage
+/// started would. It runs before the stage that is judged, which is cleaned of what it wrote.
+fn plant_in_home(file: &str, lines: &[String]) -> Stage {
+    assert!(lines.iter().all(|line| !line.contains('\'')), "{lines:?}");
+    let quoted: Vec<String> = lines.iter().map(|line| format!("'{line}'")).collect();
+    Stage::new(
+        "sh",
+        &[
+            "-c",
+            &format!(
+                "mkdir -p \"$(dirname '{{home}}/{file}')\" && printf '%s\\n' {} > '{{home}}/{file}'",
+                quoted.join(" ")
+            ),
+        ],
+    )
+}
+
+/// The rustup home the control run gives the programs it starts: the `RUSTUP_HOME` the account
+/// configured when it is set and not empty, else `.rustup` under the account's `home`.
+fn rustup_home_for_control(configured: Option<std::ffi::OsString>, home: &str) -> String {
+    match configured.filter(|value| !value.is_empty()) {
+        Some(value) => value.to_str().expect("a utf-8 RUSTUP_HOME").to_string(),
+        None => format!("{home}/.rustup"),
+    }
+}
+
+/// The control run gives cargo the rustup home the account configured, so a machine whose rustup
+/// is not under `$HOME/.rustup` still finds its toolchain and the home tests assert something.
+#[test]
+fn the_control_run_uses_the_rustup_home_the_account_configured() {
+    let configured = Some(std::ffi::OsString::from("/opt/rustup"));
+    assert_eq!(
+        rustup_home_for_control(configured, "/Users/a"),
+        "/opt/rustup"
+    );
+    assert_eq!(
+        rustup_home_for_control(None, "/Users/a"),
+        "/Users/a/.rustup"
+    );
+    assert_eq!(
+        rustup_home_for_control(Some(std::ffi::OsString::new()), "/Users/a"),
+        "/Users/a/.rustup"
+    );
+}
+
+/// Runs the setup stage `program args` over `files`, after a stage that writes `lines` to `file`
+/// under the scratch home, and asserts nothing ran the file that writes `marker`. The control
+/// starts the same program with `lines` in `file` under a home of the test's, and where it does not
+/// run the helper the test proves nothing on this host and says it skipped. The result is whether
+/// the stage ran.
+fn home_configuration_is_not_read(
+    name: &str,
+    program: &str,
+    args: &[&str],
+    files: &[(&str, &str)],
+    file: &str,
+    lines: &[String],
+    marker: &Path,
+) -> bool {
+    let planted = marker.parent().expect("a directory");
+    let control_home = planted.join("control-home");
+    let control_file = control_home.join(file);
+    std::fs::create_dir_all(control_file.parent().expect("a directory")).expect("directory");
+    std::fs::write(&control_file, format!("{}\n", lines.join("\n"))).expect("control file");
+    let home = control_home.to_str().expect("utf-8").to_string();
+    // The rustup proxy finds its toolchains from the account's home, which the control replaces.
+    // A `cargo test` run under it holds `CARGO_HOME` for the account's home, which cargo reads in
+    // place of `.cargo` under `HOME`, so the control names the replacement's. The lock keeps a test
+    // that holds `RUSTUP_HOME` for a start from being read here.
+    let rustup = {
+        let _environment = Environment::held(&[], &[]);
+        rustup_home_for_control(
+            std::env::var_os("RUSTUP_HOME"),
+            &std::env::var("HOME").expect("a home"),
+        )
+    };
+    let cargo_home = format!("{home}/.cargo");
+    match runs_the_helper_when_given(
+        name,
+        program,
+        args,
+        files,
+        &[
+            ("HOME", &home),
+            ("RUSTUP_HOME", &rustup),
+            ("CARGO_HOME", &cargo_home),
+        ],
+        marker,
+    ) {
+        None => {
+            eprintln!("skipped {name}: {program} is not installed");
+            return false;
+        }
+        Some(false) => {
+            eprintln!(
+                "skipped {name}: {program} on {} {} does not run the helper from {file} in its home",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return false;
+        }
+        Some(true) => {}
+    }
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup stage"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(plant_in_home(file, lines))
+        .setup(Stage::new(program, args))
+        .stage(Stage::new("true", &[]));
+    run_with_planted(name, &[], workflow, marker)
+}
+
+/// The files a cargo test builds: a package with nothing to compile but `main`.
+fn cargo_demo_files() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "demo/Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+        ),
+        ("demo/src/main.rs", "fn main() {}\n"),
+    ]
+}
+
+/// Plants the helpers a cargo configuration names under a directory of its own, in `pass` (a
+/// wrapper or a runner) and `linker`, and returns the directory and the marker they write.
+fn cargo_helpers(name: &str) -> (PathBuf, PathBuf) {
+    let planted = planted_dir(name);
+    let marker = planted.join("ran");
+    plant_passthrough(&planted.join("pass"), &marker);
+    plant_linker(&planted.join("linker"), &marker);
+    (planted, marker)
+}
+
+/// Runs a setup `cargo subcommand` over a package and the cargo configuration `configuration` makes
+/// at `file` in the session directory, and asserts nothing ran the helpers.
+fn cargo_ignores_a_configuration_in_its_directory(
+    name: &str,
+    file: &str,
+    subcommand: &str,
+    configuration: impl FnOnce(&Path) -> String,
+) {
+    let (planted, marker) = cargo_helpers(name);
+    let configuration = configuration(&planted);
+    let mut files: Vec<(&str, &str)> = cargo_demo_files();
+    files.push((file, &configuration));
+    withheld_from_a_setup_stage(
+        name,
+        "cargo",
+        &[
+            subcommand,
+            "-q",
+            "--offline",
+            "--manifest-path={session}/demo/Cargo.toml",
+        ],
+        &files,
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 ran the program
+/// `target.<triple>.linker` names in `.cargo/config.toml` in its working directory. The regression
+/// it rejects: a setup `cargo` started in a directory that holds a `.cargo/config.toml` no workflow
+/// wrote. The control shows this `cargo` runs the linker when the file is left in place.
+#[test]
+fn a_setup_cargo_does_not_run_a_linker_from_a_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        return eprintln!("skipped: the host is not one the tests know");
+    };
+    cargo_ignores_a_configuration_in_its_directory(
+        "cargo-config-linker",
+        ".cargo/config.toml",
+        "build",
+        |planted| {
+            format!(
+                "[target.{triple}]\nlinker = \"{}\"\n",
+                planted.join("linker").display()
+            )
+        },
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 ran the program
+/// `target.<triple>.runner` names in `.cargo/config.toml` for `cargo run`. The regression it
+/// rejects: a setup `cargo run` started in a directory that holds a `.cargo/config.toml` no
+/// workflow wrote.
+#[test]
+fn a_setup_cargo_does_not_run_a_runner_from_a_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        return eprintln!("skipped: the host is not one the tests know");
+    };
+    cargo_ignores_a_configuration_in_its_directory(
+        "cargo-config-runner",
+        ".cargo/config.toml",
+        "run",
+        |planted| {
+            format!(
+                "[target.{triple}]\nrunner = \"{}\"\n",
+                planted.join("pass").display()
+            )
+        },
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 ran the linker that
+/// `build.rustflags` names with `-C linker=` in `.cargo/config.toml`, and the same flags under
+/// `target.<triple>.rustflags`. The regression it rejects: a setup `cargo` started in a directory
+/// that holds a `.cargo/config.toml` no workflow wrote. Each table is a case.
+#[test]
+fn a_setup_cargo_does_not_take_rustflags_from_a_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        return eprintln!("skipped: the host is not one the tests know");
+    };
+    for (name, table) in [
+        ("cargo-config-build-rustflags", "build".to_string()),
+        ("cargo-config-target-rustflags", format!("target.{triple}")),
+    ] {
+        cargo_ignores_a_configuration_in_its_directory(
+            name,
+            ".cargo/config.toml",
+            "build",
+            |planted| {
+                format!(
+                    "[{table}]\nrustflags = [\"-C\", \"linker={}\"]\n",
+                    planted.join("linker").display()
+                )
+            },
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 read `.cargo/config.toml` and
+/// `.cargo/config` in `.cargo` under `HOME` and ran the `build.rustc-wrapper` they name. The
+/// scratch home is a directory a start reads, so the regression it rejects is a start that leaves
+/// the home out of the directories it cleans. Each name is a case.
+#[test]
+fn a_setup_cargo_does_not_read_a_cargo_configuration_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    for (name, file) in [
+        ("cargo-home-config-toml", ".cargo/config.toml"),
+        ("cargo-home-config-bare", ".cargo/config"),
+    ] {
+        let (planted, marker) = cargo_helpers(name);
+        let lines = [
+            "[build]".to_string(),
+            format!("rustc-wrapper = \"{}\"", planted.join("pass").display()),
+        ];
+        home_configuration_is_not_read(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &cargo_demo_files(),
+            file,
+            &lines,
+            &marker,
+        );
+    }
+}
+
+/// A `package.json` whose `start` script is `script`.
+fn package_with_start(script: &str) -> String {
+    format!("{{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{{\"start\":\"{script}\"}}}}\n")
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 read `node-options` in `.npmrc` in
+/// the project and passed it to the `node` a script starts, which loaded the module it names with
+/// `--require`. The regression it rejects: a setup `npm` started in a directory that holds an
+/// `.npmrc` no workflow wrote.
+#[test]
+fn a_setup_npm_does_not_take_node_options_from_an_npmrc_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("npmrc-node-options");
+    let marker = planted.join("ran");
+    let module = planted.join("module.js");
+    plant_module(&module, &marker);
+    let npmrc = format!("node-options=--require={}\n", module.display());
+
+    withheld_from_a_setup_stage(
+        "npmrc-node-options",
+        "npm",
+        &["--prefix", "{session}", "run", "-s", "start"],
+        &[
+            ("package.json", &package_with_start("node -e 0")),
+            (".npmrc", &npmrc),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 read `init-module` in `.npmrc` in
+/// the project and ran the module it names for `npm init`. The regression it rejects: a setup
+/// `npm init` started in a directory that holds an `.npmrc` no workflow wrote.
+#[test]
+fn a_setup_npm_does_not_run_an_init_module_from_an_npmrc_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("npmrc-init-module");
+    let marker = planted.join("ran");
+    let module = planted.join("module.js");
+    plant_module(&module, &marker);
+    let npmrc = format!("init-module={}\n", module.display());
+    // A project root is the nearest directory with a `package.json`, and without one here npm
+    // would take the checkout's, which holds no `.npmrc` of the test's.
+    withheld_from_a_setup_stage(
+        "npmrc-init-module",
+        "npm",
+        &["init", "-y"],
+        &[
+            ("package.json", "{\"name\":\"a\",\"version\":\"1.0.0\"}\n"),
+            (".npmrc", &npmrc),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 read `$HOME/.npmrc` and ran the
+/// shell its `script-shell` names, the module its `init-module` names, and loaded the module its
+/// `node-options` name. The scratch home is a directory a start reads, so the regression it rejects
+/// is a start that leaves the home out of the directories it cleans. Each key is a case.
+#[test]
+fn a_setup_npm_does_not_read_an_npmrc_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    for (name, key) in [
+        ("home-npmrc-script-shell", "script-shell"),
+        ("home-npmrc-node-options", "node-options"),
+        ("home-npmrc-init-module", "init-module"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let shell = planted.join("shell");
+        plant(&shell, &marker);
+        let module = planted.join("module.js");
+        plant_module(&module, &marker);
+        let (line, args, package): (String, &[&str], Vec<(&str, String)>) = match key {
+            "script-shell" => (
+                format!("script-shell={}", shell.display()),
+                &["--prefix", "{session}", "run", "-s", "start"],
+                vec![("package.json", package_with_start("true"))],
+            ),
+            "node-options" => (
+                format!("node-options=--require={}", module.display()),
+                &["--prefix", "{session}", "run", "-s", "start"],
+                vec![("package.json", package_with_start("node -e 0"))],
+            ),
+            _ => (
+                format!("init-module={}", module.display()),
+                &["init", "-y"],
+                vec![],
+            ),
+        };
+        let files: Vec<(&str, &str)> = package
+            .iter()
+            .map(|(path, contents)| (*path, contents.as_str()))
+            .collect();
+        home_configuration_is_not_read(name, "npm", args, &files, ".npmrc", &[line], &marker);
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 ran `$HOME/.npm-init.js`, its
+/// default `init-module`, for `npm init`. The regression it rejects: a start that leaves the home
+/// out of the directories it cleans, or that leaves `.npm-init.js` out of the names it removes.
+#[test]
+fn a_setup_npm_does_not_run_an_init_script_from_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("home-npm-init-js");
+    let marker = planted.join("ran");
+    let lines = [
+        format!(
+            "require(\"fs\").writeFileSync(\"{}\", \"x\");",
+            marker.display()
+        ),
+        "module.exports = {};".to_string(),
+    ];
+
+    home_configuration_is_not_read(
+        "home-npm-init-js",
+        "npm",
+        &["init", "-y"],
+        &[],
+        ".npm-init.js",
+        &lines,
+        &marker,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): go 1.27.3 read `GOTOOLCHAIN=go1.99.0+path` from its
+/// environment file under the home and ran the `go1.99.0` it found on `PATH`, when the variable
+/// was not set. The file is `Library/Application Support/go/env` on macOS and `.config/go/env`
+/// elsewhere, and both are planted. The suite sets `GOTOOLCHAIN=local`, which wins over the file,
+/// and `GOENV=off`, which stops the file being read, so the regression it rejects is a start with
+/// neither. The control shows this `go` runs the helper from a file `GOENV` names.
+#[test]
+fn a_setup_go_does_not_switch_toolchain_from_an_environment_file_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("go-toolchain-file");
+    let marker = planted.join("ran");
+    plant(&planted.join("go1.99.0"), &marker);
+    let environment_file = planted.join("env");
+    std::fs::write(&environment_file, "GOTOOLCHAIN=go1.99.0+path\n").expect("environment file");
+    let path = {
+        let _environment = Environment::held(&[], &[]);
+        format!(
+            "{}:{}",
+            planted.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    };
+    let files = [
+        ("go.mod", "module probe\n\ngo 1.20\n"),
+        ("main.go", "package main\n\nfunc main() {}\n"),
+    ];
+    let args = ["-C", "{session}", "build", "./..."];
+
+    match runs_the_helper_when_given(
+        "go-toolchain-file",
+        "go",
+        &args,
+        &files,
+        &[
+            ("GOENV", environment_file.to_str().expect("utf-8")),
+            ("PATH", &path),
+        ],
+        &marker,
+    ) {
+        None => {
+            eprintln!("skipped go-toolchain-file: go is not installed");
+            return;
+        }
+        Some(false) => return skipped("go here does not switch toolchain from a GOENV file"),
+        Some(true) => {}
+    }
+
+    let lines = ["GOTOOLCHAIN=go1.99.0+path".to_string()];
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup go"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(plant_in_home("Library/Application Support/go/env", &lines))
+        .setup(plant_in_home(".config/go/env", &lines))
+        .setup(Stage::new("go", &args))
+        .stage(Stage::new("true", &[]));
+    run_with_planted("go-toolchain-file", &[("PATH", &path)], workflow, &marker);
+}
+
 /// SANDBOX-30 (brave/bravebot#3811): npm 11.19.1 ran the shell named by `npm_config_script_shell`
 /// and `NPM_CONFIG_SCRIPT_SHELL` for a script, and read a file named by `npm_config_userconfig`
 /// that names one. The regression it rejects: removing the lower-case prefix only.
@@ -2953,6 +3794,73 @@ fn a_setup_go_vet_is_not_handed_a_go_settings_file() {
         workflow,
         &marker,
     );
+}
+
+/// The files `cargo`, `npm`, `go`, `pip` and `make` read to choose code (brave/bravebot#3858), by
+/// where the program looks for them, as `touch` arguments. Each is a directory the suite starts an
+/// unconfined program in or gives it as `HOME`: the session directory, its parent, and the scratch
+/// home.
+const CONFIGURATION_LOCATIONS: &[(&str, &str)] = &[
+    ("cargo-session", "{session}/.cargo/config.toml"),
+    ("npm-session", "{session}/.npmrc"),
+    ("make-session", "{session}/GNUmakefile"),
+    ("cargo-parent", "{session}/../.cargo/config.toml"),
+    ("npm-parent", "{session}/../.npmrc"),
+    ("make-parent", "{session}/../GNUmakefile"),
+    ("cargo-home", "{home}/.cargo/config.toml"),
+    ("cargo-home-bare", "{home}/.cargo/config"),
+    ("npm-home", "{home}/.npmrc"),
+    ("npm-init-home", "{home}/.npm-init.js"),
+    ("go-home-macos", "{home}/Library/Application Support/go/env"),
+    ("go-home-xdg", "{home}/.config/go/env"),
+    ("pip-home", "{home}/.config/pip/pip.conf"),
+    ("pip-home-legacy", "{home}/.pip/pip.conf"),
+];
+
+/// SANDBOX-30 and SANDBOX-21 (brave/bravebot#3858): a configuration file reaches an unconfined
+/// start of the suite only if a confined stage can write it. A confined stage writes the session
+/// directory and nothing else of the workflow's places, so its `.cargo/config.toml`, `.npmrc` and
+/// `GNUmakefile` are read by the next program started in that directory, and the same names in the
+/// directory above it, the scratch home or the places beside it are refused. The regression it
+/// rejects: a toolchain list that names `~/.cargo` or the home directory in place of the cache
+/// beneath it, which lets a confined stage write the file that every later cargo or npm start in
+/// that home reads. The directories exist before the confined stage starts, so a refusal is the
+/// policy's and not a missing parent.
+#[test]
+fn a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let workflows: Vec<Workflow> = CONFIGURATION_LOCATIONS
+        .iter()
+        .map(|(name, path)| {
+            let directory = path.rsplit_once('/').expect("a path").0;
+            let workflow = Workflow::new("test", name)
+                .setup(Stage::new("mkdir", &["-p", directory]))
+                .stage(Stage::new("touch", &[path]));
+            if name.ends_with("session") {
+                workflow
+            } else {
+                workflow.refused()
+            }
+        })
+        .collect();
+
+    let _environment = Environment::held(&[], &[]);
+    let report = run("configuration-locations", &workflows);
+
+    assert!(report.skipped().is_empty(), "{:?}", report.skipped());
+    assert_eq!(report.rows.len(), CONFIGURATION_LOCATIONS.len());
+    for row in &report.rows {
+        assert_eq!(
+            row.outcome,
+            Outcome::Passed,
+            "{} was not {:?}: {:?}",
+            row.name,
+            row.expect,
+            row.outcome
+        );
+    }
 }
 
 /// SANDBOX-21: the `/usr/bin` shims run `$DEVELOPER_DIR/usr/bin/xcrun` before the tool. The

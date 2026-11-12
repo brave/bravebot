@@ -645,6 +645,72 @@ impl Places {
     }
 }
 
+/// Files, relative to a directory a program is started in or given as `HOME`, that `make`,
+/// `cargo` and `npm` read to choose code to run ([SANDBOX-30]). `go` and `python3` read theirs
+/// from the home, which `stage_command` switches off with `GOENV=off` and `PYTHONNOUSERSITE=1`. A
+/// directory the suite starts an unconfined program in holds what bravebot, the workflow's files
+/// and the setup stages before it put there, so these names are removed from it before every
+/// unconfined start. Each is a name bravebot chose, and removing one never reads it.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md#SANDBOX-30
+const CONFIGURATION_FILES: &[&str] = &[
+    "GNUmakefile",
+    "makefile",
+    ".cargo/config.toml",
+    ".cargo/config",
+    ".npmrc",
+    ".npm-init.js",
+];
+
+/// Whether `a` and `b` are one file. On a volume that ignores case `makefile` is the `Makefile` the
+/// workflow wrote, and removing it would remove the workflow's own file.
+fn one_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Whether `path` is a symbolic link itself, not what it points to.
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+}
+
+/// Remove [`CONFIGURATION_FILES`] from each of `directories`.
+///
+/// A name that is not there is skipped. A removal that fails for any other reason, such as a
+/// directory of that name or a directory that cannot be written, leaves the file in effect, so it
+/// is an error and no program is started. Where the directory a name is in (`.cargo`) is a link, the
+/// link is removed and not the file it leads to, which is outside the places.
+fn remove_configuration_files(directories: &[PathBuf]) -> std::io::Result<()> {
+    for directory in directories {
+        for name in CONFIGURATION_FILES {
+            let path = directory.join(name);
+            if *name == "makefile" && one_file(&path, &directory.join("Makefile")) {
+                continue;
+            }
+            let target = match path.parent() {
+                Some(parent) if parent != directory.as_path() && is_link(parent) => {
+                    parent.to_path_buf()
+                }
+                _ => path,
+            };
+            match std::fs::remove_file(&target) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(std::io::Error::new(
+                        error.kind(),
+                        format!("cannot remove {}: {error}", target.display()),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn attempt(
     root: &Path,
     index: usize,
@@ -661,6 +727,14 @@ fn attempt(
         std::fs::write(&file, places.fill(contents))?;
         if contents.starts_with("#!") {
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    // The directories an unconfined start reads configuration from: the home, the session, and the
+    // directory of each file the workflow wrote.
+    let mut directories = vec![places.home.clone(), places.session.clone()];
+    for (path, _) in &workflow.files {
+        if let Some(parent) = places.session.join(path).parent() {
+            directories.push(parent.to_path_buf());
         }
     }
     let confinement = if confined {
@@ -681,6 +755,7 @@ fn attempt(
     };
     for (number, stage) in workflow.setup.iter().enumerate() {
         let log = places.logs.join(format!("setup-{}.log", number + 1));
+        remove_configuration_files(&directories)?;
         let ran = start(stage, &places, None, &log);
         if !matches!(ran, Ok(Some(0))) {
             done.ended = Ended::Setup(number + 1);
@@ -697,6 +772,9 @@ fn attempt(
         done.stage = number + 1;
         done.log = Some(log.clone());
         done.code = None;
+        if confinement.is_none() {
+            remove_configuration_files(&directories)?;
+        }
         match start(stage, &places, confinement.as_ref(), &log) {
             Ok(Some(0)) => done.code = Some(0),
             Ok(code) => {
@@ -723,7 +801,8 @@ enum Started {
 }
 
 /// Start one stage, wait for it, and give its exit code, or `None` when a signal ended it or it ran
-/// past [`LIMIT`].
+/// past [`LIMIT`]. A caller starting a stage with no `confinement` first clears the
+/// [`CONFIGURATION_FILES`] with [`remove_configuration_files`].
 fn start(
     stage: &Stage,
     places: &Places,
@@ -816,6 +895,10 @@ fn stage_command(
     command
         .env("HOME", &places.home)
         .env("GOTOOLCHAIN", "local")
+        // No environment file: `off` is go's switch for not reading one, wherever it would be.
+        .env("GOENV", "off")
+        // No `usercustomize.py` or `.pth` file from the user site under the home.
+        .env("PYTHONNOUSERSITE", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
@@ -1501,7 +1584,8 @@ mod tests {
     /// setup stage or a control run starts `git` or `make` with a template directory, helper
     /// directory, common directory, makefile or developer directory the person's environment names
     /// (brave/bravebot#3797). The value is a genuine file outside every row, so the removal is not
-    /// a judgment of the value.
+    /// a judgment of the value. `GOENV` is set again to `off` by the start, so it counts as
+    /// withheld because the value the person's environment held does not reach the stage.
     #[test]
     fn the_variables_that_choose_the_code_a_stage_runs_are_removed_whatever_they_hold() {
         let (session, _planted, genuine) = planted_and_genuine("usability-host");
@@ -1513,7 +1597,6 @@ mod tests {
             "MAKEFILES",
             "DEVELOPER_DIR",
             "GOROOT",
-            "GOENV",
         ] {
             assert!(HOST_VARIABLES.contains(&name), "{name}");
             let parent = genuine.parent().unwrap();
@@ -1525,14 +1608,12 @@ mod tests {
                 "{name}"
             );
         }
+        assert!(HOST_VARIABLES.contains(&"GOENV"));
+        assert!(withheld("GOENV", genuine.parent().unwrap(), &session));
+        let goenv = stage_with(OsStr::new("GOENV"), genuine.as_os_str(), &session);
+        assert_eq!(set_to(&goenv, "GOENV"), Some(OsString::from("off")));
         for name in HOST_VARIABLES {
-            assert!(
-                removed(
-                    &stage_with(OsStr::new(name), genuine.as_os_str(), &session),
-                    OsStr::new(name)
-                ),
-                "{name}"
-            );
+            assert!(withheld(name, &genuine, &session), "{name}");
         }
     }
 
