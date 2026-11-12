@@ -609,6 +609,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             keeping_links: false,
             delegated: false,
             confined_to: None,
+            offered: None,
             servers: None,
             mcp: None,
             jobs: &mut jobs,
@@ -2062,12 +2063,13 @@ fn reads_that_run_together(
     calls: &[ToolCall],
     repeats: &crate::repeated_call::Repeats,
     confined_to: Option<&[String]>,
+    offered: Option<&[bravebot_aichat::protocol::Tool]>,
     hooks: &bravebot_config::hooks::Hooks,
 ) -> usize {
     let mut counting = repeats.clone();
     let mut together = 0;
     for call in calls {
-        if !tools::can_read_ahead(call, confined_to)
+        if !tools::can_read_ahead(call, confined_to, offered)
             || hooks
                 .firing(
                     bravebot_config::hooks::Moment::ToolFinished,
@@ -3955,6 +3957,7 @@ where
                     &completion.calls[index..],
                     &state.repeats,
                     addressed.as_ref().map(|addressed| addressed.tools()),
+                    Some(&state.offered),
                     hooks,
                 );
                 examined = index + reads.max(1);
@@ -9778,6 +9781,51 @@ mod tests {
             let _ = std::fs::remove_dir_all(scratch);
         }
 
+        /// The regression it rejects: a call refused for an argument its schema does not declare
+        /// being read ahead, so the disk is read for a call that is then refused (TOOL-3). The
+        /// first listing names `path`, which `list_files` does not declare, and is refused; the
+        /// two after it still run together. The hook records every directory a walk reads.
+        #[test]
+        fn a_call_with_an_undeclared_argument_is_not_read_ahead() {
+            let (scratch, workspace) = workspace("together-undeclared");
+            let walked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let seen = walked.clone();
+            workspace.hold_reads(move |directory| {
+                seen.lock().unwrap().push(directory.to_string());
+            });
+
+            let round = take(
+                &workspace,
+                &[
+                    ("list_files", r#"{"directory":"a","path":"a"}"#),
+                    ("search", &search("b")),
+                    ("search", &search("c")),
+                ],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().expect("the turn ended");
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 3, "{told:?}");
+            assert!(
+                told[0].contains("list_files takes no argument 'path'"),
+                "{}",
+                told[0]
+            );
+            let walked = walked.lock().unwrap().clone();
+            assert!(
+                !walked.iter().any(|directory| directory == "a"),
+                "the refused call was read ahead: {walked:?}"
+            );
+            assert!(
+                walked.iter().any(|directory| directory == "b")
+                    && walked.iter().any(|directory| directory == "c"),
+                "the reads after it did not run: {walked:?}"
+            );
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
         /// One call per name, each with arguments of its own so that no two are a repeat.
         fn calls(names: &[&str]) -> Vec<ToolCall> {
             names
@@ -9804,7 +9852,7 @@ mod tests {
             let none = bravebot_config::hooks::Hooks::default();
             let repeats = crate::repeated_call::Repeats::default();
             let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
-                reads_that_run_together(&calls(names), &repeats, None, hooks)
+                reads_that_run_together(&calls(names), &repeats, None, None, hooks)
             };
 
             assert_eq!(run(&["search", "list_files", "search"], &none), 3);
@@ -9835,12 +9883,15 @@ mod tests {
                     })
                     .collect()
             };
-            assert_eq!(reads_that_run_together(&same(4), &repeats, None, &none), 2);
+            assert_eq!(
+                reads_that_run_together(&same(4), &repeats, None, None, &none),
+                2
+            );
             let mut after_two = crate::repeated_call::Repeats::default();
             after_two.is_held(&same(1)[0]);
             after_two.is_held(&same(1)[0]);
             assert_eq!(
-                reads_that_run_together(&same(3), &after_two, None, &none),
+                reads_that_run_together(&same(3), &after_two, None, None, &none),
                 0
             );
         }

@@ -1985,6 +1985,7 @@ pub(super) fn tools_for_a_call<'a>(
         delegated: task.delegate.is_some(),
         keeping_links: task.keeps_links && task.delegate.is_none(),
         confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
+        offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
         jobs: &mut *state.jobs,

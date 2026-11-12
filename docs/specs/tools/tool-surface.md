@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 257
+      - crates/agent/src/tools.rs: 258
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
@@ -110,11 +110,31 @@ excluded. An argument vector passes the test, which is why running a pipeline of
 `verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
 
 <a id="TOOL-3"></a>
-### TOOL-3: an unknown tool is reported to the planner rather than ignored
+### TOOL-3: an unknown tool or an undeclared argument is reported to the planner rather than ignored
+
+A call to a built-in tool that names an argument the schema it was offered with does not declare
+is refused before the tool runs, and nobody is asked about it. It is not read ahead with the
+reads beside it ([TURN-10](../turns.md#TURN-10)) either, so nothing on disk is read for it. The
+refusal names the argument and lists the ones the tool takes. For `run` it also says that a
+variable is set as `NAME=value` in
+front of the program, and, in the mode where
+[CMDLINE-17](command-line.md#CMDLINE-17) accepts it, that `NAME=$VAR` and
+`NAME="$(cmd)"` are accepted there too. An argument given as `null` reads as absent. A server's
+tool is not checked, and neither is a name a tool reads to give its own answer: `path_ref` for
+`watch_file` and `download_url`, `read` for `fetch_url` where `vet_content` is not offered, `read`
+for `spawn_processor` ([SPAWN-5](spawn-processor.md#SPAWN-5)), and `stop` for `schedule_next` in
+a turn arranging a look ([SCHED-4](schedule-next.md#SCHED-4)).
 
 `verified-by: bravebot_agent::turn::an_unknown_tool_is_reported_to_the_model`
 `verified-by: bravebot_agent::turn::a_refused_call_is_reported_as_one`
 `verified-by: bravebot_agent::turn::each_tool_call_is_announced_before_it_runs_and_summarised_after`
+`verified-by: bravebot_agent::turn::an_undeclared_run_argument_is_refused_and_names_the_prefix`
+`verified-by: bravebot_agent::turn::an_undeclared_run_argument_in_bypass_mode_names_the_variable_form`
+`verified-by: bravebot_agent::turn::an_undeclared_argument_is_refused_by_any_built_in_tool`
+`verified-by: bravebot_agent::turn::a_call_giving_why_is_not_refused_as_undeclared`
+`verified-by: bravebot_agent::turn::a_stdin_ref_that_is_not_a_string_keeps_its_own_refusal`
+`verified-by: bravebot_agent::turn::a_call_with_an_undeclared_argument_is_not_read_ahead`
+`verified-by: bravebot_agent::mcp::a_server_tool_is_sent_an_argument_its_schema_does_not_declare`
 
 <a id="TOOL-4"></a>
 ### TOOL-4: a refusal is worded by the driver

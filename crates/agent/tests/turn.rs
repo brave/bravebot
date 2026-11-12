@@ -3173,6 +3173,114 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     );
 }
 
+/// SCHED-4, SCHED-6, TOOL-3. A turn arranging a look is offered no `stop`, and one it sends is not
+/// read: the call with a wait is kept as an ordinary wait, and the call without one is refused for
+/// the missing wait, as any other call is. The turn's offered list is set, so the check of
+/// undeclared arguments is in force.
+///
+/// The regression it rejects: the generic refusal of an undeclared argument answering `stop` first,
+/// so that a call SCHED-4 keeps is refused and the turn arranges no look.
+#[test]
+fn stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn() {
+    let scratch = Scratch::new(&format!("schedule-next-stop-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("schedule_next", r#"{"noop": true, "stop": true}"#),
+        tool_request(
+            "schedule_next",
+            r#"{"delay_seconds": 900, "noop": true, "stop": true}"#,
+        ),
+        reply_with("looking again in fifteen minutes"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when a.txt changes").looking_again(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("schedule_next"),
+        "the turn was not offered the tool, so nothing here was tested: {first}"
+    );
+    let refused = tool_results(&received.recv().expect("second request"));
+    assert!(
+        refused.contains("'delay_seconds' is required"),
+        "a call without a wait was not refused for the wait: {refused}"
+    );
+    assert!(
+        !refused.contains("takes no argument"),
+        "stop was refused as undeclared: {refused}"
+    );
+    let kept = tool_results(&received.recv().expect("third request"));
+    assert!(
+        !kept.contains("takes no argument"),
+        "stop was refused as undeclared: {kept}"
+    );
+    let wakeup = outcome.wakeup.expect("the wait was kept");
+    assert_eq!(wakeup.after, std::time::Duration::from_secs(900));
+    assert!(!wakeup.stop, "stop was read in a turn arranging a look");
+}
+
+/// SPAWN-5, TOOL-3. A processor call that sends `read` in place of `reads` is told that the
+/// argument is `reads`, in a whole turn whose offered list is set, so the check of undeclared
+/// arguments is in force.
+///
+/// The regression it rejects: the generic refusal of an undeclared argument answering `read` first,
+/// which names no `reads` and loses the sentence SPAWN-5 pins.
+#[test]
+fn a_processor_call_sending_read_is_told_the_argument_is_reads_in_a_whole_turn() {
+    let scratch = Scratch::new(&format!("processor-read-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "spawn_processor",
+            r#"{"instruction":"redo it","read":["ref:0"]}"#,
+        ),
+        reply_with("done"),
+    ]);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("redo it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("spawn_processor"),
+        "the turn was not offered a processor, so nothing here was tested: {first}"
+    );
+    let told = tool_results(&received.recv().expect("second request"));
+    assert!(
+        told.contains("the argument is 'reads', not 'read'"),
+        "the call was not told the argument is reads: {told}"
+    );
+    assert!(
+        !told.contains("takes no argument"),
+        "read was refused as undeclared: {told}"
+    );
+}
+
 /// SETLINK-1 through a whole turn: the lines the person typed reach `set_link` outside the auto mode,
 /// and the address it accepted leaves the turn in `links`.
 ///
@@ -3623,6 +3731,279 @@ fn a_shell_the_planner_names_is_not_dispatched() {
         "a shell call was answered as something other than an unknown name: {second}"
     );
     assert!(!marker.exists(), "the line the planner proposed ran");
+}
+
+/// A `run` call naming an argument its schema does not declare is refused before anything runs,
+/// with the name it gave, the names it takes, and how a variable is set instead.
+///
+/// The regression it rejects: a driver that reads only the names it knows and drops the rest, so
+/// the line runs without the variable the planner meant to set. The marker is what says nothing
+/// ran, under a confirmer that would have approved the line. The `$VAR` form is absent because
+/// only bypass mode accepts it (CMDLINE-17).
+#[test]
+fn an_undeclared_run_argument_is_refused_and_names_the_prefix() {
+    let scratch = Scratch::new(&format!("undeclared-run-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            &format!(
+                r#"{{"command": "touch {}", "env": {{"CARGO_TARGET_DIR": "/tmp/x"}}}}"#,
+                marker.display()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("run takes no argument 'env'"),
+        "the refusal did not name the argument: {second}"
+    );
+    assert!(
+        second.contains("command, ") && second.contains("stdin_ref"),
+        "the refusal did not list the arguments run takes: {second}"
+    );
+    assert!(
+        second.contains("NAME=value"),
+        "the refusal did not say how a variable is set: {second}"
+    );
+    assert!(
+        !second.contains("NAME=$VAR"),
+        "a session outside bypass mode was offered the $VAR form: {second}"
+    );
+    assert!(
+        !marker.exists(),
+        "the line ran despite the undeclared argument"
+    );
+}
+
+/// In bypass mode the same refusal also gives the `NAME=$VAR` form, which only that mode compiles
+/// (CMDLINE-17).
+///
+/// The regression it rejects: a hint that never mentions the form, or one that mentions it in
+/// every mode; the test above holds the other half.
+#[test]
+fn an_undeclared_run_argument_in_bypass_mode_names_the_variable_form() {
+    let scratch = Scratch::new(&format!("undeclared-run-bypass-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            &format!(
+                r#"{{"command": "touch {}", "env": {{"A": "b"}}}}"#,
+                marker.display()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut unattended = bravebot_agent::Unattended;
+    let mut confirmer = bravebot_agent::Confining::new(
+        &mut unattended,
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+    );
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("run takes no argument 'env'") && second.contains("NAME=value"),
+        "the refusal was not given: {second}"
+    );
+    assert!(
+        second.contains("NAME=$VAR"),
+        "a bypass session was not told the $VAR form: {second}"
+    );
+    assert!(
+        !marker.exists(),
+        "the line ran despite the undeclared argument"
+    );
+}
+
+/// Every built-in tool refuses an argument its schema does not declare, a write included, and the
+/// write does not happen.
+///
+/// The regression it rejects: a check made only for `run`, or one that lets the tool act and
+/// complains afterwards. `null` is read as absent, as the driver reads it for a declared argument,
+/// so a call padded with one is not refused for it.
+#[test]
+fn an_undeclared_argument_is_refused_by_any_built_in_tool() {
+    let scratch = Scratch::new(&format!("undeclared-write-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"out.txt","contents":"body","mode":"append","encoding":null}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write out.txt"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("write_file takes no argument 'mode'"),
+        "the refusal did not name the argument: {second}"
+    );
+    assert!(
+        !second.contains("'encoding'"),
+        "an argument given as null was refused: {second}"
+    );
+    assert!(
+        second.contains("contents_ref") && !second.contains("NAME=value"),
+        "the refusal did not list write_file's own arguments: {second}"
+    );
+    assert!(
+        confirmer.seen.is_empty(),
+        "the person was asked about the write"
+    );
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the write happened despite the undeclared argument"
+    );
+}
+
+/// `why`, which no built-in schema writes for itself, is not refused as undeclared: every offered
+/// schema declares it (TOOL-5), and the call runs.
+///
+/// The regression it rejects: a check made against the schemas before `why` is added to them, which
+/// would refuse every call a planner makes as TOOL-5 asks it to.
+#[test]
+fn a_call_giving_why_is_not_refused_as_undeclared() {
+    let scratch = Scratch::new(&format!("undeclared-why-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"out.txt","contents":"body","why":"to keep the result"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write out.txt"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !second.contains("takes no argument"),
+        "a call giving why was refused: {second}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt"))
+            .ok()
+            .as_deref(),
+        Some("body"),
+        "the write did not happen: {second}"
+    );
+}
+
+/// A declared `run` argument of the wrong shape is still refused with its own sentence rather than
+/// the undeclared one.
+///
+/// The regression it rejects: a check that refuses a declared argument it cannot read, or a `run`
+/// schema that lost `stdin_ref`, either of which replaces the sentence that says what the value
+/// has to be.
+#[test]
+fn a_stdin_ref_that_is_not_a_string_keeps_its_own_refusal() {
+    let scratch = Scratch::new(&format!("undeclared-stdin-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            &format!(
+                r#"{{"command": "touch {}", "stdin_ref": 5}}"#,
+                marker.display()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("'stdin_ref' must be a string naming a reference"),
+        "the shape refusal was not given: {second}"
+    );
+    assert!(
+        !second.contains("takes no argument"),
+        "a declared argument was refused as undeclared: {second}"
+    );
+    assert!(!marker.exists(), "the line ran");
 }
 
 fn tool_request_2(tool: &str, arguments: &str) -> String {
@@ -91465,7 +91846,7 @@ fn a_file_a_listing_or_a_search_names_does_not_load_a_rule() {
     let scratch = project_with_rules("rule-listing");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("list_files", r#"{"path":"src"}"#),
+        tool_request("list_files", r#"{"directory":"src"}"#),
         tool_request("search", r#"{"pattern":"nothing"}"#),
         reply_with("done"),
     ]);
