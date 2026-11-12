@@ -201,8 +201,21 @@ test('stdout that closes in the middle of a turn rejects and does not give a hal
 })
 
 test('killing a session stops a process that is mid-turn', async () => {
-  await withFake('hang', async (stand) => {
-    const session = startSession({ command: stand.command, env: stand.env })
+  await withFake('lines', async (stand) => {
+    let onQuestion: () => void = () => undefined
+    const asked = new Promise<void>((resolve) => {
+      onQuestion = resolve
+    })
+    const session = startSession({
+      command: stand.command,
+      env: stand.env,
+      onEvent: (event) => {
+        if (event.event === 'question') onQuestion()
+      },
+    })
+    // The stand-in holds the turn open after it writes a question, so the turn is running here.
+    session.send('ASK which cache')
+    await within(asked, 'the question event')
     const exit = await within(session.kill(), 'the process to end')
     assert.ok(exit.signal !== null || exit.code !== 0)
   })
