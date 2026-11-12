@@ -146,6 +146,12 @@ impl Servers {
         self.offer.is_some()
     }
 
+    /// The servers of a run that is offered `offer`, for a test of what the planner is told.
+    #[cfg(test)]
+    pub(crate) fn offering(offer: crate::mcp::Offer) -> Self {
+        Self { offer: Some(offer) }
+    }
+
     /// Whether any offered tool is marked read-only, which decides whether the planner is told a
     /// read is a step.
     pub(crate) fn any_read_only(&self) -> bool {

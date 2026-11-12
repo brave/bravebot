@@ -2512,6 +2512,21 @@ fn write<S: Sink, C: Confirmer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MANIFEST-15. The planner is offered `mcp_read` only where some tool it is offered is marked
+    /// read-only, and `mcp_call` wherever a tool is offered. The regression it rejects is a read
+    /// offered for a list with nothing it may read, which a plan could then only be refused for.
+    #[test]
+    fn a_read_is_offered_only_where_a_tool_is_marked_read_only() {
+        let servers = crate::server_calls::Servers::offering(crate::mcp::offer_for_test(&[(
+            "brave__open_tab",
+            "brave",
+            "open_tab",
+        )]));
+        let told = catalogue(&crate::connectors::Connectors::default(), &servers);
+        assert!(told.contains("SERVER_CALL"), "{told}");
+        assert!(!told.contains("SERVER_READ"), "{told}");
+    }
     use crate::confirm::shown_name;
 
     /// A plan whose only file-naming steps use `names` as the path of a read and a write.

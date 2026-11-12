@@ -1728,7 +1728,8 @@ Still open:
   what it runs. `digest` is what an approval binds to. `lines` is the question as the agent
   words it, one string per line, for a front end that draws the question as text.
 - `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
-  `arguments` (one line each) and `description`, which is the server's own text. `refused`
+  `arguments` (one line each), `description`, which is the server's own text, and `read_only`,
+  set where the server marks the tool read-only with its `readOnlyHint`. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
 - `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
   `mayStand`, which says whether the third answer can be recorded, and `askedForPrivateArguments`,

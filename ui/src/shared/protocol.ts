@@ -822,7 +822,13 @@ export interface McpServerRequest {
 }
 
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
-export interface McpTool { name: string; arguments: string[]; description: string | null }
+export interface McpTool {
+  name: string
+  arguments: string[]
+  description: string | null
+  /** The server marks the tool read-only, as its own `readOnlyHint` says (SERVERS-8). */
+  read_only?: boolean
+}
 
 /**
  * The tools an MCP server lists, put to the person before any is offered to the model

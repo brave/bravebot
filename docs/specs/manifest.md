@@ -140,9 +140,9 @@ program this mode starts is a connector's authority, at the absolute path in the
 definition, with one fixed argument and the request on its standard input
 ([connectors.md](connectors.md)).
 
-A tool of an MCP server is not a tool of this schema. It is the `tool` field of the one `mcp_call`
-step, whose handler calls only a tool on a list a person vouched for, so the schema still names
-every handler ([MANIFEST-15](#MANIFEST-15)).
+A tool of an MCP server is not a tool of this schema. It is the `tool` field of an `mcp_call` or
+`mcp_read` step, whose handlers call only a tool on a list a person vouched for, so the schema still
+names every handler ([MANIFEST-15](#MANIFEST-15)).
 
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
@@ -609,6 +609,7 @@ nobody asked about.
 `verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it`
+`verified-by: bravebot_agent::manifest::a_read_is_offered_only_where_a_tool_is_marked_read_only`
 `verified-by: bravebot_agent::manifest_server_calls::a_read_whose_reply_arrived_fills_its_slot_whatever_it_holds`
 `verified-by: bravebot_core::manifest::a_server_read_fills_a_slot_a_later_step_uses`
 `verified-by: bravebot_core::manifest::a_server_read_comes_before_every_action_and_takes_from_no_slot`

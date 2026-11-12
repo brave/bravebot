@@ -620,6 +620,12 @@ fn a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed() {
     );
 
     assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    // A plan of calls has no answer step, and the run says where what they returned is shown.
+    let summary = ran.outcome.as_ref().expect("ran").reply_for_display();
+    assert!(
+        summary.contains("what each server call returned is shown under it"),
+        "{summary}"
+    );
     assert_eq!(
         ran.called,
         vec![
@@ -1180,6 +1186,24 @@ fn a_call_that_gets_no_reply_ends_a_plan_run() {
     let attempt = attempt_of(failure);
     assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
     assert!(attempt.steps[1].contains("FAILED"), "{:?}", attempt.steps);
+
+    // A read that gets no reply has nothing to fill its slot with, and ends the run as a call does.
+    let read = ran(
+        PermissionMode::Bypass,
+        session(&url, &scratch, false, true),
+        &mcp,
+        vec![
+            read("drop_tab", json!({}), "said"),
+            call("open_tab", json!({"url": "https://example.com/2"})),
+        ],
+    );
+    let failure = read.outcome.expect_err("a read nothing answered");
+    assert!(failure.to_string().contains("step 1"), "{failure}");
+    assert!(
+        read.called.iter().all(|(name, _)| name != "open_tab"),
+        "{:?}",
+        read.called
+    );
 }
 
 /// A `deny` rule about the tool refuses the call in every mode and asks nobody, and a rule about a
@@ -1903,6 +1927,13 @@ fn a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it() {
     assert_eq!(ran.chat.len(), 3, "shape, plan and one processor call");
     assert!(ran.chat[..2].iter().all(|body| !body.contains(PAYLOAD)));
     assert!(ran.chat[1].contains("SERVER_READ"), "{}", ran.chat[1]);
+    // The planner's listing says which tools it may read, and no other.
+    assert!(
+        ran.chat[1].contains("brave:read_page (url*: string) read-only\\n")
+            && ran.chat[1].contains("brave:open_tab (url*: string)\\n"),
+        "{}",
+        ran.chat[1]
+    );
     assert!(ran.chat[2].contains(PAYLOAD));
 }
 
