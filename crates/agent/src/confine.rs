@@ -662,7 +662,9 @@ impl Confinement {
             || self
                 .requested_for(step)
                 .iter()
-                .any(|request| matches!(request, Requested::Toolchain(_)))
+                .any(|request| {
+                    matches!(request, Requested::Toolchain(toolchain) if toolchain.lends_the_network())
+                })
         {
             Some("a toolchain that fetches")
         } else if self.scope_of(step).is_some()
@@ -1753,7 +1755,8 @@ impl Confinement {
             _ => String::new(),
         };
         format!(
-            "{}{source}{refusal}{}{commit}{git}{launch}{listing}{}",
+            "{}{}{source}{refusal}{}{commit}{git}{launch}{listing}{}",
+            self.cache_sentence(steps),
             self.reach(steps),
             self.identity_sentence(steps, unconfined_offered, environment),
             credential_locations_sentence(
@@ -1762,6 +1765,70 @@ impl Confinement {
                 self.names_request_path()
             ),
         )
+    }
+
+    /// The sentence that opens the failure sentence where a step of `steps` resolved to a
+    /// toolchain whose cache this mode does not write, or to `gh` on macOS, whose cache is written
+    /// only where `~/.cache` exists (SANDBOX-15, SANDBOX-19). Nothing otherwise.
+    ///
+    /// Chosen from the file each step resolved to, the platform, the mode and whether the session
+    /// names a home and a scratch directory, and from nothing a program printed, so the same words
+    /// follow a cache refusal, a failing test and a typo.
+    fn cache_sentence(&self, steps: &[&Step]) -> String {
+        // Each step's toolchain, and whether its own assignment names XDG_CACHE_HOME. A gh step
+        // with that assignment keeps no cache under `~/.cache`. Read from the plan's argv, which
+        // the planner wrote.
+        let read: Vec<(Option<Toolchain>, bool)> = steps
+            .iter()
+            .map(|step| {
+                let Step {
+                    program: _,
+                    resolved,
+                    started_as: _,
+                    args: _,
+                    matched: _,
+                    environment,
+                    expansions: _,
+                    routes: _,
+                } = step;
+                let moves_the_cache = environment.iter().any(|(name, _)| name == "XDG_CACHE_HOME");
+                (Toolchain::of(resolved), moves_the_cache)
+            })
+            .collect();
+        let toolchains: std::collections::BTreeSet<&str> = read
+            .iter()
+            .filter_map(|(toolchain, _)| *toolchain)
+            .map(Toolchain::name)
+            .collect();
+        match self.mode {
+            SandboxMode::ReadOnly if !toolchains.is_empty() => format!(
+                "{READ_ONLY_CACHE_OPENING}{}{READ_ONLY_CACHE_CLOSING}",
+                toolchains.into_iter().collect::<Vec<_>>().join(", "),
+            ),
+            SandboxMode::Strict | SandboxMode::WorkspaceWrite
+                if self.prelude == Prelude::MacOs
+                    && self.home.is_some()
+                    && toolchains.contains("gh") =>
+            {
+                let moved = read
+                    .iter()
+                    .filter(|(toolchain, _)| matches!(toolchain, Some(Toolchain::Gh)))
+                    .all(|(_, moves_the_cache)| *moves_the_cache);
+                // The route is a requested scope on an `env` stage: an assignment in front of gh
+                // itself takes its scope away (`Scope::of`), and a request is added only to a
+                // stage with no assignment in front of it (SANDBOX-26).
+                match (&self.scratch, self.names_requests()) {
+                    _ if moved => String::new(),
+                    (Some(scratch), true) => format!(
+                        "{MACOS_GH_CACHE_SENTENCE}{MACOS_GH_CACHE_MOVED_SENTENCE}`env \
+                         XDG_CACHE_HOME='{}' gh ...`{MACOS_GH_CACHE_MOVED_SCOPE}",
+                        scratch.display()
+                    ),
+                    _ => format!("{MACOS_GH_CACHE_SENTENCE}{MACOS_GH_CACHE_PERSON_SENTENCE}"),
+                }
+            }
+            _ => String::new(),
+        }
     }
 
     /// What the failure sentence says of the key the `git` steps of `steps` offered over ssh, or
@@ -2767,6 +2834,41 @@ const MACOS_PROCESS_LISTING_SENTENCE: &str = " On macOS the sandbox refuses list
      is running, and that failure is not an answer about the program. A local service is found by \
      connecting to its port instead, such as `curl http://127.0.0.1:9222/json/version` for a \
      browser started with --remote-debugging-port=9222.";
+
+/// Said first after a failed step on macOS whose program resolved to `gh`, in a mode that writes
+/// gh's cache. The profile writes `~/.cache/gh` and never `~/.cache`, so on an account with no
+/// `~/.cache` gh cannot create its cache (SANDBOX-15).
+const MACOS_GH_CACHE_SENTENCE: &str = "A `gh` step could write its cache `~/.cache/gh`, and on \
+     macOS only where `~/.cache` already exists: where it does not, the sandbox refuses gh \
+     creating it.";
+
+/// Follows [`MACOS_GH_CACHE_SENTENCE`] where the session accepts a `scopes` argument, ahead of the
+/// line written with the session's scratch directory, which every mode that writes gh's cache also
+/// writes. gh keeps its cache in `$XDG_CACHE_HOME/gh` where that variable is set, so the line moves
+/// the cache somewhere the stage can create it. The variable is set by `env`, since an assignment
+/// in front of gh takes away its remote scope (SANDBOX-16), and the line asks for that scope by
+/// name, since `env` carries none of its own (SANDBOX-19, SANDBOX-26).
+const MACOS_GH_CACHE_MOVED_SENTENCE: &str = " A gh step can keep its cache in the session's \
+     scratch directory instead, which it can write, by starting gh through `env` with \
+     XDG_CACHE_HOME set to that directory and asking for gh's login by name: ";
+
+/// Follows the line [`MACOS_GH_CACHE_MOVED_SENTENCE`] introduces.
+const MACOS_GH_CACHE_MOVED_SCOPE: &str = " with `scopes: [\"remote\"]`. An assignment written in \
+     front of gh itself takes away gh's login and network, since a stage with an assignment in \
+     front of it carries no credential scope. ";
+
+/// Follows [`MACOS_GH_CACHE_SENTENCE`] where the session accepts no `scopes` argument or holds no
+/// scratch directory, so no line run in it moves gh's cache and keeps gh's login.
+const MACOS_GH_CACHE_PERSON_SENTENCE: &str = " Only the person can create `~/.cache`, so say in \
+     the reply that gh needs it. ";
+
+/// Opens the sentence that names the toolchains whose cache `read-only` leaves unwritten, ahead of
+/// their names.
+const READ_ONLY_CACHE_OPENING: &str = "Under `read-only` no toolchain cache is written, so a step \
+     of ";
+
+/// Closes the sentence [`READ_ONLY_CACHE_OPENING`] opens.
+const READ_ONLY_CACHE_CLOSING: &str = " that writes its cache is refused that write. ";
 
 /// Whether the file a step resolved to is one of the programs [`MACOS_PROCESS_LISTING_SENTENCE`]
 /// names. Decided from the compiled step alone, as [`launches_applications`] is.
@@ -6235,6 +6337,7 @@ mod tests {
                         ".gradle/caches",
                         ".gradle/wrapper",
                         ".gradle/native",
+                        ".cache/gh",
                     ]
                     .iter()
                     .any(|cache| path.ends_with(cache)),
@@ -6303,6 +6406,136 @@ mod tests {
                         !writes(&policy, &format!("{HOME}/{token}")),
                         "{prelude:?}: {program} writes {token}"
                     );
+                }
+            }
+        }
+    }
+
+    /// SANDBOX-15, SANDBOX-18: where the machine is read, a stage writes gh's cache, which is where
+    /// `gh run view --log-failed` keeps the log it downloads and where gh keeps its HTTP cache, and
+    /// writes none of gh's configuration or login. The regressions it rejects are a cache table
+    /// without gh's directory, which fails that command with permission denied, and a row naming
+    /// `~/.cache` or `~/.config/gh`, which hands every stage other programs' state or gh's token.
+    #[test]
+    fn where_the_machine_is_read_every_stage_writes_ghs_cache_and_not_its_login() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = reading_confinement(prelude, &["/work/project"]);
+            for stage in [
+                step(
+                    "/opt/homebrew/bin/gh",
+                    &["run", "view", "1", "--log-failed"],
+                ),
+                step("/bin/sh", &["-c", "gh run view 1 --log-failed"]),
+            ] {
+                let policy = confined.policy(&stage, Path::new("/work/project"), &[]);
+                assert!(
+                    writes(&policy, &format!("{HOME}/.cache/gh")),
+                    "{prelude:?}: {:?} does not write .cache/gh",
+                    stage.resolved
+                );
+                for not_written in [
+                    ".config/gh",
+                    ".config/gh/hosts.yml",
+                    ".config",
+                    ".cache",
+                    "Library/Caches/gh",
+                ] {
+                    assert!(
+                        !writes(&policy, &format!("{HOME}/{not_written}")),
+                        "{prelude:?}: {:?} writes {not_written}",
+                        stage.resolved
+                    );
+                }
+            }
+        }
+    }
+
+    /// SANDBOX-15, SANDBOX-16, SANDBOX-22: where the lists are keyed, a stage resolving to `gh`
+    /// writes gh's cache and a stage resolving to another program does not, a `git push` that
+    /// carries the remote scope included, and under `read-only` neither a `gh` stage nor a script
+    /// that asked for `gh` does. The regressions it rejects are a gh cache granted to every stage
+    /// under `strict`, a cache row added by the remote scope rather than by gh's list, and one
+    /// written under `read-only`.
+    #[test]
+    fn where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache() {
+        let gh = step("/usr/bin/gh", &["run", "view", "1", "--log-failed"]);
+        let make = step("/usr/bin/make", &[]);
+        let push = step("/usr/bin/git", &["push"]);
+        let script = step("/bin/sh", &["-c", "gh run view 1 --log-failed"]);
+        let work = Path::new("/work/project");
+        for (prelude, cache) in [
+            (Prelude::Linux, ".cache/gh"),
+            (Prelude::MacOs, ".cache/gh"),
+            (Prelude::Windows, "AppData/Local/GitHub CLI"),
+        ] {
+            let cache = format!("{HOME}/{cache}");
+            let keyed = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            );
+            let strict = keyed.clone().with_mode(SandboxMode::Strict);
+            assert!(
+                writes(&strict.policy(&gh, work, &[]), &cache),
+                "{prelude:?}"
+            );
+            assert!(
+                !writes(&strict.policy(&make, work, &[]), &cache),
+                "{prelude:?}"
+            );
+            assert!(
+                !writes(&strict.policy(&push, work, &[]), &cache),
+                "{prelude:?}: the remote scope wrote gh's cache"
+            );
+            let asked = [Requested::Toolchain(Toolchain::Gh)];
+            assert!(
+                writes(
+                    &strict
+                        .clone()
+                        .with_requested(&asked)
+                        .policy(&script, work, &[]),
+                    &cache
+                ),
+                "{prelude:?}: the control does not write the cache"
+            );
+            let read_only = keyed.with_mode(SandboxMode::ReadOnly);
+            assert!(
+                !writes(&read_only.policy(&gh, work, &[]), &cache),
+                "{prelude:?}"
+            );
+            assert!(
+                !writes(
+                    &read_only.with_requested(&asked).policy(&script, work, &[]),
+                    &cache
+                ),
+                "{prelude:?}: read-only wrote the cache a script asked for"
+            );
+        }
+    }
+
+    /// SANDBOX-15: gh reads `XDG_CACHE_HOME` to move its cache, and the row does not follow it,
+    /// whether the session's environment or an assignment on the line sets it. The regression it
+    /// rejects is a gh row read from the environment, which a model-written assignment would then
+    /// point at any directory it chose.
+    #[test]
+    fn xdg_cache_home_moves_no_row_for_gh() {
+        let moved = "/elsewhere/cache".to_string();
+        let environment = vec![("XDG_CACHE_HOME".to_string(), moved.clone())];
+        let mut assigned = step("/usr/bin/gh", &["run", "view", "1", "--log-failed"]);
+        assigned.environment = environment.clone();
+        let plain = step("/usr/bin/gh", &["run", "view", "1", "--log-failed"]);
+        let work = Path::new("/work/project");
+        for confined in [
+            reading_confinement(Prelude::MacOs, &["/work/project"]),
+            reading_confinement(Prelude::Linux, &["/work/project"]).with_mode(SandboxMode::Strict),
+        ] {
+            for (stage, inherited) in [(&plain, &environment[..]), (&assigned, &[][..])] {
+                let policy = confined.policy(stage, work, inherited);
+                assert!(writes(&policy, &format!("{HOME}/.cache/gh")));
+                for not_written in [moved.clone(), format!("{moved}/gh")] {
+                    assert!(!writes(&policy, &not_written), "{not_written}");
                 }
             }
         }
@@ -7651,6 +7884,42 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    /// SANDBOX-20, SANDBOX-26: asking for `gh` by name lends gh's cache and no network, since
+    /// whether a `gh` stage reaches the network is the remote scope's question (SANDBOX-16). The
+    /// regression it rejects is every requested toolchain read as one that fetches, which reopens
+    /// a closed session for a script that asked only for a writable cache.
+    #[test]
+    fn a_requested_gh_lends_its_cache_and_keeps_a_closed_network_closed() {
+        let script = step("/bin/sh", &["-c", "gh run view 1 --log-failed"]);
+        let closed = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_requests_offered(true)
+        .with_mode(SandboxMode::Strict)
+        .with_network(Network::Closed);
+        let asked = closed
+            .clone()
+            .with_requested(&[Requested::Toolchain(Toolchain::Gh)]);
+        assert!(!asked.egress(&script));
+        assert_eq!(
+            asked.network_for_the_trail(&[&script]),
+            closed.network_for_the_trail(&[&script])
+        );
+        let cache = format!("{HOME}/.cache/gh");
+        assert!(writes(
+            &asked.policy(&script, Path::new("/work/project"), &[]),
+            &cache
+        ));
+        assert!(!writes(
+            &closed.policy(&script, Path::new("/work/project"), &[]),
+            &cache
+        ));
     }
 
     /// SANDBOX-26: names are kept once and in the menu's order whatever order the planner wrote
@@ -13308,5 +13577,182 @@ mod tests {
                 assert!(!line.contains(named), "{named} is in {line}");
             }
         }
+    }
+
+    /// SANDBOX-19: a failed line with a step whose program resolved to `gh` on macOS opens with the
+    /// sentence about gh's cache, and under `read-only` a line with any toolchain's step opens with
+    /// the sentence that the mode writes no cache, before the account of the confinement and its
+    /// credential scopes. The regression it rejects is the cause buried after the generic paragraph
+    /// about credential scopes and `/add-dir`, which a planner reads as the cause and retries on.
+    #[test]
+    fn a_failed_toolchain_step_opens_with_what_the_mode_does_with_its_cache() {
+        let gh = step(
+            "/opt/homebrew/bin/gh",
+            &["run", "view", "1", "--log-failed"],
+        );
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::Strict] {
+            let said = reading_confinement(Prelude::MacOs, &["/work/project"])
+                .with_mode(mode)
+                .profile(&[&step("/bin/echo", &[]), &gh]);
+            assert!(
+                said.starts_with(MACOS_GH_CACHE_SENTENCE),
+                "{mode:?}: {said}"
+            );
+            assert!(
+                said.contains(MACOS_GH_CACHE_MOVED_SENTENCE.trim()),
+                "{mode:?}: {said}"
+            );
+            assert!(
+                said.contains(
+                    "`env XDG_CACHE_HOME='/var/scratch' gh ...` with `scopes: [\"remote\"]`"
+                ),
+                "{mode:?}: the line does not name the scratch directory the driver holds: {said}"
+            );
+            assert!(said.contains("Confinement:"), "{mode:?}: {said}");
+        }
+        for (prelude, program) in [
+            (Prelude::MacOs, "/opt/homebrew/bin/gh"),
+            (Prelude::Linux, "/usr/bin/cargo"),
+        ] {
+            let said = reading_confinement(prelude, &["/work/project"])
+                .with_mode(SandboxMode::ReadOnly)
+                .profile(&[&step(program, &["build"])]);
+            assert!(
+                said.starts_with("Under `read-only` no toolchain cache is written"),
+                "{prelude:?}: {said}"
+            );
+            assert!(!said.starts_with(MACOS_GH_CACHE_SENTENCE), "{said}");
+        }
+    }
+
+    /// SANDBOX-19, SANDBOX-26, SANDBOX-16: the line the gh cache sentence names, compiled and asked
+    /// for with the scope it names, starts gh's stage with gh's login and the network of a closed
+    /// session, so the route keeps what `gh run view --log-failed` needs. The control is the line
+    /// with the assignment written in front of gh, which a requested scope does not reach. Where the
+    /// session accepts no `scopes`, the sentence names no line and says only the person can create
+    /// `~/.cache`; where every gh step already sets XDG_CACHE_HOME it says nothing of the cache.
+    /// The regression it rejects is the sentence naming `XDG_CACHE_HOME='<scratch>' gh ...`, which
+    /// loses the remote scope (#3988).
+    #[test]
+    fn the_gh_cache_line_the_sentence_names_keeps_ghs_login() {
+        let gh = step(
+            "/opt/homebrew/bin/gh",
+            &["run", "view", "1", "--log-failed"],
+        );
+        let session = reading_confinement(Prelude::MacOs, &["/work/project"])
+            .with_mode(SandboxMode::WorkspaceWrite)
+            .with_network(Network::Closed);
+        let said = session.profile(&[&gh]);
+        let start = said.find("`env ").expect("names a line") + 1;
+        let end = start + said[start..].find('`').expect("closes the line");
+        let line = said[start..end].replace("gh ...", "gh run view 1 --log-failed");
+        assert!(
+            said[end..].starts_with("` with `scopes: [\"remote\"]`"),
+            "{said}"
+        );
+        let login = format!("{HOME}/.config/gh");
+        let lent = |line: &str| {
+            let plan = plan_of(line, Path::new("/work/project"));
+            let steps = plan.steps();
+            let requested = session
+                .clone()
+                .with_requested(&[Requested::Scope(Scope::Remote)]);
+            let policy = requested.policy(steps[0], Path::new("/work/project"), &[]);
+            (
+                policy.readable.iter().any(|row| row == Path::new(&login)),
+                policy.allow_network,
+            )
+        };
+        assert_eq!(lent(&line), (true, true), "{line}");
+        assert_eq!(
+            lent("XDG_CACHE_HOME=/var/scratch gh run view 1 --log-failed"),
+            (false, false)
+        );
+
+        let refused = session.clone().with_requests_offered(false).profile(&[&gh]);
+        assert!(!refused.contains("XDG_CACHE_HOME"), "{refused}");
+        assert!(
+            refused.starts_with(&format!(
+                "{MACOS_GH_CACHE_SENTENCE}{MACOS_GH_CACHE_PERSON_SENTENCE}"
+            )),
+            "{refused}"
+        );
+
+        let mut moved = gh.clone();
+        moved.environment = vec![("XDG_CACHE_HOME".into(), "/var/scratch".into())];
+        let quiet = session.profile(&[&moved]);
+        assert!(!quiet.contains(MACOS_GH_CACHE_SENTENCE), "{quiet}");
+    }
+
+    /// SANDBOX-19: a macOS session that accepts requests but holds no scratch directory has no
+    /// directory to move gh's cache to, so after a failed gh step it says only the person can
+    /// create `~/.cache` and names no `XDG_CACHE_HOME` line. The control is the same session with
+    /// a scratch directory, which names the line. Rejects a line written with an empty or missing
+    /// path, and a session with no scratch directory saying nothing of gh's cache.
+    #[test]
+    fn a_session_with_no_scratch_directory_says_only_the_person_can_create_the_gh_cache() {
+        let gh = step(
+            "/opt/homebrew/bin/gh",
+            &["run", "view", "1", "--log-failed"],
+        );
+        let unscratched = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![PathBuf::from("/work/project")],
+            None,
+        )
+        .with_requests_offered(true)
+        .with_mode(SandboxMode::WorkspaceWrite);
+        let said = unscratched.profile(&[&gh]);
+        assert!(!said.contains("XDG_CACHE_HOME"), "{said}");
+        assert!(
+            said.starts_with(&format!(
+                "{MACOS_GH_CACHE_SENTENCE}{MACOS_GH_CACHE_PERSON_SENTENCE}"
+            )),
+            "{said}"
+        );
+
+        let scratched = reading_confinement(Prelude::MacOs, &["/work/project"])
+            .with_mode(SandboxMode::WorkspaceWrite)
+            .profile(&[&gh]);
+        assert!(
+            scratched.contains("`env XDG_CACHE_HOME='/var/scratch' gh ...`"),
+            "{scratched}"
+        );
+    }
+
+    /// SANDBOX-19: where no step of the line resolved to a toolchain whose cache the mode leaves
+    /// unwritten, the sentence still opens with the account of the confinement. Rejects a cache
+    /// sentence said for every failure, or for `gh` on a platform whose profile has no such gap,
+    /// or chosen from a name that only contains `gh`.
+    #[test]
+    fn a_failed_line_with_no_such_toolchain_step_opens_with_the_confinement() {
+        let make = step("/usr/bin/make", &["gh"]);
+        let lookalike = step("/usr/bin/ghc", &[]);
+        let gh = step("/usr/bin/gh", &["run", "view"]);
+        let cargo = step("/usr/bin/cargo", &["build"]);
+        for (prelude, mode, steps) in [
+            (Prelude::MacOs, SandboxMode::WorkspaceWrite, vec![&make]),
+            (
+                Prelude::MacOs,
+                SandboxMode::WorkspaceWrite,
+                vec![&lookalike],
+            ),
+            (Prelude::MacOs, SandboxMode::WorkspaceWrite, vec![&cargo]),
+            (Prelude::MacOs, SandboxMode::ReadOnly, vec![&make]),
+            (Prelude::Linux, SandboxMode::WorkspaceWrite, vec![&gh]),
+            (Prelude::Linux, SandboxMode::Strict, vec![&gh]),
+        ] {
+            let said = reading_confinement(prelude, &["/work/project"])
+                .with_mode(mode)
+                .profile(&steps);
+            assert!(
+                said.starts_with("Confinement:"),
+                "{prelude:?} {mode:?}: {said}"
+            );
+        }
+        let said = confinement(&["/work/project"]).profile(&[&gh]);
+        assert!(said.starts_with("Confinement:"), "Windows: {said}");
     }
 }
