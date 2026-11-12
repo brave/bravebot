@@ -90,7 +90,7 @@ class Clean(unittest.TestCase):
         return result.stdout
 
     def branches(self):
-        return set(git("for-each-ref", "refs/heads", "--format=%(refname:short)", cwd=self.clone).split())
+        return set(git("for-each-ref", "refs/heads", "--format=%(refname:lstrip=2)", cwd=self.clone).split())
 
     def test_deletes_a_merged_branch_and_removes_its_clean_worktree(self):
         path = self.branch("done", worktree=True)

@@ -123,7 +123,7 @@ def get_default_branch(repo: Path) -> str:
 
 
 def list_local_branches(repo: Path) -> list[str]:
-    out = git_stdout(repo, ["for-each-ref", "refs/heads", "--format=%(refname:short)"])
+    out = git_stdout(repo, ["for-each-ref", "refs/heads", "--format=%(refname:lstrip=2)"])
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
