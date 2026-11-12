@@ -922,6 +922,7 @@ fn a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopene
         resolved: "/bin/cat".into(),
         started_as: "/bin/cat".into(),
         args: Vec::new(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),

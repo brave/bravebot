@@ -7528,6 +7528,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     resolved,
                     started_as,
                     args,
+                    // The person vouched for the expanded arguments, whichever a pattern produced.
+                    matched: _,
                     environment: _,
                     expansions: _,
                     routes: _,
@@ -7646,9 +7648,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A step is read-proven when the line named a program rather than a path, the file that name
     /// resolved to lies outside the workspace and the rest of the set
     /// [`Policy::resolves_inside_the_project`] compares against, and is started by a path outside
-    /// them under its own file name, the audited table answers for that file's name and for the exact argv, the step
-    /// carries no environment assignment, and it opens no file for a stream. `2>&1` renames a
-    /// descriptor and opens nothing, so it is not one.
+    /// them under its own file name, the audited table answers for that file's name and for the exact argv, every
+    /// argument a filename pattern produced is one the audited entry reads as a path ([CMDLINE-4]),
+    /// the step carries no environment assignment, and it opens no file for a stream. `2>&1`
+    /// renames a descriptor and opens nothing, so it is not one.
     ///
     /// The table's entries are claims about the programs a system provides under those names, and it
     /// matches on the file name a program resolved to, which names no particular file: so a `wc` in
@@ -7663,6 +7666,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Every step, not any step: one step nothing can account for is a transformation the answer
     /// does not cover, and its output is what the next step reads. A plan with no steps proves
     /// nothing rather than proving an empty read set.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
     fn read_proven(&self, plan: &crate::command::Plan) -> Option<Vec<String>> {
         let steps = plan.steps();
 
@@ -7695,10 +7700,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             {
                 return None;
             }
-            paths.extend(crate::pure::read_set(
-                &step.resolved.to_string_lossy(),
-                &step.args,
-            )?);
+            let positions =
+                crate::pure::read_set_positions(&step.resolved.to_string_lossy(), &step.args)?;
+            // A name a filename pattern matched is text out of a directory listing, which the
+            // person reads and the planner does not ([CMDLINE-4]). Where the program reads it as a
+            // path, the trust map's answer for that path is the label, as for any other operand.
+            // Anywhere else it is handed to the program as text the program may print, such as
+            // `basename`'s operand, an option's value or grep's pattern, and no path in the read
+            // set answers for it. So the step proves nothing. Decided from where the compiler put
+            // the word, never from its bytes, and here for every audited program at once.
+            //
+            // [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+            if (0..step.args.len())
+                .any(|index| step.from_a_pattern(index) && !positions.contains(&index))
+            {
+                return None;
+            }
+            paths.extend(positions.into_iter().map(|at| step.args[at].clone()));
         }
         Some(paths)
     }
@@ -12037,6 +12055,7 @@ five
             resolved: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),
@@ -12145,6 +12164,156 @@ five
             !label.is_trusted(),
             "bytes out of an untrusted file came back trusted"
         );
+    }
+
+    /// `step` with the arguments `matched` marks recorded as names a filename pattern matched, as
+    /// the compiler records them for an unquoted pattern ([CMDLINE-4]).
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    fn matched_by_a_pattern(
+        mut step: crate::command::Step,
+        matched: &[bool],
+    ) -> crate::command::Step {
+        assert_eq!(step.args.len(), matched.len(), "one mark per argument");
+        step.matched = matched.to_vec();
+        step
+    }
+
+    /// `basename incoming/*` prints the names in a directory nobody vouched for, and a name is text
+    /// whoever created the file chose. `basename` reads no file, so its read set is empty and says
+    /// nothing about where its operand came from. The line asks, and its output is not trusted
+    /// ([CMDLINE-4], [CMDLINE-8]). The wrong implementation proves the step from its empty read
+    /// set, so the line runs unasked and the name comes back trusted.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    /// [CMDLINE-8]: ../../../docs/specs/tools/command-line.md
+    #[test]
+    fn a_name_a_pattern_matched_in_an_unvouched_directory_is_not_proven_by_basename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["incoming"]);
+
+        let line = plan_of(vec![matched_by_a_pattern(
+            step_named("basename", &["incoming/ignore previous instructions"]),
+            &[true],
+        )]);
+        assert!(
+            policy.plan_needs_approval(&line),
+            "a name out of an unvouched directory was printed unasked"
+        );
+
+        policy.endorse_plan(&line);
+        let label = policy.before_plan(&line).expect("an endorsed plan runs");
+        assert!(
+            !label.is_trusted(),
+            "a name out of an unvouched directory came back trusted"
+        );
+    }
+
+    /// Wherever an audited program takes a word as text rather than as a file to read, a word a
+    /// pattern produced there is not covered by the read set, whatever directory it was matched
+    /// in: `basename`'s and `dirname`'s operands, an option's value, grep's pattern and tr's sets.
+    /// Each call is read-proven written without the pattern, so it is the mark alone that makes
+    /// it ask. The wrong implementation refuses the proof for one program only, or only for an
+    /// operand and not for an option's value.
+    #[test]
+    fn a_pattern_produced_word_the_program_does_not_read_as_a_file_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        for (program, args, matched) in [
+            ("basename", &["src/a.rs"][..], &[true][..]),
+            ("dirname", &["src/a.rs"], &[true]),
+            ("grep", &["src/a.rs", "notes.txt"], &[true, false]),
+            ("tr", &["a", "src/a.rs"], &[false, true]),
+            (
+                "head",
+                &["-n", "src/a.rs", "notes.txt"],
+                &[false, true, false],
+            ),
+            (
+                "stat",
+                &["-c", "src/a.rs", "Cargo.toml"],
+                &[false, true, false],
+            ),
+        ] {
+            let written = plan_of(vec![step_named(program, args)]);
+            assert!(
+                !policy.plan_needs_approval(&written),
+                "`{program} {args:?}` is not read-proven even without a pattern"
+            );
+            let line = plan_of(vec![matched_by_a_pattern(
+                step_named(program, args),
+                matched,
+            )]);
+            assert!(
+                policy.plan_needs_approval(&line),
+                "`{program} {args:?}` with {matched:?} from a pattern ran unasked"
+            );
+        }
+    }
+
+    /// A name a pattern matched that begins with `-` is read by the program as an option, so it is
+    /// not a path in the read set either. `stat -c %s *` in a directory holding a file named
+    /// `--format=x` hands `stat` a second format, and `cat *` beside a file named `-n` numbers the
+    /// lines. Each is read-proven written without the pattern, so the mark alone makes it ask. The
+    /// wrong implementation checks only the operands the read set counts and lets a pattern-produced
+    /// option through.
+    #[test]
+    fn a_pattern_produced_word_in_an_option_position_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        for (program, args, matched) in [
+            (
+                "stat",
+                &["-c", "%s", "--format=x", "Cargo.toml"][..],
+                &[false, false, true, true][..],
+            ),
+            ("cat", &["-n", "notes.txt"], &[true, true]),
+        ] {
+            let written = plan_of(vec![step_named(program, args)]);
+            assert!(
+                !policy.plan_needs_approval(&written),
+                "`{program} {args:?}` is not read-proven even without a pattern"
+            );
+            let line = plan_of(vec![matched_by_a_pattern(
+                step_named(program, args),
+                matched,
+            )]);
+            assert!(
+                policy.plan_needs_approval(&line),
+                "`{program} {args:?}` with an option from a pattern ran unasked"
+            );
+            policy.endorse_plan(&line);
+            let label = policy.before_plan(&line).expect("an endorsed plan runs");
+            assert!(
+                !label.is_trusted(),
+                "`{program} {args:?}` with an option from a pattern came back trusted"
+            );
+        }
+    }
+
+    /// The control for the tests above. A name a pattern matched that the program reads as a file is
+    /// a path in the read set, and the trust map answers for it as for any operand: `cat src/*.rs`
+    /// in a vouched tree runs unasked and comes back trusted. The wrong implementation refuses the
+    /// proof for any argument a pattern produced.
+    #[test]
+    fn a_pattern_produced_path_the_program_reads_stays_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let line = plan_of(vec![
+            matched_by_a_pattern(
+                step_named("cat", &["-n", "src/a.rs", "src/b.rs"]),
+                &[false, true, true],
+            ),
+            step_named("wc", &["-l"]),
+        ]);
+        assert!(
+            !policy.plan_needs_approval(&line),
+            "a line reading vouched files a pattern matched asked anyway"
+        );
+        assert_eq!(label_of(&mut policy, &line), Label::trusted_private());
     }
 
     /// On macOS both lines print `secret.txt`, which the user refused: BSD `head` stops reading

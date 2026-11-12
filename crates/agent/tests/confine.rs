@@ -782,6 +782,7 @@ fn an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after() {
         resolved: "/bin/cat".into(),
         started_as: "/bin/cat".into(),
         args: Vec::new(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),

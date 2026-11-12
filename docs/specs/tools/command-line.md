@@ -284,6 +284,18 @@ person and never spelled into a sentence for the planner. That holds for a file 
 line could not open as well ([CMDLINE-17](#CMDLINE-17)): it is named once, under the directory as
 typed.
 
+**A name a pattern matched is a path only where the program reads it as one.** The compiled plan
+records which arguments a pattern produced. Such an argument counts toward the proof of
+[CMDLINE-8](#CMDLINE-8) only in a position where the audited program reads it as a file, and then
+the trust map's answer for that path is its label. In any other position, such as an instruction
+operand like `basename`'s or grep's pattern, an option, or an option's value, the program may print
+the name, and no path in the read set answers for it. The step is then not read-proven, so the line
+is asked about and its output is untrusted. `basename incoming/*` asks and its output is
+quarantined; `basename 'incoming/*'` passes the pattern as written and keeps the proof road; and
+`cat incoming/*` takes its label from what the map says about `incoming/`. A matched name starting
+with `-`, such as a file called `--format=x` matched by `stat -c %s *`, is read as an option and
+refuses the proof the same way.
+
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
 
@@ -344,6 +356,13 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_delegate_resolves_a_tilde_against_the_home_its_parent_did`
 `verified-by: bravebot_tui::app::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
 `verified-by: bravebot_ui_bridge::retention::worker::a_tilde_in_a_desktop_run_line_stands_for_the_home_directory`
+`verified-by: bravebot_agent::cmdline::each_argument_records_whether_a_pattern_matched_it`
+`verified-by: bravebot_core::command::a_matched_list_of_another_length_marks_every_argument`
+`verified-by: bravebot_core::policy::a_name_a_pattern_matched_in_an_unvouched_directory_is_not_proven_by_basename`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_the_program_does_not_read_as_a_file_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_in_an_option_position_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_path_the_program_reads_stays_proven`
+`verified-by: bravebot_agent::turn::a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined`
 
 <a id="CMDLINE-5"></a>
 ### CMDLINE-5: a redirection target is a write destination and takes the write gates
@@ -600,7 +619,10 @@ read-proven, since its operands and the map's rules would be spelled relative to
 A plan with no steps is not read-proven either: the answer to what it read is that there was no
 proof.
 
-The plan's read set is those operand paths, glob-expanded. The output's first label is the meet of
+The plan's read set is those operand paths, glob-expanded. A name a pattern matched belongs to it
+only where the program reads that name as a file. A step holding a pattern-produced word anywhere
+else, in an instruction operand, an option or an option's value, is not read-proven
+([CMDLINE-4](#CMDLINE-4)). The output's first label is the meet of
 the labels over the read set and over stdin, which is the ordinary rule for a derived value,
 applied to a process, and is not a relabel and grants nothing.
 
@@ -688,6 +710,11 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::a_line_bsd_and_gnu_read_different_files_from_still_asks`
 `verified-by: bravebot_core::policy::a_line_reading_a_refused_file_called_dash_still_asks`
+`verified-by: bravebot_core::policy::a_name_a_pattern_matched_in_an_unvouched_directory_is_not_proven_by_basename`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_the_program_does_not_read_as_a_file_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_in_an_option_position_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_path_the_program_reads_stays_proven`
+`verified-by: bravebot_agent::turn::a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined`
 `verified-by: bravebot_core::policy::a_recursive_search_takes_its_label_from_the_whole_subtree`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::an_environment_assignment_leaves_a_step_unproven`

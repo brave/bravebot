@@ -31226,6 +31226,134 @@ fn a_line_that_only_reads_vouched_for_files_needs_no_prompt() {
     );
 }
 
+/// What the planner is sent back for one `run` of `command` in a workspace vouched for apart from
+/// `incoming/`, which holds one file named `name`, and what the person was asked. `docs/` is
+/// vouched for and holds `notes.txt`.
+fn a_run_beside_an_unvouched_directory(
+    tag: &str,
+    command: &str,
+    name: &str,
+    decision: bravebot_agent::RunDecision,
+) -> (usize, String) {
+    let scratch = Scratch::new(tag);
+    std::fs::create_dir(scratch.path.join("incoming")).unwrap();
+    std::fs::write(scratch.path.join("incoming").join(name), "planted\n").unwrap();
+    std::fs::create_dir(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs/notes.txt"), "vouched words\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let arguments = serde_json::json!({ "command": command }).to_string();
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("run", &arguments), reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = trusting_the_workspace();
+    trust.distrust("incoming");
+
+    let mut confirmer = AskedAboutRuns::answering(decision);
+    let seen = confirmer.seen.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("list them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let asked = seen.lock().unwrap().len();
+    (asked, second)
+}
+
+/// CMDLINE-4, CMDLINE-8: a name an unquoted pattern matched in a directory nobody vouched for is
+/// text whoever created the file chose. `basename incoming/*` reads no file, so no path in its
+/// read set answers for the name it prints: the line is asked about and what it printed reaches
+/// the planner as a reference. Quoted, the pattern is the planner's own word and the line keeps
+/// the proof road. `cat incoming/*` reads the matched files, so the trust map's answer for them
+/// decides, and `cat docs/*` in a vouched directory still runs unasked with its output shown.
+///
+/// The wrong implementation proves `basename` from its empty read set whatever produced its
+/// operand, so the first line runs unasked and the planner is sent the file's name as text.
+#[test]
+fn a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined() {
+    let planted = "planted-name-4c1e9";
+
+    let (asked, second) = a_run_beside_an_unvouched_directory(
+        "run-pattern-basename",
+        "basename incoming/*",
+        planted,
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(
+        asked, 1,
+        "`basename incoming/*` ran without the Run question"
+    );
+    assert!(
+        !second.contains(planted),
+        "a name out of an unvouched directory reached the planner: {second}"
+    );
+    assert!(
+        second.contains("ref:"),
+        "the output was not handed back as a reference: {second}"
+    );
+
+    let (asked, second) = a_run_beside_an_unvouched_directory(
+        "run-pattern-basename-quoted",
+        "basename 'incoming/*'",
+        planted,
+        bravebot_agent::RunDecision::reject(),
+    );
+    assert_eq!(
+        asked, 0,
+        "a quoted pattern, which matches nothing, was asked about"
+    );
+    assert!(
+        !second.contains(planted),
+        "a quoted pattern was expanded: {second}"
+    );
+    assert!(
+        !second.contains("could not be shown to you"),
+        "the literal word's output was quarantined: {second}"
+    );
+
+    let (asked, second) = a_run_beside_an_unvouched_directory(
+        "run-pattern-cat-unvouched",
+        "cat incoming/*",
+        planted,
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(asked, 1, "a line reading unvouched files ran unasked");
+    assert!(
+        !second.contains("planted\\n") && !second.contains(planted),
+        "bytes out of an unvouched file reached the planner: {second}"
+    );
+
+    let (asked, second) = a_run_beside_an_unvouched_directory(
+        "run-pattern-cat-vouched",
+        "cat docs/*",
+        planted,
+        bravebot_agent::RunDecision::reject(),
+    );
+    assert_eq!(
+        asked, 0,
+        "a line reading vouched files a pattern matched was asked about"
+    );
+    assert!(
+        second.contains("vouched words"),
+        "the planner was not shown the vouched file: {second}"
+    );
+}
+
 /// A result that no command produced says nothing about vouching, which would be advice about a
 /// tool the planner did not call.
 #[test]

@@ -2483,6 +2483,7 @@ mod tests {
                 args: ["pr", "view", "12", "--repo", "brave/bravebot"]
                     .map(String::from)
                     .to_vec(),
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),

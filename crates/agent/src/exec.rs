@@ -1552,6 +1552,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             resolved,
             started_as,
             args: _,
+            matched: _,
             environment: _,
             expansions: _,
             routes: _,
@@ -1874,6 +1875,7 @@ fn command_for(
         resolved: _,
         started_as,
         args: _,
+        matched: _,
         environment: _,
         // Their values are `expanded`, worked out by the caller for the whole pipeline before its
         // first step starts.

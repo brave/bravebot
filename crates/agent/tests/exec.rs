@@ -3153,6 +3153,7 @@ fn expanding(program: &std::path::Path, args: &[&str], expansions: Vec<Expansion
         resolved: program.to_path_buf(),
         started_as: program.to_path_buf(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions,
         routes: Vec::new(),
