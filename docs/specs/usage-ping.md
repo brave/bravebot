@@ -242,9 +242,8 @@ here goes through ([NET-1](network-egress.md#NET-1)), with only its own address 
 agent of `bravebot`, and carries no credential. The reply's body is never read: a status from 200 to
 299 is accepted and anything else is a failure ([PING-5](#PING-5)).
 
-<!-- TODO(en9.1): confirm production host -->
 The base address of a released build is `https://laptop-updates.brave.com`, which is not yet
-confirmed by the service's owners.
+confirmed by the service's owners ([Open questions](#open-questions)).
 
 **Why.** Neither `cargo run` nor a test that starts the program should be counted as a person's
 launch, so a debug build sends only where somebody named a destination. The variable lets a person
@@ -324,4 +323,8 @@ for that reason.
 - **A checkout's settings cannot turn it off.** Only the person's own file and the managed file are
   read, so a checkout's `usagePing` is ignored in both directions.
 
-- **The production address is not confirmed.** [PING-9](#PING-9) names it, and it may change.
+## Open questions
+
+<!-- TODO(en9.1): confirm production host -->
+- **The production address.** [PING-9](#PING-9) names `https://laptop-updates.brave.com`, which
+  the service's owners have not yet confirmed, so it may change.
