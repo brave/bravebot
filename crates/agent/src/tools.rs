@@ -4682,23 +4682,58 @@ fn record_confinement_refusal<S: Sink>(
     }
 }
 
+/// Whether a `read_file` of the path `edit_file` refused would put the vouch question, and who
+/// would answer it (EDIT-2, TRUST-8). Settled from the turn's list, the mode, the trust map and
+/// the path, never from the file's bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadToVouch {
+    /// No read would put the question: the turn is not offered `read_file`, the path was already
+    /// asked about this turn, a yes could not open it, or nobody is there to ask.
+    Not,
+    /// A read puts the question to the person.
+    AsksThePerson,
+    /// A read puts the question and the bypass mode answers it, so nobody is asked.
+    TheModeAnswers,
+}
+
 /// What `edit_file` says of a file it will not edit because the file is not trusted: it is not
 /// vouched for, or untrusted content was written to it (EDIT-2). Fixed text about the path's
 /// state. It holds no byte of the file and no name, and the label is the one the driver assigned.
-/// It names `write_file` and `run` only where the turn is offered them (TOOL-6), and always the
-/// vouch, which is the person's to give. The vouch is named on every turn, a delegate's included,
-/// because nothing on the turn says it cannot ask a person.
-fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label) -> String {
-    let routes = match (policy.writing_is_offered(), policy.running_is_offered()) {
-        (true, true) => {
-            "Write the whole file with write_file, edit it through run, or ask the person to \
-             vouch for the path"
+/// It names `write_file` and `run` only where the turn is offered them (TOOL-6). Where a
+/// `read_file` of the path would put the vouch question, the read is named as the way to put it,
+/// and under bypass as a read the mode vouches for, with no person named. Otherwise the vouch is
+/// named as the person's to give, on every turn, a delegate's included, because nothing on the
+/// turn says it cannot ask a person.
+fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label, read: ReadToVouch) -> String {
+    let tools = match (policy.writing_is_offered(), policy.running_is_offered()) {
+        (true, true) => Some("Write the whole file with write_file, edit it through run"),
+        (true, false) => Some("Write the whole file with write_file"),
+        (false, true) => Some("Edit it through run"),
+        (false, false) => None,
+    };
+    let vouch = match (read, tools.is_some()) {
+        (ReadToVouch::Not, false) => "Only the person can open it, by vouching for the path",
+        (ReadToVouch::Not, true) => "ask the person to vouch for the path",
+        (ReadToVouch::AsksThePerson, false) => {
+            "Read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have"
         }
-        (true, false) => {
-            "Write the whole file with write_file, or ask the person to vouch for the path"
+        (ReadToVouch::AsksThePerson, true) => {
+            "read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have"
         }
-        (false, true) => "Edit it through run, or ask the person to vouch for the path",
-        (false, false) => "Only the person can open it, by vouching for the path",
+        (ReadToVouch::TheModeAnswers, false) => {
+            "Read it with read_file, which in this mode vouches for the path without asking \
+             anybody, and then edit it with edit_file"
+        }
+        (ReadToVouch::TheModeAnswers, true) => {
+            "read it with read_file, which in this mode vouches for the path without asking \
+             anybody, and then edit it with edit_file"
+        }
+    };
+    let routes = match tools {
+        Some(tools) => format!("{tools}, or {vouch}"),
+        None => vouch.to_string(),
     };
     format!(
         "refused: this file is closed to edit_file, label {label}: it is not vouched for, or \
@@ -7019,7 +7054,28 @@ fn edit_file<S: Sink, C: Confirmer>(
     // inside the process to locate a passage releases nothing; only integrity decides whether
     // this comparison is safe to make.
     let Ok(current) = policy.read_trusted_content("edit_file", &source) else {
-        return Produced::problem(closed_to_editing(policy, source.label()));
+        // Whether a read of this path would put the vouch question, asked with the guards
+        // `read_file` asks before it does, from the path, the map, the mode and the turn's list.
+        // A run with nobody to ask outside bypass gets no question from a read, so it is not sent
+        // to one.
+        let read = if !nobody_to_ask
+            && policy.reading_files_is_offered()
+            && bravebot_filetype::by_name::media_for(&proposed_path).is_none()
+            && workspace.names_a_file(&proposed_path)
+            && {
+                let keyed = workspace.trust_key(&proposed_path);
+                let other_names = workspace.other_trust_keys(&proposed_path);
+                policy.would_offer_vouch(&keyed, &other_names.keys, other_names.complete)
+            } {
+            if mode == crate::PermissionMode::Bypass {
+                ReadToVouch::TheModeAnswers
+            } else {
+                ReadToVouch::AsksThePerson
+            }
+        } else {
+            ReadToVouch::Not
+        };
+        return Produced::problem(closed_to_editing(policy, source.label(), read));
     };
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair

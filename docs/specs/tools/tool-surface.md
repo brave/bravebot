@@ -216,7 +216,9 @@ background and remind a later turn of a kept job name `job_output` only where th
 and keep the sentence not to start the job again. The note on a file past the size cap that
 `read_git` shows names `read_file` and `run`, and the heading over the files it could not compare
 names `run`, each only where the list holds them. The refusal of an empty `old_text` names
-`write_file`, the refusal of an editor names `edit_file`, the refusal of `read_output` for a
+`write_file`, the refusal of an untrusted file by `edit_file` names `write_file`, `run` and
+`read_file` ([EDIT-2](edit-file.md#EDIT-2)), the refusal of an editor names `edit_file`, the
+refusal of `read_output` for a
 reference no program printed names `vet_content`, the refusals of `vet_content` and the empty-`reads`
 error of `spawn_processor` name `spawn_processor` and `write_file`, the refusal of `lsp` for a server
 that cannot be confined names `search` and `read_file`, and the refusal of a processor after private

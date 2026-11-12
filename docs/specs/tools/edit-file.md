@@ -55,11 +55,19 @@ that the file is not vouched for or untrusted content was written to it. It then
 the same turn is offered ([TOOL-6](tool-surface.md#TOOL-6)): a whole-file write with `write_file`,
 where nothing is located and the body is shown to a person in full; an edit through `run`; and
 asking the person to vouch for the path. `write_file` and `run` are named only where the turn is
-offered them, and a turn offered neither is told that only the person can open the file, by
-vouching for the path. The vouch route is named on every turn, a delegate's included, because
-nothing on the turn says it cannot ask a person. The sentence is fixed text about the path's state
-and holds no byte of the file. It does not tell the planner to use a reference, because `edit_file`
-takes none.
+offered them. Where a `read_file` of the path would put the vouch question this turn
+([TRUST-8](../trust-map.md#TRUST-8): the turn is offered `read_file`, the path is a file and not a
+picture, it was not already asked about this turn, no other name for it is distrusted, and somebody
+answers the question), the vouch route is named as that read: outside bypass, a `read_file` that
+asks the person to vouch, then `edit_file` once they have; under bypass, a `read_file` that the mode
+vouches for without asking anybody, then `edit_file`, with no person named. This holds for an
+unread file and for one a program wrote alike, since the read offers the vouch for both. Where no
+read would put the question, a turn offered neither `write_file` nor `run` is told that only the
+person can open the file, by vouching for the path, and any other turn is told to ask the person to
+vouch for it. The vouch route is named on every turn, a delegate's included, because nothing on the
+turn says it cannot ask a person. The sentence is fixed text about the path's state, the mode, the
+trust map and the turn's list, and holds no byte of the file and no name. It does not tell the
+planner to use a reference, because `edit_file` takes none.
 
 The refusal of an empty `old_text` says what the text to replace must be and, only where the turn
 is offered `write_file`, that `write_file` creates or replaces a whole file.
@@ -67,6 +75,10 @@ is offered `write_file`, that `write_file` creates or replaces a whole file.
 `verified-by: bravebot_agent::turn::editing_an_untrusted_file_is_refused`
 `verified-by: bravebot_agent::turn::editing_a_file_a_program_wrote_is_refused`
 `verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
+`verified-by: bravebot_agent::turn::under_bypass_the_refusal_to_edit_an_unread_file_names_the_read_that_vouches_for_it`
+`verified-by: bravebot_agent::turn::under_bypass_one_read_makes_an_unread_file_editable_without_asking`
+`verified-by: bravebot_agent::turn::the_refusal_to_edit_a_file_already_asked_about_does_not_name_the_read`
+`verified-by: bravebot_core::policy::whether_a_read_would_offer_the_vouch_is_asked_without_marking_the_path`
 `verified-by: bravebot_agent::tools::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 

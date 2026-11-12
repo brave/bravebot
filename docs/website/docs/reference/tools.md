@@ -516,6 +516,9 @@ decision may be taken only from trusted content. A file that is not vouched for,
 content was written to, is refused with a sentence saying the file is closed to `edit_file`. The
 sentence names the routes that are open: the whole file with `write_file`, an edit through `run`, or
 your vouching for the path. It names `write_file` and `run` only when the session offers them.
+Where a `read_file` of the file would ask you to vouch for it, the sentence names that read and then
+`edit_file`. In bypass mode the read is vouched for without asking anybody, so the sentence names
+the read and does not send the agent to you.
 
 ### Notebook cells
 
