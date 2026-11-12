@@ -53,9 +53,8 @@ read does not make that output readable. It points instead to `spawn_processor` 
 question about the output and to a person vouching for the command. `spawn_processor` is named only
 where the turn's list holds it, and the vouching advice names no tool
 ([TOOL-6](tool-surface.md#TOOL-6)). Its example of a build run by a delegate promises what failed
-only for output the planner may read. A planner told only that example started a delegate to run
-a command whose output it held as a reference, and the delegate was handed the same reference
-([RUN-14](run.md#RUN-14)).
+only for output the planner may read. A build example without that caveat reads as a way round the
+quarantine, but the delegate is handed the same reference ([RUN-14](run.md#RUN-14)).
 
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`

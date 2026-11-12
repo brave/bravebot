@@ -76,9 +76,9 @@ use, and it would guess globs to see which came back empty. Describing every ent
 the same sentence for each one, and the result is sent again every round: at 110 entries that is
 about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
 
-**Why the label.** A header that told the planner read_file had nothing to add for every file left it
-unable to read the files a person had vouched for, since it holds a reference and no name. One
-planner spent three rounds on the listing and then guessed a file name to read one.
+**Why the label.** A single sentence telling the planner read_file has nothing to add for every file
+leaves it unable to read a trusted file, since it holds a reference and no name, so it guesses names
+until a read works.
 
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
 `verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`

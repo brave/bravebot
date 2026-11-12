@@ -917,9 +917,9 @@ readable. The sentence names no tool: the reference's own description already na
 `spawn_processor` wherever the list holds it, and the sentence does not repeat it. The sentence carries no
 vouching advice, so it adds none where a record stops the asking or where no vouch stops an asking,
 and it names no mode. A job's result is worded by the same advice, so it carries the sentence too.
-The account the turn gives of an ended job carries the same sentence. Without it, a
-planner handed a reference to a run's output started a delegate to run the command again, and the
-delegate was handed the same reference and could not read it either.
+The account the turn gives of an ended job carries the same sentence. Without it, delegating the
+rerun looks like a way round the quarantine, but the delegate is handed the same reference and
+cannot read it either.
 
 **Who answers is stated once, in the description.** The `read_output` description is built for each
 request from the session as it stands, so a mode the person changes in the middle of a turn is what
