@@ -864,7 +864,7 @@ mod tests {
         let ran_after = |stored: bool, answer: &str| {
             let ran = std::cell::Cell::new(false);
             let mut asking = Prompting::new(std::io::Cursor::new(answer.to_string()), Vec::new());
-            after_asking(stored, &mut asking, || {
+            let _ = after_asking(stored, &mut asking, || {
                 ran.set(true);
                 ExitCode::SUCCESS
             });
