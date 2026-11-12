@@ -2461,6 +2461,87 @@ fn an_apply_naming_what_the_vouched_list_does_not_hold_is_refused_before_anybody
     }
 }
 
+/// An apply step whose `arguments` is not an object of its tools, names a tool the step does not
+/// list, or gives a tool's arguments as something other than an object is refused before the plan
+/// is put to anybody.
+///
+/// Rejects an implementation that ignores an `arguments` key outside `tools` or reads a malformed
+/// one as no arguments, which would put a step the planner did not write.
+#[test]
+fn an_apply_whose_arguments_are_malformed_is_refused_before_anybody_is_asked() {
+    let malformed = |change: &dyn Fn(&mut Value)| {
+        let mut steps = organise();
+        change(&mut steps[1]["args"]["arguments"]);
+        steps
+    };
+    for (steps, says_why) in [
+        (
+            malformed(&|arguments| *arguments = json!("[\"make_folder\"]")),
+            "must be a JSON object of tools",
+        ),
+        (
+            malformed(&|arguments| arguments["ghost"] = json!({"url": {"entry": "url"}})),
+            "name each of its tools and no other",
+        ),
+        (
+            malformed(&|arguments| arguments["make_folder"] = json!("new")),
+            "the arguments of make_folder must be a JSON object",
+        ),
+    ] {
+        let scratch = Scratch::new("apply-malformed");
+        let (url, mcp) = serve_marks();
+        let ran = walk(Walk {
+            session: marks_session(&url, &scratch, MARKS_DECLARED),
+            mode: PermissionMode::Ask,
+            task: Task::new("organise my bookmarks into folders"),
+            replies: vec![shape(), plan(steps.clone()), plan(steps)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        let failure = ran.outcome.expect_err("refused").to_string();
+        assert!(failure.contains(says_why), "{says_why}: {failure}");
+        assert!(ran.asked.plans.is_empty(), "{says_why}");
+        assert!(ran.called.is_empty(), "{says_why}");
+    }
+}
+
+/// An apply step whose `entries` is not a pointer or an object of them, or names a list the step
+/// does not read, ends the run at the step, with none of its calls made.
+///
+/// Rejects an implementation that reads a malformed `entries` as the whole reply or an unknown list
+/// as no pointer, which would number entries from somewhere the plan did not say.
+#[test]
+fn an_apply_whose_entries_are_malformed_makes_no_call() {
+    for (entries, says_why) in [
+        (json!("{not json"), "must be a pointer or an object of them"),
+        (json!({"labels": "/labels"}), "name no list labels"),
+    ] {
+        let scratch = Scratch::new("apply-entries");
+        let (url, mcp) = serve_marks();
+        let mut steps = organise();
+        steps[1]["args"]["entries"] = entries;
+        let ran = walk(Walk {
+            session: marks_session(&url, &scratch, MARKS_DECLARED),
+            mode: PermissionMode::Ask,
+            task: Task::new("organise my bookmarks into folders"),
+            replies: vec![shape(), plan(steps), says(ROWS)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        let failure = ran.outcome.expect_err("refused").to_string();
+        assert!(failure.contains(says_why), "{says_why}: {failure}");
+        assert!(
+            ran.called
+                .iter()
+                .all(|(tool, _)| tool != "make_folder" && tool != "move_mark"),
+            "{says_why}: {:?}",
+            ran.called
+        );
+    }
+}
+
 /// An apply step gives at least one argument a kind other than literal, which only a declaration
 /// allows and no server asked about every call holds, so a step of literals alone is refused before
 /// the plan is put to anybody and no list covers calls that would each be put on their own.

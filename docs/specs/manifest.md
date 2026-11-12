@@ -682,6 +682,8 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_of_literals_alone_is_refused_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_naming_what_the_vouched_list_does_not_hold_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_arguments_are_malformed_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_entries_are_malformed_makes_no_call`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_list_nobody_can_answer_makes_no_call`
 `verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_refuses_an_apply_steps_call_the_list_approved`
 `verified-by: bravebot_core::apply::applying_keeps_what_its_dependencies_allow_and_a_failure_skips_its_dependants`
