@@ -631,11 +631,11 @@ check-affected-containers:
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
-	check-review-ready-selftest check-clean-branches-selftest
+	check-review-ready-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
-	check-review-ready-selftest check-clean-branches-selftest
+	check-review-ready-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -648,9 +648,6 @@ check-reviewdog-selftest:
 
 check-rebase-selftest:
 	python3 agents/skills/rebase/selftest.py
-
-check-clean-branches-selftest:
-	python3 agents/skills/clean-branches-and-worktrees/selftest.py
 
 check-peer-advisories-selftest:
 	python3 agents/skills/peer-advisories/selftest.py
