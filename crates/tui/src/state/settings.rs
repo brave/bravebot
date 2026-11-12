@@ -691,6 +691,29 @@ impl Session {
         }
     }
 
+    /// Whether the daily usage ping is on, and what turned it off where it is not.
+    ///
+    /// Read fresh each time, so a variable or settings file changed since the session started is what
+    /// the panel shows. A session that does not persist records nothing, so it has no record of a
+    /// ping and is answered as incognito; that also keeps a test from reading the developer's choice.
+    pub fn usage_ping(&self) -> bravebot_config::usage_ping::UsagePing {
+        if self.persist {
+            bravebot_session::store::usage_ping()
+        } else {
+            bravebot_config::usage_ping::UsagePing::Incognito
+        }
+    }
+
+    /// Record whether the person wants the usage ping sent, keeping it for later sessions.
+    ///
+    /// Written through to disk only for a session that persists, the same rule the editing style
+    /// follows: a test must not rewrite the developer's own choice.
+    pub fn choose_usage_ping(&mut self, on: bool) {
+        if self.persist {
+            bravebot_session::store::save_usage_ping(on);
+        }
+    }
+
     /// Open the info panel where it was left open last time.
     ///
     /// Read only for a session that persists, as the editing style is, so a test is not handed the

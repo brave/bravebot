@@ -46,6 +46,8 @@ bravebot-skus = { path = "../skus" }
 bravebot-stamp = { path = "../stamp" }
 # Whether a newer release is recorded, which the desktop app shows as a link, and the hourly ask.
 bravebot-update = { path = "../update" }
+# The daily usage ping, sent at start and once the window has shown its notice.
+bravebot-usage-ping = { path = "../usage-ping" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # The digest a send is recorded under, so a repeat can be told from other parameters under its id.

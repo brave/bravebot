@@ -36,6 +36,8 @@ bravebot-stamp = { path = "../stamp" }
 # The startup line about a newer release, and the hourly ask behind it, which the desktop bridge
 # asks too.
 bravebot-update = { path = "../update" }
+# The daily usage ping, sent once the session has said the notice.
+bravebot-usage-ping = { path = "../usage-ping" }
 image = { workspace = true }
 ratatui = { workspace = true }
 ratatui-image = { workspace = true }

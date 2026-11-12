@@ -72,6 +72,7 @@ pub mod settings;
 pub mod store;
 pub mod turn;
 pub mod update_status;
+pub mod usage_ping;
 pub mod view;
 pub mod window_fault;
 pub mod wire;

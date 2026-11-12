@@ -373,6 +373,16 @@ impl Bridge {
             "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
+            "usage_ping.get" => Ok(crate::usage_ping::get()),
+            "usage_ping.set" => crate::usage_ping::set(request),
+            "usage_ping.notice_due" => {
+                Ok(json!({"due": bravebot_session::store::usage_ping_notice_due()}))
+            }
+            "usage_ping.mark_notice_shown" => {
+                bravebot_session::store::mark_usage_ping_notice_shown();
+                crate::usage_ping::start(self.settings.as_deref());
+                Ok(json!({"shown": bravebot_session::store::usage_ping_notice_shown()}))
+            }
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {

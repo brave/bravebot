@@ -400,6 +400,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `crashReports` | `false` stops crash reports being written and sent. Read from your own file only ([below](#crashreports)) |
+| `usagePing` | `false` stops the daily usage ping. Read from your own file only ([below](#usageping)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
@@ -1087,6 +1088,38 @@ session started with `--incognito` has no state directory to leave a report in, 
 sends none. The terminal says once, on the startup screen, that reports are sent. The desktop
 application does not, so this page and the README are where it is said for that. See
 [Crash reports](../security/security.md#crash-reports) for what leaves the process.
+
+### `usagePing`
+
+```json
+{ "usagePing": false }
+```
+
+Once a UTC day bravebot sends Brave one request saying that a copy of it ran, so that Brave can count
+how many people use each release. It holds the operating system, the version, how bravebot was
+installed, whether the launch was the terminal, the desktop app or a command line run, the kind of
+model service it starts with, whether you hold a premium key, four flags saying whether this is the
+first ping today, this week, this month and ever, and the Monday of the week of your first ping. It
+never holds your prompts, files, keys, paths, host name, model names or an identifier. See
+[The usage ping](../security/usage-ping.md) for an example request.
+
+The ping is on, and `false` turns it off. So do any of these, and any one is enough:
+
+- the switch in `/config`, or **Settings → General → Privacy** in the desktop app, which both write
+  `~/.bravebot/usage-ping`;
+- the environment variable `BRAVEBOT_USAGE_PING=0`;
+- the environment variable `DO_NOT_TRACK` set to anything but an empty value, `0` or `false`;
+- `"usagePing": false` in the [managed file](managed-settings.md), which no person's setting overrides.
+
+Only the boolean `false` turns it off here, and nothing turns it back on over another: a `true` in
+this file does not undo the switch. Only your own `~/.bravebot/settings.json` and the managed file are
+read for this key, so a checkout's `.bravebot/settings.json` cannot turn it off or on. Nothing is sent
+before bravebot has told you about the ping once, in the terminal, on standard error for `-p`,
+`--plain` and `bravebot acp`, or in the desktop app's sidebar. A session started with `--incognito`
+sends none.
+
+`BRAVEBOT_USAGE_PING_URL` sends the ping to another server instead, so you can see exactly what is
+sent. A build from source sends nothing unless it is set.
 
 ### `run.scrubEnv`
 

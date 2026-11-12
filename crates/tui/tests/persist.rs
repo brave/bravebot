@@ -761,6 +761,141 @@ fn a_recorded_answer_about_vetting_outlives_the_session_that_gave_it() {
     });
 }
 
+/// The usage-ping switch outlives the session that set it, and off is read back as off: read as
+/// no answer, the default would turn the ping back on for somebody who turned it off.
+#[test]
+fn the_usage_ping_switch_outlives_the_session_that_set_it() {
+    with_temp_home("usage-ping-switch", || {
+        assert_eq!(store::load_usage_ping(), None, "started with a choice");
+
+        store::save_usage_ping(false);
+        assert_eq!(
+            store::load_usage_ping(),
+            Some(false),
+            "off was not read back"
+        );
+
+        store::save_usage_ping(true);
+        assert_eq!(store::load_usage_ping(), Some(true), "on was not read back");
+    });
+}
+
+/// The answer every caller asks is gathered from the person's own settings file, the switch's file
+/// and the variables, so a front end cannot leave one of them out.
+#[test]
+fn the_usage_ping_answer_gathers_the_settings_file_the_switch_and_the_variables() {
+    use bravebot_config::env_var;
+    use bravebot_config::usage_ping::UsagePing;
+    with_temp_home("usage-ping-answer", || {
+        let saved: Vec<_> = [env_var::USAGE_PING, env_var::DO_NOT_TRACK]
+            .map(|name| (name, std::env::var_os(name)))
+            .into();
+        // SAFETY: single-threaded within the home lock, and restored before returning.
+        for (name, _) in &saved {
+            unsafe { std::env::remove_var(name) };
+        }
+        let home =
+            std::path::PathBuf::from(std::env::var_os("HOME").expect("a home")).join(".bravebot");
+        std::fs::create_dir_all(&home).expect("the state directory");
+
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::On,
+            "nothing said, and still off"
+        );
+
+        store::save_usage_ping(false);
+        assert_eq!(store::usage_ping(), UsagePing::OffByUser);
+
+        store::save_usage_ping(true);
+        std::fs::write(home.join("settings.json"), r#"{"usagePing": false}"#)
+            .expect("a settings file");
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::OffBySetting,
+            "the switch turned the ping back on over the settings file"
+        );
+
+        unsafe { std::env::set_var(env_var::DO_NOT_TRACK, "1") };
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::OffByEnvironment(env_var::DO_NOT_TRACK)
+        );
+
+        unsafe { std::env::set_var(env_var::USAGE_PING, "0") };
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::OffByEnvironment(env_var::USAGE_PING)
+        );
+
+        for (name, value) in saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    });
+}
+
+/// The usage-ping row in `/config` writes the switch's file, and the answer read fresh afterwards is
+/// the one picked: a switch that wrote nothing, or wrote what the next read does not understand,
+/// would leave the ping going for somebody who turned it off.
+#[test]
+fn turning_the_usage_ping_off_in_config_is_read_back_by_the_next_answer() {
+    use bravebot_config::env_var;
+    use bravebot_config::usage_ping::UsagePing;
+    with_temp_home("usage-ping-config", || {
+        let saved: Vec<_> = [env_var::USAGE_PING, env_var::DO_NOT_TRACK]
+            .map(|name| (name, std::env::var_os(name)))
+            .into();
+        // SAFETY: single-threaded within the home lock, and restored before returning.
+        for (name, _) in &saved {
+            unsafe { std::env::remove_var(name) };
+        }
+        let file = std::path::PathBuf::from(std::env::var_os("HOME").expect("a home"))
+            .join(".bravebot")
+            .join("usage-ping");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        assert_eq!(session.usage_ping(), UsagePing::On);
+
+        session.choose_usage_ping(false);
+        assert_eq!(
+            std::fs::read_to_string(&file)
+                .map(|s| s.trim().to_string())
+                .ok(),
+            Some("off".to_string()),
+            "the switch's file was not written"
+        );
+        assert_eq!(store::usage_ping(), UsagePing::OffByUser);
+        let next = bravebot_tui::state::Session::new("test").with_stored_history();
+        assert_eq!(next.usage_ping(), UsagePing::OffByUser);
+
+        session.choose_usage_ping(true);
+        assert_eq!(store::usage_ping(), UsagePing::On);
+
+        for (name, value) in saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    });
+}
+
+/// A session that does not persist neither writes the switch nor reads it, so a test cannot turn
+/// off the developer's own ping, and its panel shows the switch as locked.
+#[test]
+fn a_session_that_does_not_persist_leaves_the_usage_ping_switch_alone() {
+    use bravebot_config::usage_ping::UsagePing;
+    with_temp_home("usage-ping-unpersisted", || {
+        let mut session = bravebot_tui::state::Session::new("test");
+        assert_eq!(session.usage_ping(), UsagePing::Incognito);
+        session.choose_usage_ping(false);
+        assert_eq!(store::load_usage_ping(), None, "the switch was written");
+    });
+}
+
 /// UPDATE-11: with the check off, an ordinary session neither asks nor writes the record.
 ///
 /// The seeded stamp is old enough that a session with the check on would stamp it again before

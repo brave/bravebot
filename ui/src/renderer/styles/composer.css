@@ -431,6 +431,27 @@
 .composer-notice strong { font: var(--type-caption-strong); color: var(--ink-primary); }
 .composer-notice .notice-text { flex: 1 1 16em; min-width: 0; }
 .composer-notice .notice-actions { display: flex; gap: var(--leo-spacing-xs); margin-left: auto; }
+/* Information rather than a warning, and a paragraph long, so the icon is plain ink and stays by
+   the first line. */
+.usage-ping-notice { flex-wrap: nowrap; align-items: flex-start; --leo-icon-color: var(--ink-tertiary); }
+.usage-ping-notice > leo-icon { flex: none; margin-top: 3px; }
+.usage-ping-notice .notice-text { padding-top: 2px; line-height: 1.6; color: var(--ink-secondary); text-wrap: pretty; }
+.usage-ping-notice .notice-actions { flex: none; align-items: center; margin-top: -3px; }
+.notice-more {
+  display: inline;
+  margin: 0 0 0 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  font-weight: 600;
+  color: var(--ink-link);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.notice-more:hover { text-decoration: underline; text-underline-offset: 2px; }
+.notice-more:focus-visible { outline: none; border-radius: var(--radius-control); box-shadow: var(--shadow-focus); }
 
 /* ---- above the box: the alerts and pills that float over the end of the transcript.
    They stand on the box's top edge, take no height in the dock, and have the box's width. */

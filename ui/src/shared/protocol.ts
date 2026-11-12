@@ -422,6 +422,24 @@ export interface LanguageSaved {
   tag: string
 }
 
+/** What keeps the usage ping off where its switch cannot: `variable` is set for `environment`. */
+export interface UsagePingReason {
+  code: 'setting' | 'environment' | 'admin' | 'incognito'
+  variable?: string
+}
+
+/** `usage_ping.get`: whether the ping is on, and `reason` when the switch cannot change that. */
+export interface UsagePingReport {
+  enabled: boolean
+  changeable: boolean
+  reason: UsagePingReason | null
+}
+
+/** `usage_ping.set`: the report after the change, and whether the switch file was written. */
+export interface UsagePingSaved extends UsagePingReport {
+  saved: boolean
+}
+
 /**
  * A session begun from part of another one.
  *

@@ -1,0 +1,28 @@
+[package]
+name = "bravebot-usage-ping"
+description = "The anonymous usage ping bravebot sends to Brave at most once a day"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Where the record is kept, through the writing answer that incognito mode answers nothing to, the
+# date arithmetic, and whether a premium key is held.
+bravebot-agent = { path = "../agent" }
+# How this copy was installed, which service answers the default model, and the variable that
+# points the ping elsewhere.
+bravebot-config = { path = "../config" }
+bravebot-core = { path = "../core" }
+# The one request, through the egress gate like every other.
+bravebot-net = { path = "../net" }
+# Whether the ping is on and whether its notice was shown, and the audit trail the gate writes its
+# decision to.
+bravebot-session = { path = "../session" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

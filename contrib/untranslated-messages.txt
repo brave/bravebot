@@ -369,6 +369,15 @@ fr:ui-recalled-title
 fr:ui-recalled-tool
 fr:ui-recalled-unread
 fr:ui-recalled-you
+fr:ui-settings-privacy
+fr:ui-settings-usage-ping
+fr:ui-settings-usage-ping-explained
+fr:ui-settings-usage-ping-locked-admin
+fr:ui-settings-usage-ping-locked-environment
+fr:ui-settings-usage-ping-locked-incognito
+fr:ui-settings-usage-ping-locked-setting
+fr:ui-settings-usage-ping-unread
+fr:ui-settings-usage-ping-unsaved
 fr:unfinished-checkout
 fr:unfinished-failed
 fr:unfinished-goal-paused

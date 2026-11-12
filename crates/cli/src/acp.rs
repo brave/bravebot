@@ -18,6 +18,7 @@ pub(crate) fn command(args: &[String]) -> Option<()> {
     if !args.is_empty() {
         return None;
     }
+    crate::say_usage_ping_notice();
     let settings = bravebot_config::named_settings_file().map(std::path::Path::to_path_buf);
     // The same layers `bravebot-acp` reads: this directory's project files, the person's and the
     // named one. The answers every turn reads were settled before dispatch.
@@ -26,6 +27,13 @@ pub(crate) fn command(args: &[String]) -> Option<()> {
         settings.as_deref(),
     );
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&layers);
+    // The editor picks each session's model later, so the ping names the configured default. A
+    // configuration that does not load sends nothing, as it opens no session either.
+    if let Ok(config) =
+        bravebot_config::Config::from_env_and_settings(&layers, &bravebot_config::Managed::load())
+    {
+        crate::usage_ping(&config, None);
+    }
 
     let finished = bravebot_ui_bridge::acp_loop::serve(
         BufReader::new(std::io::stdin()),

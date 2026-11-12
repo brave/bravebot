@@ -640,6 +640,12 @@ const ALLOWED = new Set([
   'effort.set',
   'language.get',
   'language.set',
+  // The usage ping switch, kept in the file `/config` keeps.
+  'usage_ping.get',
+  'usage_ping.set',
+  // Whether the one-time notice about it is due, and recording that it was shown.
+  'usage_ping.notice_due',
+  'usage_ping.mark_notice_shown',
   'connectors.list',
   'connectors.preview',
   'connectors.connect',
