@@ -493,6 +493,7 @@ within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
 `verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
 `verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect

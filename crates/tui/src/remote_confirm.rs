@@ -800,6 +800,23 @@ mod tests {
         responder.join().expect("responder finished");
     }
 
+    /// MANIFEST-16. The terminal puts an apply step's list, and still says so through the wrappers
+    /// a manifest run puts around it, so a plan's step that needs the list is not refused here.
+    /// Where nobody can be asked it cannot. Rejects a wrapper that falls back to the default.
+    #[test]
+    fn the_terminal_puts_an_apply_list_through_the_wrappers_a_run_adds() {
+        let (outbound, _inbound) = channel::<ToMain>();
+        let (_answers, answer_rx) = channel();
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        let mut confining = bravebot_agent::Confining::new(
+            &mut confirmer,
+            bravebot_agent::PermissionMode::Ask,
+            false,
+        );
+        assert!(bravebot_agent::confirm::Timed::new(&mut confining).can_put_apply_lists());
+        assert!(!bravebot_agent::Unattended.can_put_apply_lists());
+    }
+
     /// A yes to a server's list is not a yes to a call of one of its tools, nor the other way round:
     /// one promotes the server's words and the other sends the planner's to it.
     #[test]

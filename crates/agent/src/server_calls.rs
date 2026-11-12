@@ -770,13 +770,8 @@ impl Servers {
             .map_err(|denial| denial.message)?;
         while let Some(at) = applying.next_call() {
             let called = crate::mcp::call_applied(
-                policy, offer, egress, confirmer, reporter, alias, at, &resolved,
+                policy, offer, egress, confirmer, reporter, alias, at, &resolved, covered,
             );
-            // The plan's approval is recorded for a call it covered that was sent, and for none a
-            // rule refused or the run did not reach.
-            if covered && !matches!(called, crate::mcp::Called::Problem(_)) {
-                policy.record_plan_covered_call(alias, &shown.calls[at].name);
-            }
             match called {
                 // What a made call returned is drawn as a failure's is, so a reply that says what
                 // the call replaced, such as the folder a bookmark left, lets the person undo it.
@@ -1210,7 +1205,8 @@ pub(crate) fn notes(
                         tools.join(", then "),
                         shape.max_rows,
                         shape.max_new,
-                        step.text("instruction")
+                        // Written out, so the line holds no character the person could not read.
+                        bravebot_core::invisible::spelled_code(step.text("instruction")).text
                     ),
                 )
             }),

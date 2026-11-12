@@ -486,6 +486,17 @@ mod tests {
         (one_shot, said, program)
     }
 
+    /// CLI-8. A one-shot cannot put an apply step's list, typed at a terminal, piped, or answering
+    /// a program over lines, so a plan whose step would put one is refused before it runs.
+    #[test]
+    fn a_one_shot_cannot_put_an_apply_steps_list() {
+        for attended in [true, false] {
+            assert!(!OneShot::new(&b""[..], Vec::new(), attended).can_put_apply_lists());
+        }
+        let (mut over_lines, _said, _program) = approving_over_lines(0);
+        assert!(!over_lines.can_put_apply_lists());
+    }
+
     fn keys(value: &serde_json::Value) -> Vec<String> {
         let mut keys: Vec<String> = value
             .as_object()

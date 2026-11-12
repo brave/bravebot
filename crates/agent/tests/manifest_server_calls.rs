@@ -368,8 +368,6 @@ struct Calls {
     stopping: Option<bravebot_core::cancel::Cancel>,
     /// The lists of calls an apply step put, and which calls to keep: every one where `None`.
     applies: Vec<ApplyRequest>,
-    /// A mode the person moves the run into once they have answered its plan, where a test says.
-    then_mode: Option<(bravebot_agent::LiveMode, PermissionMode)>,
     /// A mode the person moves the run into when a call is put to them at its step, after the plan
     /// was answered and before the steps after it run, where a test says.
     then_mode_at_call: Option<(bravebot_agent::LiveMode, PermissionMode)>,
@@ -393,7 +391,6 @@ impl Calls {
             order: Vec::new(),
             stopping: None,
             applies: Vec::new(),
-            then_mode: None,
             then_mode_at_call: None,
             apply_keeps: None,
             apply_unasked: false,
@@ -441,9 +438,6 @@ impl Confirmer for Calls {
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
         self.order.push("plan");
         self.plans.push(request.clone());
-        if let Some((live, mode)) = &self.then_mode {
-            live.set(*mode);
-        }
         match self.approve_plan {
             true => Decision::Approve,
             false => Decision::Reject,
@@ -2870,7 +2864,7 @@ fn an_apply_whose_call_could_depend_on_two_rows_is_refused() {
 
 /// A step whose tools are all marked plan-covered makes its calls on the person's approval of the
 /// plan, with no list put. The plan line says the step runs without asking and names the server its
-/// list was read from, and the trail credits the plan's approval for each call.
+/// list was read from, and the trail credits the plan's approval once for each call it made.
 ///
 /// Rejects an implementation that still puts the list, that runs it without saying so on the line
 /// the person approved, and that leaves the trail silent about what answered the calls.
@@ -2940,11 +2934,32 @@ fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
             .any(|body| body.contains("brave:move_mark") && body.contains("plan-covered\\n")),
         "no planning request named the covered tools"
     );
-    assert!(ran.events.iter().any(|event| matches!(
-        event,
-        bravebot_core::event::Event::GatePassed { gate: "approval", detail }
-            if detail == "approving the plan covered brave:make_folder, no prompt at the step"
-    )));
+    // The trail credits the plan's approval once for each call the step made, and for no other.
+    let applied = |tool: &str| tool == "make_folder" || tool == "move_mark";
+    let mut credited: Vec<String> = ran
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            bravebot_core::event::Event::GatePassed {
+                gate: "approval",
+                detail,
+            } => detail
+                .strip_prefix("approving the plan covered brave:")
+                .and_then(|rest| rest.strip_suffix(", no prompt at the step"))
+                .filter(|tool| applied(tool))
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect();
+    let mut made: Vec<String> = ran
+        .called
+        .iter()
+        .map(|(tool, _)| tool.clone())
+        .filter(|tool| applied(tool))
+        .collect();
+    credited.sort();
+    made.sort();
+    assert_eq!(credited, made);
 }
 
 /// A step whose tools are all marked still puts its list where one tool is not marked, where bypass
@@ -3172,6 +3187,41 @@ fn a_marked_step_holding_a_hidden_character_puts_its_list() {
     assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
     let line = &ran.asked.plans[0].steps[1];
     assert!(!line.contains("run without asking you"), "{line}");
+    assert!(
+        !line.contains('\u{202E}'),
+        "the line drew the character raw: {line}"
+    );
+}
+
+/// A marked step's instruction to its processor is written out on its plan line, so a character
+/// in it that would draw as nothing is shown, and the step still runs on the plan's approval.
+///
+/// Rejects an implementation that draws the instruction raw on a line a step runs unasked on.
+#[test]
+fn a_marked_steps_instruction_is_written_out_on_its_plan_line() {
+    let scratch = Scratch::new("covered-instruction");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["instruction"] = json!("group these\u{202E} bookmarks into folders");
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty(), "the list was put");
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(line.contains("run without asking you"), "{line}");
+    assert!(line.contains("U+202E"), "{line}");
     assert!(
         !line.contains('\u{202E}'),
         "the line drew the character raw: {line}"
