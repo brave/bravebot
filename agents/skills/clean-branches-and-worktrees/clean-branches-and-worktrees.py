@@ -214,7 +214,6 @@ def branch_has_unpushed_commits(repo: Path, branch: str, upstream: str) -> tuple
 
 
 def list_worktrees(repo: Path) -> list[dict[str, object]]:
-    repo_root = repo.resolve()
     out = git_stdout(repo, ["worktree", "list", "--porcelain"])
     worktrees: list[dict[str, object]] = []
     current: dict[str, object] = {}
@@ -228,7 +227,8 @@ def list_worktrees(repo: Path) -> list[dict[str, object]]:
                     {
                         "path": str(path),
                         "branch": branch,
-                        "is_primary": path == repo_root,
+                        # git lists the main checkout first, whichever worktree this runs from.
+                        "is_primary": not worktrees,
                         "locked": bool(current.get("locked")),
                     }
                 )
@@ -315,6 +315,9 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if default_branch and branch == default_branch:
                 skipped.append((branch, "repository default branch"))
+                continue
+            if any(worktree["is_primary"] and worktree["branch"] == branch for worktree in worktrees):
+                skipped.append((branch, "checked out in the main checkout"))
                 continue
 
             try:

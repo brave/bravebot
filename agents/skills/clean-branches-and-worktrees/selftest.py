@@ -84,9 +84,9 @@ class Clean(unittest.TestCase):
         self.prs[name] = [{"number": 1, "title": name, "url": "u", "mergedAt": "2026-01-01T00:00:00Z",
                            "headRefName": name, "headRefOid": head}]
 
-    def run_script(self, *args):
+    def run_script(self, *args, cwd=None):
         self.prs_file.write_text(json.dumps(self.prs))
-        result = subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.clone, env=self.env,
+        result = subprocess.run([sys.executable, str(SCRIPT), *args], cwd=cwd or self.clone, env=self.env,
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
@@ -155,6 +155,16 @@ class Clean(unittest.TestCase):
         self.assertEqual(self.branches(), {"main", "b-broken"})
         self.assertIn("- a-done (#1 a-done)", out)
         self.assertIn("- b-broken: could not look up its pull request", out)
+
+    def test_keeps_the_branch_of_the_main_checkout_when_run_from_a_linked_worktree(self):
+        runner = self.branch("runner", merged=False, worktree=True)
+        self.branch("on-main")
+        git("checkout", "-q", "on-main", cwd=self.clone)
+        for args in (("--dry-run",), ()):
+            out = self.run_script(*args, cwd=runner)
+            self.assertIn("on-main", self.branches(), out)
+            self.assertIn("- on-main: checked out in the main checkout", out)
+        self.assertTrue((self.clone / ".git").is_dir())
 
     def test_keeps_the_default_branch_when_another_is_checked_out(self):
         self.branch("open", merged=False)

@@ -18,7 +18,7 @@ allowed-tools: Bash(python3 agents/skills/clean-branches-and-worktrees/clean-bra
 
 It fetches `origin` with `--prune`, in a dry run too, so both runs decide from the same refs. It runs `git worktree prune` the same way, which forgets only unlocked worktrees whose folder is already gone. Then, for each local branch, it looks up a merged pull request with that head on GitHub. It deletes the branch with `git branch -D`, so a squash-merged branch is deleted, after removing every linked worktree that holds it. It keeps a branch when:
 
-- it is checked out in the checkout the script runs from, or is the default branch
+- it is checked out in the checkout the script runs from or in the main checkout, or is the default branch
 - no merged pull request has it as head, or `gh` failed to look one up
 - it has commits past the merged pull request's head, or past its upstream
 - a linked worktree holding it is dirty, locked or unreadable
