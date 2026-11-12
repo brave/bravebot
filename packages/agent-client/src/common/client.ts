@@ -1,7 +1,7 @@
 import { describeThrown, isolate } from './isolate.js'
-import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
+import { CapabilityError, ProtocolError, RpcError, UnknownSendError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, HeldSession, InstanceInfo, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
+import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, HeldSession, InstanceInfo, MessageStatus, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
 import { applySnapshot, applyUpdate, awaitSnapshot, endView, startView, viewFromSnapshot, type ViewState } from './view.js'
 import {
   SESSION_VIEW_RESYNC,
@@ -62,6 +62,8 @@ class Session implements AgentSession {
   refused: string | null = null
   /** Whether `session.attach` is unanswered, the only time a snapshot may start the view. */
   attaching = false
+  /** The ids whose latest lookup answered `not_received`, each of which may be resent once. */
+  private readonly resendable = new Set<string>()
 
   constructor(
     readonly id: string,
@@ -169,12 +171,32 @@ class Session implements AgentSession {
     if (this.trust === asked) this.trust = null
   }
 
-  async send(text: string): Promise<SendResult> {
+  send(text: string): Promise<SendResult> {
+    return this.submit(text, newMessageId())
+  }
+
+  async resend(messageId: string, text: string): Promise<SendResult> {
+    this.live('resend')
+    if (!this.resendable.delete(messageId)) throw new StaleActionError(`message ${messageId} has not been looked up as not received`)
+    return this.submit(text, messageId)
+  }
+
+  async messageStatus(messageId: string): Promise<MessageStatus> {
+    this.resendable.delete(messageId)
+    const status = readMessageStatus(await this.connection.request('turn.lookup', this.params({ messageId })))
+    if (status.state === 'not_received') this.resendable.add(messageId)
+    return status
+  }
+
+  private async submit(text: string, messageId: string): Promise<SendResult> {
     this.live('send')
     this.sending++
     let result: unknown
     try {
-      result = await this.connection.request('turn.send', this.params({ prompt: text, messageId: newMessageId() }))
+      result = await this.connection.request('turn.send', this.params({ prompt: text, messageId }))
+    } catch (error) {
+      if (error instanceof RpcError && error.outcome === 'unknown') throw new UnknownSendError(messageId, error)
+      throw error
     } finally {
       this.sending--
     }
@@ -271,6 +293,22 @@ function newMessageId(): string {
 }
 
 const HELD_STATES: readonly string[] = ['open', 'closing', 'closed']
+
+function readMessageStatus(value: unknown): MessageStatus {
+  if (isRecord(value)) {
+    if (value.state === 'not_received') return { state: 'not_received' }
+    if (value.state === 'accepted' && isCount(value.turn) && isCount(value.target)) return { state: 'accepted', turn: value.turn, target: value.target }
+    const error = value.error
+    if (value.state === 'refused' && isRecord(error) && typeof error.code === 'string' && typeof error.message === 'string') {
+      return { state: 'refused', error: { code: error.code, message: error.message } }
+    }
+  }
+  throw new ProtocolError('turn.lookup answered in a shape it does not have')
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
 
 function readInstance(value: unknown): InstanceInfo {
   if (!isRecord(value) || typeof value.instance !== 'string' || !Array.isArray(value.sessions)) {
@@ -445,7 +483,7 @@ export class RpcAgentClient implements AgentClient {
     return session
   }
 
-  unsupported(operation: 'takeControl' | 'messageStatus'): Promise<never> {
+  unsupported(operation: 'takeControl'): Promise<never> {
     return Promise.reject(new UnsupportedError(`${operation} is unavailable on the local stdio client`))
   }
 

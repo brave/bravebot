@@ -45,3 +45,17 @@ export class ConnectionLostError extends RpcError {
     this.name = 'ConnectionLostError'
   }
 }
+
+/**
+ * A send that may have reached the bridge. Look `messageId` up with `messageStatus` before sending
+ * it again; nothing is resent on the caller's behalf.
+ */
+export class UnknownSendError extends RpcError {
+  constructor(
+    readonly messageId: string,
+    cause: RpcError,
+  ) {
+    super(cause.code, cause.message, 'unknown')
+    this.name = 'UnknownSendError'
+  }
+}

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { connectDevRelay, RelayRefusedError, type DevRelay, type RelaySocket } from '../src/dev-relay/index.js'
-import type { AgentClient, AgentSession, InstanceInfo, Pending } from '../src/common/index.js'
+import { StaleActionError, UnknownSendError, type AgentClient, type AgentSession, type InstanceInfo, type Pending } from '../src/common/index.js'
 import { ModelStub, type PlannerStep } from './support/model-stub.js'
 import { hostBinary, isolatedEnvironment, until } from './support/rig.js'
 import { within } from './support/wait.js'
@@ -208,6 +208,46 @@ test('an app whose connection ended takes its session over through the next rela
   await until(taken, 'the second reply', () => replies(taken).length === 2)
   assert.deepEqual(replies(taken), ['first reply', 'second reply'])
   assert.equal(session.view.ended?.reason, 'connection_lost', 'the old session object stays ended')
+})
+
+test('a send whose answer was lost with the connection is looked up after taking the session over, and is resent only when the host did not receive it', async () => {
+  const host = await startHost({ 'plan:once': [{ say: 'only reply' }], 'plan:again': [{ say: 'resent reply' }] })
+  const made = sockets()
+  const first = await connect(await host.launch(), (url) => {
+    const socket = made.open(url)
+    const send = socket.send.bind(socket)
+    socket.send = (data) => {
+      send(data)
+      if (data.includes('"turn.send"')) socket.close(1000, 'the phone lost its network after sending')
+    }
+    return socket
+  })
+  const session = await first.client.createSession({ workspace: host.project })
+  await session.answerTrust(false)
+  await until(session, 'trust to be recorded', (view) => view.status === 'idle')
+  const instance = (await first.client.instance()).instance
+  const lost = await session.send('plan:once').then(() => assert.fail('the send was answered'), (error: unknown) => error)
+  assert.ok(lost instanceof UnknownSendError, `the cut-off send failed with ${String(lost)}`)
+  await within(first.ended, 'the client to see its connection end')
+
+  host.child.stdin.write('launch\n')
+  const second = await connect(await host.launch(), made.open)
+  const listed = await second.client.instance()
+  assert.equal(listed.instance, instance, 'the host did not restart, so the session handle is the same session')
+  assert.deepEqual(listed.sessions.map((held) => held.session), [session.id])
+  const taken = await second.client.attach(session.id)
+  const status = await taken.messageStatus(lost.messageId)
+  assert.equal(status.state, 'accepted', 'the host received the send whose answer was lost')
+  await assert.rejects(taken.resend(lost.messageId, 'plan:once'), StaleActionError)
+  await until(taken, 'the reply to the send that reached the host', () => replies(taken).length === 1)
+  await settled(second.client, 'the turn\'s worker to return')
+  assert.deepEqual(replies(taken), ['only reply'], 'the accepted send ran once')
+
+  assert.deepEqual(await taken.messageStatus('never-sent'), { state: 'not_received' })
+  await taken.resend('never-sent', 'plan:again')
+  await until(taken, 'the resent reply', () => replies(taken).length === 2)
+  assert.deepEqual(replies(taken), ['only reply', 'resent reply'])
+  assert.equal((await taken.messageStatus('never-sent')).state, 'accepted')
 })
 
 test('a wrong code ends that relay and leaves the host running, and the next launch has a port and code of its own', async () => {

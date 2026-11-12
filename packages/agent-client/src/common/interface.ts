@@ -35,6 +35,12 @@ export interface SendResult {
   target: number
 }
 
+/** What the host recorded under a message id. It says whether a turn started, not how it ended. */
+export type MessageStatus =
+  | { state: 'accepted'; turn: number; target: number }
+  | { state: 'refused'; error: { code: string; message: string } }
+  | { state: 'not_received' }
+
 export interface CancelResult {
   /**
    * Whether the bridge stopped the named turn. `false` means the turn had already ended or another
@@ -71,7 +77,21 @@ export interface AgentSession {
   subscribe(listener: ViewListener): () => void
   /** Answer the startup trust question. Never sent unless a caller asks; never remembered. */
   answerTrust(trusted: boolean): Promise<void>
+  /** A failure that may have reached the bridge is an `UnknownSendError` naming the message id it was sent under. */
   send(text: string): Promise<SendResult>
+  /**
+   * What the host recorded for a send under `messageId`. A failure, `no_such_session` included,
+   * leaves the send's outcome unknown, never not sent. A `refused` answer with the code `internal` is the
+   * recorded `internal` failure, so the turn may have partly run.
+   */
+  messageStatus(messageId: string): Promise<MessageStatus>
+  /**
+   * Send `text` again under `messageId`. Refused locally with `StaleActionError` unless this session's
+   * latest lookup of the id answered `not_received`, and each such answer allows one resend. The text
+   * must be what was first sent; the host has no record of the id, so it does not check the text. A handle on a
+   * restarted host can name another session, so compare the host's instance before attaching.
+   */
+  resend(messageId: string, text: string): Promise<SendResult>
   /**
    * Approve or reject the displayed `confirm`, `run` (once, never remembered) or `fetch` question.
    * A second reply to a request while the first is being sent is refused locally.
@@ -107,7 +127,7 @@ export interface AgentClient {
    */
   attach(session: string): Promise<AgentSession>
   /** Operations a later stage adds. They fail locally and send nothing. */
-  unsupported(operation: 'takeControl' | 'messageStatus'): Promise<never>
+  unsupported(operation: 'takeControl'): Promise<never>
 }
 
 /** One session a host holds, as `instance.info` lists it. */
