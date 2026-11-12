@@ -1,7 +1,7 @@
 ## Unreleased
 
  - Added reporting to [herdr](https://github.com/herdrdev/herdr). A session in a herdr pane tells herdr whether it is idle, working or waiting for an answer, gives it `bravebot --resume <id>` with only the flags that narrow the session so herdr can reopen it after a restart, and frees the pane when you quit. An incognito session sends no resume command, and nothing is sent outside herdr. macOS and Linux only for now.
- - Added Ollama's own API. A `provider` entry whose `npm` is `ollama-ai-provider-v2` or `ollama-ai-provider` is reached at `/api/chat`, and each request asks Ollama for the context window bravebot budgets the conversation against, so a server left at its default no longer drops the earliest turns without saying so and `OLLAMA_CONTEXT_LENGTH` need not be set. Each model's window is read from `/api/show`, up to 65,536 tokens, and `contextWindow` or a model's `limit` asks for less. A first run that finds Ollama now writes this form. An entry at `/v1` with no `npm` is reached as before.
+ - Added Ollama's own API. A `provider` entry whose `npm` is `ollama-ai-provider-v2` or `ollama-ai-provider` is reached at `/api/chat`, and each request asks Ollama for the model's context window, with a fifth of it above what bravebot budgets the conversation against, so a server left at its default no longer drops the earliest turns without saying so and `OLLAMA_CONTEXT_LENGTH` need not be set. Each model's window is read from `/api/show`, up to 65,536 tokens, and `contextWindow` or a model's `limit` asks for less. A first run that finds Ollama now writes this form. An entry at `/v1` with no `npm` is reached as before.
 
 ## [0.21.0](https://github.com/brave/bravebot/releases/tag/v0.21.0)
 

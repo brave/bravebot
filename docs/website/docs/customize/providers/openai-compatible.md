@@ -207,8 +207,8 @@ Ollama wants no API key, so its block names none:
 
 `baseURL` is written down because `ollama` is not one of the names an endpoint is
 [compiled in](#where-the-requests-go) for. `npm` names Ollama's own SDK, so bravebot speaks Ollama's
-own API at `/api` rather than its OpenAI-compatible one, and each request asks for the context window
-the session budgets for ([Ollama](ollama.md#the-context-window)). There is no `models` key, so Ollama
+own API at `/api` rather than its OpenAI-compatible one, and each request asks for the model's context
+window, with room above what the session budgets for ([Ollama](ollama.md#the-context-window)). There is no `models` key, so Ollama
 is asked what it has pulled and `/model` lists what came back. A first run with nothing configured offers to write this
 block for you where Ollama is running ([Importing from Claude Code, opencode or a local model
 server](../importing.md)).

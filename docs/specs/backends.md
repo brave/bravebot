@@ -4576,9 +4576,10 @@ neither states is offered. The entry's whitelist and blacklist then apply as the
 A row's window is the first of: the model's own `limit` in the block, the entry's `contextWindow`,
 the `<architecture>.context_length` `/show` states in `model_info`, no larger than the window this
 agent assumes for an Ollama entry (65,536 tokens, rather than the 131,072 it assumes elsewhere), and
-that assumed window. A model a block lists without a `limit` is held to the same assumed window. A `/show` that fails or states no length leaves the model
-listed under the next of those. The window a row carries is the one the session budgets for, and so
-the one each request asks the server for.
+that assumed window. A model a block lists without a `limit` is held to the same assumed window. A
+`/show` that fails or states no length leaves the model listed under the next of those. The session
+budgets for four fifths of a row's window, the rest kept for the reply, so the window each request
+asks the server for ([BACKEND-72](#BACKEND-72)) is the row's.
 
 **Why.** Ollama reports a model's trained window whether or not the model is loaded, so the window is
 known before the first turn rather than learned from a prompt the server cut short. It is capped,
@@ -4593,7 +4594,7 @@ with a window this machine cannot hold, and the block's own figures outrank it s
 `verified-by: bravebot_config::provider::a_model_an_ollama_entry_lists_without_a_window_is_held_to_ollamas_own_assumed_one`
 
 <a id="BACKEND-72"></a>
-### BACKEND-72: an entry naming an Ollama SDK is reached at Ollama's own chat API, asking for the window the session budgets for
+### BACKEND-72: an entry naming an Ollama SDK is reached at Ollama's own chat API, asking for a window above the session's budget
 
 A provider entry whose `npm` is `ollama-ai-provider-v2` or `ollama-ai-provider` is reached in
 Ollama's own protocol, whatever its id: a turn is `POST {baseURL}/chat`, the listing is
@@ -4603,7 +4604,7 @@ without one of those SDKs, the bare `ollama` entry at `/v1` among them, keeps th
 The request carries the conversation as `messages`, the system prompt first; images as bare base64
 on the message; a call as `tool_calls` with its arguments as an object; and each result as a message
 of its own under the role `tool`, naming the function it answers. A result whose call was not sent
-is said as words. `options.num_ctx` is the window the session budgets for, `options.num_predict` the
+is said as words. `options.num_ctx` is the session's budget and a quarter of it again, `options.num_predict` the
 reply ceiling where one is stated, and `format` the schema a reply must match where one is asked for.
 A model's `options` in the block join `options` and the body, and never replace the window or the
 ceiling this agent set.
@@ -4619,16 +4620,19 @@ for it, and its words are not shown.
 the model with a few thousand tokens and drops the start of any longer prompt without saying so: the
 system prompt and the first turns are lost and the turn goes on as though they had been sent. The
 only fix there is a server-wide setting a person has to know about. Its own API takes the window per
-request, so the session's budget and the server's allocation are one figure.
+request. It is asked for more than the budget because compaction looks at the last round's prompt,
+so the next prompt passes the budget before compaction runs, and a prompt past the window is cut
+short rather than refused.
 
 `verified-by: bravebot_config::provider::an_entry_naming_an_ollama_sdk_is_reached_in_ollamas_own_protocol`
-`verified-by: bravebot_agent::backend::an_ollama_entry_is_asked_for_the_window_the_session_budgets_for`
+`verified-by: bravebot_agent::backend::an_ollama_entry_is_asked_for_a_window_a_quarter_over_the_sessions_budget`
 `verified-by: bravebot_aichat::client::an_ollama_request_asks_the_server_for_the_window_the_session_budgets_for`
 `verified-by: bravebot_aichat::client::a_models_options_join_the_window_and_never_replace_it`
 `verified-by: bravebot_aichat::client::an_ollama_stream_is_read_a_line_at_a_time`
 `verified-by: bravebot_aichat::client::an_ollama_stream_that_never_says_it_is_done_is_not_a_reply`
 `verified-by: bravebot_aichat::client::an_ollama_reply_the_ceiling_stopped_is_kept_and_said_to_be_cut_off`
 `verified-by: bravebot_aichat::client::an_error_line_from_ollama_is_reported_rather_than_read_past`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_ollama_model_to_start_writing`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_is_messages_with_the_window_and_ceiling_in_options`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_nobody_asked_anything_of_carries_only_the_conversation`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_schema_goes_in_format`

@@ -8,7 +8,7 @@ description: Connect local Ollama models without an API key, use first-run disco
 
 A local Ollama is configured as a [gateway](openai-compatible.md) that wants no API key, so its
 block names none. Its block names Ollama's own SDK in `npm`, so bravebot speaks Ollama's own API at
-`/api`: each request asks the server for the context window the session budgets for, and each
+`/api`: each request asks the server for the context window the model is listed with, and each
 model's window is read from Ollama. What the gateway page says about naming a model and which models
 are offered applies to it.
 
@@ -72,8 +72,8 @@ thousand tokens and drops the start of any longer prompt without saying so. brav
 window on every request instead, as `options.num_ctx`, so a conversation is never cut short behind
 your back and `OLLAMA_CONTEXT_LENGTH` need not be set.
 
-The window asked for is the one bravebot budgets the conversation against. Where the block lists no
-models, it is read for each model from Ollama's `/api/show`, which states the window the model was
+bravebot budgets the conversation against four fifths of the window asked for, so the reply and
+the round before compaction runs fit in the rest. Where the block lists no models, the window is read for each model from Ollama's `/api/show`, which states the window the model was
 trained with, and held to 65,536 tokens. A model whose window Ollama does not state is given
 65,536.
 
@@ -91,7 +91,7 @@ or for one model, in a block that lists it, as `limit` (which needs `output` bes
 ```
 
 A `num_ctx` among a model's `options` never replaces the window above, so the figure bravebot
-budgets against and the one Ollama allocates are the same. [The context
+budgets against always has room above it in the one Ollama allocates. [The context
 window](openai-compatible.md#the-context-window) says what outranks what.
 
 ## The OpenAI-compatible endpoint

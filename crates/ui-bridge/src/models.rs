@@ -144,7 +144,7 @@ fn named_rows(provider: &bravebot_config::provider::Provider) -> Vec<Model> {
             premium: false,
             reads_effort: true,
             provider: Some(provider.display_name().to_string()),
-            conversation_tokens: Some(provider.window_of(model)),
+            conversation_tokens: Some(provider.budget_of(model)),
             advertised: Advertised::default(),
         })
         .collect()

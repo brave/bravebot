@@ -1790,7 +1790,9 @@ fn gateway_client<'a>(
         Protocol::Ollama => GatewayClient::Ollama(
             OllamaChatClient::new(egress, provider, wire_model, token)
                 .with_gateway_headers(headers)
-                .with_window(config.context_budget),
+                .with_window(bravebot_config::provider::ollama_window_for(
+                    config.context_budget,
+                )),
         ),
     })
 }
@@ -4332,7 +4334,7 @@ mod tests {
     /// its start. The regressions rejected are speaking chat completions to it, sending no window,
     /// and sending a window other than the session's.
     #[test]
-    fn an_ollama_entry_is_asked_for_the_window_the_session_budgets_for() {
+    fn an_ollama_entry_is_asked_for_a_window_a_quarter_over_the_sessions_budget() {
         use std::io::{BufRead, BufReader, Read, Write};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -4378,7 +4380,7 @@ mod tests {
                 "models": {{"qwen3:8b": {{}}}}
             }}}}}}"#
         ));
-        config.adopt_window(Some(40_960));
+        config.adopt_window(Some(32_768));
         let egress = Egress::new();
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = bravebot_core::policy::Policy::begin(
@@ -4407,6 +4409,7 @@ mod tests {
         assert_eq!(line, "POST /api/chat HTTP/1.1");
         let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(body["model"], "qwen3:8b");
+        // A quarter over the budget, since compaction runs a round after a prompt has passed it.
         assert_eq!(body["options"]["num_ctx"], 40_960);
         assert_eq!(completion.usage.prompt_tokens, 3);
     }

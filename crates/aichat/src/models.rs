@@ -576,15 +576,17 @@ fn offered_by_ollama(
         .map(|(tagged, shown)| Model {
             key: format!("{}/{}", provider.id, tagged.name),
             conversation_tokens: Some(
-                provider
-                    .model(&tagged.name)
-                    .and_then(|model| model.context_window)
-                    .or(provider.context_window)
-                    .or(shown
-                        .as_ref()
-                        .and_then(OllamaShown::trained_window)
-                        .map(|window| window.min(assumed)))
-                    .unwrap_or(assumed),
+                provider.budget_in(
+                    provider
+                        .model(&tagged.name)
+                        .and_then(|model| model.context_window)
+                        .or(provider.context_window)
+                        .or(shown
+                            .as_ref()
+                            .and_then(OllamaShown::trained_window)
+                            .map(|window| window.min(assumed)))
+                        .unwrap_or(assumed),
+                ),
             ),
             display_name: tagged.name,
             premium: false,
@@ -1338,11 +1340,12 @@ mod tests {
     /// BACKEND-73: each row's window is the one `/show` says the model was trained with, read under
     /// the architecture `general.architecture` names, and held to the assumed window, since that is
     /// what every request asks the server to allocate. A model `/show` did not answer for is kept
-    /// at the assumed window. The regressions rejected are reading one architecture's key for all,
-    /// and sending a model's full trained window.
+    /// at the assumed window. A row carries four fifths of its window, the rest kept for the reply.
+    /// The regressions rejected are reading one architecture's key for all, sending a model's full
+    /// trained window, and budgeting the whole window the server is asked for.
     #[test]
     fn an_ollama_row_carries_the_window_show_says_the_model_was_trained_with() {
-        let assumed = 65_536;
+        let assumed = 65_536 - 65_536 / 5;
         let models = offered_by_ollama(
             &native_ollama("", ""),
             vec![
@@ -1363,8 +1366,8 @@ mod tests {
         assert_eq!(
             rows,
             [
-                ("ollama/qwen3:8b", Some(40_960)),
-                ("ollama/llama3.2", Some(8_192)),
+                ("ollama/qwen3:8b", Some(32_768)),
+                ("ollama/llama3.2", Some(6_554)),
                 ("ollama/long", Some(assumed)),
                 ("ollama/llama3.1", Some(assumed)),
                 ("ollama/unshown", Some(assumed)),
@@ -1390,7 +1393,10 @@ mod tests {
             ],
         );
         let windows: Vec<Option<u64>> = models.iter().map(|m| m.conversation_tokens).collect();
-        assert_eq!(windows, [Some(8_192), Some(16_384)]);
+        assert_eq!(
+            windows,
+            [Some(8_192 - 8_192 / 5), Some(16_384 - 16_384 / 5)]
+        );
     }
 
     /// A model that cannot call tools is left out, `/show`'s word outranking what `/tags` said, and

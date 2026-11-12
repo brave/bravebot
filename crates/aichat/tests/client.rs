@@ -10604,6 +10604,46 @@ fn an_ollama_reply_the_ceiling_stopped_is_kept_and_said_to_be_cut_off() {
     }
 }
 
+/// A stop while Ollama is loading the model or has yet to write is not held until it does, which
+/// on this machine can be minutes.
+#[test]
+fn a_stop_does_not_wait_for_an_ollama_model_to_start_writing() {
+    let endpoint = serve_stream_paced(
+        vec![ndjson(
+            serde_json::json!({"message": {"role": "assistant", "content": ""}, "done": false}),
+        )],
+        Duration::from_secs(30),
+    );
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let cancel = Cancel::new();
+    let mut client = ollama_client(&egress, &provider).with_cancel(cancel.clone());
+    let stopping = cancel.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        stopping.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hi")]),
+            |_| {},
+        )
+        .expect_err("a stopped request produced a completion");
+
+    assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "it waited for the model to start: {:?}",
+        started.elapsed()
+    );
+}
+
 /// A line saying the server gave up is reported as a failure of the service, and the server's own
 /// words are not what reaches a person.
 #[test]
@@ -10678,7 +10718,7 @@ fn an_ollama_roster_reads_each_models_window_from_show() {
         .iter()
         .map(|model| (model.key.as_str(), model.conversation_tokens))
         .collect();
-    assert_eq!(rows, [("ollama/qwen3:8b", Some(40_960))]);
+    assert_eq!(rows, [("ollama/qwen3:8b", Some(32_768))]);
     assert_eq!(
         received.recv().expect("tags").request_line,
         "GET /api/tags HTTP/1.1"

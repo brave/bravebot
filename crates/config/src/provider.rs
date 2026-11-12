@@ -401,6 +401,14 @@ pub const CONTEXT_WINDOW: u64 = crate::bedrock::CONTEXT_WINDOW;
 /// memory a model is loaded with grows with it.
 pub const OLLAMA_WINDOW: u64 = 65_536;
 
+/// The window to ask Ollama for so that a conversation budgeted at `budget` has a quarter of it
+/// over for the reply: the inverse of [`Provider::budget_in`]. Compaction looks at the last
+/// round's prompt, so the next one passes the budget before it runs, and Ollama cuts the start of
+/// a prompt longer than the window rather than refusing it.
+pub fn ollama_window_for(budget: u64) -> u64 {
+    budget.saturating_add(budget / 4)
+}
+
 /// One model a gateway offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Model {
@@ -1450,6 +1458,21 @@ impl Provider {
             .context_window
             .or(self.context_window)
             .unwrap_or(self.assumed_window())
+    }
+
+    /// The budget a conversation with `model` gets: [`Provider::window_of`], less the reply's share
+    /// where the server cuts a long prompt short rather than refusing it.
+    pub fn budget_of(&self, model: &Model) -> u64 {
+        self.budget_in(self.window_of(model))
+    }
+
+    /// The budget a conversation gets in `window`: a fifth is held back in Ollama's protocol, as
+    /// `/v1/models` holds it back from the figure it sends.
+    pub fn budget_in(&self, window: u64) -> u64 {
+        match self.protocol() {
+            Protocol::Ollama => window - window / 5,
+            _ => window,
+        }
     }
 
     /// The window a model nobody stated one for is budgeted against.
@@ -3803,6 +3826,14 @@ mod tests {
         compatible_windows.sort_unstable();
         assert_eq!(native_windows, [65_536, 200_000]);
         assert_eq!(compatible_windows, [131_072, 200_000]);
+
+        // Ollama cuts a prompt longer than the window rather than refusing it, so a fifth is kept
+        // for the reply, and the window asked for is the one the budget was taken from.
+        let plain = native.model("qwen3:8b").expect("offered");
+        assert_eq!(native.budget_of(plain), 52_429);
+        assert_eq!(ollama_window_for(native.budget_of(plain)), 65_536);
+        let plain = compatible.model("qwen3:8b").expect("offered");
+        assert_eq!(compatible.budget_of(plain), 131_072);
     }
 
     /// BACKEND-61: an entry naming `@ai-sdk/openai` is reached in the Responses protocol, whatever its
