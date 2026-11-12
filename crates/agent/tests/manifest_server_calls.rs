@@ -1251,6 +1251,60 @@ fn a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody() {
     }
 }
 
+/// A read that is declined at its step, or that a `deny` rule refuses in every mode, ends the run:
+/// the tool is not called, its slot is not filled and the transform that reads it never runs. The
+/// decline is put by an `ask` rule, so the read is asked at its step whatever answers it otherwise.
+///
+/// Rejects an implementation that lets a refusal fill a read's slot as an unusable reply does, which
+/// would run the steps after a read nobody approved.
+#[test]
+fn a_declined_or_denied_read_ends_the_run_before_the_steps_after_it() {
+    let scratch = Scratch::new("read-refused");
+    let (url, mcp) = serve_browser();
+    let rule = || vec!["Mcp(brave:read_page)".to_string()];
+    let none = bravebot_core::permissions::Anchors::none;
+    let (asking, rejected) =
+        bravebot_core::permissions::Permissions::parse(&[], &rule(), &[], &none());
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let (denying, rejected) =
+        bravebot_core::permissions::Permissions::parse(&rule(), &[], &[], &none());
+    assert!(rejected.is_empty(), "{rejected:?}");
+    for (mode, permissions, denied) in [
+        (PermissionMode::Ask, asking, false),
+        (PermissionMode::Bypass, denying.clone(), true),
+        (PermissionMode::Ask, denying, true),
+    ] {
+        let ran = walk(Walk {
+            session: session(&url, &scratch, false, true),
+            mode,
+            task: Task::new("show the page as a short list").with_permissions(permissions),
+            replies: vec![
+                shape(),
+                plan(vec![
+                    read("read_page", json!({"url": "https://example.com/b"}), "page"),
+                    json!({"capability": "TRANSFORM", "args": {
+                        "reads": ["page"], "instruction": "as a short list", "out_slot": "list"}}),
+                    json!({"capability": "ANSWER", "args": {"from_slot": "list"}}),
+                ]),
+                processor_reply("- one\n- two"),
+            ],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::reject()]),
+            grants: None,
+        });
+        let failure = ran.outcome.expect_err("the read was refused").to_string();
+        assert!(failure.contains("step 1"), "{mode:?} {denied}: {failure}");
+        assert!(ran.called.is_empty(), "{mode:?} {denied}: {:?}", ran.called);
+        assert_eq!(ran.chat.len(), 2, "{mode:?} {denied}: the transform ran");
+        assert_eq!(
+            ran.asked.calls.len(),
+            usize::from(!denied),
+            "{mode:?} {denied}: {:?}",
+            ran.asked.calls
+        );
+    }
+}
+
 /// A server only a manifest run calls, such as one in an OpenShell sandbox, has its list put to the
 /// person before the plan as any other server's is, and a plan may call its tools.
 #[test]

@@ -611,6 +611,7 @@ nobody asked about.
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it`
 `verified-by: bravebot_agent::manifest::a_read_is_offered_only_where_a_tool_is_marked_read_only`
 `verified-by: bravebot_agent::manifest_server_calls::a_read_whose_reply_arrived_fills_its_slot_whatever_it_holds`
+`verified-by: bravebot_agent::manifest_server_calls::a_declined_or_denied_read_ends_the_run_before_the_steps_after_it`
 `verified-by: bravebot_core::manifest::a_server_read_fills_a_slot_a_later_step_uses`
 `verified-by: bravebot_core::manifest::a_server_read_comes_before_every_action_and_takes_from_no_slot`
 `verified-by: bravebot_agent::manifest::a_calls_arguments_object_is_carried_as_its_text`
