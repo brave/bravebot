@@ -4196,15 +4196,15 @@ file. A new spawn that looks a name up through
   its generic path, so under GNOME with `gio` installed it is not read. The desktop application
   deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories, `XDG_CACHE_HOME` and the GIO,
   Qt and KDE names of the opener's table below from its own environment (`OPENER_SELECTORS`, 16
-  names: the opener's 19 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the application leaves set, as
-  `APPLICATION_EXCEPTIONS` in `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
+  names: the opener's 29 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
+  application leaves set, and without the ten Windows names, as `APPLICATION_EXCEPTIONS` in
+  `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
   `XDG_MENU_PREFIX` when the value contains a `/` (`FILE_NAME_PREFIXES` in
   `ui/src/main/external-open.ts`, tested by `a file-name prefix is deleted only when it has a slash,
-  by the pure function and before each call` in `ui/scripts/external-open.test.mjs`; with the `/`
-  test replaced by `false &&` that test failed on `Expected values to be strictly deep-equal:
-  actual [] expected ['XDG_CURRENT_DESKTOP', 'XDG_MENU_PREFIX']`, and it passes with it restored.
-  Electron was not run for these two names), before it asks
-  Electron to open an address or a file, since
+  by the pure function and before each call` in `ui/scripts/external-open.test.mjs`, which fails on
+  `Expected values to be strictly deep-equal: actual [] expected ['XDG_CURRENT_DESKTOP',
+  'XDG_MENU_PREFIX']` when the `/` test never matches. Electron was not run for these two names),
+  before it asks Electron to open an address or a file, since
   it starts the opener through Electron and not through this start. It does not delete `HOME`,
   `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: the
   application reads `HOME` itself, Electron reaches the session bus through the other two, the
@@ -5128,9 +5128,11 @@ shown by running the program, or not entirely:
     handler. The opener removes it when its value contains a `/`.
     `a_file_name_prefix_with_a_slash_does_not_lead_the_installed_xdg_open_out_of_a_judged_directory`
     runs both against the real script, and `a_file_name_prefix_is_removed_only_when_it_has_a_slash`
-    checks the rule. With the `/` test in `opening_against` replaced by one that never matches,
-    both failed (`XDG_CURRENT_DESKTOP=../../stage/evil: the planted handler ran`), and both passed
-    with it restored. Neither is run on Linux.
+    checks the rule. When the `/` test in `opening_against` never matches, the first fails with
+    `XDG_CURRENT_DESKTOP=../../stage/evil: the planted handler ran` where `xdg-open` and `xdg-mime`
+    are installed, and the second fails on `XDG_CURRENT_DESKTOP` with `../../stage/x` on every
+    host. Both run and pass on Linux in CI (the `Format, lint, and test` job, `ubuntu-26.04`),
+    where the first fails rather than skips when `xdg-open` or `xdg-mime` is missing.
   - `KDE_SESSION_VERSION`: in the `xdg-open` start it is matched against the literals `4`, `5` and
     `6` (`open_kde`), so the only name built from it is `kde-open5`, found on the opener's reduced
     `PATH`. `xdg-mime query default` reads it as a number (`-lt 6`) and builds `ktraderclient5`
