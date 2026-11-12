@@ -491,6 +491,9 @@ pub struct Tools<'a> {
     /// [`Tools::delegated`] gives: a narrowing that rested on the offer alone would rest on the
     /// model reading it.
     pub confined_to: Option<&'a [String]>,
+    /// The schemas this turn's request offered, which a built-in call's argument names are checked
+    /// against before it runs (TOOL-3), or `None` where no request offered a list.
+    pub offered: Option<&'a [Tool]>,
     /// The language servers this session has started, or `None` where the host offers none.
     ///
     /// Held across calls rather than per call because indexing is the whole cost of a server, and
@@ -2603,12 +2606,26 @@ impl Reading {
 }
 
 /// Whether `call` is one [`read_ahead`] can run for this run: a read of the kind above, which this
-/// run offers and the command line has not taken away, with arguments that are JSON.
-pub(crate) fn can_read_ahead(call: &ToolCall, confined_to: Option<&[String]>) -> bool {
+/// run offers and the command line has not taken away, with arguments that are JSON and that the
+/// schema in `offered` declares, so a call [`dispatch_with`] refuses is not read (TOOL-3).
+pub(crate) fn can_read_ahead(
+    call: &ToolCall,
+    confined_to: Option<&[String]>,
+    offered: Option<&[Tool]>,
+) -> bool {
     Reading::named(&call.function.name).is_some_and(|reading| {
         bravebot_core::tool_set::allows(reading.name())
             && confined_to.is_none_or(|offered| offered.iter().any(|tool| tool == reading.name()))
-            && call.arguments().is_ok()
+            && call.arguments().is_ok_and(|arguments| {
+                // The mode words the refusal and does not decide whether there is one.
+                undeclared_argument(
+                    offered,
+                    reading.name(),
+                    &arguments,
+                    crate::PermissionMode::default(),
+                )
+                .is_none()
+            })
     })
 }
 
@@ -2714,6 +2731,67 @@ pub(crate) fn read_ahead<S: Sink>(
         .collect()
 }
 
+/// Names a built-in reads although the schema it was offered with does not declare them, each to
+/// answer it in a way a spec pins, so a call naming one reaches the tool rather than this check.
+///
+/// `watch_file` and `download_url` read `path_ref` to refuse a real reference with their own
+/// sentence and let a blank one by. `fetch_url` reads `read` in a turn whose schema lost it for
+/// want of `vet_content`, and keeps the page as a reference. `spawn_processor` reads `read` to say
+/// the argument is `reads` (SPAWN-5). `schedule_next` takes `stop` from a turn arranging a look,
+/// whose schema does not offer it, and does not read it there (SCHED-4).
+const READ_THOUGH_UNDECLARED: &[(&str, &str)] = &[
+    ("watch_file", "path_ref"),
+    ("download_url", "path_ref"),
+    ("fetch_url", "read"),
+    ("spawn_processor", "read"),
+    ("schedule_next", "stop"),
+];
+
+/// The refusal for a built-in call that names an argument the schema it was offered with does not
+/// declare, or `None` where every name it gives is declared (TOOL-3).
+///
+/// A tool the list does not hold is not checked here: the arms that answer an unknown name answer
+/// it. An argument given as `null` reads as absent, as the tools read a declared one. The name in
+/// the sentence is the planner's own, and the list is the schema's, which the driver wrote.
+fn undeclared_argument(
+    offered: Option<&[Tool]>,
+    name: &str,
+    arguments: &Value,
+    mode: crate::PermissionMode,
+) -> Option<String> {
+    let declared = offered?
+        .iter()
+        .find(|tool| tool.function.name == name)?
+        .function
+        .parameters
+        .get("properties")?
+        .as_object()?;
+    let (argument, _) = arguments.as_object()?.iter().find(|(argument, value)| {
+        !value.is_null()
+            && !declared.contains_key(argument.as_str())
+            && !READ_THOUGH_UNDECLARED.contains(&(name, argument.as_str()))
+    })?;
+    let takes = declared
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut said = format!("error: {name} takes no argument '{argument}'. It takes: {takes}.");
+    if name == "run" {
+        said.push_str(
+            " To set an environment variable for a program, write it in front of the program in \
+             the command, as `NAME=value cargo build`.",
+        );
+        // Only bypass mode compiles an expansion in that position (CMDLINE-17).
+        if mode == crate::PermissionMode::Bypass {
+            said.push_str(
+                " In this mode `NAME=$VAR cmd` and `NAME=\"$(cmd)\" cmd` are accepted there too.",
+            );
+        }
+    }
+    Some(said)
+}
+
 /// [`dispatch`], answering a call from a read that already ran where there is one.
 ///
 /// The read stands in for the tool's own run, at the place in the call the run would have been,
@@ -2788,6 +2866,12 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
 
     // Read once, so a write refused below is recorded under the mode that refused it.
     let mode = tools.permission_mode.get();
+    // A server's tool is sent its arguments as the server describes them, so only a built-in's are
+    // checked against the schema it was offered with (TOOL-3).
+    let undeclared = match server_tool {
+        Some(_) => None,
+        None => undeclared_argument(tools.offered, &name, &arguments, mode),
+    };
     tools
         .workspace
         .hold_bypass_reach(tools.reach_facts().for_call(policy, tools.workspace, &name));
@@ -2812,6 +2896,9 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         {
             Produced::problem(format!("error: no such tool '{taken_away}'"))
         }
+        // Refused before the tool is reached, so nothing runs and nobody is asked about a call
+        // that would have done something other than what the planner meant.
+        _ if undeclared.is_some() => Produced::problem(undeclared.clone().unwrap_or_default()),
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
         // which is what makes it a statement about the turn rather than an answer given on the
         // person's behalf. Checked before the tool runs, so nothing is read and no path resolved.
@@ -9187,6 +9274,32 @@ struct Standing {
     prior: bravebot_core::label::Integrity,
 }
 
+/// What a refusal of a program named by a relative path adds: where that path was looked for, and
+/// whether the directory was carried from an earlier call (CMDLINE-12). Empty for any other
+/// refusal, since a bare name is looked for on `$PATH` and an absolute path names itself.
+///
+/// `told` is the directory as the planner typed it, `None` at the workspace root; where a link led
+/// is never named (LABEL-3). Every branch reads the planner's own line and argument and the
+/// driver's record of which call named the directory, never a byte of a file.
+fn looked_for_in(refused: &crate::cmdline::Refused, told: Option<&str>, carried: bool) -> String {
+    if refused.reason != crate::cmdline::Reason::NotAtPath
+        || !std::path::Path::new(&refused.text).is_relative()
+    {
+        return String::new();
+    }
+    match (told, carried) {
+        (None, _) => {
+            ". It was looked for at the workspace root; pass `directory` to look elsewhere"
+                .to_string()
+        }
+        (Some(told), false) => format!(". It was looked for in '{told}'"),
+        (Some(told), true) => format!(
+            ". It was looked for in '{told}', carried from the last run that named a directory; \
+             pass `directory` to change it"
+        ),
+    }
+}
+
 /// The name the planner is told for a destination a line opened.
 ///
 /// A destination under the directory the line ran in is told as that directory spelled the way
@@ -11051,6 +11164,9 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
+    // Whether the directory below is one this call named or the one the last call left, which a
+    // refusal of a program named by a relative path says (CMDLINE-12). The planner's own argument.
+    let carried = named.is_none();
     let (directory, told_directory) = match named {
         Some(proposed) => {
             // Read through the same gate the command line is, for the same reason: this is
@@ -11134,8 +11250,16 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
         Err(crate::cmdline::Stopped::Compile(refused)) => {
+            // Chosen from the planner's spelling, not from where the directory landed, because a
+            // link in a tree nobody vouched for may lead to the root (LABEL-3). `told` is empty
+            // at the root a turn starts at and where the planner named the directory as "".
+            let looked_in = looked_for_in(
+                &refused,
+                (!told_directory.is_empty()).then_some(told_directory.as_str()),
+                carried,
+            );
             return Produced::problem(format!(
-                "error: {}",
+                "error: {}{looked_in}",
                 refused.said(tools.beside.holds(Named::EditFile))
             ));
         }
@@ -27614,6 +27738,7 @@ mod tests {
                 cache: None,
                 delegated: false,
                 confined_to: None,
+                offered: None,
                 servers: None,
                 mcp: None,
                 jobs: &mut jobs,
@@ -33877,11 +34002,11 @@ mod tests {
             }))
             .unwrap();
 
-            assert!(can_read_ahead(&search, None));
-            assert!(can_read_ahead(&search, Some(&both)));
-            assert!(can_read_ahead(&namespaced, None));
-            assert!(!can_read_ahead(&search, Some(&only_reading)));
-            assert!(!can_read_ahead(&not_json, None));
+            assert!(can_read_ahead(&search, None, None));
+            assert!(can_read_ahead(&search, Some(&both), None));
+            assert!(can_read_ahead(&namespaced, None, None));
+            assert!(!can_read_ahead(&search, Some(&only_reading), None));
+            assert!(!can_read_ahead(&not_json, None, None));
             for asks_or_acts in [
                 "read_file",
                 "read_git",
@@ -33891,7 +34016,7 @@ mod tests {
                 "fetch_url",
             ] {
                 assert!(
-                    !can_read_ahead(&call(asks_or_acts, json!({})), None),
+                    !can_read_ahead(&call(asks_or_acts, json!({})), None, None),
                     "{asks_or_acts}"
                 );
             }

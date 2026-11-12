@@ -68,7 +68,10 @@ sits on the same footing as the fields beside it. A routing argument naming a **
 than a path is bound to the context the planner named it in, so a turn whose context has met
 untrusted content can name no reference at all.
 
-An unknown tool is reported to the planner rather than ignored.
+An unknown tool is reported to the planner rather than ignored. So is an argument a built-in tool
+does not take: the call is refused before it runs, and nobody is asked about it. The refusal names
+the argument and lists the ones the tool takes. For [`run`](#run) it also says that a variable is
+set by writing `NAME=value` in front of the program. A server's tool is sent its arguments as given.
 
 When the planner asks for several calls in one reply, they run in the order it asked, except that two
 or more consecutive [`list_files`](#list_files) and [`search`](#search) calls are read at the same

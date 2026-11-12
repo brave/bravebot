@@ -897,8 +897,13 @@ of the exact command makes what it prints visible from then on. It is also point
 for a file. Each of these names is said only where the turn's list holds the tool
 ([TOOL-6](tool-surface.md#TOOL-6)): `read_output` for the reference, `spawn_processor` for working
 with the output, `read_file` for a file. Where the list holds none of them the planner is told only
-that the quarantine is about the command and not about running programs, and, where it applies, the
-vouching sentence, which names no tool. Who answers a `read_output` call is a fact about the session, so it is said once, in the
+that the quarantine is about the command and not about running programs, and the vouching sentence,
+which names no tool, where a person is asked about runs and no record stops the asking. Where the
+mode answers runs without asking, as bypassing permissions does with or without screening, the
+vouching sentence is left out of such a turn's run and job results and of the account of an ended
+job, and they say instead that what was printed cannot be shown in this turn, since no prompt is
+drawn and a run the mode approved vouches for no program
+([MODE-4](../permission-modes.md#MODE-4)). Who answers a `read_output` call is a fact about the session, so it is said once, in the
 `read_output` description, and not in each result (below). Only where a command produced the result: a quarantined read carries no advice about
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
@@ -987,6 +992,9 @@ with its own three wordings ([VET-5](vet-content.md#VET-5)).
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_file_is_not_pointed_at_it`
 `verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_told_of_vouching_where_the_mode_answers_runs`
+`verified-by: bravebot_agent::turn::a_turn_left_without_read_output_is_not_told_of_vouching_where_permissions_are_bypassed`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_not_told_of_vouching_where_permissions_are_bypassed`
 `verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
 
