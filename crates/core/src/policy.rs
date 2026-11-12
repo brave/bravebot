@@ -10177,6 +10177,71 @@ mod tests {
         }
     }
 
+    /// A trusted entry of a listing is described as one read_file shows exactly when the run is
+    /// offered read_file, whether the policy reserved it or a branch of it did. The policy is told
+    /// once, as it is for `read_output`, and every listing reserved after carries it.
+    #[test]
+    fn a_trusted_entry_names_read_file_exactly_when_the_policy_was_told_the_run_is_offered_it() {
+        for (offered, through_a_branch) in
+            [(true, false), (false, false), (true, true), (false, true)]
+        {
+            let mut sink = RecordingSink::new();
+            let mut store = crate::trust::TrustStore::new("/work");
+            store.trust("notes.md");
+            let mut policy = Policy::begin(
+                routing_with("task", "read the notes"),
+                ReleasePlan::new(),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap()
+            .with_trust(store);
+            if !offered {
+                policy.without_reading_files();
+            }
+            let entries = Labelled::new(vec!["notes.md".to_string()], Label::untrusted_private());
+            let ids = [SlotId::new("ref:1")];
+            let mut slots = SlotStore::new();
+            let mut record = RecordingSink::new();
+            let references = if through_a_branch {
+                policy.branch(&mut record).defer_entries(
+                    "list_files",
+                    "an entry in \".\"",
+                    &entries,
+                    0,
+                    &ids,
+                    &mut slots,
+                )
+            } else {
+                policy.defer_entries(
+                    "list_files",
+                    "an entry in \".\"",
+                    &entries,
+                    0,
+                    &ids,
+                    &mut slots,
+                )
+            }
+            .expect("entries may be reserved");
+            assert!(
+                references[0].label.is_trusted(),
+                "the entry was reserved from a vouched path, so nothing here was tested"
+            );
+
+            let described = crate::reference::describe_listing(&references);
+            assert_eq!(
+                described.contains("read_file"),
+                offered,
+                "a listing for a run {} read_file (branch {through_a_branch}): {described}",
+                if offered { "offered" } else { "not offered" }
+            );
+            assert!(
+                described.contains("A file labelled (T,...): its label lets you read it"),
+                "{described}"
+            );
+        }
+    }
+
     /// Work that runs beside other work reads through a branch, and what a branch makes is told to
     /// the same run: a reference made through it names no tool the policy it was taken from was
     /// told the run is not offered, and names every tool when it was told none.
