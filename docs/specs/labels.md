@@ -30,7 +30,7 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 140
+      - crates/core/src/policy.rs: 141
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
