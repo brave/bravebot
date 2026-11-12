@@ -59,6 +59,8 @@ fn take_turn_in(
             state,
             config,
             workspace,
+            indexer: None,
+            retrievers: None,
             attribution: Default::default(),
             effort: None,
             output_cap: None,

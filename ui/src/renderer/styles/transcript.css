@@ -452,6 +452,63 @@
 }
 .turn-notices li { margin-block: var(--leo-spacing-s); white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.turn-recalled ul { padding-inline: var(--leo-spacing-m) var(--leo-spacing-s); }
+.turn-recalled li { white-space: normal; }
+/* Each row folds open to the words its turn sent (RETRIEVE-32); the button beside it scrolls to the row. */
+.turn-recalled-item { display: flex; align-items: flex-start; gap: var(--leo-spacing-s); margin-block: var(--leo-spacing-xs); }
+.turn-recalled-excerpt {
+  flex: 1;
+  min-width: 0;
+  --leo-collapse-summary-padding: var(--leo-spacing-xs) var(--leo-spacing-s);
+  --leo-collapse-content-padding: 0 var(--leo-spacing-s) var(--leo-spacing-s);
+  --leo-font-heading-h3: var(--type-meta);
+}
+.turn-recalled-reveal { flex: none; min-width: var(--hit); }
+.turn-recalled-row { display: flex; gap: var(--leo-spacing-m); min-width: 0; text-align: start; }
+.turn-recalled-who { flex: none; min-width: 6em; color: var(--ink-tertiary); }
+/* Clamped rather than kept from wrapping: Leo's title box sizes to its content's narrowest width, so
+   only a line that may break lets the row's chevron stay in view. */
+.turn-recalled-line {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--ink-secondary);
+}
+.turn-recalled-body { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
+.turn-recalled-note { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.turn-recalled-failed { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-s); }
+.turn-recalled-block { margin: 0; min-width: 0; }
+.turn-recalled-caption { display: flex; align-items: flex-start; gap: var(--leo-spacing-s); }
+.turn-recalled-facts {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--leo-spacing-xs) var(--leo-spacing-m);
+  min-width: 0;
+  padding-block-start: var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.turn-recalled-replaced { flex-basis: 100%; color: var(--ink-secondary); }
+/* About twelve lines, then the block scrolls on its own rather than pushing the transcript down. */
+.turn-recalled-text {
+  margin: var(--leo-spacing-xs) 0 0;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  max-height: calc(12lh + 2 * var(--leo-spacing-s));
+  overflow: auto;
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  font: var(--type-code);
+  color: var(--ink-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.turn-recalled-text:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+
 .turn-audit-link.has-refusal { --leo-button-color: var(--status-error-ink); }
 .turn-refusal { font: var(--type-caption-strong); color: var(--status-error-ink); }
 

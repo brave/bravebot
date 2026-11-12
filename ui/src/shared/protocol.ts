@@ -288,6 +288,73 @@ export interface SessionSettled {
   settingsRules?: SettingsRules | null
 }
 
+/**
+ * Where a message a retrieval drew on was said: the exchange, by the prompt that began it (`null`
+ * where no prompt began it), and whether it was that prompt, which reply in it (`nth` among the
+ * replies with words), which call's result (`nth` among its calls, `null` for one no call made),
+ * or something else. Never the words, which the window holds already (RETRIEVE-27).
+ */
+export interface RecalledPlace {
+  prompt: number | null
+  said: 'prompt' | 'reply' | 'tool' | 'other'
+  nth: number | null
+  /** The message's place in the record's numbering, which its excerpts are asked by. Absent from an older bridge. */
+  ordinal?: number
+}
+
+/** What one exchange's retrievals drew on, by the prompt that began it. */
+export interface RecalledExchange {
+  prompt: number
+  used: RecalledPlace[]
+}
+
+/** `turn.retrieved`: what this turn's retrievals have drawn on so far, sent again only when it grows. */
+export interface TurnRetrieved {
+  turn: number
+  used: RecalledPlace[]
+  tokens: number
+  /** Why the round summarised instead, where it could not retrieve, and `used` is then empty. */
+  fellBack: string | null
+}
+
+/** One excerpt a retrieval sent, its words made printable by the bridge (RETRIEVE-32). */
+export interface SentExcerpt {
+  ordinal: number
+  chunk: number
+  /** The word its block names the speaker by: `user`, `you`, `tool`, `file`, `skill` or `session`. */
+  from: string
+  /** Sent as a context line, cut to `contextBytes`, rather than as the excerpt found. */
+  context: boolean
+  text: string
+}
+
+/** One retrieval's message, as the exchange it was put in front of sent it. */
+export interface RetrievalSend {
+  /** What the request view calls it. */
+  label: string
+  /** Found for a later prompt without moving the cut. */
+  refreshed: boolean
+  /** A later cut in the same exchange replaced it, so the requests after carried a stub. */
+  replacedInTurn: boolean
+  model: string
+  excerpts: SentExcerpt[]
+}
+
+/** `retrieval.excerpts`: what one exchange's retrievals sent, asked for when a row is opened (RETRIEVE-32). */
+export interface RetrievalExcerpts {
+  sends: RetrievalSend[]
+  contextBytes: number
+}
+
+/** `retrieval.status`: how far a session's vectors have caught up, in messages (RETRIEVE-29). */
+export interface RetrievalStatus {
+  state: 'off' | 'unconfigured' | 'indexing' | 'rebuilding' | 'ready' | 'untrusted'
+  indexed: number
+  eligible: number
+  /** Why the embeddings service gave the last indexing pass nothing, while the index is behind. */
+  failure?: 'key' | 'unreachable' | 'failed' | 'out of time'
+}
+
 export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
   rewind?: RewindPoint[]
@@ -315,6 +382,13 @@ export interface OpenedSession extends SessionSettled {
    * said again when this has gone up since it last looked.
    */
   archived: number
+  /**
+   * How many earlier messages the request no longer carries, compaction's and the retrieval cut's
+   * together. Only ever rises, and rises whenever `archived` does. Absent from an older bridge.
+   */
+  outOfRequest?: number
+  /** What each exchange's retrievals drew on. Absent from an older bridge. */
+  recalled?: RecalledExchange[]
 }
 
 /**
@@ -361,6 +435,10 @@ export interface RewoundSession {
   context: string
   contextTokens?: number
   archived: number
+  /** As on `OpenedSession`. */
+  outOfRequest?: number
+  /** As on `OpenedSession`. */
+  recalled?: RecalledExchange[]
   todos: Record<string, TodoRow[]>
   trust: { rules: { path: string; integrity: string }[] | null }
   rewind: RewindPoint[]
@@ -562,6 +640,8 @@ export interface TurnDone {
   id: string | null
   /** As on `OpenedSession`. */
   archived: number
+  /** As on `OpenedSession`. */
+  outOfRequest?: number
   /** As on `OpenedSession`. */
   rewind?: RewindPoint[]
 }
@@ -1134,6 +1214,7 @@ export interface EventMap {
   'manifest.error': ManifestError
   'ask.request': AskRequest
   'ask.settled': AskSettled
+  'turn.retrieved': TurnRetrieved
   'turn.done': TurnDone
   'turn.error': TurnError
 }

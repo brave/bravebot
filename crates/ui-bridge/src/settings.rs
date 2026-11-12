@@ -174,6 +174,7 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
         "ignored": ignored(&settings),
         "limits": limits(&settings, &managed),
         "managed": { "path": managed.path(), "keys": managed.pinned().collect::<Vec<_>>() },
+        "retrieval": crate::retrieval::state(selected),
         "network": { "roots": transport.roots().paths(),
             "problem": (!transport.trust_problems().is_empty()).then(|| transport.trust_problems().iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")),
             "trustsNothing": transport.trusts_nothing(), "proxy": transport.proxy_summary(),

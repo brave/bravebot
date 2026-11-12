@@ -129,12 +129,16 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedQuestions(message.data)] }
       case 'ask.settled':
         return { ...old, entries: [...old.entries, t.askSettled(message.data)] }
+      case 'turn.retrieved':
+        return { ...old, fellBack: message.data.used.length ? null : message.data.fellBack }
       case 'turn.done': {
         refresh()
         // A rise means compaction summarised part of this conversation away, and what it takes it
         // takes from the front — so a briefing put at the top of the session is the first thing
         // gone. Saying the bot is no longer grounded is what makes the next prompt carry it again.
-        const compacted = message.data.archived > old.archived
+        // The retrieval cut moving takes from the front as well, so either count rising asks for it.
+        const outOfRequest = message.data.outOfRequest ?? old.outOfRequest ?? 0
+        const compacted = message.data.archived > old.archived || outOfRequest > (old.outOfRequest ?? 0)
         return leftOver({
           ...old,
           contextTokens: message.data.contextTokens,
@@ -150,6 +154,7 @@ export function apply(
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
+          outOfRequest,
           rewind: message.data.rewind ?? [],
           bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
         }, true)

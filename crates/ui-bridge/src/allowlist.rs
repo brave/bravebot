@@ -151,6 +151,16 @@ pub const DENIED: &[&str] = &[
     "hooks.inspect",
     "language.get",
     "language.set",
+    // Whether a bot retrieves earlier excerpts, written to the person's own file (RETRIEVE-24).
+    "retrieval.set",
+    // Reads a record named by its directory, as the session list does (RETRIEVE-29).
+    "retrieval.status",
+    // Reads a record named by its directory, and the words its excerpts sent (RETRIEVE-32).
+    "retrieval.excerpts",
+    // Writes the embeddings service retrieval sends to, and a key for it (RETRIEVE-35).
+    "retrieval.embeddings.set",
+    // Asks OpenRouter with the person's key (RETRIEVE-37).
+    "retrieval.embeddings.models",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",

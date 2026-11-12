@@ -47,6 +47,7 @@ import {
   carryOverPrompt,
   consolidationPrompt,
   AFTER_COMPACTION,
+  AFTER_RETRIEVAL_CUT,
 } from './bots'
 import { botFolders, isBotModel, isServerSelection, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
@@ -495,11 +496,10 @@ function createWindow(): void {
       if (folder && id && typeof prompt === 'number') noteTurnEnded({ directory: folder, id }, prompt, pending, message.data.reply)
       if (slug && folder) {
         if (message.data.id) noteBotSession(slug, message.data.id, folder, prompt ?? undefined)
-        // Read before `noteBotArchived` moves it, because the comparison *is* the signal: the
-        // archive rises exactly once per compaction that actually happened, which is the only
-        // reliable way to learn that one did. See the note on `Bot.archived`.
-        const before = bot(slug)?.archived ?? 0
-        noteBotArchived(slug, message.data.archived)
+        // The rise *is* the signal: the archive rises exactly once per compaction that actually
+        // happened, and what the requests leave out once per message the retrieval cut passes,
+        // which is the only reliable way to learn that either did. See the note on `Bot.archived`.
+        const leftOut = noteBotArchived(slug, message.data.archived, message.data.outOfRequest ?? 0)
         // Whether the bot wrote anything down during the turn that has just ended. Asked of every
         // turn including a consolidation's own, so a consolidation that worked is what resets the
         // count that would otherwise have nudged.
@@ -512,9 +512,12 @@ function createWindow(): void {
           message.data.consolidating = true
           after = () => ended(handle, slug, true)
         }
-        else if (message.data.archived > before) {
+        else if (leftOut) {
+          // Only a compaction summarised anything. The cut alone leaves the earlier part out of the
+          // request, to come back as excerpts, and saying it was summarised would be untrue.
+          const why = leftOut === 'compaction' ? AFTER_COMPACTION : AFTER_RETRIEVAL_CUT
           message.data.consolidating = true
-          after = () => void consolidate(handle, slug)
+          after = () => void consolidate(handle, slug, (held) => consolidationPrompt(held, why))
         }
         // The turn that gave the bot its definition has ended, so the old notes can be asked about
         // without a person's own line being in flight. Behind a compaction's consolidation, which
@@ -640,6 +643,11 @@ const ALLOWED = new Set([
   'effort.set',
   'language.get',
   'language.set',
+  'retrieval.set',
+  'retrieval.status',
+  'retrieval.excerpts',
+  'retrieval.embeddings.set',
+  'retrieval.embeddings.models',
   'connectors.list',
   'connectors.preview',
   'connectors.connect',

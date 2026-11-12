@@ -163,7 +163,23 @@
 /* A problem with the row's choice reads under both its text and its control. */
 .settings-row-alert { grid-column: 1 / -1; }
 .settings-row-text p { margin: var(--leo-spacing-xs) 0 0; font: var(--type-body); color: var(--ink-secondary); }
+.settings-row-text p.settings-caption { font: var(--type-caption); color: var(--ink-tertiary); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
+
+/* The embeddings service under the recall switch: one radio per service, its fields under it. */
+.recall-embeddings { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
+.recall-embeddings-title { margin: 0; font: var(--type-title); color: var(--ink-primary); }
+.recall-embeddings-options { display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
+.recall-embeddings-option { display: flex; flex-direction: column; gap: var(--leo-spacing-xs); }
+.recall-embeddings-name { font: var(--type-body); color: var(--ink-primary); }
+.recall-embeddings-detail { margin: 0; padding-inline-start: var(--leo-spacing-3xl); }
+.recall-embeddings-fields { display: flex; flex-direction: column; gap: var(--leo-spacing-m); padding-inline-start: var(--leo-spacing-3xl); padding-block-start: var(--leo-spacing-s); }
+.recall-embeddings-fields leo-dropdown, .recall-embeddings-fields leo-input { display: block; max-width: 28rem; }
+.recall-embeddings-advanced { padding: 0; }
+.recall-embeddings-key { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.recall-embeddings-problem { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); }
+.recall-embeddings-testing { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; }
+.recall-embeddings-spinner { display: inline-flex; }
 
 .hook-editor {
   margin: 0 0 var(--leo-spacing-l);

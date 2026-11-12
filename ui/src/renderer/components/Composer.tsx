@@ -12,6 +12,7 @@ import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { SessionControlsMenu } from './SessionControlsMenu'
 import { typing } from '../avatar/clock'
+import { t } from '../i18n'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
 /** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
@@ -48,6 +49,8 @@ export interface ComposerProps {
   compacting: boolean
   contextTokens?: number
   archived?: number
+  /** How many earlier messages the request leaves out, compaction's and the retrieval cut's together. */
+  outOfRequest?: number
   /** A card is waiting on the reader, which the placeholder says. */
   pending: boolean
   /** The message is being sent and a conversation made for it, so it cannot be sent again yet. */
@@ -131,7 +134,7 @@ export interface ComposerFooterProps {
  */
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
-    input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
+    input, session, model, running, askingTrust, compacting, contextTokens, archived, outOfRequest, pending, scope,
     draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false, summonable = NO_BOTS,
@@ -449,7 +452,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 data-tooltip="Hold this message until the turn ends, then send it as a turn of its own (Alt+Enter)"
                 onClick={props.onQueue}>Queue for after</Button>
             )}
-            <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
+            <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} outOfRequest={outOfRequest} compacting={compacting} />
             <SessionControlsMenu key={`controls-${session}`} permissionMode={permissionMode} onPermissionMode={onMode}
               sandboxMode={sandboxMode} onSandboxMode={onSandbox} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
@@ -591,11 +594,12 @@ export function BackendTray({ onSetup, onCheckBackend, onDiagnostics }: {
  * alone says "most of it" and not how much. The fraction is drawn only against a window the
  * catalogue gave; without one the ring is an empty track rather than a guess.
  */
-function ContextMeter({ session, model, tokens, archived, compacting }: {
+function ContextMeter({ session, model, tokens, archived, outOfRequest, compacting }: {
   session: string
   model: string | null
   tokens?: number
   archived?: number
+  outOfRequest?: number
   compacting: boolean
 }): React.JSX.Element {
   const size = useContextWindow(session, model, (tokens ?? 0) > 0)
@@ -606,7 +610,10 @@ function ContextMeter({ session, model, tokens, archived, compacting }: {
   const fraction = size && tokens ? Math.min(1, tokens / size) : 0
   const share = size && tokens ? `${Math.round(fraction * 100)}% of ${size.toLocaleString()}` : null
   const level = fraction >= 0.95 ? 'full' : fraction >= 0.8 ? 'high' : ''
-  const tooltip = [said, share, archived ? 'Earlier context summarised' : null].filter(Boolean).join(' · ')
+  // What the retrieval cut leaves out beyond what compaction summarised (RETRIEVE-28).
+  const kept = Math.max(0, (outOfRequest ?? 0) - (archived ?? 0))
+  const recalled = kept ? t.uiContextOutOfRequest({ count: kept }) : null
+  const tooltip = [said, share, archived ? 'Earlier context summarised' : null, recalled].filter(Boolean).join(' · ')
     + '. The size of the model’s last request, not the tokens used so far.'
   return (
     <span className={`context-meter ${level}`} tabIndex={0} data-tooltip={tooltip} data-test="context-meter">
@@ -617,6 +624,7 @@ function ContextMeter({ session, model, tokens, archived, compacting }: {
         <span>{said}</span>
         {share && <span> · {share}</span>}
         {!!archived && <span> · Earlier context summarised</span>}
+        {recalled && <span> · {recalled}</span>}
       </span>
     </span>
   )

@@ -92,6 +92,8 @@ fn check_completion(ending: &str) -> (bool, bool) {
             addressing: None,
             addressing_standing: false,
             workspace,
+            indexer: None,
+            retrievers: None,
             prompt: "hello".into(),
             composed: None,
             files: vec![],

@@ -1598,7 +1598,19 @@ Still open:
   that did, `managed` true where the administrator's file did), `unreadable` (keys a file spelled as
   something other than a boolean), and `run.{defaultSeconds, maxSeconds, maxOutput}`, each null
   where nothing set it so the agent's built-in figure applies. The window displays these and
-  writes none of them.
+  writes none of them. `retrieval` is `{ enabled, path, from, locked, disclosed, endpoint }`:
+  whether bots retrieve earlier excerpts, the person's own settings file the switch writes, the
+  file that decided it (or null), `{ by, path }` where `by` is `managed` (the administrator's file
+  turned it off) or `run` (the `--settings` file states it) and null where nothing fixes it,
+  whether the person was shown the current endpoint, and `endpoint` as
+  `{ url, host, model, dimensions, development }`
+  ([RETRIEVE-24](../../docs/specs/retrieval.md#RETRIEVE-24)).
+- `retrieval.set` takes `enabled` and, turning retrieval on for the first time against an
+  endpoint, `disclosed`, the endpoint URL the window showed the person. It writes
+  `retrieval.enabled` into `~/.bravebot/settings.json`, keeping the rest of the file, and answers
+  with the `retrieval` block above. It is refused with the reason where `locked` is set, where
+  `disclosed` is missing or names another endpoint and the person was not shown this one before,
+  and where the file cannot be written ([RETRIEVE-25](../../docs/specs/retrieval.md#RETRIEVE-25)).
   `settings.select` is main-process-only and selects/clears a validated file for future turns.
   The native `bravebot:settings:select` picker grants the path; renderer requests cannot set it.
   Model discovery uses the same override and the session's registered project directory.

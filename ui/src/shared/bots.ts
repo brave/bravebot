@@ -98,6 +98,14 @@ export interface Bot {
    */
   archived: number
   /**
+   * How many earlier messages that session's requests leave out, last time anyone looked.
+   *
+   * Compaction's and the retrieval cut's together, and rising only, like `archived`. A rise is the
+   * same moment for the same reason: something the bot was told is no longer in what it is sent.
+   * Main-written.
+   */
+  outOfRequest: number
+  /**
    * The modification time its memory file had, last time a turn of its finished.
    *
    * Not a copy of the memory and not a judgement about it — only the answer to "has it changed
@@ -270,6 +278,10 @@ function isText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && !value.includes('\0')
 }
 
+function count(value: unknown, otherwise: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : otherwise
+}
+
 /**
  * A bot list, always.
  *
@@ -307,6 +319,7 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       conversations,
       lastHome,
       archived,
+      outOfRequest,
       remembered,
       quiet,
       retired,
@@ -343,8 +356,9 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       lastHome: parseHomeTurn(lastHome),
       // Clamped rather than refused. It is a watermark, and a nonsense one costs one needless
       // re-grounding, where dropping the bot over it costs the bot.
-      archived:
-        typeof archived === 'number' && Number.isInteger(archived) && archived >= 0 ? archived : 0,
+      archived: count(archived, 0),
+      // A bot written before the count left out what compaction had archived, and nothing more.
+      outOfRequest: count(outOfRequest, count(archived, 0)),
       // Both clamped rather than refused, for the reason above them: these decide when a bot is
       // reminded to write, and a nonsense figure costs one needless briefing where dropping the
       // row over it costs the bot. Absent is the ordinary case — every bot written before this

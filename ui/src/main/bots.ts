@@ -199,6 +199,7 @@ export function botFromForm(value: unknown): Bot | null {
     conversations: [],
     lastHome: null,
     archived: 0,
+    outOfRequest: 0,
     // Nothing has been remembered and nothing has gone unremembered, so a new bot starts owing no
     // nudge. See `noteBotMemory`, which takes its first reading when its first turn ends.
     remembered: 0,
@@ -422,16 +423,24 @@ export function noteBotSession(slug: string, id: string, directory: string, prom
 }
 
 /**
- * Note how much compaction has taken out of a bot's session.
+ * Note how much compaction and the retrieval cut have taken out of a bot's session, and say
+ * which rose, which is when the bot is owed its purpose again: `compaction` where the archive rose,
+ * whether or not the cut moved with it, `cut` where only the cut did, and `null` where neither did.
+ * The two are told apart because only a compaction summarised anything.
  *
- * Monotonic, and treated as such: a lower figure than the one already stored describes a
+ * Both monotonic, and treated as such: a lower figure than the one already stored describes a
  * conversation this is not looking at, and adopting it would ask for a re-grounding that nothing
  * happened to justify.
  */
-export function noteBotArchived(slug: string, archived: number): void {
+export function noteBotArchived(slug: string, archived: number, outOfRequest = 0): 'compaction' | 'cut' | null {
   const held = bot(slug)
-  if (!held || !Number.isInteger(archived) || archived <= held.archived) return
-  saveBot({ ...held, archived })
+  if (!held) return null
+  const rose = (figure: number, stored: number): boolean => Number.isInteger(figure) && figure > stored
+  const archiveRose = rose(archived, held.archived)
+  const cutRose = rose(outOfRequest, held.outOfRequest)
+  if (!archiveRose && !cutRose) return null
+  saveBot({ ...held, archived: archiveRose ? archived : held.archived, outOfRequest: cutRose ? outOfRequest : held.outOfRequest })
+  return archiveRose ? 'compaction' : 'cut'
 }
 
 /**
@@ -447,7 +456,7 @@ export function noteBotArchived(slug: string, archived: number): void {
 export function releaseBotSession(slug: unknown): void {
   const held = bot(slug)
   if (!held || held.session === null) return
-  saveBot({ ...held, session: null, archived: 0 })
+  saveBot({ ...held, session: null, archived: 0, outOfRequest: 0 })
 }
 
 /**
@@ -459,7 +468,7 @@ export function forgetBotConversation(directory: string, id: string): void {
     const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
     const pointed = held.session === id
     if (conversations.length === held.conversations.length && !pointed) continue
-    saveBot({ ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived })
+    saveBot({ ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived, outOfRequest: pointed ? 0 : held.outOfRequest })
   }
 }
 
@@ -654,6 +663,11 @@ export function carryOverPrompt(bot: Pick<Bot, 'slug' | 'definition'>): string {
 export const AFTER_COMPACTION =
   'Your conversation has just been summarised, and the detail behind that summary is now the only' +
   ' thing your memory can still be written from.'
+
+/** Why a consolidation was sent after the retrieval cut moved, where nothing was summarised. */
+export const AFTER_RETRIEVAL_CUT =
+  'The earlier part of your conversation is no longer sent with each request, and only the' +
+  ' excerpts of it retrieved as they become relevant will come back to you.'
 
 /**
  * The longest a bot's name may be inside a file this composes.

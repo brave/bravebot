@@ -5,6 +5,7 @@ import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } fr
 import { composeHooks, unusableTimeout } from '../../shared/agent-settings'
 import { Alert, Button, Dropdown, Icon, Input, ProgressRing } from '../nala'
 import { Skeleton } from './Skeleton'
+import { RecallGroup } from './RecallSetting'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
   if (typeof event.value === 'string') return event.value
   const target = event.target
@@ -118,6 +119,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
     {status && <Alert type="success" size="small" role="status">{status}</Alert>}
     {busy && !report && <Skeleton label="Loading the agent's configuration…" kind="lines" count={5} delayed={!showLoading} />}
     {busy && report && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
+    {report?.retrieval && <RecallGroup state={report.retrieval} onSaved={retrieval => setReport({ ...report, retrieval })} />}
     <SettingsGroup title="Connection">
       {report && <>
         <section className="settings-block"><h3>Network</h3>
