@@ -65,7 +65,7 @@ pub fn resolve_proposal<S: Sink>(
 
 #[cfg(test)]
 mod tests {
-    use super::read;
+    use super::{read, resolve_proposal};
     use bravebot_core::{
         CapabilitySet, Label, Policy, RecordingSink, ReleasePlan, Routing, SlotId, SlotStore,
     };
@@ -158,5 +158,45 @@ mod tests {
         let reply = slots.take_for_reading(&reply).expect("written");
         read(&mut policy, &spec, reply)
             .expect_err("a document processor's answer was read for a number");
+    }
+
+    /// MANIFEST-16. A spec built for a document is refused by the gate that reads rows, so this
+    /// crate cannot resolve calls out of a document processor's answer.
+    #[test]
+    fn a_processor_that_was_not_asked_for_rows_has_none_read_from_its_answer() {
+        let mut slots = SlotStore::new();
+        let page = slot_of(&mut slots, "ref:page", Label::trusted_public(), "a page");
+        let instruction = slot_of(&mut slots, "ref:said", Label::trusted_public(), "rewrite");
+        let instruction = slots.take_for_reading(&instruction).expect("written");
+
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "rewrite");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("a policy");
+        let spec = policy
+            .before_processor("p", &[page], &instruction, None, &slots)
+            .expect("a processor that writes a document");
+
+        let reply = slot_of(
+            &mut slots,
+            "ref:reply",
+            Label::trusted_public(),
+            "row 1: tool 1",
+        );
+        let reply = slots.take_for_reading(&reply).expect("written");
+        let shape = bravebot_core::apply::Shape {
+            lists: Vec::new(),
+            tools: Vec::new(),
+            max_rows: 50,
+            max_new: 12,
+        };
+        resolve_proposal(&mut policy, &spec, reply, &[], &shape)
+            .expect_err("a document processor's answer was read for rows");
     }
 }

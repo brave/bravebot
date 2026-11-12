@@ -31,7 +31,7 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 143
+      - crates/core/src/policy.rs: 144
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -284,11 +284,11 @@ guards:
   - symbol: Policy::keep_applied
     sites:
       - crates/agent/src/server_calls.rs: 1
-      - crates/core/src/policy.rs: 1
+      - crates/core/src/policy.rs: 2
   - symbol: Policy::carry_applied_call
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/core/src/policy.rs: 1
+      - crates/core/src/policy.rs: 5
   - symbol: Carried::into_wire
     sites:
       - crates/core/src/policy.rs: 4
