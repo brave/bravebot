@@ -27,7 +27,7 @@ use bravebot_session::audit::Trail;
 
 /// Where the ping goes unless [`bravebot_config::env_var::USAGE_PING_URL`] says otherwise.
 ///
-/// The host is not yet confirmed by the service's owners; bead bravebot-en9.1 tracks it.
+/// Brave's usage service, which serves `/1/usage/bravebot` there (brave-intl/go-vault#378).
 const BASE_URL: &str = "https://laptop-updates.brave.com";
 
 /// The path the service answers the ping on.

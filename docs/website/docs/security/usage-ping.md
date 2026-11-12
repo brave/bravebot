@@ -26,7 +26,6 @@ One `GET` request, with these fields and nothing else:
 | `first` | `true` until Brave has accepted one ping from this install |
 | `woi` | the Monday of the week of the first ping Brave accepted from this install |
 
-<!-- TODO(en9.1): confirm production host -->
 A first ping from the terminal on a Mac looks like this:
 
 ```text
