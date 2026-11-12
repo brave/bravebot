@@ -2455,6 +2455,31 @@ SELECTIONS = [
 ]
 
 
+def local_git_variables():
+    """The variables git says describe one repository, such as GIT_DIR and GIT_INDEX_FILE."""
+    return subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+
+
+@contextlib.contextmanager
+def without_the_callers_repository():
+    """The environment with the variables that point git at the caller's repository removed.
+
+    `git rebase --exec`, hooks and `git -C` aliases run a command with GIT_DIR set, and with it
+    set git ignores the directory it is started in: the fixture's `git init`, `add` and `commit`
+    would land in the caller's repository, on its branch and in its index. The variables come
+    back when the block ends, since the caller's own checks still need them."""
+    saved = {name: os.environ.pop(name) for name in local_git_variables() if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
 def in_fixture(break_it, ask):
     """`ask` run against a fresh fixture repository, broken as the case says."""
     original = Path.cwd()
@@ -2462,11 +2487,12 @@ def in_fixture(break_it, ask):
     check._TOPLEVEL.clear()  # A different checkout from the last case's.
     check._BASE.clear()
     try:
-        build_fixture(root)
-        os.chdir(root)
-        if break_it is not None:
-            break_it(root)
-        return ask()
+        with without_the_callers_repository():
+            build_fixture(root)
+            os.chdir(root)
+            if break_it is not None:
+                break_it(root)
+            return ask()
     finally:
         os.chdir(original)
         shutil.rmtree(root, ignore_errors=True)
@@ -2474,6 +2500,53 @@ def in_fixture(break_it, ask):
 
 def generated_list():
     return check.unverified_clauses(load_specs(), TestIndex())
+
+
+def caller_repository_checks():
+    """A run started with GIT_DIR and GIT_INDEX_FILE set, as `git rebase --exec` starts one.
+
+    The caller's repository has one commit and an index of its own. The fixture builds and commits
+    its tree while those variables name that repository, so a fixture that leaves them set adds a
+    commit to the caller's branch and rewrites the caller's index."""
+    names = ("GIT_DIR", "GIT_INDEX_FILE")
+    saved = {name: os.environ.pop(name, None) for name in names}
+    caller = Path(tempfile.mkdtemp(prefix="check-spec-selftest-caller-"))
+    try:
+        git(caller, "init", "-q")
+        git(caller, "commit", "-q", "--allow-empty", "-m", "the caller's own commit")
+        head = git(caller, "rev-parse", "HEAD")
+        index = caller / ".git" / "index"
+        os.environ["GIT_DIR"] = str(caller / ".git")
+        os.environ["GIT_INDEX_FILE"] = str(index)
+        inside = in_fixture(None, lambda: (os.environ.get("GIT_DIR"), os.environ.get("GIT_INDEX_FILE")))
+        after = (os.environ.get("GIT_DIR"), os.environ.get("GIT_INDEX_FILE"))
+        for name in names:
+            os.environ.pop(name)
+        return [
+            (
+                "the fixture is built without the variables that name the caller's repository",
+                inside == (None, None),
+            ),
+            (
+                "the caller's repository has the commits it had before the fixture",
+                git(caller, "rev-list", "--all", "--count") == "1"
+                and git(caller, "rev-parse", "HEAD") == head,
+            ),
+            (
+                "the caller's index holds nothing from the fixture",
+                git(caller, "ls-files") == "",
+            ),
+            (
+                "the variables are the caller's again once the fixture is gone",
+                after == (str(caller / ".git"), str(index)),
+            ),
+        ]
+    finally:
+        for name in names:
+            os.environ.pop(name, None)
+            if saved[name] is not None:
+                os.environ[name] = saved[name]
+        shutil.rmtree(caller, ignore_errors=True)
 
 
 # The gates that lower a value's confidentiality or give bytes a trusted label. Each is pinned in
@@ -2663,6 +2736,10 @@ def main():
     for name, held in bullet_checks():
         note(name, held, "the bullet was written differently")
 
+    isolated = caller_repository_checks()
+    for name, held in isolated:
+        note(name, held, "the fixture reached the repository that started the selftest")
+
     selected = in_fixture(nest_a_spec, selection_checks)
     for name, held in selected:
         note(name, held, "the selector resolved to something else")
@@ -2691,6 +2768,7 @@ def main():
         + len(manifests)
         + len(sited)
         + len(selected)
+        + len(isolated)
         + len(repeated)
     )
     print()

@@ -2890,12 +2890,17 @@ mod tests {
     /// CHATGPT-13: the opener is started with the variables [CRED-14] removes left out and the
     /// arguments it was given. A start that inherited everything would hand this agent's own
     /// credentials to whatever `open` or `xdg-open` resolves to.
+    ///
+    /// The set is read in an environment holding no variable that selects code, so what the
+    /// SANDBOX-30 check takes off for this process, such as an `LD_LIBRARY_PATH` it was started
+    /// with, is not read as a credential. The start this process makes is then held to leaving out
+    /// every one of them.
     #[test]
     fn the_opener_is_not_handed_this_agents_own_credentials() {
         let program = Resolved::found_earlier("/usr/bin/open");
         let arguments = vec!["https://example.invalid/".to_string()];
 
-        let command = opening(&program, &arguments);
+        let command = opening_against(&program, &arguments, std::iter::empty(), &|_: &Path| true);
 
         let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
@@ -2903,6 +2908,12 @@ mod tests {
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
             ["https://example.invalid/"]
+        );
+
+        let started = withheld_from(&opening(&program, &arguments));
+        assert!(
+            expected.iter().all(|name| started.contains(name)),
+            "the opener this process starts was handed a credential: {started:?}"
         );
     }
 
