@@ -2064,9 +2064,16 @@ decide it.
 `verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_what_printed_nothing_makes_no_check`
 `verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_more_than_one_result_may_hold_is_told_why`
 `verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
+`verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_changes_nothing_where_a_person_still_answers_for_it`
+`verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_where_a_check_objects_is_said_not_to_have_returned_the_slice`
 `verified-by: bravebot_agent::turn::sentences::a_job_look_that_asked_to_read_past_the_cap_is_told_why_once`
 `verified-by: bravebot_agent::turn::a_job_look_with_a_read_that_is_not_a_boolean_is_refused`
 `verified-by: bravebot_agent::turn::an_ended_job_whose_last_look_asked_to_read_is_told_with_its_output_where_nobody_is_asked`
+`verified-by: bravebot_agent::turn::an_ended_job_whose_last_look_asked_to_read_stays_a_reference_where_a_person_answers`
+`verified-by: bravebot_agent::turn::an_ended_job_whose_last_look_asked_to_read_stays_a_reference_past_the_cap`
+`verified-by: bravebot_agent::turn::an_ended_job_whose_last_look_asked_to_read_and_that_printed_nothing_makes_no_check`
+`verified-by: bravebot_agent::turn::an_ended_job_whose_last_look_asked_to_read_stays_a_reference_where_a_check_objects`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_an_ended_jobs_account_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::a_look_after_a_released_account_of_an_ended_job_lists_its_reference`
 `verified-by: bravebot_agent::tools::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`

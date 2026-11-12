@@ -1271,10 +1271,19 @@ fn serve_until_job_1_finishes(start: String) -> (String, MockRequests) {
 
 /// [`serve_until_job_1_finishes`] with the calls of `first` made, in order, before the waiting.
 fn serve_until_job_1_finishes_after(first: Vec<String>) -> (String, MockRequests) {
+    serve_until_job_1_finishes_answering_checks_after(Vec::new(), first)
+}
+
+/// [`serve_until_job_1_finishes_after`], answering the checks with `checks` in order, as
+/// [`serve_sequence_answering_checks_with`] does.
+fn serve_until_job_1_finishes_answering_checks_after(
+    checks: Vec<String>,
+    first: Vec<String>,
+) -> (String, MockRequests) {
     let mut first = first.into_iter();
     let mut waited = 0;
     let mut done = false;
-    serve_rounds(Vec::new(), false, move |body| {
+    serve_rounds(checks, false, move |body| {
         if let Some(call) = first.next() {
             return Some(Some(call));
         }
@@ -41000,6 +41009,477 @@ fn a_look_after_a_released_account_of_an_ended_job_lists_its_reference() {
         after.contains("Earlier looks at job:1 are ref:"),
         "the later look did not list the released account's reference: {after}"
     );
+}
+
+/// RUN-22 for `job_output`: where a person still answers `read_output`, a look that asks to read
+/// changes nothing. The slice stays behind its reference, nobody is asked and no check is made. A
+/// person asked here would be a prompt the planner never requested with `read_output`.
+///
+/// The confirmer would let every read through, so a release made in this mode shows up as the
+/// slice reaching the planner and a release in the trail.
+#[test]
+fn a_job_look_that_asks_to_read_changes_nothing_where_a_person_still_answers_for_it() {
+    let scratch = Scratch::new("background-ask-read");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("noisy"),
+        "echo SENTINEL-JOB-ASKED\nsleep 30\n",
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"kill":true,"read":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Ask, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Ask),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made nobody asked for"
+    );
+    let after = sent.last().expect("the round after job_output");
+    assert!(
+        !after.contains("SENTINEL-JOB-ASKED"),
+        "the slice reached the planner unasked for by read_output: {after}"
+    );
+    assert!(
+        after.contains("Result of job_output could not be shown to you"),
+        "the look's result does not say the slice is behind a reference: {after}"
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "somebody was asked about a slice the planner never called read_output for"
+    );
+    assert!(
+        releases_of_output(&sink).is_empty(),
+        "the trail records a release: {:?}",
+        releases_of_output(&sink)
+    );
+}
+
+/// RUN-14, RUN-22 for `job_output`: a look that asks to read, where a check answers for the person
+/// and the check objects, leaves the slice behind its reference with nobody asked, and the result
+/// says the read did not return it, in the words a run's result uses. Without the sentence a look
+/// that passed `read: true` comes back looking like any quarantined result, and a planner looks
+/// again with `read: true` to try to see it.
+#[test]
+fn a_job_look_that_asks_to_read_where_a_check_objects_is_said_not_to_have_returned_the_slice() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::Ask,
+    ] {
+        let scratch = Scratch::new(&format!("background-read-checked-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(
+            scratch.path.join("noisy"),
+            "echo SENTINEL-JOB-CHECKED\nsleep 30\n",
+        )
+        .unwrap();
+
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
+            )],
+            vec![
+                tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+                tool_request(
+                    "job_output",
+                    r#"{"job":"job:1","wait_seconds":30,"kill":true,"read":true}"#,
+                ),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent: Vec<String> = received.try_iter().collect();
+        assert!(
+            sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+            "{mode:?}: no check was made, so this test pins nothing"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked about a slice the planner never called read_output for"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release of a slice a check objected to: {:?}",
+            releases_of_output(&sink)
+        );
+        let after = sent.last().expect("the round after job_output");
+        assert!(
+            !after.contains("SENTINEL-JOB-CHECKED") && !after.contains("SENTINEL-REASON"),
+            "{mode:?}: the slice, or what the check wrote, reached the planner: {after}"
+        );
+        let told = message_from(after, "Result of job_output could not be shown to you");
+        assert!(
+            told.contains(
+                "Your read: true did not return it in this result, so read_output is the way to \
+                 see it."
+            ),
+            "{mode:?}: the look was not told its read did not return the slice: {told}"
+        );
+    }
+}
+
+/// What a turn did with the account of an ended job whose latest look asked to read.
+struct OverAnEndedJob {
+    /// Every request the model double received, the checks included.
+    sent: Vec<String>,
+    sink: RecordingSink,
+    reporter: bravebot_agent::report::RecordingReporter,
+    /// What the confirmer was asked to release.
+    asked: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::OutputRequest>>>,
+}
+
+impl OverAnEndedJob {
+    /// The account the turn gave of job:1's end.
+    fn account(&self) -> &str {
+        let body = self
+            .sent
+            .iter()
+            .find(|body| body.contains(JOB_1_FINISHED))
+            .expect("the turn was never told the job ended");
+        message_from(body, JOB_1_FINISHED)
+    }
+}
+
+/// Run a turn in `mode` that starts a job which sleeps a second and then prints `printed`, looks at
+/// it at once with `read: true`, and waits for its end. The checks are answered with `checks`.
+fn over_an_ended_job_whose_look_asked_to_read(
+    name: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    printed: &str,
+    output_cap: Option<usize>,
+    checks: Vec<String>,
+) -> OverAnEndedJob {
+    let scratch = Scratch::new(name);
+    let script = if printed.is_empty() {
+        "sleep 1\n".to_string()
+    } else {
+        format!("sleep 1\necho {printed}\n")
+    };
+    std::fs::write(scratch.path.join("noisy"), script).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes_answering_checks_after(
+        checks,
+        vec![
+            tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+            tool_request("job_output", r#"{"job":"job:1","read":true}"#),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(true);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, auto_vetting);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it")
+            .with_permission_mode(mode)
+            .with_auto_vetting(auto_vetting)
+            .with_output_cap(output_cap),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    OverAnEndedJob {
+        sent: received.try_iter().collect(),
+        sink,
+        reporter,
+        asked,
+    }
+}
+
+/// RUN-22 for the account of an ended job: where a person still answers `read_output`, the look's
+/// `read: true` releases nothing at the job's end. The account stays a reference, nobody is asked,
+/// and no check is made. A release here would put a prompt in front of a person that the planner
+/// never asked for.
+#[test]
+fn an_ended_job_whose_last_look_asked_to_read_stays_a_reference_where_a_person_answers() {
+    let over = over_an_ended_job_whose_look_asked_to_read(
+        "background-finish-ask-read",
+        bravebot_agent::PermissionMode::Ask,
+        false,
+        "SENTINEL-ENDED-ASKED",
+        None,
+        Vec::new(),
+    );
+    let told = over.account();
+    assert!(
+        !told.contains("SENTINEL-ENDED-ASKED") && told.contains("could not be shown to you"),
+        "the account was released where a person answers read_output: {told}"
+    );
+    assert!(
+        !over.sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made nobody asked for"
+    );
+    assert!(
+        over.asked.lock().unwrap().is_empty(),
+        "somebody was asked about an account the planner never called read_output for"
+    );
+    assert!(
+        releases_of_output(&over.sink).is_empty(),
+        "the trail records a release: {:?}",
+        releases_of_output(&over.sink)
+    );
+}
+
+/// RUN-21, RUN-22 for the account of an ended job: an account longer than one result may hold stays
+/// behind its reference though the job's latest look asked to read, as a run's output past the cap
+/// does. The cap bounds what a result may spend of the conversation, and the look asked before
+/// there was a size to see.
+#[test]
+fn an_ended_job_whose_last_look_asked_to_read_stays_a_reference_past_the_cap() {
+    let over = over_an_ended_job_whose_look_asked_to_read(
+        "background-finish-bypass-read-capped",
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        &format!("SENTINEL-ENDED-CAPPED {}", "x".repeat(200)),
+        Some(64),
+        Vec::new(),
+    );
+    let told = over.account();
+    assert!(
+        !told.contains("SENTINEL-ENDED-CAPPED") && told.contains("could not be shown to you"),
+        "an account past the cap was released: {told}"
+    );
+    assert!(
+        over.asked.lock().unwrap().is_empty(),
+        "somebody was asked about an account past the cap"
+    );
+    assert!(
+        releases_of_output(&over.sink).is_empty(),
+        "the trail records a release past the cap: {:?}",
+        releases_of_output(&over.sink)
+    );
+}
+
+/// RUN-22, RUN-24 for the account of an ended job: a job that printed nothing after a look that
+/// asked to read is told as having printed nothing, with no check made over it, nothing released
+/// and nobody asked, though a check answers in this mode. A check over no bytes would spend a model
+/// call on nothing.
+#[test]
+fn an_ended_job_whose_last_look_asked_to_read_and_that_printed_nothing_makes_no_check() {
+    let over = over_an_ended_job_whose_look_asked_to_read(
+        "background-finish-bypass-read-empty",
+        bravebot_agent::PermissionMode::Bypass,
+        true,
+        "",
+        None,
+        Vec::new(),
+    );
+    let told = over.account();
+    assert!(
+        told.contains("It printed nothing") && !told.contains("could not be shown to you"),
+        "the account of a job that printed nothing does not say so: {told}"
+    );
+    assert!(
+        !over.sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made over an account that holds no bytes"
+    );
+    assert!(
+        over.reporter.checks.is_empty(),
+        "a check was announced for an account that holds no bytes"
+    );
+    assert!(
+        over.asked.lock().unwrap().is_empty(),
+        "somebody was asked about an account that holds no bytes"
+    );
+    assert!(
+        releases_of_output(&over.sink).is_empty(),
+        "the trail records a release of nothing: {:?}",
+        releases_of_output(&over.sink)
+    );
+}
+
+/// RUN-22 for the account of an ended job: where a check answers and does not say safe, the account
+/// stays behind its reference, nobody is asked and nothing is released, in every mode that screens.
+/// The check's word is the only thing a release may branch on, so one that objects keeps it back.
+#[test]
+fn an_ended_job_whose_last_look_asked_to_read_stays_a_reference_where_a_check_objects() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::Ask,
+    ] {
+        let over = over_an_ended_job_whose_look_asked_to_read(
+            &format!("background-finish-read-checked-{mode:?}"),
+            mode,
+            true,
+            "SENTINEL-ENDED-CHECKED",
+            None,
+            vec![reply_with(
+                r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
+            )],
+        );
+        assert!(
+            over.sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+            "{mode:?}: no check was made, so this test pins nothing"
+        );
+        let told = over.account();
+        assert!(
+            !told.contains("SENTINEL-ENDED-CHECKED")
+                && !told.contains("SENTINEL-REASON")
+                && told.contains("could not be shown to you"),
+            "{mode:?}: an account a check objected to was released: {told}"
+        );
+        assert!(
+            over.asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked about an account the planner never called read_output for"
+        );
+        assert!(
+            releases_of_output(&over.sink).is_empty(),
+            "{mode:?}: the trail records a release of an account a check objected to: {:?}",
+            releases_of_output(&over.sink)
+        );
+    }
+}
+
+/// RUN-22, CHECK-16 for the account of an ended job: a stop while the check on the account is
+/// running ends the turn stopped, as a stop during the check on a run that asks to read does. The
+/// account stays quarantined, nobody is asked, and the trail records the stop and no verdict.
+#[test]
+fn a_stop_during_the_check_on_an_ended_jobs_account_ends_the_turn_stopped() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::Ask,
+    ] {
+        let scratch = Scratch::new(&format!("background-finish-read-stopped-{mode:?}"));
+        std::fs::write(
+            scratch.path.join("noisy"),
+            "sleep 1\necho SENTINEL-ENDED-STOPPED\n",
+        )
+        .unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, _received) = serve_until_job_1_finishes_answering_checks_after(
+            vec![a_check_finding_nothing()],
+            vec![
+                tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+                tool_request("job_output", r#"{"job":"job:1","read":true}"#),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = StopsWhenACheckBegins::new(&cancel);
+
+        let error = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+        .outcome
+        .unwrap_err();
+
+        assert!(
+            matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+            "{mode:?}: the turn did not end as stopped: {:?}",
+            error.ending()
+        );
+        assert_eq!(reporter.begun, 1, "{mode:?}: no check was made");
+        assert_eq!(
+            reporter.finished, 1,
+            "{mode:?}: the check never said it was over"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked after a stop"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release: {:?}",
+            releases_of_output(&sink)
+        );
+        let trail = format!("{:?}", sink.events());
+        assert!(
+            trail.contains("the check was stopped before it finished")
+                && !trail.contains("inconclusive")
+                && !trail.contains("could not be made"),
+            "{mode:?}: the trail does not record a stop and no verdict: {trail}"
+        );
+    }
 }
 
 /// The same for a job whose end the turn reports unasked.
@@ -96120,11 +96600,14 @@ fn walk_asking_to_read_within(
             // A directory too, so a bounded listing whose pattern selects no file still has a
             // quarantined entry.
             std::fs::create_dir(root.join("SENTINEL-LISTED-DIR")).unwrap();
+            #[cfg(unix)]
             std::os::unix::fs::symlink(
                 root.join("SENTINEL-LISTED-NAME.rs"),
                 root.join("a-link.rs"),
             )
             .unwrap();
+            #[cfg(not(unix))]
+            unreachable!("only the Unix tests ask for a link");
         }
     })
 }
@@ -96398,7 +96881,11 @@ fn a_search_or_listing_whose_read_is_not_a_boolean_is_refused() {
 ///
 /// A wrong implementation drops the link or pattern sentence from a kept-back one-slot listing,
 /// omits the read-not-returned sentence, or relays the check's reason.
+///
+/// Unix only, because making the link is: a symlink needs a privilege on Windows that a test run
+/// cannot assume.
 #[test]
+#[cfg(unix)]
 fn a_search_or_listing_kept_back_after_asking_to_read_says_so_and_keeps_its_notes() {
     for (tool, arguments, sentinel, notes) in [
         (
@@ -96455,7 +96942,11 @@ fn a_search_or_listing_kept_back_after_asking_to_read_says_so_and_keeps_its_note
 /// sentences a trusted one would: the links it did not enter and a pattern that matched nothing.
 ///
 /// A wrong implementation releases the bare entries and loses those sentences.
+///
+/// Unix only, because making the link is: a symlink needs a privilege on Windows that a test run
+/// cannot assume.
 #[test]
+#[cfg(unix)]
 fn a_released_search_or_listing_keeps_its_notes() {
     for (tool, arguments, sentinel, notes) in [
         (
