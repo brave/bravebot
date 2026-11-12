@@ -13,17 +13,32 @@ Each session stays with its chosen execution target. Switching targets never mov
 
 The prototype uses React Native for native mobile controls and shared Android/iOS screens. Validate responsiveness, approval legibility, accessibility, keyboard behavior, scrolling, and lifecycle handling in the first device proof before expanding the screens. See the [UI decision](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). Neither platform has delivery priority.
 
-Keep shareable behavior in Rust. Both execution modes call the same Rust session-view and approval code; the thin TypeScript package in `packages/agent-client/` handles transport and UI wiring. Validate the new view capability through a real local RPC process, independently of Electron.
+Keep shareable behavior in Rust. Both execution modes call the same Rust session-view and approval code; the thin TypeScript package in `packages/agent-client/` handles transport and UI wiring. Validate the new view capability through a real local RPC process, independently of the desktop app.
 
 ## Implementation order
 
-![Local client validation leads to host foundations, a synthetic phone experiment, recovery and handoff, secure remote control, and a full demonstration. Embedded execution and Electron integration run as separate tracks and join the final demonstration.](mobile-delivery.png)
+```mermaid
+flowchart TD
+    S1["1–2a · Start here<br/>Define and test the local client<br/>Prove the interface and shared screen state"]
+    S3["3a–3c · Host foundations<br/>Build the persistent host<br/>Exact targets, ownership, client loss"]
+    S3d["3d · Phone experiment<br/>Try the phone early<br/>Synthetic data and controlled tools only"]
+    S4["4a–4b + 5a · Local validation<br/>Add recovery and shared control<br/>Snapshots, send IDs, two clients on one session"]
+    S6["6–7 · Network and phone<br/>Enable secure remote control<br/>Resolve pairing and access scope first"]
+    S8["8 · Full prototype<br/>Demonstrate both modes<br/>Desktop and phone act on the same session"]
+    S2b["2b · Parallel<br/>Prove on-device execution<br/>Build on android-shell"]
+    S5b["5b · Parallel<br/>Integrate the desktop app<br/>Supported prototype sessions"]
+    S1 --> S3 --> S3d --> S4 --> S6 --> S8
+    S1 --> S2b --> S8
+    S4 --> S5b --> S8
+```
 
-**Remote control is the first substantial end-to-end prototype.** Test the interface locally first, discover phone lifecycle problems early, then add recovery and secure networking. Embedded work proceeds in parallel; Electron integration does not block the initial phone work. Both remain part of completion.
+Security gates apply before real-session control or network exposure.
+
+**Remote control is the first substantial end-to-end prototype.** Test the interface locally first, discover phone lifecycle problems early, then add recovery and secure networking. Embedded work proceeds in parallel; desktop integration does not block the initial phone work. Both remain part of completion.
 
 Use **red → green → refactor** for each small behavior: show the intended test failure, implement it, then improve the code with tests passing. Follow `testing-preflight` and demonstrate that selected security and concurrency tests catch plausible faults.
 
-The first deliverable is the local client proof. The [first secure remote checkpoint](implementation-plan.md#first-secure-remote-checkpoint) then uses a local test client for host setup and takeover; embedded work and Electron attachment can follow. Both remain required for full completion. Use the [checkpoints and scope cuts](implementation-plan.md#checkpoints-and-scope-cuts) to choose the next deliverable based on demonstrated behavior and remaining work.
+The first deliverable is the local client proof. The [first secure remote checkpoint](implementation-plan.md#first-secure-remote-checkpoint) then uses a local test client for host setup and as a second client on the phone's session; embedded work and desktop attachment can follow. Both remain required for full completion. Use the [checkpoints and scope cuts](implementation-plan.md#checkpoints-and-scope-cuts) to choose the next deliverable based on demonstrated behavior and remaining work.
 
 ## Current mobile status
 
@@ -31,8 +46,8 @@ See the [README](README.md#current-mobile-status) for what is built and for the 
 
 ## Known limits and open decisions
 
-- **Small scope:** one user, one host, one prepared workspace, fresh sessions, one active controller, and explicit takeover. Busy sends retain a draft; there is no shared queue.
-- **Foreground approvals:** unavailable questions are refused; startup trust stays unanswered. Workspace trust and command-output admission remain host-only. Reading test failures may therefore need desktop takeover.
+- **Small scope:** one user, one host, one prepared workspace, and fresh sessions. Every attached device can send, answer and cancel with no takeover step, and the view shows which device acted last. Busy sends retain a draft; there is no shared queue.
+- **Foreground approvals:** unavailable questions are refused; startup trust stays unanswered. Workspace trust and command-output admission remain host-only. Reading test failures may therefore need the desktop to answer.
 - **Bounded recovery:** reconnect uses a recent snapshot. Message IDs protect against duplicate sends while the host lives. Restart can leave outcomes unknown; do not automatically resend uncertain work. Closed means the worker stopped, not that saving succeeded.
 - **[Security decisions remain open](open-questions.md#unresolved-security-decisions):** U1 has a recorded decision for host-launched local clients (anonymous socket pairs, no named local endpoint), validated against the host process on macOS and Linux; attaching a client the host did not launch is [U4](open-questions.md#u4-attaching-a-client-the-host-did-not-launch). U2 pairing/transport and U3 effective-scope authorization must be resolved before network access. Early phone experiments use synthetic data and controlled tools over the restricted development transport.
 - **Embedded credentials and iOS:** begin with a model stub. Real backend use needs native protected credential storage and an external revocation route. iOS embedded tools are limited to compiled-in, foreground, app-private operations; store distribution and remote use need separate policy review. See the [architecture](architecture.md#embedded-model-credentials).
@@ -43,7 +58,9 @@ Defer full history, automatic restart, public relays, push notifications, and br
 
 ## What counts as done
 
-The same React Native app demonstrates a bounded on-device session and remote host control: start work, take over desktop-started work, answer supported approvals, deny or cancel, and return control. Record device evidence for permissions, labels, ownership, reconnects, and duplicate-send prevention.
+The same React Native app demonstrates a bounded on-device session and remote host control: start work, continue desktop-started work, answer supported approvals, and deny or cancel, with each device showing the other's actions. Record device evidence for permissions, labels, ownership, reconnects, and duplicate-send prevention.
+
+Beyond the prototype, the goal is one host serving the same sessions to the desktop app and to Android, iOS and iPad apps at once. The terminal UI keeps its current behaviour. See the [end goal and later work](implementation-plan.md#end-goal-beyond-the-prototype).
 
 This is a high-level plan. Implementation will reveal gaps and new behavior; update the design, specs, and tests as those findings arise. Do not wait to predict every edge case, and resolve security gaps before enabling the affected feature.
 

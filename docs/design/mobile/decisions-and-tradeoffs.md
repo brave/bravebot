@@ -33,10 +33,10 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 
 ### 3. Early phone feedback and parallel embedded work
 
-- **Decision:** stages 1–2a come first. Embedded work in 2b proceeds independently of the host track. Stage 3d uses a thin phone experiment; 5a proves takeover with two TypeScript clients before 5b integrates Electron.
+- **Decision:** stages 1–2a come first. Embedded work in 2b proceeds independently of the host track. Stage 3d uses a thin phone experiment; 5a attaches two TypeScript clients to one session before 5b integrates the desktop app.
 - **Reason:** discover phone lifecycle and transport limits early, and avoid making native or desktop integration block host validation.
 - **Cost:** the early phone experiment uses synthetic data and controlled tools. It proves neither secure remote access nor complete embedded support.
-- **Revisit when:** the experiment reveals a contract or recovery flaw. The [first secure remote checkpoint](implementation-plan.md#first-secure-remote-checkpoint) can use the local test client for setup and takeover. Both the embedded proof and Electron handoff remain required for full prototype completion.
+- **Revisit when:** the experiment reveals a contract or recovery flaw. The [first secure remote checkpoint](implementation-plan.md#first-secure-remote-checkpoint) can use the local test client for setup and as the second client on a session. Both the embedded proof and desktop attachment remain required for full prototype completion.
 
 ### 4. One Rust host and an isolated session store
 
@@ -45,12 +45,18 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 - **Cost:** host failure interrupts live sessions. Ordinary saved-session import and automatic restart are excluded. Supported front ends must not independently resume host-owned records.
 - **Revisit when:** real use requires importing existing sessions or recovering execution after a crash. `closed` confirms worker termination, not successful saving or rollback.
 
-### 5. One controller, explicit takeover, no shared queue
+### 5. Every attached device can act, with no takeover step
 
-- **Decision:** allow one active controller plus authorized viewers. Transfer control explicitly; reject sends while busy and retain an unsent draft.
-- **Reason:** prove continuation between clients without concurrent control or queue-order rules.
-- **Cost:** users must take control before acting and wait before submitting a follow-up. Old-controller actions must fail; controller loss refuses pending questions.
-- **Revisit when:** observed use shows that queued work or simultaneous control is necessary. A new controller supplies its own supported approval kinds.
+- **Decision:** every device attached to a session sees the whole session live, approval requests included, and can send, answer and cancel at any time. There is no controller role, takeover step or controller epoch. A device paired with a read-only grant views only (stage 6).
+  - The host records which device made each send, answer and cancel. The view shows the device that acted last, for example "approved on Phone", and the trace records the device for each action.
+  - The first answer to a question counts. A later answer from any device fails on its question number (RPCVIEW-6).
+  - A send while a turn runs is refused as busy, and the client keeps it as a draft. There is no shared queue.
+  - Host-only questions, such as workspace trust and command-output admission, are offered only to connections the host lets answer them. This is a property of the connection, not of control. Today every host connection can answer the same kinds ([HOST-10](../../specs/local-host.md#HOST-10)); stage 5a makes them per connection.
+  - A device that leaves or breaks blocks no other device. Its pairing can be revoked on the host (stage 6). A locked or backgrounded phone cannot answer approvals (stage 7, decision 8).
+- **Reason:** an approval is bound to one exact request and answered once, so a device does not need to hold control to answer it. A takeover prompt would confirm the device, not the effect. Moving from desktop to phone needs no handoff, and a lost phone does not leave a session stuck.
+- **Cost:** an approval can be answered on a device the person was not using, such as an unlocked tablet on a desk. Two sends at once start one turn and refuse the other as busy. The host has one controller per session now ([HOST-7](../../specs/local-host.md#HOST-7)); stage 5a replaces it.
+- **Deferred:** a "Take control from Desktop?" confirmation before a device acts. Because the view names the device that acted last, the dialog is client-side: a client asks before acting when another device acted last. It needs no host role, epoch or protocol change.
+- **Revisit when:** an approval or cancel is answered on a device the person was not using, or people report acting from the wrong device. Add the dialog then. Add queued follow-ups only if observed use shows they are needed.
 
 ### 6. Snapshot-only reconnect recovery
 
@@ -68,9 +74,9 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 
 ### 8. Foreground approvals and host-only output admission
 
-- **Decision:** require a ready foreground controller for supported phone approvals. Keep workspace trust, command-output admission, and authority-expanding decisions on the host.
+- **Decision:** a phone answers supported approvals only while it is ready and in the foreground. Keep workspace trust, command-output admission, and authority-expanding decisions on the host.
 - **Reason:** preserve explicit consent with a small, testable set of phone approval screens.
-- **Cost:** locking the phone may cause refusal. A run-tests-then-read-failures task needs desktop takeover before output admission; it is not a phone-only demo. Startup trust stays unanswered when unavailable.
+- **Cost:** locking the phone may cause refusal when no other attached device can answer. A run-tests-then-read-failures task needs the desktop to answer output admission; it is not a phone-only demo. Startup trust stays unanswered when unavailable.
 - **Revisit when:** a useful task justifies another approval kind or a defined waiting policy. Add complete field display, label handling, permission rules, and tests before enabling it. Push notifications do not themselves grant approval.
 
 ### 9. Mobile dependencies and builds
