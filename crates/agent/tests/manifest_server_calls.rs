@@ -2398,6 +2398,11 @@ fn a_deny_rule_refuses_an_apply_steps_call_the_list_approved() {
     let failure = ran.outcome.expect_err("refused").to_string();
     assert!(failure.contains("refused"), "{failure}");
     assert!(
+        ran.called.iter().any(|(tool, _)| tool == "make_folder"),
+        "{:?}",
+        ran.called
+    );
+    assert!(
         ran.called.iter().all(|(tool, _)| tool != "move_mark"),
         "{:?}",
         ran.called
