@@ -2516,8 +2516,8 @@ function Card({
             These steps run in this order, decided before anything was read. Nothing the run reads
             can add a step, drop one, or send anything anywhere this plan does not already name.
             Approving the plan answers the calls to a server’s tools it shows, and does not approve
-            its writes: each write is still put to you when its step is reached, as is a call a rule
-            or a server’s declaration asks about. Nothing has been read or written yet, so
+            its writes: each write is still put to you when its step is reached, as is a call something
+            else asks about, such as a rule or a server’s declaration. Nothing has been read or written yet, so
             declining leaves everything as it is. This answer covers this plan only.
           </p>
 
