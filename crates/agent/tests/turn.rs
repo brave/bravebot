@@ -84878,9 +84878,15 @@ impl Drop for ArmingWatches {
 }
 
 impl PathPlaces {
+    /// Under `target/test-homes` rather than `target/test-scratch`. Under bypass a stage is given a
+    /// row for each entry of every directory on the way to the home's credential directories
+    /// (SANDBOX-28), and on macOS the rows are in the profile `sandbox-exec` takes as an argument.
+    /// `target/test-scratch` holds an entry for each test that ran before, and with about 8000 of
+    /// them the profile is larger than the arguments a program can be started with, so no stage
+    /// starts.
     fn new(name: &str) -> Self {
         let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
+            .join("../../target/test-homes")
             .join(format!("path-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let home = top.join("home");
