@@ -203,21 +203,6 @@ pub struct Resolved {
     pub dropped: BTreeMap<Dropped, usize>,
 }
 
-impl Resolved {
-    /// The calls that depend, directly or through others, on the call at `index`.
-    pub fn dependants(&self, index: usize) -> BTreeSet<usize> {
-        let mut found = BTreeSet::new();
-        for (later, call) in self.calls.iter().enumerate().skip(index + 1) {
-            if let Some(before) = call.after
-                && (before == index || found.contains(&before))
-            {
-                found.insert(later);
-            }
-        }
-        found
-    }
-}
-
 /// What became of one call of an approved list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Came {
@@ -362,35 +347,6 @@ mod tests {
         );
         assert_eq!(applying.tally(), (5, 3, 1, 1));
         assert!(Applying::new(vec![None], &[]).is_empty());
-    }
-
-    fn call(tool: usize, after: Option<usize>) -> Call {
-        Call {
-            tool,
-            name: format!("tool{tool}"),
-            arguments: Vec::new(),
-            sent: Vec::new(),
-            after,
-        }
-    }
-
-    /// A call that depends on a dependant depends on the first call too, and an unrelated one does
-    /// not, so unticking or failing one call takes exactly its chain with it.
-    #[test]
-    fn the_dependants_of_a_call_are_its_whole_chain_and_nothing_else() {
-        let resolved = Resolved {
-            calls: vec![
-                call(0, None),
-                call(0, None),
-                call(1, Some(0)),
-                call(1, Some(1)),
-                call(1, Some(2)),
-            ],
-            dropped: BTreeMap::new(),
-        };
-        assert_eq!(resolved.dependants(0), BTreeSet::from([2, 4]));
-        assert_eq!(resolved.dependants(1), BTreeSet::from([3]));
-        assert!(resolved.dependants(4).is_empty());
     }
 
     /// The fields an entry of each list needs are the ones an argument takes from that list, each
