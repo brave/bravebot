@@ -890,7 +890,9 @@ mod tests {
     /// what this sets. `xdg-open` reads the first only to choose `open_gnome`, which
     /// `XDG_CURRENT_DESKTOP=GNOME` also chooses, and `gio open` reads its handler from the
     /// directories the four names select. The names the survey in SANDBOX-30 found are the same
-    /// with or without a session, so none is expected to be added by one. No session was run.
+    /// with or without a session, so none is expected to be added by one. Run on Ubuntu 25.10 under
+    /// a GNOME session, with the session's variables set and without them, the four names behaved
+    /// the same ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30) records the runs).
     #[cfg(unix)]
     #[test]
     fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome() {
