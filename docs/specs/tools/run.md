@@ -2027,7 +2027,7 @@ cap is told it is longer than a result may hold, with where the rest is, in the 
 account the
 turn gives of an ended job ([RUN-15](#RUN-15)) is released in the same way where that job's latest
 `job_output` look passed `read: true`, since no call is made for the account to carry the argument.
-A job nobody looked at, or whose latest look did not pass it, has its account given as before.
+A job nobody looked at, or whose latest look did not pass it, has its account given as [RUN-15](#RUN-15) has it, behind its reference.
 What decides is the planner's argument on that look, the mode, the tools the turn was offered and
 the size the slot states, and never a byte the job printed.
 
