@@ -247,7 +247,8 @@ def list_worktrees(repo: Path) -> list[dict[str, object]]:
 
 
 def worktree_is_clean(worktree_path: str) -> bool:
-    return git_stdout(Path(worktree_path), ["status", "--porcelain"]) == ""
+    # Explicit, because status.showUntrackedFiles=no would hide a file that worktree remove deletes.
+    return git_stdout(Path(worktree_path), ["status", "--porcelain", "--untracked-files=all"]) == ""
 
 
 def classify_linked_worktrees(linked_worktrees: list[dict[str, object]]) -> tuple[list[str], list[str]]:

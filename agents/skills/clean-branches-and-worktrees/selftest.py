@@ -125,6 +125,15 @@ class Clean(unittest.TestCase):
         self.assertTrue((path / "wip.txt").exists())
         self.assertIn("dirty linked worktree(s)", out)
 
+    def test_keeps_an_untracked_file_the_persons_config_hides_from_status(self):
+        git("config", "status.showUntrackedFiles", "no", cwd=self.clone)
+        path = self.branch("hidden", worktree=True)
+        (path / "wip.txt").write_text("wip\n")
+        out = self.run_script()
+        self.assertIn("hidden", self.branches())
+        self.assertTrue((path / "wip.txt").exists())
+        self.assertIn("dirty linked worktree(s)", out)
+
     def test_keeps_a_branch_whose_worktree_is_locked(self):
         path = self.branch("held", worktree=True)
         git("worktree", "lock", "--reason", "in use", str(path), cwd=self.clone)
