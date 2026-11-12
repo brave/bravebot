@@ -23,6 +23,8 @@ It fetches `origin` with `--prune`, in a dry run too, so both runs decide from t
 - it has commits past the merged pull request's head, or past its upstream
 - a linked worktree holding it is dirty, locked or unreadable
 
+A removed worktree takes its ignored files with it, such as `target/` or a local `.env`. Neither run lists them, so tell the person before they agree.
+
 After deleting anything it runs `git worktree prune` and `git remote prune origin`. It never deletes a remote branch.
 
 Do not unlock a worktree, clean a dirty one, or delete a skipped branch yourself. The skip reason says what the person can do.

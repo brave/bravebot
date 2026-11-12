@@ -127,6 +127,23 @@ class Clean(unittest.TestCase):
         self.assertIn("done", self.branches())
         self.assertTrue(path.exists())
         self.assertIn("Would delete 1 branch(es).", out)
+        self.assertIn("Would remove 1 linked worktree(s).", out)
+
+    def test_deletes_a_merged_branch_whose_remote_branch_was_deleted(self):
+        self.branch("gone", merged=False)
+        git("push", "-q", "-u", "origin", "gone", cwd=self.clone)
+        self.merged("gone", git("rev-parse", "gone", cwd=self.clone))
+        git("push", "-q", "origin", "--delete", "gone", cwd=self.clone)
+        out = self.run_script()
+        self.assertNotIn("gone", self.branches(), out)
+
+    def test_keeps_the_default_branch_when_another_is_checked_out(self):
+        self.branch("open", merged=False)
+        git("checkout", "-q", "open", cwd=self.clone)
+        out = self.run_script()
+        self.assertEqual(self.branches(), {"main", "open"})
+        self.assertIn("- main: repository default branch", out)
+        self.assertIn("- open: currently checked out", out)
 
     def test_dry_run_fetches_a_merged_head_pushed_from_elsewhere(self):
         """The local branch is behind a head only origin has, so the plan needs the fetch."""
@@ -141,7 +158,7 @@ class Clean(unittest.TestCase):
         self.assertIn("Would delete 1 branch(es).", out)
         self.assertIn("pushed", self.branches())
 
-    def test_keeps_the_current_and_default_branch_and_unmerged_work(self):
+    def test_keeps_the_current_branch_and_unmerged_work(self):
         self.branch("open", merged=False)
         out = self.run_script()
         self.assertEqual(self.branches(), {"main", "open"})
