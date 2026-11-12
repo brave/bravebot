@@ -93,14 +93,31 @@ anything to say the call it came from was answered rounds earlier. A call that w
 report would hold the turn still until the delegate finished, so a turn could have one delegate
 working and no more.
 
-When the planner ends a round with a delegate working, the turn asks it again as soon as the first
-delegate ends, with that report, and does not hold the report for the others
-([DELEGATE-17](../delegation.md#DELEGATE-17)). The call has no field choosing between that and
-waiting for every delegate of a batch, so nothing about it is for a person to approve.
+When the planner ends a round with a delegate working, the turn by default asks it again as soon as
+the first delegate ends, with that report, and does not hold the report for the others
+([DELEGATE-17](../delegation.md#DELEGATE-17)). An optional whole number, `wake_after`, says how
+many of this call's delegates have to end before the planner is asked again instead. Left out it
+is 1. A figure at or above the number of delegates the call starts means all of them, and 0, a
+negative number or anything but a number is refused with a sentence naming the field. It applies to
+this call's delegates only. The field names no routing field and carries no untrusted content: it
+is a count the planner wrote, which decides only when the planner is asked again, so nothing about
+it is for a person to approve. The result of the call says when the planner will be asked again
+from this call's count: when the report is in for one delegate, when the first report is in for a
+count of 1, when that many have reported for a count between, and when all have reported for a
+count at or above their number. The field's description and the result for a count at or above the
+number say that a line from the user also wakes the turn only on the list of the turn the person
+is watching, since a typed line never wakes a delegate's wait; a delegate's own call is told only
+that another call's count does.
 
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
 `verified-by: bravebot_agent::turn::the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest`
+`verified-by: bravebot_agent::turn::a_batch_that_asked_to_wake_after_all_of_it_costs_the_planner_one_request_during_the_wait`
+`verified-by: bravebot_agent::tools::the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count`
+`verified-by: bravebot_agent::tools::the_planner_is_offered_a_count_of_delegates_to_wake_after`
+`verified-by: bravebot_agent::tools::a_wake_after_that_is_not_a_count_of_delegates_is_refused`
 `verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
+`verified-by: bravebot_agent::turn::a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_last_ends`
+`verified-by: bravebot_agent::turn::a_call_waiting_for_all_of_its_delegates_counts_each_end_whatever_its_label`
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
 `verified-by: bravebot_agent::tools::the_start_message_names_what_a_delegate_was_started_without`
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`

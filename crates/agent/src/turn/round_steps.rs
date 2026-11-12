@@ -1088,6 +1088,7 @@ pub(super) fn limit_the_tools<R: Reporter>(
 pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
     started: Vec<(DelegateId, crate::delegate::Seeded)>,
+    wake_after: usize,
     delegates: &mut Vec<Working<'scope>>,
     servers: Option<&crate::lsp::LanguageServers>,
     confirming: &'scope crate::shared::Lent<'_, C>,
@@ -1118,6 +1119,12 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     // started, which is the one its parent was asking at the time.
     let spawning_model = turn_model.clone();
     let spawning_effort = effort;
+    // One call's delegates are one batch, named by the first of them (DELEGATE-17).
+    let size = started.len();
+    let Some(lead) = started.first().map(|(lead, _)| *lead) else {
+        return;
+    };
+    let batch = super::Batch::of_call(lead, size, wake_after);
     for (id, seeded) in started {
         let vouched = seeded.vouched.clone();
         let checkout = seeded
@@ -1185,6 +1192,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
             rounds,
             budget,
             stop,
+            batch,
             handle,
         });
     }
@@ -2012,7 +2020,8 @@ pub(super) fn tools_for_a_call<'a>(
 /// and the pieces taken out of `output` are the ones the caller does not use again.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output"
+    clippy::too_many_lines,
+    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output; the body is the steps that follow a call, in the order a round takes them"
 )]
 pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
@@ -2089,6 +2098,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     start_delegates(
         scope,
         std::mem::take(&mut output.delegate),
+        output.wake_after,
         delegates,
         state.servers.as_deref(),
         confirming,

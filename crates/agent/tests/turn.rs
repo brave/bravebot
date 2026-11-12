@@ -51574,6 +51574,504 @@ fn a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_
     );
 }
 
+/// DELEGATE-17 and AGENT-3: a call that sets `wake_after` to the number of delegates it starts is
+/// not asked again until all of them have ended, and is then asked once with every report.
+///
+/// The fast delegate answers at once. The slow one is held until a third planner request arrives,
+/// or for the server's bound of ten seconds where none does. A turn that woke at the first
+/// delegate's end sends that request with the fast report alone, which releases the slow one and
+/// sets the flag saying the hold was met. The turn under test sends no third request until the
+/// slow delegate has ended, so the hold runs to its bound and the flag stays false.
+#[test]
+fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_last_ends() {
+    let scratch = Scratch::new("delegates-wake-after-all");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-ALL",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["FAST-ONE","SLOW-ONE"],"wake_after":2}"#,
+                    ),
+                    reply_with("waiting on both"),
+                    reply_with("both are in"),
+                    reply_with("asked a fourth time"),
+                ],
+            ),
+            ("FAST-ONE", vec![reply_with("THE-FAST-REPORT")]),
+            ("SLOW-ONE", vec![reply_with("THE-SLOW-REPORT")]),
+        ],
+        Order::After {
+            held: "SLOW-ONE",
+            after: "ASK-ALL",
+            asked: 3,
+        },
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-ALL"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !kept.load(Ordering::SeqCst),
+        "a third planner request arrived while the slow delegate was still held, so the planner \
+         was asked again before the last of the call's delegates ended: {:?}",
+        reporter.lines()
+    );
+    let requests = every_request(&received);
+    let planner: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("ASK-ALL"))
+        .collect();
+    assert_eq!(
+        planner.len(),
+        3,
+        "the planner was not asked exactly once after both delegates ended"
+    );
+    assert!(
+        !planner[1].contains("THE-FAST-REPORT"),
+        "the fast report was in the request that answered the call"
+    );
+    assert!(
+        planner[2].contains("THE-FAST-REPORT") && planner[2].contains("THE-SLOW-REPORT"),
+        "the request after the wait did not carry both reports"
+    );
+    assert_eq!(outcome.reply_for_display(), "both are in");
+}
+
+/// DELEGATE-17 and AGENT-3: the planner's requests for a batch whose call asked to be woken after
+/// all of it are exact. Three delegates of one call end at different moments, and the planner is
+/// asked three times: the call, the one line it ends the round with, and once with every report.
+///
+/// The first delegate answers at once. The second is held until the planner's third request and
+/// the third until its fourth, or for the server's bound of ten seconds where none comes. A turn
+/// that woke at each end, as the default count does, sends the third request with the first
+/// report, which releases the second delegate, then a fourth, which releases the third, then a
+/// fifth: five requests, against three here. This is the count the issue measured (about 17 of
+/// these requests for 34 delegates); a call's count makes them one.
+#[test]
+fn a_batch_that_asked_to_wake_after_all_of_it_costs_the_planner_one_request_during_the_wait() {
+    let scratch = Scratch::new("delegates-wake-after-all-count");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-BATCH",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["FIRST-ONE","SECOND-ONE","THIRD-ONE"],"wake_after":3}"#,
+                    ),
+                    reply_with("waiting on all three"),
+                    reply_with("all three are in"),
+                    reply_with("asked a fourth time"),
+                    reply_with("asked a fifth time"),
+                    reply_with("asked a sixth time"),
+                ],
+            ),
+            ("FIRST-ONE", vec![reply_with("THE-FIRST-REPORT")]),
+            ("SECOND-ONE", vec![reply_with("THE-SECOND-REPORT")]),
+            ("THIRD-ONE", vec![reply_with("THE-THIRD-REPORT")]),
+        ],
+        Order::Staged(&[
+            ("SECOND-ONE", "ASK-BATCH", 3),
+            ("THIRD-ONE", "ASK-BATCH", 4),
+        ]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-BATCH"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !kept.load(Ordering::SeqCst),
+        "a planner request released a held delegate, so the planner was asked again before the \
+         last of the batch ended: {:?}",
+        reporter.lines()
+    );
+    let requests = every_request(&received);
+    let planner: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("ASK-BATCH"))
+        .collect();
+    assert_eq!(
+        planner.len(),
+        3,
+        "the planner was asked other than once during the wait for the batch"
+    );
+    for report in ["THE-FIRST-REPORT", "THE-SECOND-REPORT", "THE-THIRD-REPORT"] {
+        assert!(
+            planner[2].contains(report),
+            "{report} was not in the one request after the wait"
+        );
+    }
+    assert_eq!(outcome.reply_for_display(), "all three are in");
+}
+
+/// DELEGATE-17 and AGENT-3: a call whose `wake_after` is between 1 and the number of delegates it
+/// starts is not asked again when the first ends, and is asked again when the count is reached
+/// while the rest keep working.
+///
+/// Three delegates of one call with `wake_after` 2. The first answers at once. The second is held
+/// until the planner's third request, or for the server's bound of ten seconds where none comes.
+/// The third makes two requests, each held until the planner's fourth request or for the bound,
+/// so it ends about ten seconds after the second. A turn that woke at the first end sends the third
+/// request at once, which releases the second and then, with a fourth, the third, and sets the
+/// flag. A turn that waited for all three sends its third request after the third delegate with
+/// every report in it. The turn under test sends the third request when the second ends, with the
+/// first two reports, and the fourth when the third ends, so no hold is met.
+#[test]
+fn a_call_asking_to_wake_after_two_of_three_is_asked_again_at_the_second_end_and_not_the_first() {
+    let scratch = Scratch::new("delegates-wake-after-two");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-TWO-OF-THREE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["FIRST-ONE","SECOND-ONE","THIRD-ONE"],"wake_after":2}"#,
+                    ),
+                    reply_with("waiting on all three"),
+                    reply_with("waiting on the third"),
+                    reply_with("all three are in"),
+                    reply_with("asked a fifth time"),
+                    reply_with("asked a sixth time"),
+                ],
+            ),
+            ("FIRST-ONE", vec![reply_with("THE-FIRST-REPORT")]),
+            ("SECOND-ONE", vec![reply_with("THE-SECOND-REPORT")]),
+            (
+                "THIRD-ONE",
+                vec![
+                    tool_request("list_files", r#"{"directory":"."}"#),
+                    reply_with("THE-THIRD-REPORT"),
+                ],
+            ),
+        ],
+        Order::Staged(&[
+            ("SECOND-ONE", "ASK-TWO-OF-THREE", 3),
+            ("THIRD-ONE", "ASK-TWO-OF-THREE", 4),
+        ]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-TWO-OF-THREE"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !kept.load(Ordering::SeqCst),
+        "a planner request released a held delegate, so the planner was asked again before the \
+         call reached its count or before the last delegate ended: {:?}",
+        reporter.lines()
+    );
+    let requests = every_request(&received);
+    let planner: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("ASK-TWO-OF-THREE"))
+        .collect();
+    assert_eq!(
+        planner.len(),
+        4,
+        "the planner was not asked once at the count and once at the last end"
+    );
+    assert!(
+        planner[2].contains("THE-FIRST-REPORT") && planner[2].contains("THE-SECOND-REPORT"),
+        "the request at the call's count did not carry the first two reports"
+    );
+    assert!(
+        !planner[2].contains("THE-THIRD-REPORT"),
+        "the request at the call's count already held the third report, so the turn waited for \
+         every delegate rather than for two"
+    );
+    assert!(
+        planner[3].contains("THE-THIRD-REPORT"),
+        "the last request did not carry the third report"
+    );
+    assert_eq!(outcome.reply_for_display(), "all three are in");
+}
+
+/// DELEGATE-17 and TURN-14: a wait for all of a call's delegates is not a round. The planner
+/// answers the wait with a line and no tool call, so with a limit of two rounds the call that
+/// started the delegates and the write after the wake are both run.
+///
+/// A turn that counted the wake as a round would have reached the limit before the write and
+/// ended with the limit reached, leaving the file as it was.
+#[test]
+fn a_wait_for_all_of_a_calls_delegates_is_not_a_round_against_the_rounds_limit() {
+    let scratch = Scratch::new("delegates-wake-after-all-rounds");
+    std::fs::write(scratch.path.join("marker.txt"), "before").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, _kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-ALL-ROUNDS",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["ROUND-A","ROUND-B"],"wake_after":2}"#,
+                    ),
+                    reply_with("waiting on both"),
+                    tool_request(
+                        "write_file",
+                        r#"{"path":"marker.txt","contents":"written after a wake"}"#,
+                    ),
+                    reply_with("all done"),
+                ],
+            ),
+            ("ROUND-A", vec![reply_with("THE-A-REPORT")]),
+            ("ROUND-B", vec![reply_with("THE-B-REPORT")]),
+        ],
+        Order::Staged(&[
+            ("ROUND-A", "ASK-ALL-ROUNDS", 2),
+            ("ROUND-B", "ASK-ALL-ROUNDS", 2),
+        ]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+    let task = Task::new("ASK-ALL-ROUNDS").with_run_limits(bravebot_agent::turn::RunLimits {
+        rounds: Some(2),
+        tokens: None,
+    });
+
+    let ended = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    let outcome = ended
+        .unwrap_or_else(|error| panic!("the turn ended early: {error:?}, {:?}", reporter.lines()));
+    assert_eq!(outcome.reply_for_display(), "all done");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("marker.txt")).unwrap(),
+        "written after a wake",
+        "the round after the wake was not run"
+    );
+    let asked = every_request(&received)
+        .iter()
+        .filter(|body| body.contains("ASK-ALL-ROUNDS"))
+        .count();
+    assert_eq!(
+        asked, 4,
+        "the planner was asked a different number of times"
+    );
+}
+
+/// DELEGATE-17: a turn that has run out of tool calls waits for every delegate of a call that set
+/// `wake_after`, and answers without being asked again.
+///
+/// Both delegates are held until the planner's second request, whose reply is the turn's answer
+/// because the one round allowed has been spent. A turn that took the batch wait here would ask
+/// the planner a third time with the reports, a planner that was told it had no calls left.
+#[test]
+fn a_turn_out_of_tool_calls_waits_for_a_whole_batch_and_is_not_asked_again() {
+    let scratch = Scratch::new("delegates-wake-after-all-out-of-calls");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "OUT-OF-CALLS-BATCH",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["LATE-A","LATE-B"],"wake_after":2}"#,
+                    ),
+                    reply_with("the answer with the calls spent"),
+                    reply_with("ASKED-A-THIRD-TIME"),
+                ],
+            ),
+            ("LATE-A", vec![reply_with("THE-A-FINISHED-LATE")]),
+            ("LATE-B", vec![reply_with("THE-B-FINISHED-LATE")]),
+        ],
+        Order::Staged(&[
+            ("LATE-A", "OUT-OF-CALLS-BATCH", 2),
+            ("LATE-B", "OUT-OF-CALLS-BATCH", 2),
+        ]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("OUT-OF-CALLS-BATCH").with_rounds(Some(1)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegates were answered before the planner's last reply, so this proves nothing: {:?}",
+        reporter.lines()
+    );
+    for id in ["d1", "d2"] {
+        assert!(
+            reporter
+                .position(&format!("delegate {id} finished failed=false"))
+                .is_some(),
+            "the turn ended without collecting delegate {id}: {:?}",
+            reporter.lines()
+        );
+    }
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the answer with the calls spent",
+        "a turn out of tool calls was asked again after its batch reported"
+    );
+    assert!(
+        !every_request(&received)
+            .iter()
+            .any(|body| body.contains("FINISHED-LATE")),
+        "what the delegates said reached a planner that had no calls left"
+    );
+}
+
+/// DELEGATE-17 and INPUT-10: a line typed while the turn waits for all of a call's delegates
+/// still wakes the turn before any of them has ended.
+///
+/// Both delegates are held until the planner's third request has arrived, which is the one the
+/// typed line wakes the turn for. A wait that heard only the call's count would send it only
+/// after both delegates ended, and they are waiting for it, so the holds would run to their bound.
+#[test]
+fn a_typed_line_wakes_a_turn_waiting_for_all_of_a_calls_delegates() {
+    let scratch = Scratch::new("delegates-wake-after-all-line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-ALL-LINE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["SLOW-A","SLOW-B"],"wake_after":2}"#,
+                    ),
+                    reply_with("waiting on both"),
+                    reply_with("noted, still waiting"),
+                    reply_with("both are in"),
+                    reply_with("both are in"),
+                ],
+            ),
+            ("SLOW-A", vec![reply_with("THE-A-REPORT")]),
+            ("SLOW-B", vec![reply_with("THE-B-REPORT")]),
+        ],
+        Order::Staged(&[("SLOW-A", "ASK-ALL-LINE", 3), ("SLOW-B", "ASK-ALL-LINE", 3)]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut reporter = Watched {
+        types_when_waiting: Some((buffer.clone(), "TYPED-WHILE-ALL-WORK".to_string())),
+        ..Watched::default()
+    };
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-ALL-LINE"),
+        &mut SaysOnce::typing_into(&buffer),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        kept.load(Ordering::SeqCst),
+        "the delegates were held for the planner's third request and it never came, so the line \
+         did not wake the wait: {:?}",
+        reporter.lines()
+    );
+    let requests = every_request(&received);
+    let planner: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("ASK-ALL-LINE"))
+        .collect();
+    let with_line = planner
+        .iter()
+        .position(|body| body.contains("TYPED-WHILE-ALL-WORK"))
+        .expect("the typed line never reached the planner");
+    assert_eq!(
+        with_line, 2,
+        "the line was not in the request the typed line woke the turn for"
+    );
+    assert!(
+        !planner[with_line].contains("THE-A-REPORT")
+            && !planner[with_line].contains("THE-B-REPORT"),
+        "a delegate had already ended when the line reached the planner"
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "both are in",
+        "the turn ended before the delegates reported"
+    );
+}
+
 /// A planner that waits on two delegates, writes a file after the first reports, and waits again.
 ///
 /// The two waiting answers are the same words. Every request the planner makes carries `marker`,
@@ -51691,6 +52189,94 @@ fn each_waiting_answer_stays_in_the_transcript_even_when_it_repeats() {
         2,
         "a repeated waiting line was dropped or merged: {:?}",
         reporter.narrated
+    );
+}
+
+/// DELEGATE-17 and INPUT-10: a stop ends a wait for all of a call's delegates. The call sets
+/// `wake_after` to the number it starts, so no end of a delegate wakes the turn before both have
+/// ended, and the reporter stops the turn as the wait begins.
+///
+/// Both delegates are held until the planner's third request, which a stopped turn never sends,
+/// or for the server's bound of ten seconds. The stop reaches the delegates' requests, so they end
+/// at once and the turn ends well inside that bound, reporting both as finished. A turn whose stop
+/// did not reach a batch it was waiting for all of would sit until the holds ran to the bound.
+#[test]
+fn a_stop_ends_a_wait_for_all_of_a_calls_delegates() {
+    let scratch = Scratch::new("delegates-wake-after-all-stop");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received, _kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-ALL-STOP",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"REPORT ON","each":["STOPPED-A","STOPPED-B"],"wake_after":2}"#,
+                    ),
+                    reply_with("waiting on both"),
+                    reply_with("never asked for"),
+                ],
+            ),
+            ("STOPPED-A", vec![reply_with("THE-A-REPORT")]),
+            ("STOPPED-B", vec![reply_with("THE-B-REPORT")]),
+        ],
+        Order::Staged(&[
+            ("STOPPED-A", "ASK-ALL-STOP", 3),
+            ("STOPPED-B", "ASK-ALL-STOP", 3),
+        ]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut reporter = Watched {
+        stops_when_waiting: Some((
+            cancel.clone(),
+            buffer.clone(),
+            "TYPED-AFTER-THE-STOP".to_string(),
+        )),
+        ..Watched::default()
+    };
+
+    let began = std::time::Instant::now();
+    let ended = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-ALL-STOP"),
+        &mut SaysOnce::typing_into(&buffer),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    );
+    let took = began.elapsed();
+
+    assert!(
+        matches!(ended, Err(bravebot_agent::TurnError::Cancelled { .. })),
+        "the turn ended some other way, so this says nothing about a stop: {:?}",
+        ended.err()
+    );
+    assert!(
+        took < std::time::Duration::from_secs(8),
+        "the turn took {took:?}, so the wait for the whole call outlasted the stop and ended only \
+         when the held delegates ran to their bound: {:?}",
+        reporter.lines()
+    );
+    assert!(
+        reporter.position("delegate d1 finished").is_some()
+            && reporter.position("delegate d2 finished").is_some(),
+        "the turn ended while a delegate was still working: {:?}",
+        reporter.lines()
+    );
+    assert_eq!(
+        every_request(&received)
+            .iter()
+            .filter(|body| body.contains("ASK-ALL-STOP"))
+            .count(),
+        2,
+        "the planner was asked again after the stop"
     );
 }
 
@@ -66298,8 +66884,11 @@ fn a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own() {
     let answer = "'d1' is a delegate, not a background job, so job_output neither reads it nor \
                   stops it. How it ended reaches you on its own, in a message saying d1 has \
                   finished or did not finish. When a delegate is all that is left, end the round \
-                  with one line naming what is outstanding: the turn asks you again when the \
-                  first report is in, while any others keep working.";
+                  with one line naming what is outstanding. The turn asks you again no later \
+                  than when as many of the delegates of the spawn_agent call that started d1 \
+                  have reported as its wake_after asked for: one where it gave no count, and all \
+                  of them where it asked for more than it started. Delegates still working keep \
+                  working.";
     let last = every_request(&received)
         .into_iter()
         .rfind(|body| body.contains("WAIT-ON-THE-DELEGATE"))

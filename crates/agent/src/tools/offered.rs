@@ -2042,6 +2042,11 @@ fn table(
                                         each. It can only lower the \
                                         bound the delegate's definition sets. Leave it out to \
                                         set none."
+                    },
+                    "wake_after": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": wake_after_description(true)
                     }
                 },
                 "required": ["kind", "task"]
@@ -2362,8 +2367,35 @@ pub fn for_delegate(
         // The kinds this delegate's own capabilities reach, so a checker is not offered a worker
         // it could only start narrowed to what it holds itself (DELEGATE-32).
         offer_kinds(&mut tools, &delegates.offered_to(capabilities));
+        // A typed line never ends a delegate's wait (DELEGATE-17), so its `wake_after` does not
+        // say one does.
+        if let Some(wake_after) = tools
+            .iter_mut()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .and_then(|spawn| spawn.function.parameters.get_mut("properties"))
+            .and_then(|properties| properties.get_mut("wake_after"))
+        {
+            wake_after["description"] = json!(wake_after_description(false));
+        }
     }
     tools
+}
+
+/// What `spawn_agent`'s `wake_after` is told (DELEGATE-17). `typed_lines_wake` is false for a
+/// delegate's list, whose wait no typed line ends.
+fn wake_after_description(typed_lines_wake: bool) -> String {
+    let also = match typed_lines_wake {
+        true => " A line from the user still wakes you, and so does another call's count.",
+        false => " Another call's count still wakes you.",
+    };
+    format!(
+        "Optional. How many of this call's delegates have to end before you are asked again, \
+         once you end a round with them working. Left out it is 1: you are asked again as each \
+         one reports. A figure at or above the number of delegates the call starts means all of \
+         them. Use it when you need the reports together, such as a batch whose results you \
+         compare or merge, so the turn does not ask you once per report to name what is still \
+         outstanding.{also}"
+    )
 }
 
 /// The tools a turn offers its planner, with the kinds of delegate this turn resolved.

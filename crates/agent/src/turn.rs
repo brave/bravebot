@@ -1252,6 +1252,9 @@ struct Working<'scope> {
     budget: Option<u64>,
     /// What a person set, where they stopped this delegate alone (DELEGATE-25).
     stop: bravebot_core::cancel::DelegateStop,
+    /// The `spawn_agent` call that started it, and how many of that call's delegates have to end
+    /// before the planner is asked again (DELEGATE-17).
+    batch: Batch,
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
@@ -1261,6 +1264,42 @@ struct Working<'scope> {
             Vec<crate::timing::Interval>,
         ),
     >,
+}
+
+/// The `spawn_agent` call a delegate was started by, and how many of that call's delegates have to
+/// end before the planner is asked again (DELEGATE-17).
+///
+/// Both are the driver's: the call is named by the number of its first delegate, and the count is
+/// the planner's own `wake_after` argument, or 1 where it gave none. Nothing a delegate reports
+/// sets or changes either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Batch {
+    /// The first delegate the call started, which no other call's delegates share.
+    pub(crate) lead: DelegateId,
+    /// How many delegates the call started.
+    pub(crate) size: usize,
+    /// How many of the call's delegates have to end before the planner is woken, between 1 and
+    /// `size`: a figure above `size` is all of them.
+    pub(crate) wake_after: usize,
+}
+
+impl Batch {
+    /// A call that started `size` delegates, the first `lead`, and asked to be woken after
+    /// `wake_after` of them.
+    pub(crate) fn of_call(lead: DelegateId, size: usize, wake_after: usize) -> Self {
+        let size = size.max(1);
+        Self {
+            lead,
+            size,
+            wake_after: wake_after.clamp(1, size),
+        }
+    }
+
+    /// A delegate whose call started it alone, which wakes the turn when it ends.
+    #[cfg(test)]
+    pub(crate) fn alone(lead: DelegateId) -> Self {
+        Self::of_call(lead, 1, 1)
+    }
 }
 
 /// What a run has done to the workspace it works in, which TURN-4's question and closing line
@@ -1571,13 +1610,38 @@ fn a_typed_line_wakes(task: &Task, arrival: &crate::interjections::Arrival, seen
     task.delegate.is_none() && arrival.is_waiting() && arrival.typed() > seen
 }
 
+/// Whether some `spawn_agent` call has had as many of its delegates end as it asked to be woken
+/// after (DELEGATE-17).
+///
+/// A call's ended delegates are the ones already taken back, by this call's wake or another's,
+/// and the ones whose threads have finished since. It wakes the turn when that reaches its count
+/// and one of them is still to be taken back, so a call past its count wakes the turn for each
+/// later end, and one with nothing left to collect never wakes it. A call with the default count
+/// of 1 wakes at each of its delegates' ends, as every call did before the count existed. The facts
+/// read are which call started each delegate, the counts, and whether its thread has finished; no
+/// report is read, whatever its label.
+fn a_call_has_enough_ended(delegates: &[Working<'_>]) -> bool {
+    delegates.iter().any(|working| {
+        let batch = working.batch;
+        let (left, finished) = delegates
+            .iter()
+            .filter(|other| other.batch.lead == batch.lead)
+            .fold((0usize, 0usize), |(left, finished), other| {
+                (left + 1, finished + usize::from(other.handle.is_finished()))
+            });
+        let ended = batch.size.saturating_sub(left) + finished;
+        finished > 0 && ended >= batch.wake_after
+    })
+}
+
 /// Block until the turn has a reason to ask the planner again while its delegates work (DELEGATE-17).
 ///
-/// The reasons are a delegate that ended, a line the person typed, or a stop. Each is a count or a
-/// flag the driver holds: how many threads have finished, whether a line is waiting and how many
-/// have been typed since the last wait woke for one, and whether the turn was cancelled. Nothing a
-/// delegate reported is read, so a report that is quarantined wakes the turn exactly as one that
-/// is shown does.
+/// The reasons are a call that has had as many of its delegates end as it asked to be woken after
+/// ([`a_call_has_enough_ended`]), a line the person typed, or a stop. Each is a count or a flag
+/// the driver holds: how many threads of each call have finished against the call's own count,
+/// whether a line is waiting and how many have been typed since the last wait woke for one, and
+/// whether the turn was cancelled. Nothing a delegate reported is read, so a report that is
+/// quarantined wakes the turn exactly as one that is shown does.
 ///
 /// A line that is waiting wakes the wait once. The count keeps a line the turn cannot take from
 /// waking every wait after it and sending the planner a request each time.
@@ -1598,13 +1662,14 @@ fn wait_for_a_wake<C: Confirmer, R: Reporter>(
     let arrival = confirmer.arrival();
     // Remembered before anything else runs, so a line typed from here on is one this wait woke for.
     let seen = waits.typed_seen();
-    // Every delegate still working is named, since the wait ends at whichever of them is first.
+    // Every delegate not yet taken back is named, since the end of any of them can be the one that
+    // brings its call to its count.
     for working in delegates {
         reporter.delegate_waiting(working.id);
     }
     waits.begin_wait();
     while !cancel.is_cancelled()
-        && !delegates.iter().any(|working| working.handle.is_finished())
+        && !a_call_has_enough_ended(delegates)
         && !a_typed_line_wakes(task, &arrival, seen)
     {
         std::thread::sleep(WAKE_POLL);
@@ -5441,6 +5506,7 @@ mod tests {
                 rounds: 60,
                 budget: None,
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: worker,
             }];
             let mut account = crate::outcome::Spent::default();
@@ -5522,6 +5588,7 @@ mod tests {
                     rounds: 120,
                     budget: None,
                     stop: Default::default(),
+                    batch: super::Batch::alone(DelegateId::nth(1)),
                     handle: stopped,
                 },
                 Working {
@@ -5532,6 +5599,7 @@ mod tests {
                     rounds: 60,
                     budget: None,
                     stop: Default::default(),
+                    batch: super::Batch::alone(DelegateId::nth(2)),
                     handle: lost,
                 },
             ];
@@ -5647,6 +5715,7 @@ mod tests {
                 rounds: 5,
                 budget: None,
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: answered,
             }];
             collect_delegates(
@@ -5855,6 +5924,7 @@ mod tests {
                 rounds: 1,
                 budget: None,
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: answered,
             }];
             collect_delegates(
@@ -5951,6 +6021,7 @@ mod tests {
                 rounds: 60,
                 budget: Some(1000),
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: answered,
             }];
             collect_delegates(
@@ -6050,6 +6121,7 @@ mod tests {
                         rounds: 1,
                         budget: None,
                         stop: Default::default(),
+                        batch: super::Batch::alone(DelegateId::nth(1 + at as u32)),
                         handle: answered,
                     }
                 })
@@ -6168,6 +6240,7 @@ mod tests {
                             rounds: 1,
                             budget: None,
                             stop: Default::default(),
+                            batch: super::Batch::alone(DelegateId::nth(1 + at as u32)),
                             handle: answered,
                         }
                     })
@@ -6233,6 +6306,150 @@ mod tests {
             (1, 1),
             "a report's label changed whether its delegate's ending woke the turn"
         );
+    }
+
+    /// DELEGATE-17 and AGENT-3. A call that asked to be woken after all of its delegates counts
+    /// each one's end, whatever label its report carries, and wakes the turn only when the last of
+    /// them has ended, while a call with the default count wakes it at its own delegate's end.
+    ///
+    /// Rejects a wait that wakes at any delegate's end, which wakes after the first of the call's
+    /// two, and a count over only the delegates not yet collected, which never wakes for a call
+    /// whose first delegate another wake already took back.
+    #[test]
+    fn a_call_waiting_for_all_of_its_delegates_counts_each_end_whatever_its_label() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
+        );
+        const LIMIT: Duration = Duration::from_secs(5);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "count the ends of one call's delegates");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let quarantined = policy.label_piped_input("REPORT-WORDS".to_string());
+        let visible = bravebot_core::Labelled::trusted("REPORT-WORDS".to_string());
+        assert!(
+            !quarantined.label().is_trusted() && visible.label().is_trusted(),
+            "the two reports carry the same label, so nothing here was tested"
+        );
+        let settle = |delegates: &[Working<'_>], id: DelegateId| {
+            let working = delegates
+                .iter()
+                .find(|working| working.id == id)
+                .expect("the delegate is still held");
+            let began = std::time::Instant::now();
+            while !working.handle.is_finished() {
+                assert!(began.elapsed() < LIMIT, "the delegate's thread never ended");
+                std::thread::yield_now();
+            }
+        };
+        // A delegate answers with `report` once its sender is used or dropped.
+        let (one_tx, one_rx) = mpsc::channel::<()>();
+        let (two_tx, two_rx) = mpsc::channel::<()>();
+        let (alone_tx, alone_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let call = Batch::of_call(DelegateId::nth(1), 2, 2);
+            let lone = Batch::of_call(DelegateId::nth(3), 1, 1);
+            let mut delegates: Vec<Working<'_>> = [
+                (1, quarantined, call, one_rx),
+                (2, visible, call, two_rx),
+                (
+                    3,
+                    bravebot_core::Labelled::trusted("ALONE".to_string()),
+                    lone,
+                    alone_rx,
+                ),
+            ]
+            .into_iter()
+            .map(|(n, report, batch, released)| {
+                let handed = seeded.clone();
+                let answered = scope.spawn(move || -> Joined {
+                    let _ = released.recv_timeout(LIMIT);
+                    (
+                        crate::delegate::Ended {
+                            delegated: Ok(crate::delegate::Delegated {
+                                report,
+                                kind: "one-round".to_string(),
+                                usage: Default::default(),
+                                requests: 0,
+                            }),
+                            vouched: handed,
+                            notices: Vec::new(),
+                            rounds: 1,
+                            took: Duration::from_millis(5),
+                            worked: Default::default(),
+                        },
+                        Default::default(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                });
+                Working {
+                    join_started: None,
+                    id: DelegateId::nth(n),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 1,
+                    budget: None,
+                    stop: Default::default(),
+                    batch,
+                    handle: answered,
+                }
+            })
+            .collect();
+            assert!(
+                !a_call_has_enough_ended(&delegates),
+                "the turn was woken with nothing ended"
+            );
+
+            drop(one_tx);
+            settle(&delegates, DelegateId::nth(1));
+            assert!(
+                !a_call_has_enough_ended(&delegates),
+                "the turn was woken when one of a call's two delegates, whose report is \
+                 quarantined, had ended, though the call asked for both"
+            );
+
+            drop(alone_tx);
+            settle(&delegates, DelegateId::nth(3));
+            assert!(
+                a_call_has_enough_ended(&delegates),
+                "a call with the default count was not woken for its delegate's end"
+            );
+            // That wake takes back every delegate that has ended, the first of the call among
+            // them.
+            let mut taken = Vec::new();
+            for at in (0..delegates.len()).rev() {
+                if delegates[at].handle.is_finished() {
+                    taken.push(delegates.remove(at));
+                }
+            }
+            assert_eq!(taken.len(), 2, "the wake did not take both ended delegates");
+            assert!(
+                !a_call_has_enough_ended(&delegates),
+                "the turn was woken again with the call's second delegate still working"
+            );
+
+            drop(two_tx);
+            settle(&delegates, DelegateId::nth(2));
+            assert!(
+                a_call_has_enough_ended(&delegates),
+                "the call's second delegate, whose report is shown, ended and the turn was not \
+                 woken, so the first one's end was not counted once it had been taken back"
+            );
+            for working in taken.into_iter().chain(delegates) {
+                let _ = working.handle.join();
+            }
+        });
     }
 
     /// INPUT-10 and DELEGATE-17: a line waiting for the turn wakes a wait once, and a delegate's
@@ -6352,6 +6569,7 @@ mod tests {
                     rounds: 1,
                     budget: None,
                     stop: Default::default(),
+                    batch: super::Batch::alone(DelegateId::nth(1)),
                     handle: answered,
                 }];
                 collect_delegates(
