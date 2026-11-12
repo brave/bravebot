@@ -4799,7 +4799,7 @@ shown by running the program, or not entirely:
   does with them. The fourth,
   `ld_origin_path_runs_a_library_a_stage_wrote_in_a_process_with_no_proc_unless_the_start_removes_it`,
   runs a program whose `RUNPATH` is `$ORIGIN/lib` in a process with an empty `/proc`
-  (`bwrap --tmpfs /proc`, since `unshare -rm` is refused on the host the first runs were made on)
+  (`bwrap --tmpfs /proc`)
   through a kept start, which must load the planted library, and then through a checked start,
   which must not, and through a checked start with a directory outside every writable one, which
   must. It prints `skipped` where `bwrap` cannot make that process or the control loads nothing.
