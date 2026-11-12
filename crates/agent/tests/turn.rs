@@ -15010,6 +15010,68 @@ fn a_trusted_entry_of_a_mixed_listing_is_read_through_its_reference() {
     }
 }
 
+/// A turn whose list holds no `read_file` tells its policy so, and a trusted entry of a listing it
+/// makes is then described without pointing at `read_file`, which the planner could not call.
+#[test]
+fn a_trusted_entry_of_a_listing_names_no_read_file_for_a_turn_not_offered_it() {
+    for (index, fields) in [
+        "kind: worker\ntools: list_files, read_file\n",
+        "kind: worker\ntools: list_files\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let offered = index == 0;
+        let scratch = Scratch::new(&format!("list-trusted-no-read-file-{index}"));
+        let home = Scratch::new(&format!("list-trusted-no-read-file-{index}-home"));
+        std::fs::write(scratch.path.join("a.txt"), "vouched\n").unwrap();
+        std::fs::write(scratch.path.join("z.txt"), "not vouched\n").unwrap();
+        define(&home, "lister", fields, "LIST-IT");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust("a.txt");
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ADDRESSED-LIST",
+            vec![
+                tool_request_2("list_files", r#"{"directory":".","depth":1}"#),
+                reply_with("listed"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+
+        turns::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed("ADDRESSED-LIST", &home, "lister"),
+            &mut bravebot_agent::Unattended,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let requests: Vec<String> = received.try_iter().collect();
+        let [_first, second] = requests.as_slice() else {
+            panic!("two requests, for two rounds: {requests:?}");
+        };
+        let start = second
+            .find("could not be shown to you")
+            .expect("the listing was answered with a reference result");
+        let listing = &second[start..];
+        assert!(
+            listing.contains("A file labelled (T,...): its label lets you read it"),
+            "case {index}: the listing has no trusted entry, so nothing here was tested: {listing}"
+        );
+        assert_eq!(
+            listing.contains("so read_file shows you what"),
+            offered,
+            "case {index} ({fields:?}): {listing}"
+        );
+    }
+}
+
 /// A turn is several requests when the model calls tools, and each re-sends the whole history.
 /// One round's count would understate what the turn cost, so they are summed.
 #[test]
