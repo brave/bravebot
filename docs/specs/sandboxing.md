@@ -2287,7 +2287,9 @@ one; `GIT_SSH_COMMAND`,
 `_PYTHON_SYSCONFIGDATA_NAME`, `RANLIB`, `NVCC`, `ARFLAGS`, `RANLIBFLAGS`, the make variables
 `MAKE`, `RM`, `AR`, `AS`, `ASFLAGS`, `FC`, `PC`, `M2C`, `LEX`,
 `YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET` and `CO`, and the make flag variables `CFLAGS`,
-`CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` are removed, as
+`CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` are removed, as are the make variables
+`CPP` and `TARGET_MACH` and make's `.SHELLFLAGS`, which GNU Make 4.4.1 on Linux ran a program from;
+so
 are `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER`,
 `CARGO_TARGET_<triple>_RUNNER`, `CARGO_TARGET_<triple>_RUSTFLAGS`,
 `CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`, the per-target
@@ -2470,6 +2472,10 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_python_venv_is_not_handed_a_sysconfig_module_name`
 `verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler`
 `verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_a_gcc_search_path_for_its_programs`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_gnumakeflags_that_name_a_makefile`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_a_rule_program_that_gnu_make_4_reads`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_shell_flags_that_name_a_script`
+`verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_an_openssl_configuration`
 `verified-by: bravebot_agent::usability::a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
@@ -4179,8 +4185,8 @@ file. A new spawn that looks a name up through
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
   "What a checked start does not cover". The names another program
   reads are added to its start when that program is audited. The usability suite's list
-  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 83 names) adds the names `git`, `make`
-  (the programs and flags of its built-in rules, `MAKE_COMMAND`, and `COMPILER_PATH` and
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 85 names) adds the names `git`, `make`
+  (the programs and flags of its built-in rules, `MAKE_COMMAND`, `CPP`, `TARGET_MACH`, and `COMPILER_PATH` and
   `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
   the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, the credential providers, and the
   `CROSS_COMPILE`, `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` the `cc` crate reads),
@@ -4190,8 +4196,9 @@ file. A new spawn that looks a name up through
   compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
   choose code, and it matches by form `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and
   `_RUSTDOCFLAGS`, `CARGO_CREDENTIAL_ALIAS_<name>`, make's `COMPILE.<suffix>`, `LINK.<suffix>`,
-  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, the per-target names
-  below, and every `npm_config_` name in any case. `python3` is also given the generic table, which holds
+  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, `.SHELLFLAGS`, the
+  per-target names below, and every `npm_config_` name in any case. `python3` is also given the
+  generic table, which holds
   `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
   compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
   only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
@@ -5281,14 +5288,16 @@ shown by running the program, or not entirely:
   honoured. The 4.4 tag's `decode_switches` in `src/main.c` has the earlier condition, and 4.4.1's
   adds `cs->env` to it, which reads from source as the cause. `--eval`, `-E`, `-- SHELL=<helper>`,
   `SHELL=<helper>` as a variable, `MAKEFILES` and `CC` ran the helper on every version run.
-  `SHELL` in the environment, `MAKESHELL`, `CONFIG_SHELL`, `.SHELLFLAGS`, `MAKE_TERMOUT`,
+  `SHELL` in the environment, `MAKESHELL`, `CONFIG_SHELL`, `MAKE_TERMOUT`,
   `MAKE_TERMERR`, `-L`, `-l`, `-W` and the `getenv("SHELL")` fallback of an unexecutable recipe ran
-  nothing on 3.81 and on 4.0 to 4.4.1 (`make` does not export `SHELL`). GNU Make 4.1 was not run,
+  nothing on 3.81 and on 4.0 to 4.4.1 on macOS (`make` does not export `SHELL`). `.SHELLFLAGS` ran
+  nothing on macOS and ran the helper on GNU Make 4.4.1 on Linux (see the Linux run below). GNU Make 4.1 was not run,
   and no Guile-enabled build was run (`GUILE_LOAD_PATH` is read by libguile and a `$(guile)` call
   needs makefile text, so it is reachable only through routes already withheld).
-  `make` implicit-rule variables `LD`, `F77`, `SHELL` and `CPP` (`ARFLAGS` is in the list
+  `make` implicit-rule variables `LD`, `F77` and `SHELL` (`ARFLAGS` is in the list
   because the `cc` crate reads it; nothing from a
-  built-in rule; a recipe that uses `$(CPP)` runs it), `PKG_CONFIG_PATH`,
+  built-in rule on macOS; a recipe that uses `$(CPP)` runs it, and on Linux `CPP` ran from the rule that
+  preprocesses `x.S`, see below), `PKG_CONFIG_PATH`,
   `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
   through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
   `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
@@ -5308,9 +5317,7 @@ shown by running the program, or not entirely:
   file system ignores case, so `x.s` and `x.S` are one file; `PREPROCESS.r` was run in its place.
   `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
   `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it.
-  Windows was not run: the suite runs nothing there. The only Linux run is the one recorded below.
-  The names a Linux build of `make`, `cargo`, `npm`, `go` and `python3` reads, and their versions,
-  are not recorded beyond it. The added names were read from the gcc
+  The added names were read from the gcc
   13.2.0 manual, openssl 3.0 `openssl-env`, the Node v24 command-line documentation, CPython
   `Modules/main.c`, the go1.27.3 `cmd/go` source and the cargo 1.90.0 documentation, and none is
   documented as read on Linux only.
@@ -5333,12 +5340,40 @@ shown by running the program, or not entirely:
   On Linux with GNU Make 4.4.1, gcc and python3 3.13.7, the controls of the tests for
   `PKG_CONFIG` with `CGO_ENABLED=1`, `CGO_CFLAGS` with `-fno-integrated-as -B<dir>` (a clang
   option) and `PYTHONEXECUTABLE` did not run the helper, so those tests print `skipped`. The three
-  names are not shown to be read there and stay in the list on every host. The controls of the
-  other tests were not reached on that run, so what they do on Linux is not recorded.
-  What GNU Make 4.x reads beyond `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS` and `MAKEFILES` is not
-  recorded. For `cargo`, `npm`, `go` and `python3` on Linux no version, run or name beyond the
-  ones above is recorded. A run on Linux, with versions and the names found, stays tracked by
-  #3863, and #3811 tracks the rest of the list.
+  names are not shown to be read there by those tests and stay in the list on every host.
+  The same run was made on Linux (Ubuntu, kernel 6.17, x86_64) with GNU Make 4.4.1, cargo
+  1.101.0-nightly, npm 11.13.0, go 1.27.4 (the official tarball), python3 3.13.7, gcc 15.2.0 and
+  `pkg-config` 1.8.1, with the argv of the workflows in `usability.rs`, a minimal environment (`PATH`,
+  `HOME`, `LANG`) and one variable per run. A run with no variable set ran no helper for any of the five
+  programs. The helper ran under these names:
+  - `make`: `GNUMAKEFLAGS` and `MAKEFLAGS`, each with `-f <file>`, `-f<file>`, `--file=<file>`, `-s -f <file>`
+    and `SHELL=<program>`; `MAKEFILES`; `AR`, `AS`, `CC`, `CO`, `CPP`, `CTANGLE`, `CWEAVE`, `CXX`, `FC`, `GET`,
+    `LEX`, `LINT`, `M2C`, `MAKE`, `MAKE_COMMAND`, `MAKEINFO`, `OBJC`, `PC`, `RM`, `TANGLE`, `TEX`, `TEXI2DVI`,
+    `WEAVE` and `YACC`; `ASFLAGS`, `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS`, `TARGET_ARCH` and
+    `TARGET_MACH` with `-B<directory>`; `COMPILER_PATH` (an `as` or `cc1` in the directory); and the recipe
+    variables `COMPILE.c`, `COMPILE.cc`, `COMPILE.S`, `COMPILE.s`, `COMPILE.m`, `LINK.c`, `PREPROCESS.S`,
+    `LEX.l`, `YACC.y`, `LINT.c` and `.SHELLFLAGS`. `CPP`, `TARGET_MACH` and `.SHELLFLAGS` ran on Linux and
+    are the names the macOS list lacks; the others are listed. The `-f` cases from `GNUMAKEFLAGS` and
+    `MAKEFLAGS` ran the file, as on 4.4.1 on macOS.
+  - `cargo`: the same names as on macOS, and `COMPILER_PATH` when cargo linked.
+  - `npm`: `npm_config_script_shell`, `NPM_CONFIG_SCRIPT_SHELL`, `npm_config_init_module`,
+    `npm_config_userconfig` and `npm_config_globalconfig` (each naming a file with `script-shell` or
+    `node-options`), `npm_config_node_options` and `NODE_OPTIONS`.
+  - `go`: `GOFLAGS` (`-toolexec=`, `-exec=`), `GOCACHEPROG`, `CC`, `CXX`, `PKG_CONFIG` (for a package that
+    names one with `#cgo pkg-config`), and `CGO_CFLAGS`, `CGO_CPPFLAGS`, `CGO_CXXFLAGS` and `CGO_LDFLAGS`
+    with `-B<directory>`.
+  - `python3`: `PYTHONPATH`, and `OPENSSL_CONF`, whose provider module is loaded when `hashlib` is imported,
+    when `ssl.create_default_context` is called and by `python3 -m pip --version`, and not by `-c`,
+    `-m unittest`, `-m venv --without-pip` or a bare `import ssl`. `-m venv` without `--without-pip` runs
+    `pip` through `ensurepip`, which this host does not have, so whether the workflow's `-m venv` reaches
+    the name was not run; it is listed because `pip` reaches it.
+  - Every program: `LD_PRELOAD`, which is in the generic table.
+
+  Not run on Linux: `rustup` (absent), `-m venv` with `pip` (no `ensurepip`), and the `CGO_CFLAGS`,
+  `CGO_CPPFLAGS` and `LDFLAGS` cases that need clang, which skip under gcc. Other Linux distributions
+  and other versions of the five programs were not
+  run, and Windows was not run: the suite runs nothing there. [#3811](https://github.com/brave/bravebot/issues/3811)
+  and [#3863](https://github.com/brave/bravebot/issues/3863) stay open for those.
   Each test runs the program with the variable as the person set it first. Where the program does
   not run the helper, the test prints that it skipped and why, and asserts nothing further: a helper
   the program never reaches proves nothing. Where the control passes, the strict check runs on every

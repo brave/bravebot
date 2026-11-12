@@ -2817,24 +2817,31 @@ fn a_setup_python_is_not_handed_an_openssl_provider() {
     } else {
         "x.so"
     });
-    let built = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))
-        .and_then(|cc| {
-            bravebot_sandbox::programs::start_against(
-                &cc,
-                bravebot_sandbox::programs::Inherits::All,
-                bravebot_sandbox::programs::SearchPath::Inherited,
-                bravebot_sandbox::programs::CodeSelectors::Kept,
-                std::iter::empty(),
-                &|_: &Path| true,
-            )
-            .arg("-shared")
-            .arg("-o")
-            .arg(&library)
-            .arg(&source)
-            .status()
-            .ok()
-        })
-        .is_some_and(|status| status.success());
+    // The environment belongs to the process, so a build started beside a test that holds
+    // `COMPILER_PATH` would be started with it, and gcc would run the `ld` planted there and write
+    // that test's marker. Holding the lock keeps those names out of this one.
+    let built = {
+        let _environment =
+            Environment::held(&[], &["COMPILER_PATH", "GCC_EXEC_PREFIX", "LD_PRELOAD"]);
+        bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))
+            .and_then(|cc| {
+                bravebot_sandbox::programs::start_against(
+                    &cc,
+                    bravebot_sandbox::programs::Inherits::All,
+                    bravebot_sandbox::programs::SearchPath::Inherited,
+                    bravebot_sandbox::programs::CodeSelectors::Kept,
+                    std::iter::empty(),
+                    &|_: &Path| true,
+                )
+                .arg("-shared")
+                .arg("-o")
+                .arg(&library)
+                .arg(&source)
+                .status()
+                .ok()
+            })
+            .is_some_and(|status| status.success())
+    };
     if !built {
         eprintln!("skipped python-openssl: no cc builds a shared library here");
         return;
@@ -2970,5 +2977,202 @@ fn a_setup_stage_is_not_handed_a_developer_directory() {
         &[("DEVELOPER_DIR", developer.to_str().expect("utf-8"))],
         workflow,
         &marker,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 4.4.1 on Linux read `-f <file>` from `GNUMAKEFLAGS`
+/// and `MAKEFLAGS` and ran the `$(shell ...)` in that makefile, where 3.81 on macOS did not. The
+/// regression it rejects: a setup `make` started with the `GNUMAKEFLAGS` the person's shell holds,
+/// which a list made on macOS alone would not have caught if it had dropped the name as unread. The
+/// control skips the test on a `make` that does not read the flag.
+#[test]
+fn a_setup_make_is_not_handed_gnumakeflags_that_name_a_makefile() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("gnumakeflags");
+    let marker = planted.join("ran");
+    let makefile = planted.join("extra.mk");
+    std::fs::write(
+        &makefile,
+        format!("$(shell : > '{}')\nall:\n\t@true\n", marker.display()),
+    )
+    .expect("makefile");
+
+    withheld_from_a_setup_stage(
+        "gnumakeflags",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n")],
+        &[("GNUMAKEFLAGS", &format!("-f {}", makefile.display()))],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 4.4.1 on Linux ran the program in the variables of
+/// the built-in rules that preprocess assembler (`CPP`), compile Objective-C (`OBJC`), weave and
+/// tangle (`CWEAVE`, `CTANGLE`, `WEAVE`, `TANGLE`) and typeset (`TEX`), and in `COMPILE.c`,
+/// `COMPILE.cc` and `LINK.c`, which are the recipes of the rules for C and C++ files and for a
+/// program made from one C file. All are options, so a start removes them whatever they hold and the
+/// helper is left where no stage can write. The stage ends its `make` with `|| true`, since a rule
+/// whose real tool is not installed makes `make` fail: the test is whether the helper ran. The
+/// regression it rejects: a setup `make` started with a rule program the person's shell holds that
+/// the list made on macOS did not name.
+#[test]
+fn a_setup_make_is_not_handed_a_rule_program_that_gnu_make_4_reads() {
+    if !usability::available() {
+        return;
+    }
+    const LINK: &str = "int main(void) { return 0; }\n";
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static [(&'static str, &'static str)],
+    );
+    let cases: [Case; 9] = [
+        ("CPP", "all: x.s\n", &[("x.S", "")]),
+        ("OBJC", "all: x.o\n", &[("x.m", "")]),
+        ("CWEAVE", "all: x.tex\n", &[("x.w", "@\n")]),
+        ("CTANGLE", "all: x.c\n", &[("x.w", "@\n")]),
+        ("WEAVE", "all: x.tex\n", &[("x.web", "@\n")]),
+        ("TANGLE", "all: x.p\n", &[("x.web", "@\n")]),
+        ("TEX", "all: x.dvi\n", &[("x.tex", "\\end\n")]),
+        ("COMPILE.c", "all: x.o\n", &[("x.c", LINK)]),
+        ("LINK.c", "all: x\n", &[("x.c", LINK)]),
+    ];
+    for (variable, makefile, extra) in cases {
+        let label = format!("make-gnu4-{}", variable.to_lowercase().replace('.', "-"));
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let mut files = vec![("Makefile", makefile)];
+        files.extend_from_slice(extra);
+        // A name with a dot is one `sh` drops from the environment it hands a program, so `make` is
+        // started directly for those. The helper exits zero, so `make` does too.
+        let (program, args): (&str, &[&str]) = if variable.contains('.') {
+            ("make", &["-s", "-C", "{session}"])
+        } else {
+            ("sh", &["-c", "make -s -C {session} || true"])
+        };
+        withheld_from_a_setup_stage(
+            &label,
+            program,
+            args,
+            &files,
+            &[(variable, &helper.display().to_string())],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 4.4.1 on Linux ran the program `.SHELLFLAGS` held as
+/// the first argument of the shell, which runs it as a script. The name has a dot, so `make` is
+/// started directly. The regression it rejects: a setup `make` started with the `.SHELLFLAGS` the
+/// person's shell holds, which only the dotted-name matcher removes.
+#[test]
+fn a_setup_make_is_not_handed_shell_flags_that_name_a_script() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-shellflags");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+
+    withheld_from_a_setup_stage(
+        "make-shellflags",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n")],
+        &[(".SHELLFLAGS", &helper.display().to_string())],
+        &marker,
+        None,
+    );
+}
+
+/// A shared object in `directory` whose constructor writes `marker`, and an OpenSSL configuration
+/// that loads it as a provider and as an engine. `None` where no C compiler can build it.
+fn provider_configuration(directory: &Path, marker: &Path) -> Option<PathBuf> {
+    let source = directory.join("ctor.c");
+    let library = directory.join("ctor.so");
+    std::fs::write(
+        &source,
+        format!(
+            "#include <stdio.h>\n\
+             __attribute__((constructor)) static void init(void) {{ FILE *f = fopen(\"{}\", \"w\"); if (f) fclose(f); }}\n\
+             int OPENSSL_provider_init(void *a, void *b, void *c, void *d) {{ return 0; }}\n\
+             int bind_engine(void *a, const char *b, void *c) {{ return 0; }}\n\
+             unsigned long v_check(unsigned long v) {{ return v; }}\n",
+            marker.display()
+        ),
+    )
+    .expect("source");
+    let resolved = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))?;
+    let status = {
+        let _environment = Environment::held(&[], &["LD_PRELOAD", "COMPILER_PATH"]);
+        let mut command = bravebot_sandbox::programs::start_against(
+            &resolved,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
+            std::iter::empty(),
+            &|_: &Path| true,
+        );
+        command
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&library)
+            .arg(&source)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?
+    };
+    if !status.success() {
+        return None;
+    }
+    let configuration = directory.join("openssl.cnf");
+    std::fs::write(
+        &configuration,
+        format!(
+            "openssl_conf = openssl_init\n[openssl_init]\nproviders = provider_sect\nengines = engine_sect\n\
+             [provider_sect]\nplanted = planted_provider\n[planted_provider]\nmodule = {library}\nactivate = 1\n\
+             [engine_sect]\nplanted = planted_engine\n[planted_engine]\ndynamic_path = {library}\nengine_id = planted\ninit = 0\n",
+            library = library.display()
+        ),
+    )
+    .expect("configuration");
+    Some(configuration)
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): python3 3.13.7 on Linux loaded the shared object an OpenSSL
+/// configuration named, and ran its constructor, when `hashlib` was imported. The name is the
+/// generic table's `OPENSSL_CONF`, a file, which `gcloud` and the AWS CLI also list, so the suite
+/// lists it for `python3` and the `pip` that `venv` runs. A configuration in a directory a stage
+/// wrote into is removed. The regression it rejects: a setup `python3` started with the
+/// configuration the person's shell holds.
+#[test]
+fn a_setup_python_is_not_handed_an_openssl_configuration() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-openssl-conf");
+    let marker = planted.join("ran");
+    let Some(configuration) = provider_configuration(&planted, &marker) else {
+        eprintln!("skipped python-openssl-conf: no C compiler can build the provider");
+        return;
+    };
+
+    withheld_from_a_setup_stage(
+        "python-openssl-conf",
+        "python3",
+        &["-c", "import hashlib"],
+        &[],
+        &[("OPENSSL_CONF", configuration.to_str().expect("utf-8"))],
+        &marker,
+        Some(&planted),
     );
 }
