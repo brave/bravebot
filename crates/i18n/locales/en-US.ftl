@@ -1108,9 +1108,9 @@ import-found-keys =
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 # Under the model, where the running server stated the window it holds that model loaded with.
 import-window = the server has it loaded with a context window of { $window } tokens
-# Said where that window is below the one a conversation is otherwise budgeted against. The entry
-# listed below it carries the figure as contextWindow, so a conversation is kept within it.
-import-ollama-window-small = Ollama drops the earliest turns beyond that window, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
+# Said where that window is below the one a conversation is otherwise budgeted against. Nothing is
+# written for it: each request names the window it needs, and Ollama reloads the model with it.
+import-ollama-window-small = Every request asks Ollama for the window the model was trained with, up to { $assumed } tokens, so it reloads the model with that window rather than dropping the earliest turns. A larger window takes more memory: set contextWindow on the entry below to ask for less.
 import-lm-studio-window-small = A conversation longer than that window does not fit the model as LM Studio has loaded it, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Load the model with a longer context length in LM Studio to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is

@@ -368,6 +368,9 @@ pub fn list_from_gateway<S: Sink>(
             .collect();
         return Ok(offered_by_gateway(provider, listed, now));
     }
+    if provider.protocol() == bravebot_config::provider::Protocol::Ollama {
+        return list_from_ollama(policy, provider, token, headers, egress);
+    }
 
     if token.is_some() && provider.answers_for_an_account() {
         // Any failure falls through to the wide roster: a gateway with no such route answers 404,
@@ -413,9 +416,22 @@ fn fetch_listing<S: Sink>(
     headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
-    let mut request = Request::get(&url)
+    let request = Request::get(&url)
         .with_client_certificate()
         .header("accept", "application/json");
+    let request = authenticated(provider, request, token, headers);
+    let listed: GatewayListing = read_listing(policy, request, &url, egress)?;
+    Ok(listed.data)
+}
+
+/// `request` with the headers every request to `provider` carries, its credential and the ones its
+/// block names.
+fn authenticated(
+    provider: &bravebot_config::provider::Provider,
+    mut request: Request,
+    token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
+) -> Request {
     for (name, value) in provider.fixed_headers() {
         request = request.header(*name, *value);
     }
@@ -429,7 +445,8 @@ fn fetch_listing<S: Sink>(
                 request.socket_header(name, value)
             }
             bravebot_config::provider::Protocol::ChatCompletions
-            | bravebot_config::provider::Protocol::Responses => request.header(name, value),
+            | bravebot_config::provider::Protocol::Responses
+            | bravebot_config::provider::Protocol::Ollama => request.header(name, value),
         };
     }
     // Carried, never read: `Request::header` appends, and a name this request already set is
@@ -437,9 +454,146 @@ fn fetch_listing<S: Sink>(
     for (name, value) in headers {
         request = request.header(name.clone(), value.expose());
     }
+    request
+}
 
-    let listed: GatewayListing = read_listing(policy, request, &url, egress)?;
-    Ok(listed.data)
+/// What an Ollama's `/tags` answers, holding only what the roster reads.
+#[derive(Debug, Deserialize)]
+struct OllamaTags {
+    models: Vec<OllamaTagged>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OllamaTagged {
+    #[serde(default)]
+    name: String,
+    /// Absent from an Ollama older than the field.
+    #[serde(default)]
+    capabilities: Option<Vec<String>>,
+}
+
+/// What an Ollama's `/show` answers for one model, holding only what the roster reads.
+#[derive(Debug, Default, Deserialize)]
+struct OllamaShown {
+    #[serde(default)]
+    model_info: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    capabilities: Option<Vec<String>>,
+}
+
+impl OllamaShown {
+    /// The window the model was trained with: `<architecture>.context_length`, where
+    /// `general.architecture` names the architecture.
+    fn trained_window(&self) -> Option<u64> {
+        let architecture = self.model_info.get("general.architecture")?.as_str()?;
+        self.model_info
+            .get(&format!("{architecture}.context_length"))?
+            .as_u64()
+            .filter(|window| *window > 0)
+    }
+}
+
+/// The models an Ollama spoken to in its own API serves
+/// ([BACKEND-73](../../../docs/specs/backends.md#BACKEND-73)).
+///
+/// One `GET /tags` names them, and one `POST /show` for each says its window and what it can do.
+/// A `/show` that fails or cannot be read leaves that row with what `/tags` said. Both answers are
+/// a listing on the footing [`list_from_gateway`] gives one: they reach a picker, and the window a
+/// row carries is the one a pick or the model in force budgets against.
+fn list_from_ollama<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    provider: &bravebot_config::provider::Provider,
+    token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
+    egress: &Egress,
+) -> Result<Vec<Model>, ChatError> {
+    let url = provider.models_url();
+    let request = authenticated(
+        provider,
+        Request::get(&url)
+            .with_client_certificate()
+            .header("accept", "application/json"),
+        token,
+        headers,
+    );
+    let tags: OllamaTags = read_listing(policy, request, &url, egress)?;
+    let show_url = provider.show_url();
+    let listed = tags
+        .models
+        .into_iter()
+        .map(|tagged| {
+            let body = serde_json::json!({"model": tagged.name}).to_string();
+            let request = authenticated(
+                provider,
+                Request::post(&show_url, body.into_bytes())
+                    .with_client_certificate()
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json"),
+                token,
+                headers,
+            );
+            let shown: Option<OllamaShown> = read_listing(policy, request, &show_url, egress).ok();
+            (tagged, shown)
+        })
+        .collect();
+    Ok(offered_by_ollama(provider, listed))
+}
+
+/// The picker rows an Ollama's models become, in the order `/tags` listed them.
+///
+/// Separated from the requests so the filtering is testable without a server. A model that says it
+/// cannot call tools is left out, `/show`'s word outranking `/tags`', and one that says nothing is
+/// kept, as a gateway's row is. The block's `whitelist` then `blacklist` narrow what remains
+/// ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+///
+/// The window is what the block states for the model, then for the provider, then the trained
+/// window no larger than [`bravebot_config::provider::OLLAMA_WINDOW`], then that figure. It is
+/// held to that figure because the window budgeted against is the one every request asks Ollama to
+/// load the model with ([BACKEND-72](../../../docs/specs/backends.md#BACKEND-72)), and its memory
+/// grows with it.
+fn offered_by_ollama(
+    provider: &bravebot_config::provider::Provider,
+    listed: Vec<(OllamaTagged, Option<OllamaShown>)>,
+) -> Vec<Model> {
+    let assumed = provider.assumed_window();
+    listed
+        .into_iter()
+        .filter(|(tagged, shown)| {
+            shown
+                .as_ref()
+                .and_then(|shown| shown.capabilities.as_ref())
+                .or(tagged.capabilities.as_ref())
+                .is_none_or(|capabilities| capabilities.iter().any(|it| it == TOOLS_CAPABILITY))
+        })
+        .filter(|(tagged, _)| !tagged.name.trim().is_empty())
+        .filter(|(tagged, _)| {
+            provider
+                .whitelist
+                .as_ref()
+                .is_none_or(|kept| kept.contains(&tagged.name))
+        })
+        .filter(|(tagged, _)| !provider.blacklist.contains(&tagged.name))
+        .map(|(tagged, shown)| Model {
+            key: format!("{}/{}", provider.id, tagged.name),
+            conversation_tokens: Some(
+                provider
+                    .model(&tagged.name)
+                    .and_then(|model| model.context_window)
+                    .or(provider.context_window)
+                    .or(shown
+                        .as_ref()
+                        .and_then(OllamaShown::trained_window)
+                        .map(|window| window.min(assumed)))
+                    .unwrap_or(assumed),
+            ),
+            display_name: tagged.name,
+            premium: false,
+            provider: Some(provider.display_name().to_string()),
+            // No level is sent in this protocol, so none is read.
+            reads_effort: false,
+            advertised: Advertised::default(),
+        })
+        .collect()
 }
 
 /// Send one roster request and decode what answers it as `T`.
@@ -1145,6 +1299,126 @@ mod tests {
         bravebot_config::provider::Provider::all(&root)
             .pop()
             .expect("one provider")
+    }
+
+    /// An entry naming Ollama's SDK, with `options` and `entry` added to its options and to it.
+    fn native_ollama(options: &str, entry: &str) -> bravebot_config::provider::Provider {
+        let serde_json::Value::Object(root) = serde_json::from_str(&format!(
+            r#"{{"provider": {{"ollama": {{
+                "npm": "ollama-ai-provider-v2",
+                "options": {{"baseURL": "http://localhost:11434/api"{options}}}{entry}
+            }}}}}}"#
+        ))
+        .expect("json") else {
+            panic!("not an object");
+        };
+        bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider")
+    }
+
+    fn tagged(name: &str, capabilities: Option<&[&str]>) -> OllamaTagged {
+        OllamaTagged {
+            name: name.to_string(),
+            capabilities: capabilities.map(|it| it.iter().map(|c| c.to_string()).collect()),
+        }
+    }
+
+    fn shown(architecture: &str, window: u64, capabilities: Option<&[&str]>) -> OllamaShown {
+        serde_json::from_value(serde_json::json!({
+            "model_info": {
+                "general.architecture": architecture,
+                format!("{architecture}.context_length"): window,
+            },
+            "capabilities": capabilities,
+        }))
+        .expect("a /show answer")
+    }
+
+    /// BACKEND-73: each row's window is the one `/show` says the model was trained with, read under
+    /// the architecture `general.architecture` names, and held to the assumed window, since that is
+    /// what every request asks the server to allocate. A model `/show` did not answer for is kept
+    /// at the assumed window. The regressions rejected are reading one architecture's key for all,
+    /// and sending a model's full trained window.
+    #[test]
+    fn an_ollama_row_carries_the_window_show_says_the_model_was_trained_with() {
+        let assumed = 65_536;
+        let models = offered_by_ollama(
+            &native_ollama("", ""),
+            vec![
+                (tagged("qwen3:8b", None), Some(shown("qwen3", 40_960, None))),
+                (tagged("llama3.2", None), Some(shown("llama", 8_192, None))),
+                (tagged("long", None), Some(shown("gemma3", 1_048_576, None))),
+                (
+                    tagged("llama3.1", None),
+                    Some(shown("llama", 131_072, None)),
+                ),
+                (tagged("unshown", None), None),
+            ],
+        );
+        let rows: Vec<(&str, Option<u64>)> = models
+            .iter()
+            .map(|model| (model.key.as_str(), model.conversation_tokens))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("ollama/qwen3:8b", Some(40_960)),
+                ("ollama/llama3.2", Some(8_192)),
+                ("ollama/long", Some(assumed)),
+                ("ollama/llama3.1", Some(assumed)),
+                ("ollama/unshown", Some(assumed)),
+            ]
+        );
+        assert_eq!(models[0].display_name, "qwen3:8b");
+        assert!(!models[0].reads_effort);
+    }
+
+    /// A window the block states outranks the trained one, which is how somebody short of memory
+    /// asks Ollama for less: the model's own first, then the provider's.
+    #[test]
+    fn a_window_the_block_states_outranks_the_one_show_reports() {
+        let provider = native_ollama(
+            r#", "contextWindow": 16384"#,
+            r#", "models": {"qwen3:8b": {"limit": {"context": 8192, "output": 2048}}}"#,
+        );
+        let models = offered_by_ollama(
+            &provider,
+            vec![
+                (tagged("qwen3:8b", None), Some(shown("qwen3", 40_960, None))),
+                (tagged("other", None), Some(shown("qwen3", 40_960, None))),
+            ],
+        );
+        let windows: Vec<Option<u64>> = models.iter().map(|m| m.conversation_tokens).collect();
+        assert_eq!(windows, [Some(8_192), Some(16_384)]);
+    }
+
+    /// A model that cannot call tools is left out, `/show`'s word outranking what `/tags` said, and
+    /// one that says nothing either way is kept. The block's lists then narrow what remains.
+    #[test]
+    fn an_ollama_model_that_cannot_call_tools_is_not_offered() {
+        let tools: &[&str] = &["completion", "tools"];
+        let plain: &[&str] = &["completion"];
+        let models = offered_by_ollama(
+            &native_ollama("", r#", "blacklist": ["denied"]"#),
+            vec![
+                (tagged("can", Some(tools)), None),
+                (tagged("cannot", Some(plain)), None),
+                (tagged("says-nothing", None), None),
+                (
+                    tagged("show-says-cannot", Some(tools)),
+                    Some(shown("x", 1, Some(plain))),
+                ),
+                (
+                    tagged("show-says-can", Some(plain)),
+                    Some(shown("x", 1, Some(tools))),
+                ),
+                (tagged("  ", None), None),
+                (tagged("denied", None), None),
+            ],
+        );
+        let names: Vec<&str> = models.iter().map(|m| m.display_name.as_str()).collect();
+        assert_eq!(names, ["can", "says-nothing", "show-says-can"]);
     }
 
     /// A moment that is before every `shutdown_date` a listing could state in these tests, so a

@@ -372,6 +372,10 @@ pub(crate) const RESPONSES_SDK: &str = "@ai-sdk/openai";
 /// package for a gateway that speaks it.
 const CHAT_SDK: &str = "@ai-sdk/openai-compatible";
 
+/// The SDKs an entry names to say that its endpoint takes Ollama's own API, as opencode names the
+/// packages that speak it. Both take a `baseURL` ending in `/api`.
+pub(crate) const OLLAMA_SDKS: [&str; 2] = ["ollama-ai-provider-v2", "ollama-ai-provider"];
+
 /// The publisher a model named without one is taken to belong to.
 const VERTEX_PUBLISHER: &str = "google";
 
@@ -392,6 +396,11 @@ const VERTEX_KEY_HEADER: &str = "x-goog-api-key";
 /// it for anyone who knows better.
 pub const CONTEXT_WINDOW: u64 = crate::bedrock::CONTEXT_WINDOW;
 
+/// The window an entry reached in Ollama's own protocol assumes, and the most it reads from the
+/// server. Lower than [`CONTEXT_WINDOW`] because each request has the server allocate it, and the
+/// memory a model is loaded with grows with it.
+pub const OLLAMA_WINDOW: u64 = 65_536;
+
 /// One model a gateway offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Model {
@@ -399,8 +408,8 @@ pub struct Model {
     pub id: String,
     /// The context window, where the file stated one.
     ///
-    /// `None` reads as [`CONTEXT_WINDOW`]. Kept distinct from a stated figure so that
-    /// `doctor` can say which models are running on the default.
+    /// `None` reads as the provider's [`Provider::assumed_window`]. Kept distinct from a stated
+    /// figure so that `doctor` can say which models are running on the default.
     pub context_window: Option<u64>,
     /// How long a reply this model may write, where the file stated it, out of the same `limit`
     /// block the window comes from and under the same rule.
@@ -734,6 +743,9 @@ pub enum Protocol {
     /// entry reached at OpenAI's own API
     /// ([BACKEND-61](../../../docs/specs/backends.md#BACKEND-61)).
     Responses,
+    /// Ollama's own `/api/chat`, which an entry naming one of [`OLLAMA_SDKS`] speaks
+    /// ([BACKEND-72](../../../docs/specs/backends.md#BACKEND-72)).
+    Ollama,
 }
 
 impl Provider {
@@ -1097,7 +1109,14 @@ impl Provider {
                 format!("{}/publishers/{VERTEX_PUBLISHER}/models", self.base_url)
             }
             Protocol::Responses => format!("{}/responses", self.base_url),
+            Protocol::Ollama => format!("{}/chat", self.base_url),
         }
+    }
+
+    /// The URL that describes one model of an Ollama, its window among what it says
+    /// ([BACKEND-73](../../../docs/specs/backends.md#BACKEND-73)).
+    pub fn show_url(&self) -> String {
+        format!("{}/show", self.base_url)
     }
 
     /// The URL one `generateContent` request for `model` goes to, or `None` where the model's name
@@ -1142,6 +1161,7 @@ impl Provider {
             Protocol::ChatCompletions | Protocol::Responses => format!("{}/models", self.base_url),
             Protocol::Messages => format!("{}/models?limit={ANTHROPIC_PAGE}", self.base_url),
             Protocol::GenerateContent => self.completion_url(),
+            Protocol::Ollama => format!("{}/tags", self.base_url),
         }
     }
 
@@ -1252,7 +1272,10 @@ impl Provider {
     /// both and cannot disagree about either.
     pub fn fixed_headers(&self) -> &'static [(&'static str, &'static str)] {
         match self.protocol() {
-            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
+            Protocol::ChatCompletions
+            | Protocol::GenerateContent
+            | Protocol::Responses
+            | Protocol::Ollama => &[],
             Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
         }
     }
@@ -1262,7 +1285,10 @@ impl Provider {
     /// second copy would go out beside it rather than in place of it.
     fn fixed_header_names(protocol: Protocol) -> &'static [&'static str] {
         match protocol {
-            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
+            Protocol::ChatCompletions
+            | Protocol::GenerateContent
+            | Protocol::Responses
+            | Protocol::Ollama => &[],
             Protocol::Messages => &["anthropic-version"],
         }
     }
@@ -1423,7 +1449,15 @@ impl Provider {
         model
             .context_window
             .or(self.context_window)
-            .unwrap_or(CONTEXT_WINDOW)
+            .unwrap_or(self.assumed_window())
+    }
+
+    /// The window a model nobody stated one for is budgeted against.
+    pub fn assumed_window(&self) -> u64 {
+        match self.protocol() {
+            Protocol::Ollama => OLLAMA_WINDOW,
+            _ => CONTEXT_WINDOW,
+        }
     }
 
     /// Whether a name is one of this provider's models.
@@ -1575,7 +1609,9 @@ impl fmt::Debug for Credential {
 /// `openai` entry that states a proxy's endpoint, which may speak chat completions alone. Any other
 /// SDK an entry names is not read: the id decides.
 pub(crate) fn protocol_of(id: &str, npm: Option<&str>, stated: Option<&str>) -> Protocol {
-    if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
+    if npm.is_some_and(|npm| OLLAMA_SDKS.contains(&npm)) && id != GOOGLE_VERTEX_ID {
+        Protocol::Ollama
+    } else if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
         Protocol::Responses
     } else if id == ANTHROPIC_ID && npm != Some(CHAT_SDK) {
         Protocol::Messages
@@ -3709,6 +3745,64 @@ mod tests {
                 "options": {"baseURL": "https://proxy.example.invalid/v1"}
             }}}"#);
         assert_eq!(elsewhere.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-72: an entry naming an Ollama SDK, under any id, is reached in Ollama's own protocol:
+    /// requests at `/chat`, the roster at `/tags` and each model's details at `/show`, all under the
+    /// stated `/api` base, with no header of the protocol's own and no credential where none is
+    /// named. The same server written without the SDK keeps chat completions, so a block that worked
+    /// before keeps working the same way.
+    #[test]
+    fn an_entry_naming_an_ollama_sdk_is_reached_in_ollamas_own_protocol() {
+        for npm in OLLAMA_SDKS {
+            let native = one(&format!(
+                r#"{{"provider": {{"my-ollama": {{
+                    "npm": "{npm}",
+                    "options": {{"baseURL": "http://localhost:11434/api/"}}
+                }}}}}}"#
+            ));
+            assert_eq!(native.protocol(), Protocol::Ollama, "{npm}");
+            assert_eq!(native.completion_url(), "http://localhost:11434/api/chat");
+            assert_eq!(native.models_url(), "http://localhost:11434/api/tags");
+            assert_eq!(native.show_url(), "http://localhost:11434/api/show");
+            assert!(native.fixed_headers().is_empty());
+            assert!(matches!(native.credential(|_| None), Credential::NotNeeded));
+        }
+        let compatible = one(r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1"}
+            }}}"#);
+        assert_eq!(compatible.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-73: a model an Ollama entry lists with no window of its own is budgeted against
+    /// 65,536 tokens, the window each request then has the server allocate, where the same model
+    /// at the compatible endpoint keeps the window every other gateway assumes. A stated figure
+    /// outranks either.
+    #[test]
+    fn a_model_an_ollama_entry_lists_without_a_window_is_held_to_ollamas_own_assumed_one() {
+        let block = |npm: &str, base: &str| {
+            one(&format!(
+                r#"{{"provider": {{"ollama": {{{npm}
+                    "options": {{"baseURL": "http://localhost:11434/{base}"}},
+                    "models": {{"qwen3:8b": {{}}, "pinned": {{"limit": {{"context": 200000, "output": 8192}}}}}}
+                }}}}}}"#
+            ))
+        };
+        let native = block(r#""npm": "ollama-ai-provider-v2","#, "api");
+        let compatible = block("", "v1");
+        let windows = |provider: &Provider| -> Vec<u64> {
+            provider
+                .models
+                .iter()
+                .map(|model| provider.window_of(model))
+                .collect()
+        };
+        let mut native_windows = windows(&native);
+        native_windows.sort_unstable();
+        let mut compatible_windows = windows(&compatible);
+        compatible_windows.sort_unstable();
+        assert_eq!(native_windows, [65_536, 200_000]);
+        assert_eq!(compatible_windows, [131_072, 200_000]);
     }
 
     /// BACKEND-61: an entry naming `@ai-sdk/openai` is reached in the Responses protocol, whatever its

@@ -197,7 +197,8 @@ Ollama wants no API key, so its block names none:
   "provider": {
     "ollama": {
       "name": "Ollama (local)",
-      "options": { "baseURL": "http://localhost:11434/v1" }
+      "npm": "ollama-ai-provider-v2",
+      "options": { "baseURL": "http://localhost:11434/api" }
     }
   },
   "model": "ollama/qwen3-coder:30b"
@@ -205,8 +206,10 @@ Ollama wants no API key, so its block names none:
 ```
 
 `baseURL` is written down because `ollama` is not one of the names an endpoint is
-[compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
-pulled and `/model` lists what came back. A first run with nothing configured offers to write this
+[compiled in](#where-the-requests-go) for. `npm` names Ollama's own SDK, so bravebot speaks Ollama's
+own API at `/api` rather than its OpenAI-compatible one, and each request asks for the context window
+the session budgets for ([Ollama](ollama.md#the-context-window)). There is no `models` key, so Ollama
+is asked what it has pulled and `/model` lists what came back. A first run with nothing configured offers to write this
 block for you where Ollama is running ([Importing from Claude Code, opencode or a local model
 server](../importing.md)).
 
@@ -263,9 +266,9 @@ same deliberately low figure a Bedrock tier gets and for the same reason: a budg
 window does not compact a conversation late, it stops compacting it at all. A window a gateway reports
 is taken where the file stated none; a figure in the file outranks it. `options.contextWindow` is the
 figure for every model of the provider that states none, and is the place to keep one for a block
-that lists no models, such as a local Ollama, whose window is one server setting. A model's own
-`limit.context` outranks it, and a gateway's report does not. The Ollama and LM Studio imports write
-it where the server holds the model with fewer than 131,072 tokens. Following opencode, `limit`
+that lists no models, such as LM Studio, whose window is one server setting. A model's own
+`limit.context` outranks it, and a gateway's report does not. The LM Studio import writes it where
+the server holds the model with fewer than 131,072 tokens. Following opencode, `limit`
 needs `output` alongside `context` or it is not a `limit` and its figure is not read. `output` states
 [how far a reply may run](../configuration.md#how-long-a-reply-may-run).
 

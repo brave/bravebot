@@ -10375,3 +10375,315 @@ fn a_google_express_stream_reports_prose_for_text_and_not_for_thinking_or_a_call
         assert_eq!(reported.contains(&true), expected, "{reported:?}");
     }
 }
+
+// Ollama's own `/api/chat` (BACKEND-72) and its roster from `/api/tags` and `/api/show`
+// (BACKEND-73), reached by an entry naming an Ollama SDK at a server on this machine. The bodies and
+// lines are what Ollama's API reference states.
+
+use bravebot_aichat::ollama_chat::OllamaChatClient;
+
+/// An entry naming Ollama's SDK at the local server, with `extra` added to the entry.
+fn ollama_at(endpoint: &str, extra: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"ollama": {{"npm": "ollama-ai-provider-v2",
+            "options": {{"baseURL": "{endpoint}/api"}}{extra}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+fn ollama_client<'a>(
+    egress: &'a Egress,
+    provider: &'a bravebot_config::provider::Provider,
+) -> OllamaChatClient<'a> {
+    OllamaChatClient::new(egress, provider, "qwen3:8b", None)
+        .with_window(40_960)
+        .with_backoff(Duration::from_millis(1))
+}
+
+/// One line of a stream, ended as Ollama ends it.
+fn ndjson(value: serde_json::Value) -> String {
+    format!("{value}\n")
+}
+
+const OLLAMA_REPLY: &str = r#"{"model":"qwen3:8b","created_at":"2026-11-12T10:00:00Z",
+    "message":{"role":"assistant","content":"hello from ollama","thinking":"weighing it up"},
+    "done":true,"done_reason":"stop","prompt_eval_count":321,"eval_count":9}"#;
+
+/// BACKEND-72: a request goes to `/api/chat` asking the server to allocate the window the session
+/// budgets for, in `options.num_ctx`, with no ceiling nobody stated and no credential where the
+/// entry named none. The reply is the text alone, the reasoning beside it left out, at the cost the
+/// last line states.
+#[test]
+fn an_ollama_request_asks_the_server_for_the_window_the_session_budgets_for() {
+    let (endpoint, received) = serve(OLLAMA_REPLY);
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let completion = ollama_client(&egress, &provider)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(
+                "ollama/qwen3:8b",
+                vec![Message::system("be brief"), Message::user("hello")],
+            ),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.request_line, "POST /api/chat HTTP/1.1");
+    assert_eq!(sent.header("authorization"), None);
+    let body = json_of(&sent);
+    assert_eq!(body["model"], "qwen3:8b");
+    assert_eq!(body["stream"], false);
+    assert_eq!(body["options"], serde_json::json!({"num_ctx": 40_960}));
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert_eq!(body["messages"][1]["content"], "hello");
+    assert_eq!(completion.usage.prompt_tokens, 321);
+    assert_eq!(completion.usage.completion_tokens, 9);
+    assert_eq!(completion.context_tokens, 321);
+    assert_eq!(completion.content.label(), Label::untrusted_public());
+    let proof = policy.authorise_display_release("test reads the reply");
+    assert_eq!(revealed(&proof, completion.content), "hello from ollama");
+}
+
+/// A setting a model's block adds to `options` joins the window rather than replacing it, and a
+/// `num_ctx` the block wrote does not displace the one the session budgets for: the two differing is
+/// the truncation this protocol is spoken to prevent. A ceiling the block states is `num_predict`.
+#[test]
+fn a_models_options_join_the_window_and_never_replace_it() {
+    let (endpoint, received) = serve(OLLAMA_REPLY);
+    let provider = ollama_at(
+        &endpoint,
+        r#", "models": {"qwen3:8b": {
+            "limit": {"context": 40960, "output": 2048},
+            "options": {"options": {"temperature": 0.2, "num_ctx": 2048}, "keep_alive": "30m"}
+        }}"#,
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    ollama_client(&egress, &provider)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(
+        body["options"],
+        serde_json::json!({"num_ctx": 40_960, "num_predict": 2048, "temperature": 0.2})
+    );
+    assert_eq!(body["keep_alive"], "30m");
+}
+
+/// A stream is a JSON object a line. The words arrive as they are written, the reasoning reaches
+/// the display alone, a call arrives whole and is given an id, and the cost is the last line's.
+#[test]
+fn an_ollama_stream_is_read_a_line_at_a_time() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Frames(vec![
+        ndjson(
+            serde_json::json!({"message": {"role": "assistant", "content": "", "thinking": "hmm"}, "done": false}),
+        ),
+        ndjson(
+            serde_json::json!({"message": {"role": "assistant", "content": "I will "}, "done": false}),
+        ),
+        // A line split across two writes.
+        r#"{"message": {"role": "assistant", "content": "read it."}, "#.to_string(),
+        "\"done\": false}\n".to_string(),
+        ndjson(
+            serde_json::json!({"message": {"role": "assistant", "content": "",
+            "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": "x"}}}]},
+            "done": false}),
+        ),
+        ndjson(
+            serde_json::json!({"message": {"role": "assistant", "content": ""},
+            "done": true, "done_reason": "stop", "prompt_eval_count": 500, "eval_count": 30}),
+        ),
+    ])]);
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut thinking = String::new();
+    let mut written = String::new();
+    let proof = policy.authorise_display_release("the reply as the model writes it");
+
+    let completion = ollama_client(&egress, &provider)
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("ollama/qwen3:8b", vec![Message::user("read x")]),
+            |progress| {
+                thinking.push_str(progress.thinking.declassify(&proof));
+                written.push_str(progress.written.declassify(&proof));
+            },
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["options"]["num_ctx"], 40_960);
+    assert_eq!(thinking, "hmm");
+    assert_eq!(written, "I will read it.");
+    let call = call_of(&completion.calls);
+    assert_eq!(call.function.name, "read_file");
+    assert_eq!(call.function.arguments.as_deref(), Some(r#"{"path":"x"}"#));
+    assert!(call.id.is_some());
+    assert_eq!(
+        (
+            completion.usage.prompt_tokens,
+            completion.usage.completion_tokens
+        ),
+        (500, 30)
+    );
+    assert_eq!(revealed(&proof, completion.content), "I will read it.");
+}
+
+/// A stream that ends without the line saying it is done is a reply that stopped, and is not
+/// returned as a whole one.
+#[test]
+fn an_ollama_stream_that_never_says_it_is_done_is_not_a_reply() {
+    let lines = vec![ndjson(serde_json::json!({
+        "message": {"role": "assistant", "content": "half a"}, "done": false
+    }))];
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::Frames(lines.clone()),
+        Attempt::Frames(lines.clone()),
+        Attempt::Frames(lines),
+    ]);
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = ollama_client(&egress, &provider)
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]),
+            |_| {},
+        )
+        .expect_err("a reply that never ended");
+    assert!(matches!(error, ChatError::Incomplete), "{error:?}");
+}
+
+/// A reply the ceiling stopped keeps what it wrote and says it was cut off, on either path.
+#[test]
+fn an_ollama_reply_the_ceiling_stopped_is_kept_and_said_to_be_cut_off() {
+    let last = serde_json::json!({"message": {"role": "assistant", "content": "a long ans"},
+        "done": true, "done_reason": "length", "prompt_eval_count": 10, "eval_count": 2048});
+    for streaming in [false, true] {
+        let (endpoint, _received) = serve_attempts(vec![if streaming {
+            Attempt::Frames(vec![ndjson(last.clone())])
+        } else {
+            Attempt::Json(last.to_string())
+        }]);
+        let provider = ollama_at(&endpoint, "");
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]);
+        let mut client = ollama_client(&egress, &provider);
+
+        let completion = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect("what was written is kept");
+        let cut_off = completion.cut_off.expect("said to be cut off");
+        assert_eq!(cut_off.ceiling, 2048, "streaming: {streaming}");
+        assert!(cut_off.call.is_none());
+    }
+}
+
+/// A line saying the server gave up is reported as a failure of the service, and the server's own
+/// words are not what reaches a person.
+#[test]
+fn an_error_line_from_ollama_is_reported_rather_than_read_past() {
+    let failing = vec![
+        ndjson(
+            serde_json::json!({"message": {"role": "assistant", "content": "par"}, "done": false}),
+        ),
+        ndjson(serde_json::json!({"error": "model runner has unexpectedly stopped"})),
+    ];
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::Frames(failing.clone()),
+        Attempt::Frames(failing.clone()),
+        Attempt::Frames(failing),
+    ]);
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = ollama_client(&egress, &provider)
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]),
+            |_| {},
+        )
+        .expect_err("the server gave up");
+    assert!(
+        matches!(
+            error,
+            ChatError::Reported {
+                failure: bravebot_aichat::anthropic::protocol::Failure::Api
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(!format!("{error}").contains("runner"), "{error}");
+}
+
+/// BACKEND-73: the roster is `/api/tags`, and each model's window is what `/api/show` says it was
+/// trained with, which the server answers whether or not the model is loaded. A model `/show` says
+/// cannot call tools is not offered.
+#[test]
+fn an_ollama_roster_reads_each_models_window_from_show() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Json(
+            r#"{"models": [{"name": "qwen3:8b", "capabilities": ["completion", "tools"]},
+                           {"name": "embed:latest"}]}"#
+                .to_string(),
+        ),
+        Attempt::Json(
+            r#"{"model_info": {"general.architecture": "qwen3", "qwen3.context_length": 40960},
+                "capabilities": ["completion", "tools", "thinking"]}"#
+                .to_string(),
+        ),
+        Attempt::Json(
+            r#"{"model_info": {"general.architecture": "bert", "bert.context_length": 512},
+                "capabilities": ["embedding"]}"#
+                .to_string(),
+        ),
+    ]);
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let models =
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &[], &egress)
+            .expect("the roster was fetched");
+
+    let rows: Vec<(&str, Option<u64>)> = models
+        .iter()
+        .map(|model| (model.key.as_str(), model.conversation_tokens))
+        .collect();
+    assert_eq!(rows, [("ollama/qwen3:8b", Some(40_960))]);
+    assert_eq!(
+        received.recv().expect("tags").request_line,
+        "GET /api/tags HTTP/1.1"
+    );
+    let show = received.recv().expect("show");
+    assert_eq!(show.request_line, "POST /api/show HTTP/1.1");
+    assert_eq!(json_of(&show), serde_json::json!({"model": "qwen3:8b"}));
+}
