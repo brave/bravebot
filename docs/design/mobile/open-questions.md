@@ -39,11 +39,29 @@ These are not accepted risks or implementation details that can be skipped. The 
 
 ### U3. Effective session scope
 
-- **Status:** unresolved before stage 6 exposes session content or control.
+- **Status:** mapping recorded, scope check not built.
 - **Decision needed:** map resolved grants and settings to device access, including changes applied during a session.
 - **Reason:** rules read at session open and settings read per turn have different lifetimes. A single scope API does not yet exist.
 - **Current limit:** scope-expanding answers stay on the host; widened remote access requires authorization before disclosure. Ordinary one-use decisions should not cause needless reauthorization.
 - **Completion evidence:** a short state/transition mapping and tests of initial scope, widening, and revocation. See [permissions and effective scope](architecture.md#permissions-and-effective-scope).
+- **Mapping:** when the desktop bridge (`crates/ui-bridge`) reads each scope source for an open session. Functions are in `src/bridge.rs` unless named otherwise, and tests are in `tests/` unless marked as in `bridge.rs`. `permissions.revoke` is refused while a turn runs, and a turn copies the trust map and the trusted programs when it starts (`work`), so grants change between turns. Untested end to end: a fixed project, `readsStayInWorkspace` and the other per-turn settings besides the sandbox mode.
+
+| Source | When read | What changes it | Tests |
+|---|---|---|---|
+| Project directory | At open (`new_session`, `open_session`). | Nothing. The bridge has no `/cd`. | None. |
+| Additional directories | At open from `session.new` `directories`; at resume from the record (`State::resumed` in `running.rs`); at fork from the parent (`State::forked`). `workspace_of` opens them for every turn. | Nothing after open. | `session_new_opens_every_directory_it_is_given` (in `bridge.rs`). |
+| Trust map | At open (`Opening::settled_by`): the resumed or forked map, else a kept answer, else empty until `trust.reply`. | Widened by `trust.reply` (once, before a turn uses it) and `vouch.reply`; narrowed by `permissions.revoke` kind `path`. | `a_repeated_trust_answer_is_refused_and_the_first_stands`, `a_trust_answer_cannot_be_changed_after_a_turn_has_used_it`, `a_resume_takes_its_own_map_before_a_kept_answer`, `permission_review_can_only_remove_existing_grants`. |
+| Remembered trust | At open (`Opening::of`); `permissions.list` reads it again each time. | `trust.reply` keeps a yes; `permissions.revoke` kind `remembered` forgets it for the next session and leaves this session's map. | `a_remembered_yes_settles_the_next_session_started_there`, `forgetting_a_remembered_answer_makes_the_next_session_there_ask`. |
+| Trusted programs | At open: empty, from the record at resume, from the parent at fork. | Widened by `run.reply` with `remember`, or by programs a delegate vouched for; narrowed by `permissions.revoke` kind `command` and by undoing the turn that vouched. | `a_command_vouched_for_holds_for_later_turns_until_it_is_revoked`, `undoing_a_turn_does_not_hand_back_a_revoked_command` (in `bridge.rs`). |
+| Permission rules from settings layers | Once at open (`open_under_rules`, PERM-12); a fork takes its parent's. | A settings edit applies to the next session. Not revocable. | `a_rule_written_after_a_session_opened_governs_the_next_one`, `a_fork_runs_under_the_rules_its_parent_opened_under`. |
+| Other settings: sandbox mode, `readsStayInWorkspace`, references, search caps, effort, run and download caps, MCP requests | Every turn (`start_turn` reads the layers, then `turn_workspace` and `for_a_window_choosing`). | A settings edit applies from the next turn. A window's `session.sandbox` choice replaces the settings mode from the next turn. | `a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn`, `a_window_chooses_the_mode_the_next_turn_runs_under`. |
+| Permission mode | Live (`set_permission_mode`, MODE-8). | `session.mode`, accepted while a turn runs. | `a_mode_chosen_while_a_turn_runs_applies_to_that_turn`. |
+| Auto-vetting | Once at open (`auto_vetting`); a fork takes its parent's. | A settings edit applies to the next session. | `auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it`. |
+| Exposure grants | Held for the session after `exposure.reply`. | Undoing a turn keeps them; a fork starts without them. | `an_answer_covers_the_file_for_the_session_and_no_longer`, `undoing_a_turn_stops_the_servers_and_keeps_the_files_agreed_to`, `a_desktop_fork_asks_again_about_what_only_the_parent_was_asked` (in `bridge.rs`). |
+
+- **Disagreement with the spec:** [permissions.md](../../specs/permissions.md) says `readsStayInWorkspace` is read when the session opens. The bridge reads it from the settings layers on every turn (`start_turn` through `workspace_of` to `turn_workspace`), so removing the key from a settings file while a session is open widens what the next turn's file tools may read. No test pins this, because it disagrees with the spec. The scope check has to treat it as a widening, or the bridge has to read the key once at open.
+- **Not stated by the spec:** [SANDBOX-22](../../specs/sandboxing.md#SANDBOX-22) says the bridge reads the sandbox mode from the settings, but not that it reads them for every turn. The bridge does, so a settings edit from `strict` to `workspace-write` while a session is open widens the next turn. The test above pins the bridge as it is. The scope check has to treat that edit as a widening too.
+- **Remains for stage 6:** a scope check that computes a device's scope from the sources above when a device attaches and after each change listed, suspends remote reads and control before a widened scope becomes visible, and lets narrowing and one-use answers pass without reauthorizing. It needs tests of the initial scope, of widening by each host reply and per-turn setting, and of revocation.
 
 ### U4. Attaching a client the host did not launch
 
