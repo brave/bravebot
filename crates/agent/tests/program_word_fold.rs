@@ -10,7 +10,11 @@
 //! The answer is the volume's, so this reads a different set on NTFS, on APFS and on a volume that
 //! does not fold case. On a case-sensitive volume nothing folds, the probe finds no character and
 //! the first test asserts nothing about the rule. CI runs it on Windows in the `Awkward names on
-//! Windows` job, which is the one place this reads NTFS.
+//! Windows` job, which is the one place this reads NTFS. There the probe finds no character: NTFS
+//! opens none of dotless i, long s and the Kelvin sign as an ASCII letter, so the rule covers those
+//! three on Windows although the volume does not start them as the program, which is the safe side
+//! of PERM-4. The probe checks first that it can see a fold outside ASCII on the volume, so an empty
+//! answer is a measurement and not a probe that finds nothing wherever it runs.
 //!
 //! What holds the rule on every host is the unit tests in `crates/core/src/permissions.rs` and
 //! `crates/core/src/ambient.rs`, which name the spellings and fail without the fold.
@@ -33,7 +37,9 @@ fn denies(rule: &str) -> Permissions {
 
 /// The characters outside ASCII that the volume opens as an ASCII letter, with the letter.
 ///
-/// A file named for a letter opens by that name, which shows the probe reads what it wrote.
+/// A file named for a letter opens by that name, which shows the probe reads what it wrote. A
+/// volume that folds ASCII case also has to open `\u{c9}` as the file named `\u{e9}`, which shows
+/// the probe sees a fold outside ASCII there, so finding no character is the volume's answer.
 fn letters_the_volume_folds_to_ascii() -> Vec<(char, char)> {
     let directory = tempfile::tempdir().expect("a temporary directory");
     for letter in 'a'..='z' {
@@ -47,6 +53,17 @@ fn letters_the_volume_folds_to_ascii() -> Vec<(char, char)> {
         fs::read_to_string(directory.path().join("k")).expect("the file opens by its own name"),
         "k"
     );
+    if fs::read_to_string(directory.path().join("K")).is_ok() {
+        let control = tempfile::tempdir().expect("a temporary directory");
+        fs::write(control.path().join("\u{e9}"), "e").expect("a file named for e acute");
+        assert_eq!(
+            fs::read_to_string(control.path().join("\u{c9}"))
+                .ok()
+                .as_deref(),
+            Some("e"),
+            "the volume folds ASCII case and does not open E acute as e acute, so the probe cannot see a fold outside ASCII"
+        );
+    }
     (0x80..=0xFFFF_u32)
         .filter_map(char::from_u32)
         .filter_map(|spelled| {

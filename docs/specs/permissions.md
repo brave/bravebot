@@ -365,10 +365,12 @@ suffix, and with one `.exe`, `.com`, `.cmd` or `.bat` taken off, so `Bash(touch 
 `TOUCH x`, `Touch x`, `touch.exe x`, `TOUCH.EXE x`, `touch.exe. x`, `touch.exe::$DATA x`,
 `touch.cmd x` and `touch.bat x`. Two letters are the same letter when lowercasing takes them to the
 same letter or when the simple case mapping does, which is upper case and then lower case with each
-letter becoming one letter, the way NTFS compares names. `Bash(git push *)` therefore covers
+letter becoming one letter. `Bash(git push *)` therefore covers
 `g\u{131}t push`, `Bash(ssh *)` covers `\u{17f}sh host` and `Bash(kubectl *)` covers
-`\u{212a}ubectl get`. The simple mapping is used rather than the full one because it is NTFS's, and
-it takes `\u{130}` to itself, so `g\u{130}t` is not `git`. The suffixes are taken off by an ASCII
+`\u{212a}ubectl get`. NTFS opens none of those three as the ASCII letter, so on Windows the rule
+covers spellings the volume does not start as the program. The simple mapping is used rather than
+the full one because the full one joins more letters than a volume does, and it takes `\u{130}` to
+itself, so `g\u{130}t` is not `git`. The suffixes are taken off by an ASCII
 comparison, which is complete because no letter outside ASCII folds to `e`, `x`, `c`, `o`, `m`, `b`,
 `a`, `t` or `d`. Only one extension is taken off, so `touch.exe.exe` and
 `touch.exe.bak` are other files than `touch`. A rule written `touch.exe` does not cover `touch x`:
@@ -1403,14 +1405,18 @@ against them whole. A wrapper added to the table is a decision about both questi
   code says Windows ignores, and a spelling it ignores that this list omits is not covered. The
   `.cmd` and `.bat` forms matter only to a host that runs the stage unconfined or reaches the file
   by another route, since the AppContainer backend refuses a batch file. Letters are joined by the
-  simple mapping, which is NTFS's, so `\u{17f}`, `\u{131}` and the Kelvin sign name the program they
-  fold to. Lowercasing already joins the Kelvin sign with `k`; `\u{131}` and `\u{17f}` are the two it
-  leaves apart. Which characters a Windows volume opens as an ASCII letter is asked of the volume
-  by a test that CI runs on Windows; its result there is not recorded in this entry. A character
-  the fold joins and the volume does not open as the program is covered anyway, which is the safe
-  direction: the cost is a refusal or a question for a line the volume would have started as
-  another program, and no line is let through. That direction is not measured on any volume,
-  because nothing depends on the answer.
+  simple mapping, so `\u{17f}`, `\u{131}` and the Kelvin sign name the program they fold to.
+  Lowercasing already joins the Kelvin sign with `k`; `\u{131}` and `\u{17f}` are the two it leaves
+  apart. Which characters a Windows volume opens as an ASCII letter is asked of the volume by
+  `program_word_fold`, which CI runs on Windows. Over every character below U+10000 it found none:
+  NTFS opens none of `\u{17f}`, `\u{131}` and the Kelvin sign as `s`, `i` and `k`, so the three
+  spellings the fold joins are the only disagreement between the rule and the volume, and every
+  one is in the safe direction. No spelling that NTFS opens as an ASCII letter goes uncovered. The
+  cost is a refusal or a question for a line that the volume starts as no program the rule names,
+  and no line is let through. The test controls the probe: on a volume that folds ASCII case it
+  requires `\u{c9}` to open the file named `\u{e9}`, so an empty answer is not a probe that
+  cannot see a fold outside ASCII. A character above U+FFFF is not probed, and no letter there
+  folds to an ASCII one.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers
