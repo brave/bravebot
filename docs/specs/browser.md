@@ -1317,6 +1317,16 @@ also has `--ask-every-call` ([SERVERS-22](mcp-servers.md#SERVERS-22)). No other 
 the pairs are written out in `crates/browser/src/install.rs`, and a test holds them to the tools whose
 schema has `element_number`.
 
+The lines for `bookmarks-write` and `tabs-manage` also have an `--apply <tool>:<argument>=<kind>`
+for each argument a row of a manifest's `apply` step may fill, before
+`--dir` ([SERVERS-26](mcp-servers.md#SERVERS-26)). No printed declaration has a `--plan-covers`.
+After the declarations, for each group named that has such tools, `install` prints a sentence
+naming them and the same declaration with a `--plan-covers <tool>` for each before `--dir`, to use
+in its place. It suggests `create_bookmark_folder`, `move_bookmark`, `rename_bookmark` and
+`pin_tab`: each acts only in this browser, deletes nothing, overwrites nothing its reply does not
+record, and adds no address. A plan's approval covers no call until the person declares it so
+([MANIFEST-17](manifest.md#MANIFEST-17)).
+
 The declaration for `held` is the plain one, with no `--ask-every-call`. `take_held` takes no
 argument, so the question before a call holds the alias and the tool and nothing a session chose, and
 what it returns is what the person held out and no more. A rule, a standing answer or a mode answers
@@ -1376,6 +1386,7 @@ approve.
 `verified-by: bravebot_browser::tools::a_tool_added_to_a_group_is_not_offered_with_no_group`
 `verified-by: bravebot_browser::install::install_with_no_group_asks_for_the_one_server_of_every_tool`
 `verified-by: bravebot_browser::install::groups_are_read_from_one_word_in_any_order_and_each_is_kept_once`
+`verified-by: bravebot_browser::install::what_a_plans_approval_may_cover_is_suggested_apart_from_the_declaration`
 `verified-by: bravebot_browser::install::a_preset_names_the_groups_that_have_a_tool`
 `verified-by: bravebot_browser::install::a_declaration_names_the_group_in_the_alias_and_in_the_program_words`
 `verified-by: bravebot_browser::install::the_declaration_of_a_group_asked_every_call_says_so_before_the_program`

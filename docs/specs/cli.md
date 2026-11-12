@@ -483,6 +483,9 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 `verified-by: bravebot_cli::main::a_plan_is_put_only_where_stdin_and_stderr_are_both_a_terminal`
 `verified-by: bravebot_cli::main::anything_but_yes_declines_a_plan`
 `verified-by: bravebot_cli::main::a_one_shot_answers_the_plan_and_nothing_else`
+`verified-by: bravebot_cli::one_shot::a_one_shot_cannot_put_an_apply_steps_list`
+`verified-by: bravebot_agent::manifest_server_calls::a_client_that_cannot_put_the_list_refuses_its_step_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="CLI-9"></a>
 ### CLI-9: a one-shot run names its own model, or asks for the one a session would

@@ -781,6 +781,7 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::workspace::a_rewind_still_puts_back_through_a_link_to_a_name_that_is_not_protected`
 `verified-by: bravebot_agent::turn::a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confirmer`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 The planner's arguments to a server's tool are private once private content was let out of
 quarantine for it, by `vet_content`, `read_output` or a delegate's report, and they stay private
