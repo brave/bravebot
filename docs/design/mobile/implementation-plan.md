@@ -263,7 +263,7 @@ Each row applies when its named milestone is enabled; the table is not a prerequ
 
 ## End goal beyond the prototype
 
-The end goal is one host that runs sessions and several clients of them at once: the desktop app, and Android, iOS and iPad apps. A person sends a prompt from a phone, opens an iPad, and sees the same session there with the latest prompt, tool calls and results. The terminal UI keeps its current behaviour and is not one of these clients. The bounded snapshot (256 rows, 4 MiB) is enough to show the most recent work.
+The end goal is one host that runs sessions and several clients of them at once: the desktop app, and Android, iOS and iPad apps. A person sends a prompt from a phone, opens an iPad, and sees the same session there with the latest prompt, tool calls and results. The terminal UI is not one of these clients ([sessions the terminal UI runs](#sessions-the-terminal-ui-runs)). The bounded snapshot (256 rows, 4 MiB) is enough to show the most recent work.
 
 The prototype leaves these for later:
 
@@ -272,7 +272,27 @@ The prototype leaves these for later:
 - the desktop app as a full client of host sessions, beyond the stage-5b subset;
 - one session store that every client lists and resumes, and that survives a host restart;
 - several paired devices at once, such as a phone and an iPad, with revoking a lost device from another paired device;
-- a question waiting when the last device that can answer it leaves stays open for a device that attaches later, instead of being refused.
+- a question waiting when the last device that can answer it leaves stays open for a device that attaches later, instead of being refused;
+- the terminal UI as a client of the host.
+
+### Sessions the terminal UI runs
+
+A phone reaches only sessions that an application runs on `bravebot-host`. In this plan that is the desktop app, for the sessions it runs on the host (stage 5b). A session started in the terminal UI, including a background session (`--bg`, `/bg`, [background-sessions.md](../../specs/background-sessions.md)), runs in a process of the terminal UI's own, so neither the phone nor the desktop app can follow or control it while it runs. The desktop app's ordinary path can resume it from the shared store once it has ended ([SESSION-28](../../specs/sessions.md#SESSION-28), [SESSION-38](../../specs/sessions.md#SESSION-38)). A person who works in the terminal UI cannot use the phone with those sessions, and the first release says so.
+
+Making the terminal UI a host client is a separate task outside this plan. The terminal UI would stop running sessions itself, start or connect to `bravebot-host`, and draw the host's view of the session.
+
+What it gives:
+
+- **Live control.** A phone sees a running turn and can answer an approval the terminal is waiting on, so a person can start a long task at the terminal, leave, and approve or cancel it from the phone. The desktop app can follow the same session.
+- **The plan's model with one more client.** Every attached device can act ([decision 5](decisions-and-tradeoffs.md#5-every-attached-device-can-act-with-no-takeover-step)), the view shows which device acted last, and the [U3](open-questions.md#u3-effective-session-scope) scope check applies without new rules.
+- **One place to run sessions.** The host owns execution, saving and permissions, and the terminal UI no longer keeps its own driver loop.
+
+What it costs:
+
+- **A large rewrite.** The terminal UI draws from in-process agent events today and would draw from the host's view instead.
+- **A larger host protocol.** Everything the terminal UI shows and does needs a host message, including shell mode, `@` files, pasting, dropping, undo, the inspector panes and hooks. The host's view does not carry all of these today. Each is a new place to check the rule that untrusted content never reaches the driver or the planner.
+- **A running host.** The terminal UI needs the long-running host from the list above, or starts its own as the desktop app does. Either way its reliability depends on the host, and it loses its standalone mode unless it keeps a fallback path.
+- **Background sessions.** They already give the terminal UI a long-running session process, with a supervisor, a roster of sessions across projects, a named socket guarded by a secret ([BG-15](../../specs/background-sessions.md#BG-15)) and one attached terminal at a time ([BG-9](../../specs/background-sessions.md#BG-9)). This plan's host has no name to be found by ([HOST-13](../../specs/local-host.md#HOST-13)) and lets every attached device act. Before the long-running host is built, the task has to decide whether background sessions become host sessions, and which attach model and which rule for attached clients hold.
 
 ## Deferred work and open implementation choices
 

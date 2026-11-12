@@ -47,6 +47,7 @@ See the [README](README.md#current-mobile-status) for what is built and for the 
 ## Known limits and open decisions
 
 - **Small scope:** one user, one host, one prepared workspace, and fresh sessions. Every attached device can send, answer and cancel with no takeover step, and the view shows which device acted last. Busy sends retain a draft; there is no shared queue.
+- **Host sessions only:** a phone reaches only sessions the desktop app runs on the host. A session started in the terminal UI, background sessions included, cannot be followed or controlled from the phone or the desktop app while it runs. Making the terminal UI a host client is separate work; see [sessions the terminal UI runs](implementation-plan.md#sessions-the-terminal-ui-runs).
 - **Foreground approvals:** unavailable questions are refused; startup trust stays unanswered. Workspace trust and command-output admission remain host-only. Reading test failures may therefore need the desktop to answer.
 - **Bounded recovery:** reconnect uses a recent snapshot. Message IDs protect against duplicate sends while the host lives. Restart can leave outcomes unknown; do not automatically resend uncertain work. Closed means the worker stopped, not that saving succeeded.
 - **[Security decisions remain open](open-questions.md#unresolved-security-decisions):** U1 has a recorded decision for host-launched local clients (anonymous socket pairs, no named local endpoint), validated against the host process on macOS and Linux; [U4](open-questions.md#u4-attaching-a-client-the-host-did-not-launch) is decided for the prototype: no client the host did not launch attaches, and the host has no name to be found by. U2 pairing/transport and U3 effective-scope authorization must be resolved before network access. Early phone experiments use synthetic data and controlled tools over the restricted development transport.
@@ -60,7 +61,7 @@ Defer full history, automatic restart, public relays, push notifications, and br
 
 The same React Native app demonstrates a bounded on-device session and remote host control: start work, continue desktop-started work, answer supported approvals, and deny or cancel, with each device showing the other's actions. Record device evidence for permissions, labels, ownership, reconnects, and duplicate-send prevention.
 
-Beyond the prototype, the goal is one host serving the same sessions to the desktop app and to Android, iOS and iPad apps at once. The terminal UI keeps its current behaviour. See the [end goal and later work](implementation-plan.md#end-goal-beyond-the-prototype).
+Beyond the prototype, the goal is one host serving the same sessions to the desktop app and to Android, iOS and iPad apps at once. A session started in the terminal UI is not reachable from those apps until the terminal UI becomes a host client, which is separate work. See the [end goal and later work](implementation-plan.md#end-goal-beyond-the-prototype).
 
 This is a high-level plan. Implementation will reveal gaps and new behavior; update the design, specs, and tests as those findings arise. Do not wait to predict every edge case, and resolve security gaps before enabling the affected feature.
 
