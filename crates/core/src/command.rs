@@ -390,6 +390,17 @@ pub struct Step {
     pub started_as: PathBuf,
     /// The argument vector, literal and final.
     pub args: Vec<String>,
+    /// Which arguments a filename pattern produced: one entry per entry of [`Step::args`], `true`
+    /// where the word is a name the pattern matched on disk ([CMDLINE-4]).
+    ///
+    /// Set by the compiler from whether the pattern matched, never from the name's bytes. Empty
+    /// where no argument came from a pattern. A list of another length than [`Step::args`]
+    /// answers for no argument, and [`Step::from_a_pattern`] reads every argument of such a step
+    /// as produced by one. Not part of any key: the person is shown and endorses the expanded
+    /// arguments either way.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    pub matched: Vec<bool>,
     /// `NAME=value` written in front of this step's own program.
     pub environment: Vec<(String, String)>,
     /// `NAME=$VAR` and `NAME="$(cmd)"` written in front of this step's own program, as source.
@@ -403,6 +414,18 @@ pub struct Step {
 }
 
 impl Step {
+    /// Whether the argument at `index` is a name a filename pattern matched.
+    ///
+    /// `true` for every argument where [`Step::matched`] is neither empty nor one entry per
+    /// argument, since such a list says nothing about which argument is which.
+    pub fn from_a_pattern(&self, index: usize) -> bool {
+        match self.matched.len() {
+            0 => false,
+            n if n == self.args.len() => self.matched.get(index).copied().unwrap_or(true),
+            _ => true,
+        }
+    }
+
     /// Whether an assignment is written in front of this step's program, literal or not.
     pub fn carries_an_assignment(&self) -> bool {
         !self.environment.is_empty() || !self.expansions.is_empty()
@@ -516,6 +539,8 @@ impl Step {
             resolved,
             started_as,
             args,
+            // The endorsed argv is the expanded one, whichever words a pattern produced.
+            matched: _,
             environment: _,
             expansions: _,
             routes: _,
@@ -660,6 +685,9 @@ impl Steps {
                 for step in steps {
                     rebuilt.push(Step {
                         args: written.next()?.clone(),
+                        // The words are the line's own, so none of them is a name a pattern
+                        // matched.
+                        matched: Vec::new(),
                         ..step.clone()
                     });
                 }
@@ -931,6 +959,10 @@ fn encode_step(out: &mut String, step: &Step) {
         resolved,
         started_as,
         args,
+        // Not part of the key. The person is shown and endorses the expanded arguments, whichever
+        // of them a pattern produced, and the plan the endorsement is redeemed for is the one
+        // compiled with it.
+        matched: _,
         environment,
         expansions,
         routes,
@@ -997,10 +1029,35 @@ mod tests {
             resolved: PathBuf::from(format!("/usr/bin/{program}")),
             started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),
         }
+    }
+
+    /// A record of which arguments a pattern produced that is not one entry per argument says
+    /// nothing about which argument is which, so every argument of the step reads as produced by a
+    /// pattern, whether the list is shorter or longer. A step with no record reads none as produced
+    /// by one ([CMDLINE-4]). The wrong implementation reads such a list by index and answers
+    /// `false` past its end, so a name a pattern matched counts as a word the planner typed.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    #[test]
+    fn a_matched_list_of_another_length_marks_every_argument() {
+        let mut short = step("basename", &["incoming/a", "incoming/b"]);
+        short.matched = vec![true];
+        assert!(short.from_a_pattern(0));
+        assert!(short.from_a_pattern(1));
+
+        let mut long = step("basename", &["incoming/a", "incoming/b"]);
+        long.matched = vec![false, false, false];
+        assert!(long.from_a_pattern(0));
+        assert!(long.from_a_pattern(1));
+
+        let unmarked = step("basename", &["incoming/a", "incoming/b"]);
+        assert!(!unmarked.from_a_pattern(0));
+        assert!(!unmarked.from_a_pattern(1));
     }
 
     fn plan(steps: Steps) -> Plan {
@@ -1975,6 +2032,7 @@ mod tests {
                 resolved: PathBuf::from("/usr/bin/sed"),
                 started_as: PathBuf::from("/usr/bin/sed"),
                 args: vec!["-n".into(), "2p".into()],
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),

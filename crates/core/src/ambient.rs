@@ -342,6 +342,8 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
             resolved,
             started_as: _,
             args,
+            // Which words a pattern produced changes nothing a program reaches.
+            matched: _,
             environment,
             expansions,
             routes: _,
@@ -567,6 +569,7 @@ mod tests {
             resolved: PathBuf::from(format!("/usr/bin/{}", program_name(program))),
             started_as: PathBuf::from(format!("/usr/bin/{}", program_name(program))),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),

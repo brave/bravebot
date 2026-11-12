@@ -7528,6 +7528,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     resolved,
                     started_as,
                     args,
+                    // The person vouched for the expanded arguments, whichever a pattern produced.
+                    matched: _,
                     environment: _,
                     expansions: _,
                     routes: _,
@@ -12037,6 +12039,7 @@ five
             resolved: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),

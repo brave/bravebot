@@ -77,6 +77,7 @@ fn a_line() -> RememberedLine {
             resolved: PathBuf::from("/usr/bin/make"),
             started_as: PathBuf::from("/usr/bin/make"),
             args: vec!["check".to_string()],
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),
