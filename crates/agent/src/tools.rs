@@ -27374,6 +27374,7 @@ mod tests {
 
         /// A session directory, a home holding `.ssh`, and an ordinary directory beside them,
         /// each canonical, with the workspace told of the home so a credential location is known.
+        #[cfg(unix)]
         struct Outside {
             _scratch: Scratch,
             workspace: Workspace,
@@ -27381,6 +27382,7 @@ mod tests {
             beside: std::path::PathBuf,
         }
 
+        #[cfg(unix)]
         fn outside_fixture(name: &str) -> Outside {
             let scratch = Scratch::new(name);
             let home = scratch.path.join("home");
@@ -27405,6 +27407,7 @@ mod tests {
         }
 
         /// A policy in a trusted workspace that lets both `run` and `read_file` be reached.
+        #[cfg(unix)]
         fn run_and_read_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
             let mut trust = bravebot_core::trust::TrustStore::new("/work");
             trust.trust(".");
@@ -27422,6 +27425,7 @@ mod tests {
 
         /// What the planner was told for one `run` of `command` under the ask mode with every run
         /// approved, and whether a program ran.
+        #[cfg(unix)]
         fn run_approved(workspace: &Workspace, command: &str) -> (String, bool) {
             let mut sink = RecordingSink::new();
             let mut policy = run_and_read_policy(&mut sink);
@@ -27438,6 +27442,7 @@ mod tests {
         }
 
         /// What the planner was told for one `read_file` of the absolute `path`.
+        #[cfg(unix)]
         fn read_outside(workspace: &Workspace, path: &std::path::Path) -> String {
             let mut sink = RecordingSink::new();
             let mut policy = run_and_read_policy(&mut sink);
@@ -27454,6 +27459,7 @@ mod tests {
         }
 
         /// The sentence a refusal of `path` with `remedy` reads as.
+        #[cfg(unix)]
         fn remedy_sentence(path: &std::path::Path, remedy: crate::workspace::Remedy) -> String {
             crate::workspace::WorkspaceError::Escapes {
                 path: path.display().to_string(),
@@ -27463,10 +27469,12 @@ mod tests {
         }
 
         /// The clause of the open remedy that names `/add-dir`, said to a read and a write alike.
+        #[cfg(unix)]
         const OPEN_CLAUSE: &str = "The person can open the directory it is in, with /add-dir in \
              the terminal or --add-dir when starting bravebot, after which this path reaches it";
 
         /// The clause of the credential remedy, said to a read and a write alike.
+        #[cfg(unix)]
         const CREDENTIAL_CLAUSE: &str = "in a place that holds credentials, which cannot be \
              opened to the file tools; refusing to touch it";
 
