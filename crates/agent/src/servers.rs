@@ -786,7 +786,7 @@ pub fn repository_holding(directory: &Path) -> Option<PathBuf> {
 /// A temporary directory of the host's, with its links followed, that no repository holds: the
 /// system one where it qualifies, as when `TMPDIR` is inside a checkout it does not. `None`, with
 /// why the test is skipped printed, where none qualifies.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn temporary_directory_in_no_repository() -> Option<PathBuf> {
     crate::testutil::no_repository::temporary_directory_in_no_repository(repository_holding)
 }
