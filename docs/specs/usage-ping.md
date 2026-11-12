@@ -92,7 +92,6 @@ cannot each resolve the switches in a different order.
 `verified-by: bravebot_config::usage_ping::which_variable_values_turn_the_ping_off`
 `verified-by: bravebot_config::managed::a_managed_usage_ping_false_is_a_pin_and_nothing_else_is`
 `verified-by: bravebot_usage_ping::sending::a_variable_that_is_not_text_sends_nothing`
-`verified-by: bravebot_usage_ping::lib::a_released_build_refuses_an_address_that_is_not_text`
 `verified-by: bravebot_config::settings::only_the_persons_own_file_says_whether_the_usage_ping_goes`
 `verified-by: bravebot_config::settings::only_a_boolean_answers_for_the_usage_ping`
 `verified-by: bravebot_config::settings::the_usage_ping_key_is_not_reported_as_unread`
@@ -236,8 +235,9 @@ configuration does not load sends nothing.
 ### PING-9: the ping goes to one address through the one egress call
 
 A released build sends to Brave's usage service. `BRAVEBOT_USAGE_PING_URL`, where it is set, replaces
-the base address in any build; it changes where the ping goes and nothing about whether it goes. A
-debug build with the variable unset sends nothing. The request goes through the call every request
+the base address in any build; it changes where the ping goes and nothing about whether it goes,
+except that a value that is not text sends nothing rather than sending to the address it was meant
+to replace. A debug build with the variable unset sends nothing. The request goes through the call every request
 here goes through ([NET-1](network-egress.md#NET-1)), with only its own address routed and a user
 agent of `bravebot`, and carries no credential. The reply's body is never read: a status from 200 to
 299 is accepted and anything else is a failure ([PING-5](#PING-5)).
@@ -254,6 +254,7 @@ what happens next, so nothing in it is read.
 `verified-by: bravebot_usage_ping::sending::a_development_build_with_no_destination_named_sends_nothing`
 `verified-by: bravebot_usage_ping::sending::one_ping_a_day_with_exactly_the_required_fields`
 `verified-by: by-construction (the manifest depends on bravebot-net and on no crate that speaks to a network, and the layering test holds the manifest to this crate's row in layering.md)`
+`verified-by: bravebot_usage_ping::lib::a_released_build_refuses_an_address_that_is_not_text`
 
 <a id="PING-10"></a>
 ### PING-10: the switch is one file, shown in the terminal and the desktop
