@@ -1311,18 +1311,14 @@ pub(crate) fn direnv_available(path: Option<&std::ffi::OsStr>) -> bool {
                 "direnv"
             });
             std::fs::metadata(executable).is_ok_and(|metadata| {
-                if !metadata.is_file() {
-                    return false;
-                }
                 #[cfg(unix)]
-                {
+                let runnable = {
                     use std::os::unix::fs::PermissionsExt;
                     metadata.permissions().mode() & 0o111 != 0
-                }
+                };
                 #[cfg(not(unix))]
-                {
-                    true
-                }
+                let runnable = true;
+                metadata.is_file() && runnable
             })
         })
     })
