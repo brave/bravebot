@@ -1007,6 +1007,93 @@ fn holding_the_temporary_directory_back_refuses_a_write_there_and_nothing_else()
     );
 }
 
+/// SANDBOX-14, SANDBOX-19, SANDBOX-28: on macOS a confined `git commit` in a real linked worktree,
+/// whose git directory lies under the main clone's `.git` outside the session, is refused, and the
+/// failure sentence opens by naming the worktree's `.git` file. A write grant of the main clone's
+/// `.git`, as a `request_path` with write gives, lets the same commit through. The same commit with
+/// no sandbox is the control that the commit itself works. The regressions it rejects: a failure
+/// sentence that does not name the `.git` file of a real worktree (#3989), and a request route the
+/// sentence names that cannot let the commit through.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_commit_in_a_linked_worktree_is_refused_named_and_let_through_by_a_write_grant_on_macos() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("linked-worktree-commit");
+    let main = places.beside.join("main");
+    let git = |directory: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let top = places.beside.parent().expect("a parent").to_path_buf();
+    if !(git(&places.beside, &["init", "-q", "main"])
+        && std::fs::write(main.join("f"), "a\n").is_ok()
+        && git(&main, &["add", "f"])
+        && git(&main, &["commit", "-qm", "f"])
+        && git(&main, &["worktree", "add", "-q", "../../wt", "-b", "b"]))
+    {
+        return;
+    }
+    let worktree = resolved(&top.join("wt"));
+    assert!(
+        worktree.join(".git").is_file(),
+        "a linked worktree has a .git file"
+    );
+    let commit_line = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qam m";
+    let confinement = Confinement::here(vec![worktree.clone()], None, Some(&places.home))
+        .expect("a platform with a base");
+    let run = |line: &str, confinement: Option<&Confinement>| {
+        let plan = bravebot_agent::cmdline::compile(line, &worktree, None, &mut |_, _| Ok(()))
+            .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"));
+        let ran = exec::run_plan_observed(
+            &plan,
+            &Cancel::new(),
+            exec::LIMIT,
+            None,
+            None,
+            confinement,
+            &mut |_| Ok(()),
+        )
+        .unwrap_or_else(|error| panic!("`{line}` should start: {error}"));
+        (plan, ran)
+    };
+
+    std::fs::write(worktree.join("f"), "b\n").expect("a change");
+    let (plan, refused) = run(commit_line, Some(&confinement));
+    assert!(!refused.ended_well, "{refused:?}");
+    let said = confinement.profile(&plan.steps());
+    let entry = format!("`{}` is a file", worktree.join(".git").display());
+    assert!(said.starts_with(&entry), "{said}");
+
+    let granted =
+        confinement
+            .clone()
+            .with_path_reach(&[bravebot_agent::workspace::PathReach::new(
+                resolved(&main.join(".git")),
+                true,
+                "the worktree's git directory".into(),
+            )]);
+    let (_, through) = run(commit_line, Some(&granted));
+    assert!(through.ended_well, "{through:?}");
+
+    std::fs::write(worktree.join("f"), "c\n").expect("a second change");
+    let (_, control) = run(commit_line, None);
+    assert!(control.ended_well, "{control:?}");
+}
+
 /// SANDBOX-14, SANDBOX-18: on macOS a stage whose program is not git cannot write a repository's
 /// hooks or configuration, a submodule's configuration under `.git/modules` or a `.git` file that
 /// names a gitdir, and neither can git when a script starts it, while a stage whose program is git

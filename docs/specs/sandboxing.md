@@ -984,7 +984,12 @@ A policy can lift the refusal, as the profile of a `run` stage whose program is 
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
 reaches a `.git` and each other protected name as it does on Linux. Every other stage keeps the
 refusal, and so does a stage whose program is a file named `git` under a directory the plan may write
-to, the checkout holding a session directory among them ([SANDBOX-20](#SANDBOX-20)). On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+to, the checkout holding a session directory among them ([SANDBOX-20](#SANDBOX-20)).
+The lift reaches only paths a write row covers. In a linked worktree or a submodule, whose `.git`
+is a file naming a git directory elsewhere, a git step writes that directory and the repository's
+common `.git` only where a write row covers them, so `git commit` there is refused under the
+session directory's rows alone, and the sentence after the failed step says so
+([SANDBOX-19](#SANDBOX-19)). On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
 [mcp-servers.md](mcp-servers.md)'s known cost and a known cost of `run` ([SANDBOX-18](#SANDBOX-18)).
 The Windows backend withholds nothing of the kind, and no server is started there
@@ -1016,6 +1021,7 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
+`verified-by: bravebot_agent::confine::a_commit_in_a_linked_worktree_is_refused_named_and_let_through_by_a_write_grant_on_macos`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
@@ -1984,7 +1990,31 @@ not permitted` or `Permission denied`, and that only the person widens the reach
 step also say that a step whose program is not git cannot write any `.git`, so a program that runs
 git to commit, check out or clone is refused that write and git is run as a step of its own
 ([SANDBOX-18](#SANDBOX-18)); under `read-only` they say so of the places that mode writes, such as a
-clone in the temporary directory, since a git step cannot write the session's `.git` either. On a platform with no base the description says programs are not confined. Under the mode `strict`
+clone in the temporary directory, since a git step cannot write the session's `.git` either. The
+sentence after a failed step leaves that out where every step of the line already is git.
+
+Under `workspace-write` and `strict`, on every platform, the sentence after a failed line with a
+git step opens by naming each `.git` that is a file, one for the checkout holding each session
+directory (the directory, or its nearest ancestor with a `.git`). It says that the checkout is a
+linked worktree or a submodule, that git keeps its index and refs and the repository's common
+`.git` in the directory the file names, outside the session directory, and that a git step is
+refused that write where no directory the run may write holds them. It names the `.git` file and
+never the directory the file names, since that line is the checkout's content. Whether a step is
+git is judged as the `.git` lift judges it ([SANDBOX-14](#SANDBOX-14)), and only the kind of the
+`.git` entry is read, never what it holds or what a program printed. It then names the routes the
+session accepts: a `request_path` call with write where a request would be accepted and the tool
+is in the list ([SANDBOX-28](#SANDBOX-28)), the `unconfined` argument where the session would
+accept it ([SANDBOX-29](#SANDBOX-29)), and where it accepts neither, that nothing it accepts lets
+a step write them. A run nobody can be asked in ([CLI-1](cli.md#CLI-1)) names the `request_path`
+route only under a mode that approves a request unasked, which bypass does; in any other such run
+the route is not named, since a request there is refused. The `request_path` route is the one
+the commit takes: a yes with write for the common `.git`, given through request_path's own
+acceptance, lets git's step write it, since the `.git` lift ([SANDBOX-14](#SANDBOX-14)) reaches
+what a write row covers. The sentence is not said under
+`read-only`, whose own sentence already says a git step writes no session directory, nor on a
+platform with no base.
+
+On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. Under the mode `read-only` it says that programs cannot write the
 project, and that outside the paths the person's own write grants name, a build, a formatter or
@@ -2022,7 +2052,14 @@ accepts a request only in a workspace the person has trusted ([TRUST-7](trust-ma
 name neither the menu nor `request_path`, and on macOS do not tell the planner to ask for
 `loopback`. They say instead that `run` accepts no `scopes` argument
 and, where the list holds `request_path`, that `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
-add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. Under `off`, or
+add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. In a run
+nobody can be asked in ([CLI-1](cli.md#CLI-1)) the `run` description and the sentence after a
+failed step name neither route, nor `/add-dir` and `--add-dir` as the way the person widens what a
+step reaches, since nobody is there to take one, and say instead that nothing in the run widens what a
+step reaches; the sentence after a failed step adds that the reply should name the path or
+credential the command needs. A change of sandbox mode within such a run is told to the planner
+in the same words. That fact
+is the one the permission mode holds for the run, so it is read from no output. Under `off`, or
 on a turn that confines no run, an untrusted workspace gets the sentence above and nothing more, so the
 two never say different things. The description
 reads that fact as each turn starts and this sentence reads it when the result is composed. The
@@ -2198,6 +2235,8 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::under_read_only_the_failure_sentence_claims_no_write_and_offers_no_remedy_that_cannot_write`
 `verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_after_a_failure`
 `verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description`
+`verified-by: bravebot_agent::confine::a_run_nobody_can_be_asked_in_is_offered_no_route_only_a_person_takes`
+`verified-by: bravebot_agent::confine::the_run_description_of_a_run_nobody_can_be_asked_in_names_no_route_only_a_person_takes`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
 `verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
@@ -2220,6 +2259,12 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::a_failed_line_with_no_such_toolchain_step_opens_with_the_confinement`
 `verified-by: bravebot_agent::confine::the_gh_cache_line_the_sentence_names_keeps_ghs_login`
 `verified-by: bravebot_agent::confine::a_session_with_no_scratch_directory_says_only_the_person_can_create_the_gh_cache`
+`verified-by: bravebot_agent::confine::a_failed_git_step_in_a_linked_worktree_is_told_its_git_directory_is_outside_the_session`
+`verified-by: bravebot_agent::confine::the_linked_worktree_sentence_is_said_under_strict_and_on_windows`
+`verified-by: bravebot_agent::turn::a_failed_git_step_in_a_linked_worktree_nobody_can_be_asked_in_names_no_persons_route`
+`verified-by: bravebot_agent::turn::an_unattended_run_names_requests_only_where_its_mode_answers_them`
+`verified-by: bravebot_agent::turn::a_write_grant_on_the_common_git_directory_lets_a_linked_worktree_commit`
+`verified-by: bravebot_agent::confine::a_commit_in_a_linked_worktree_is_refused_named_and_let_through_by_a_write_grant_on_macos`
 `verified-by: bravebot_agent::turn::a_real_pgrep_refused_by_the_macos_profile_is_told_to_be_the_sandbox_and_to_probe_the_port`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_is_the_same_words_for_any_exit_code`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_is_chosen_from_the_program_and_not_from_what_it_printed`
@@ -3909,7 +3954,9 @@ none to add to.
   again with the argument, in the same sessions. It is also a sentence, said in the same sessions
   after a failed line with a step that runs `open` or `osascript`, that the default profile refuses
   LaunchServices and Apple Events, so launching an application, opening a URL in one or scripting
-  one needs the line run again with the argument.
+  one needs the line run again with the argument. On every platform it is also the sentence after a
+  failed git step in a linked worktree or a submodule, which says the git line can be run again
+  with the argument, in the same sessions ([SANDBOX-19](#SANDBOX-19)).
 - **Accepted after a failure.** The driver accepts the request only while a line has run with the
   sandbox in this turn and exited non-zero, or a line whose program the platform could not confine
   ([SANDBOX-17](#SANDBOX-17)) was refused, in the foreground or the background, and each such
@@ -3963,6 +4010,7 @@ refuse the path.
 `verified-by: bravebot_agent::confine::a_failed_step_on_macos_names_the_unconfined_line_for_git_only_where_it_is_accepted`
 `verified-by: bravebot_agent::confine::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::confine::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
+`verified-by: bravebot_agent::confine::a_failed_git_step_in_a_linked_worktree_is_told_its_git_directory_is_outside_the_session`
 `verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`

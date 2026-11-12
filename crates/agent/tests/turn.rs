@@ -87219,6 +87219,113 @@ fn running(line: &str) -> (&'static str, serde_json::Value) {
     ("run", serde_json::json!({ "command": line }))
 }
 
+/// SANDBOX-19, SANDBOX-28, PATHREQ: the route the failure sentence names for a commit in a linked
+/// worktree, a `request_path` call with write for the common `.git`, works when it goes through
+/// request_path's own acceptance. The workspace is a real linked worktree of a repository beside
+/// the session. The control is the same commit with no request, which leaves the branch where it
+/// was, so a commit that lands without the grant fails it. The regression it rejects is a sentence
+/// naming a grant that acceptance refuses or that the `.git` refusal still overrides (#3989).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_write_grant_on_the_common_git_directory_lets_a_linked_worktree_commit() {
+    if cannot_confine_here() {
+        return;
+    }
+    let git = |directory: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|done| done.status.success())
+            .map(|done| String::from_utf8_lossy(&done.stdout).trim().to_string())
+    };
+    let commit = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit \
+                  --allow-empty -qm m";
+    for (name, request) in [
+        ("linked-commit-control", false),
+        ("linked-commit-yes", true),
+    ] {
+        let places = PathPlaces::new(name);
+        let main = places.beside.join("main");
+        let common = main.join(".git");
+        let mut made = false;
+        let mut count = None;
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let mut calls = vec![running(commit)];
+        if request {
+            calls.insert(0, asking_for(&common, true));
+        }
+        let turn = path_turn_in(
+            name,
+            &places,
+            &calls,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+            false,
+            |workspace| {
+                made = git(&places.beside, &["init", "-q", "main"]).is_some()
+                    && git(
+                        &main,
+                        &[
+                            "-c",
+                            "user.name=t",
+                            "-c",
+                            "user.email=t@t",
+                            "-c",
+                            "commit.gpgsign=false",
+                            "commit",
+                            "--allow-empty",
+                            "-qm",
+                            "first",
+                        ],
+                    )
+                    .is_some()
+                    && git(
+                        &main,
+                        &[
+                            "worktree",
+                            "add",
+                            "-q",
+                            &workspace.display().to_string(),
+                            "-b",
+                            "b",
+                        ],
+                    )
+                    .is_some();
+                count = made
+                    .then(|| git(&main, &["rev-list", "--count", "b"]))
+                    .flatten();
+            },
+        );
+        if !made {
+            return;
+        }
+        assert_eq!(count.as_deref(), Some("1"), "{name}: the branch before");
+        let after = git(&main, &["rev-list", "--count", "b"]);
+        if request {
+            assert!(
+                path_result(&turn.results[0]).starts_with("approved"),
+                "{name}: {}",
+                turn.results[0]
+            );
+            assert_eq!(after.as_deref(), Some("2"), "{name}: {}", turn.results[1]);
+        } else {
+            assert_eq!(after.as_deref(), Some("1"), "{name}: {}", turn.results[0]);
+            assert!(
+                turn.results[0].contains("A `request_path` call with write"),
+                "{name}: the route is not named: {}",
+                turn.results[0]
+            );
+        }
+    }
+}
+
 /// SANDBOX-28: a yes lets a program write the path for the rest of the session. The control is the
 /// same line with no request, which cannot write it; a request for reading alone is the second
 /// control, since reach that was widened past what was asked would let this line write.
@@ -97436,4 +97543,190 @@ fn a_redirection_into_an_ordinary_file_is_not_marked_protected_and_auto_still_an
     } else {
         assert_eq!(run.asked, 1);
     }
+}
+
+/// What the tools answered in a turn whose one `run` is `git commit -am m` in a session directory
+/// whose `.git` is a file naming a directory that does not exist, so git fails, under
+/// `workspace-write` in a workspace nobody vouched for, so the session accepts no request, with
+/// `mode` deciding whether anybody can be asked.
+#[cfg(unix)]
+fn a_failed_git_commit_in_a_linked_worktree_under(
+    name: &str,
+    mode: bravebot_agent::LiveMode,
+) -> String {
+    a_failed_git_commit_in_a_linked_worktree_trusting(
+        name,
+        mode,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .1
+}
+
+/// [`a_failed_git_commit_in_a_linked_worktree_under`] with `trust` as the trust map, answering the
+/// `run` description the planner was first sent and what the tools answered.
+#[cfg(unix)]
+fn a_failed_git_commit_in_a_linked_worktree_trusting(
+    name: &str,
+    mode: bravebot_agent::LiveMode,
+    trust: bravebot_core::trust::TrustStore,
+) -> (String, String) {
+    let scratch = Scratch::new(name);
+    let checkout = scratch.path.join("wt");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join(".git"), "gitdir: ../elsewhere/worktrees/wt\n").unwrap();
+    let workspace = Workspace::new(&checkout).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("run", r#"{"command":"git commit -am m"}"#),
+        reply_with("done"),
+    ]);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("commit it")
+            .with_profile(Some(
+                bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+            ))
+            .with_confined_runs(true)
+            .with_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite)
+            .with_permission_mode(mode.clone()),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::Confining::new(&mut asked, mode, false),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let requests = every_request(&received);
+    (
+        run_description(requests.first().expect("a first request")),
+        tool_results(requests.last().expect("a last request")),
+    )
+}
+
+/// SANDBOX-19, SANDBOX-26, SANDBOX-28, CLI-1: in a trusted workspace a run nobody can be asked in
+/// names a `scopes` argument or a `request_path` call only where the mode would accept one with
+/// nobody to ask. Bypass approves both unasked, so its `run` description names the menu and the
+/// result of a git step that failed in a linked worktree names the `request_path` route. The
+/// default mode refuses both with nobody to ask, so neither is named. The attended default mode is
+/// the control that the trusted workspace names both. The regression it rejects: the description
+/// and the failure sentence built with `requests_offered` from trust alone (#3989), which tells an
+/// unattended planner to make a request its confirmer refuses.
+#[cfg(unix)]
+#[test]
+fn an_unattended_run_names_requests_only_where_its_mode_answers_them() {
+    if cannot_confine_here() {
+        return;
+    }
+    const MENU: &str = "can ask for it with `run`'s `scopes` argument";
+    const REQUEST_ROUTE: &str = "A `request_path` call with write";
+    let under = |name: &str, mode: bravebot_agent::LiveMode| {
+        a_failed_git_commit_in_a_linked_worktree_trusting(name, mode, trusting_the_workspace())
+    };
+    for (name, mode, offered) in [
+        (
+            "requests-attended-default",
+            bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::default()),
+            true,
+        ),
+        (
+            "requests-unattended-bypass",
+            bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Bypass),
+            true,
+        ),
+        (
+            "requests-unattended-default",
+            bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::default()),
+            false,
+        ),
+    ] {
+        let (description, results) = under(name, mode);
+        assert_eq!(
+            description.contains(MENU),
+            offered,
+            "{name}: the description: {description}"
+        );
+        assert!(
+            results.contains("is a file, so the checkout is a linked worktree"),
+            "{name}: not told of the linked worktree: {results}"
+        );
+        assert_eq!(
+            results.contains(REQUEST_ROUTE),
+            offered,
+            "{name}: the failure sentence: {results}"
+        );
+    }
+}
+
+/// SANDBOX-19, CLI-1: in a run nobody can be asked in (a one-shot command or a pipeline), the
+/// result of a git step that failed in a linked worktree names no route only a person takes: not
+/// trusting the workspace, not adding a directory, not a `request_path` call for the worktree's
+/// git directory. `/add-dir` appears only where the fixed sentence says a credential location
+/// cannot be added with it, and the result says nobody can be asked. The workspace is not trusted,
+/// so no request is accepted and the routes left are the person's. The control is the same turn
+/// with a person to ask, which names a person's route. The regression it rejects: `run` building
+/// its confinement with `nobody_to_ask` false (#3989), so an unattended planner is told to ask the
+/// person for `/add-dir` or a `request_path` write.
+#[cfg(unix)]
+#[test]
+fn a_failed_git_step_in_a_linked_worktree_nobody_can_be_asked_in_names_no_persons_route() {
+    if cannot_confine_here() {
+        return;
+    }
+    const NOT_ADDABLE: &str = "cannot be added with `/add-dir`";
+    const REQUEST_ROUTE: &str = "A `request_path` call with write";
+    let unattended = a_failed_git_commit_in_a_linked_worktree_under(
+        "linked-worktree-unattended",
+        bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Bypass),
+    );
+    let attended = a_failed_git_commit_in_a_linked_worktree_under(
+        "linked-worktree-attended",
+        bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass),
+    );
+
+    assert!(
+        attended.contains("is a file, so the checkout is a linked worktree"),
+        "the control was not told of the linked worktree: {attended}"
+    );
+    assert!(
+        attended.contains("trust the workspace")
+            || attended.contains(REQUEST_ROUTE)
+            || attended.matches("`/add-dir`").count() > attended.matches(NOT_ADDABLE).count(),
+        "the control with a person to ask named no person's route: {attended}"
+    );
+
+    assert!(
+        unattended.contains("is a file, so the checkout is a linked worktree"),
+        "the unattended run was not told of the linked worktree: {unattended}"
+    );
+    for route in [
+        "trust the workspace",
+        "the person can",
+        "add a directory",
+        REQUEST_ROUTE,
+    ] {
+        assert!(
+            !unattended.contains(route),
+            "an unattended run was offered {route:?}: {unattended}"
+        );
+    }
+    assert_eq!(
+        unattended.matches("`/add-dir`").count(),
+        unattended.matches(NOT_ADDABLE).count(),
+        "an unattended run was offered `/add-dir`: {unattended}"
+    );
+    assert_eq!(
+        unattended.matches("`--add-dir`").count(),
+        unattended.matches(NOT_ADDABLE).count(),
+        "an unattended run was offered `--add-dir`: {unattended}"
+    );
+    assert!(
+        unattended.contains("Nobody can be asked"),
+        "an unattended run was not told nobody can be asked: {unattended}"
+    );
 }

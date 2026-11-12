@@ -2721,21 +2721,25 @@ pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call,
 /// so the description names them only where it would. The sentences that name `request_path` are
 /// written only where `tools` holds it: a `--tools run` turn or a definition that leaves it out is
-/// not told of a tool it cannot call, including that the tool is refused (TOOL-6).
+/// not told of a tool it cannot call, including that the tool is refused (TOOL-6). `nobody_to_ask`
+/// says nobody can be asked in this run (CLI-1), and then the description names no route only a
+/// person takes, as the sentence after a failed step does not (SANDBOX-19).
 pub fn state_confinement(
     tools: &mut [Tool],
     confine_runs: bool,
     sandbox: bravebot_sandbox::SandboxMode,
     requests_offered: bool,
+    nobody_to_ask: bool,
 ) {
     let request_path_listed = tools
         .iter()
         .any(|tool| tool.function.name == "request_path");
-    let Some(stated) = crate::confine::stated_in_the_description(
+    let Some(stated) = crate::confine::stated_in_the_description_for(
         confine_runs,
         sandbox,
         requests_offered,
         request_path_listed,
+        crate::confine::Askable::nobody_when(nobody_to_ask),
     ) else {
         return;
     };

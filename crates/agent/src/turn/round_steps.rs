@@ -226,7 +226,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // `run` description was written in the one the turn started in, so a change is said to the
     // planner before the next request, in words the driver wrote from the two modes.
     let sandbox = task.sandbox.get();
-    if let Some(notice) = crate::confine::change_notice(
+    if let Some(notice) = crate::confine::change_notice_for(
         task.confine_runs,
         state.told_sandbox,
         sandbox,
@@ -234,8 +234,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
             task.confine_runs,
             sandbox,
             tools::workspace_is_trusted(policy, workspace),
-        ),
+        ) && task.permission_mode.answers_requests(),
         plan.beside.holds(tools::Named::RequestPath),
+        crate::confine::Askable::nobody_when(task.permission_mode.nobody_to_ask()),
     ) {
         conversation.push_composed_from(
             Message::user(&notice),

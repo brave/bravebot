@@ -10548,8 +10548,12 @@ fn settle_the_confinement<S: Sink>(
         .map(|confinement| {
             confinement
                 .with_requested(requested)
-                .with_requests_offered(requests_accepted(policy, tools).is_ok())
+                .with_requests_offered(
+                    requests_accepted(policy, tools).is_ok()
+                        && tools.permission_mode.answers_requests(),
+                )
                 .with_request_path_listed(tools.beside.holds(Named::RequestPath))
+                .with_nobody_to_ask(tools.permission_mode.nobody_to_ask())
         });
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
         let cause = match confinement {
@@ -29279,6 +29283,7 @@ mod tests {
                 false,
                 bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 true,
+                false,
             );
             let mut confining = table();
             state_confinement(
@@ -29286,6 +29291,7 @@ mod tests {
                 true,
                 bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 true,
+                false,
             );
 
             let not_confining = described(&not_confining);
@@ -29375,11 +29381,11 @@ mod tests {
             ] {
                 let at = format!("confine={confine} {mode:?} accepted={accepted}");
                 let mut short = table(false);
-                state_confinement(&mut short, confine, mode, accepted);
+                state_confinement(&mut short, confine, mode, accepted, false);
                 let short = run_description(&short);
                 assert!(!short.contains("request_path"), "{at}: {short}");
                 let mut full = table(true);
-                state_confinement(&mut full, confine, mode, accepted);
+                state_confinement(&mut full, confine, mode, accepted, false);
                 let full = run_description(&full);
                 let unconfined = !confine || mode == Off;
                 assert_eq!(
@@ -29413,7 +29419,7 @@ mod tests {
                     .find(|tool| tool.function.name == "run")
                     .map(|tool| tool.function.description.clone())
                     .expect("run is offered");
-                state_confinement(&mut table, true, mode, true);
+                state_confinement(&mut table, true, mode, true, false);
                 let after = table
                     .iter()
                     .find(|tool| tool.function.name == "run")
