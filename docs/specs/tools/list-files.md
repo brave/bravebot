@@ -182,9 +182,9 @@ places. A reference standing for a directory while reading like a file is the ot
 it sends the planner to open bytes that are not there, and a write aimed at one asks a person to
 endorse a file over a directory they own.
 
-**Why the per-directory cap.** A walk in name order spent the whole cap on the first directory with
-thousands of files: a `.locks` directory of lock files filled 2,000 entries (about 15k tokens, sent
-again every round) and no other directory of the tree was listed.
+**Why the per-directory cap.** Without one, a walk in name order spends the whole cap on the first
+directory that holds thousands of files and lists no directory after it. Those entries are paid for
+in the planner's context on every round that resends them.
 
 `verified-by: bravebot_agent::workspace::a_listing_given_a_depth_descends_no_further_than_that`
 `verified-by: bravebot_agent::workspace::a_depth_limited_listing_names_the_directories_it_stopped_at`
