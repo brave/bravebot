@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -136,6 +137,13 @@ class Clean(unittest.TestCase):
         git("push", "-q", "origin", "--delete", "gone", cwd=self.clone)
         out = self.run_script()
         self.assertNotIn("gone", self.branches(), out)
+
+    def test_deletes_a_merged_branch_whose_worktree_folder_was_deleted_by_hand(self):
+        path = self.branch("removed", worktree=True)
+        shutil.rmtree(path)
+        self.assertIn("Would delete 1 branch(es).", self.run_script("--dry-run"))
+        out = self.run_script()
+        self.assertNotIn("removed", self.branches(), out)
 
     def test_keeps_the_default_branch_when_another_is_checked_out(self):
         self.branch("open", merged=False)

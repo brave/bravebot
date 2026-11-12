@@ -302,6 +302,8 @@ def main(argv: list[str] | None = None) -> int:
         fetch_origin(repo)
         default_branch = get_default_branch(repo)
         current_branch = get_current_branch(repo)
+        # Drops only records of worktree folders already gone, so a dry run prunes too.
+        run_command(["git", "worktree", "prune"], repo, check=True)
         worktrees = list_worktrees(repo)
         deleted_branches: list[str] = []
         removed_worktrees: list[tuple[str, str]] = []
