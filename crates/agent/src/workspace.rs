@@ -8083,7 +8083,11 @@ mod tests {
     /// a sentence naming its directory would name a different one. Unix only: Windows names are
     /// UTF-16 and macOS refuses such a name on APFS, so the directory is not made there.
     ///
-    /// The regression it rejects: `/add-dir` offered with a lossy spelling of the directory.
+    /// The lookalike `beside-\u{FFFD}`, which is valid UTF-8, is offered the directory to open as
+    /// any other name outside is.
+    ///
+    /// The regression it rejects: `/add-dir` offered with a lossy spelling of the directory, and
+    /// a check on the lossy spelling that also refuses the lookalike.
     #[cfg(unix)]
     #[test]
     fn a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing() {
@@ -8105,6 +8109,13 @@ mod tests {
             destination_remedy(&workspace, &destination),
             Remedy::Nothing,
             "a name nothing is at yet"
+        );
+        let lookalike = home.parent().expect("base").join("beside-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).expect("lookalike");
+        assert_eq!(
+            destination_remedy(&workspace, &lookalike.join("notes.txt")),
+            Remedy::Open,
+            "the valid UTF-8 lookalike"
         );
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
