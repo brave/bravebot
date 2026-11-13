@@ -689,3 +689,27 @@ fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
         "workspace-write reads the file, strict does not, and workspace-write reads it again"
     );
 }
+
+/// With no window choice, the bridge reads the settings again for every turn, so a mode the
+/// person's settings ask for while a session is open holds from that session's next turn.
+/// SANDBOX-22 says the bridge reads the mode from the settings and not when, so this pins the
+/// bridge as it is. The failure this rejects is a session that keeps the mode it opened under after
+/// the file changed.
+#[test]
+fn a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn() {
+    let scratch = Scratch::new("bridge-sandbox-settings-change");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, made) = front.session(&scratch, true);
+    assert_eq!(made["sandboxMode"], "workspace-write", "{made}");
+    assert_eq!(front.ask(&session), "workspace-write");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    settings(&scratch, r#"{"sandbox": {"mode": "strict"}}"#);
+    assert_eq!(
+        front.ask(&session),
+        "strict",
+        "the turn ran under the mode the session opened with"
+    );
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+}

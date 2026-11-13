@@ -8,17 +8,17 @@ The [decision record](decisions-and-tradeoffs.md) holds settled choices, costs, 
 
 Build a React Native mobile client for both embedded and remote execution. Remote control is the first substantial end-to-end prototype. Validate the common interface on the local host machine first, then run the bounded embedded proof as a parallel track alongside host work. Stage 2b does not gate stages 3–7; its result remains part of overall prototype completion.
 
-The full remote demo uses one user, one host, one explicitly prepared workspace, fresh host-owned sessions in an isolated store, one active controller per session, and authorized viewers. Desktop and phone transfer control explicitly. The phone can start work, view progress, send a turn when idle, answer supported approvals, and cancel. A busy turn rejects another send; the UI retains a draft.
+The full remote demo uses one user, one host, one explicitly prepared workspace, fresh host-owned sessions in an isolated store, and every attached device able to send, answer and cancel, with no takeover step. Desktop and phone see the same session at once. The phone can start work, view progress, send a turn when idle, answer supported approvals, and cancel. A busy turn rejects another send; the UI retains a draft.
 
-Do not require shared queues, concurrent controllers, normal saved-session import, a supervisor process, automatic restart, generic mutation retries, complete retained history, desktop parity, attachments, file browsing, bots, forks, watches, manifests, settings/hooks editing, public relays, or push. Broader on-device tools and background execution are follow-on work. Host workspace trust is answered on the host, never inferred from pairing.
+Do not require shared queues, normal saved-session import, a supervisor process, automatic restart, generic mutation retries, complete retained history, desktop parity, attachments, file browsing, bots, forks, watches, manifests, settings/hooks editing, public relays, or push. Broader on-device tools and background execution are follow-on work. Host workspace trust is answered on the host, never inferred from pairing.
 
 Keep security boundaries and test evidence precise. Choose concrete names, libraries, limits, and timeouts during implementation. Record minor gaps and explicit non-claims rather than designing a new subsystem for every hypothetical failure. Stop only when an enabled capability would violate its security or correctness contract.
 
 ## First secure remote checkpoint
 
-The first deliverable is the local client proof in stages 1–2a. The first secure remote checkpoint then comprises 3a–3d, 4a–4b, 5a, 6, and the narrow phone path in 7. Demonstrate one prepared workspace, fresh sessions, one tested phone platform, a supported approval, denial/cancel, reconnect, and duplicate-send prevention. A second local test client proves takeover. This checkpoint does not claim Electron handoff, embedded execution, or away-from-desktop validation from stage 8.
+The first deliverable is the local client proof in stages 1–2a. The first secure remote checkpoint then comprises 3a–3d, 4a–4b, 5a, 6, and the narrow phone path in 7. Demonstrate one prepared workspace, fresh sessions, one tested phone platform, a supported approval, denial/cancel, reconnect, and duplicate-send prevention. A second local test client, attached to the same session as the phone, proves that both see and act on it. This checkpoint does not claim desktop attachment, embedded execution, or away-from-desktop validation from stage 8.
 
-The local test client supplies the typed startup-trust interaction on the host before handing control to the phone. It uses the same controller identity and U1-protected channel as other local control, with no extra approval channel. Choose a task that needs no later host-only question until a capable host UI is available. Unavailable questions are refused; pairing never supplies the trust answer.
+The local test client supplies the typed startup-trust interaction on the host before the phone joins the session. It uses the same U1-protected channel as other local clients, with no extra approval channel. Choose a task that needs no later host-only question until a capable host UI is available. Unavailable questions are refused; pairing never supplies the trust answer.
 
 Defer 2b and 5b if they delay this checkpoint. They remain required for the full two-mode demonstration. Keep the first app to the screens and tools that prove this path; device evidence determines whether to extend it.
 
@@ -29,13 +29,13 @@ At each checkpoint, record what has been demonstrated, remaining work, and unres
 | Work | Checkpoint and useful stopping point |
 |---|---|
 | 1–2a: Rust view and local client | Real RPC turn, approval/denial, cancellation, and view updates through the thin client. Stop here with a tested local interface if later work is delayed. |
-| 3a–3c: targets and local host | Exact targets, ownership, worker completion, and controller loss. Without U1, keep listener work synthetic. |
+| 3a–3c: targets and local host | Exact targets, ownership, worker completion, and client loss. Without U1, keep listener work synthetic. |
 | 3d: phone experiment and UI validation | One React Native transcript/composer/approval flow, with responsiveness, input, accessibility, and lifecycle evidence. Validate these screens before expanding the UI. |
-| 4a–4b and 5a: recovery and two-client handoff | Snapshots, send lookup, and explicit takeover survive forced connection loss. |
+| 4a–4b and 5a: recovery and two clients on one session | Snapshots, send lookup, and two clients acting on one session survive forced connection loss. |
 | 6–7: secure remote phone control | One platform, one prepared workspace, scoped pairing, supported approvals, and phone process recovery. |
-| 8: away-from-desktop evidence | Network changes and host loss, with 5b complete for the desktop handoff claim. |
+| 8: away-from-desktop evidence | Network changes and host loss, with 5b complete for the desktop claim. |
 | 2b: bounded embedded proof | One platform, one supported tool/question, stub backend first. Real credentials require the architecture's storage and revocation checks. |
-| 5b: Electron attachment | The supported desktop subset consumes the Rust view and transfers control both ways. |
+| 5b: desktop attachment | The supported desktop subset consumes the Rust view and acts on the same session as another client. |
 
 Start U1 investigation during the local client work. Record a tested boundary or the reason real-session control remains blocked. Assess U2/U3 at stage 6 and resolve them before implementing real-session networking. Record unresolved credential-provider and iOS distribution questions at their required checkpoints; do not claim completion without the required evidence.
 
@@ -47,7 +47,7 @@ When reducing scope, use this order:
 2. Stop at the [first secure remote checkpoint](#first-secure-remote-checkpoint), deferring 2b and 5b. Preserve its host setup path, refusal behavior, and recovery evidence.
 3. If U1–U4 remain unresolved, stop at the local proof or restricted synthetic phone experiment. Keep real sessions blocked until those boundaries are resolved.
 
-Never cut authentication, scope checks, labels, complete approval details, exact targets, single-writer ownership, or the recovery tests for a capability still advertised. Full prototype completion still requires 2b, 5b, and stage 8 evidence. A store release is a separate decision governed by the [iOS limits](architecture.md#ios-capability-and-distribution-limits).
+Never cut authentication, scope checks, labels, complete approval details, exact targets, one running turn per session, approvals answered once, or the recovery tests for a capability still advertised. Full prototype completion still requires 2b, 5b, and stage 8 evidence. A store release is a separate decision governed by the [iOS limits](architecture.md#ios-capability-and-distribution-limits).
 
 ## Stages
 
@@ -109,7 +109,7 @@ Done when the host persists across connections, reports truthful closing/closed 
 
 ### 3c. Enable local controller readiness and loss handling
 
-Status: built in the host ([HOST-7](../../specs/local-host.md#HOST-7), [HOST-10](../../specs/local-host.md#HOST-10), [HOST-11](../../specs/local-host.md#HOST-11)). A session has one controller, the connection that opened it or took it over with `session.attach`. A client can answer only after it has the view of the session, and only the kinds the allowlist offers replies for. A question nobody can answer is refused when it is asked, for every kind. When the controller's connection ends, the waiting question is refused and shown as resolved, and the turn goes on, so a later client can take the session over with `session.attach` and receives its status, waiting question and most recent rows (HOST-11). A stale answer fails on its question number, and trust stays unanswered until a controller answers it. The TypeScript client lists the host's sessions with `instance()` and takes one over with `attach()`, starting its view from the snapshot ([RPCVIEW-12](../../specs/session-view.md#RPCVIEW-12)). Not built: takeover from a controller that is still connected, which needs an epoch and is stage 5a. Answerable kinds are the same for every local connection, set by the host and not by what a client advertises. The host serves one client at a time, so no test has two connections open at once. The guard that refuses a live controller's session is tested on the host's own state.
+Status: built in the host ([HOST-7](../../specs/local-host.md#HOST-7), [HOST-10](../../specs/local-host.md#HOST-10), [HOST-11](../../specs/local-host.md#HOST-11)). A session has one controller, the connection that opened it or took it over with `session.attach`. A client can answer only after it has the view of the session, and only the kinds the allowlist offers replies for. A question nobody can answer is refused when it is asked, for every kind. When the controller's connection ends, the waiting question is refused and shown as resolved, and the turn goes on, so a later client can take the session over with `session.attach` and receives its status, waiting question and most recent rows (HOST-11). A stale answer fails on its question number, and trust stays unanswered until a controller answers it. The TypeScript client lists the host's sessions with `instance()` and takes one over with `attach()`, starting its view from the snapshot ([RPCVIEW-12](../../specs/session-view.md#RPCVIEW-12)). Not built: more than one client attached to a session at once, which is stage 5a. Answerable kinds are the same for every local connection, set by the host and not by what a client advertises. The host serves one client at a time, so no test has two connections open at once. The guard that refuses a live controller's session is tested on the host's own state.
 
 Use one controller, ordered local attach/detach, and answerable kinds fixed for each connection. Enable readiness only after control state and subscription are established. Coordinate question registration, answer consumption, refusal, and event publication so loss cannot approve an action or resurrect a resolved question.
 
@@ -151,41 +151,49 @@ The message ID is required, not optional. An optional ID would leave a caller th
 
 Status: steps 1 and 2 are built ([RPCVIEW-10](../../specs/session-view.md#RPCVIEW-10), [RPCVIEW-11](../../specs/session-view.md#RPCVIEW-11)). The bridge records each send's answer under its id with a digest of its parameters, answers a repeat from the record, refuses other parameters under a recorded id, and refuses a new id once a session holds 4096 records. `turn.lookup` answers accepted, refused or not received, and an unknown handle is refused, which a client takes as unknown. A lookup says whether a turn started, not how it ended. Step 3.1 is built ([RPCVIEW-12](../../specs/session-view.md#RPCVIEW-12)). Step 3.2 is built in the client ([RPCVIEW-13](../../specs/session-view.md#RPCVIEW-13)): a cut-off send fails with `UnknownSendError` carrying its id, `messageStatus` calls `turn.lookup`, and `resend` is allowed once after each `not_received` answer. Not built: the mobile app keeping a pending send and calling these after it reconnects, and keeping it across a restart of the app, which is stage 7.
 
-### 5a. Prove takeover with two TypeScript clients
+### 5a. Attach two TypeScript clients to one session
 
-Use the local test program as a second client, launched by the host. Prove one controller plus viewers, expected-epoch takeover, and rejection of delayed former-controller actions. Transfer pending questions only during explicit connected takeover; controller loss refuses them. The incoming client supplies its own answerable kinds. Busy sends retain drafts rather than queueing. This provides the handoff evidence needed for phone integration without depending on Electron. Include the typed host-local startup-trust screen in this client. Test that a phone cannot claim this capability and that its answer still requires the current local controller. Other host-only reply kinds stay unavailable until a capable host UI implements them.
+Use the local test program as a second client, launched by the host, under the [shared control rules](architecture.md#shared-control-across-devices). Both clients attach to the same session and see the same view, approval requests included. Either can send, answer and cancel at any time, with no takeover step. This provides the evidence needed for phone integration without depending on the desktop app.
 
-Status: the TypeScript client takes over a session whose controller's connection ended (step 3.1 of 4b). Not built: takeover from a controller that is still connected, the epoch that makes a former controller's late action fail, viewers, transfer of a pending question during takeover, the second local test client, and the startup-trust screen in it. `takeControl` still fails locally.
+- The first answer to a question counts; the other client's answer fails on its question number. A send while a turn runs is refused and kept as a draft. A cancel names its target.
+- The host records which client made each send, answer and cancel. The view shows the client that acted last, and the trace records each action's client.
+- When one client leaves, the other keeps the session and any question it can answer. A question is refused only when no attached client can answer it.
+- Each client answers only the kinds the host fixes for its connection (HOST-10). Include the typed host-local startup-trust screen in the test client, and test that a phone cannot claim it. Other host-only reply kinds stay unavailable until a capable host UI implements them.
+- The view's last acting client is enough for a client to add a "Take control from Desktop?" confirmation later without a host change ([decision 5](decisions-and-tradeoffs.md#5-every-attached-device-can-act-with-no-takeover-step)).
+
+This replaces the one controller per session the host has now. Change HOST-7, HOST-10 and HOST-11 with the code.
+
+Status: the TypeScript client takes over a session whose controller's connection ended (step 3.1 of 4b). Not built: the host serving more than one client at once, several clients attached to one session, recording which client acted, the second local test client, and the startup-trust screen in it. `takeControl` still fails locally; 5a removes it, because there is no takeover step.
 
 ### 5b. Attach the desktop
 
-Renderer state integration may be the largest part of this stage. At its start, compare a main-process compatibility adapter against direct renderer consumption of the shared Rust view, and record the cost and test implications. Either approach consumes Rust-computed session state without recreating domain behavior in TypeScript. This work does not block stages 6–7, but remains required for full desktop handoff.
+Renderer state integration may be the largest part of this stage. At its start, compare a main-process compatibility adapter against direct renderer consumption of the shared Rust view, and record the cost and test implications. Either approach consumes Rust-computed session state without recreating domain behavior in TypeScript. This work does not block stages 6–7, but remains required for the full desktop demonstration.
 
-Integrate the shared client into a limited desktop prototype mode using the host service. Preserve the ordinary desktop path for unsupported features, and publish a capability matrix. Reuse stage-5a takeover. Scope Electron changes to the main-process transport adapter, application of shared Rust view updates for prototype sessions, and disabling unsupported renderer controls. Remove renderer-local prompt insertion/queue assumptions from that mode. Keep ordinary desktop behavior separate.
+Integrate the shared client into a limited desktop prototype mode using the host service. Preserve the ordinary desktop path for unsupported features, and publish a capability matrix. Reuse stage-5a shared control. Scope desktop changes to the main-process transport adapter, application of shared Rust view updates for prototype sessions, and disabling unsupported renderer controls. Remove renderer-local prompt insertion/queue assumptions from that mode. Keep ordinary desktop behavior separate.
 
-Done when desktop and a second local client see the same session, transfer control both ways, and delayed actions from the former controller fail. Closing a view does not close execution. A send during a turn returns busy and remains an unsent draft. Shared queues and concurrent control are not prerequisites for networking or mobile integration.
+Done when desktop and a second local client see the same session, each can send, answer and cancel, and the view shows which one acted last. Closing a view does not close execution. A send during a turn returns busy and remains an unsent draft. Shared queues are not a prerequisite for networking or mobile integration.
 
 ### 6. Enable authenticated networking
 
-Write the short pairing/transport and effective-scope decision notes described in the architecture before enabling network access. Add encrypted transport, host identity verification, host-approved pairing, revocation, and scoped read/control authorization to the direct host. Test the adapter locally before exposing it to a phone. Add finite readiness expiry for half-open network connections and backgrounded clients.
+Write the short pairing/transport and effective-scope decision notes described in the architecture before enabling network access. Add encrypted transport, host identity verification, host-approved pairing, revocation, and scoped read/control authorization to the direct host. A lost device's pairing can be revoked on the host. Test the adapter locally before exposing it to a phone. Add finite readiness expiry for half-open network connections and backgrounded clients.
 
 Enforce the operation and reply-field allowlist from the contract. Host-only trust/scope-expanding answers remain unavailable on the phone. Determine effective scope from the agent's resolved rules, modes, trust, programs, directories, and exposure state. A device authorized for an earlier scope must not see or control a widened one without explicit reauthorization. Resolve private-display destination authorization against policy before transmitting content.
 
-Done when unauthorized, revoked, wrong-host, viewer, stale-controller, and out-of-scope calls cause no protected disclosure or effect. Test direct bypass attempts, not only UI controls. Tailscale Serve is a development reachability candidate, not the application authorization system.
+Done when unauthorized, revoked, wrong-host, stale-target, and out-of-scope calls, and sends, answers, cancels and closes from a read-only grant, cause no protected disclosure or effect. Test direct bypass attempts, not only UI controls. Tailscale Serve is a development reachability candidate, not the application authorization system.
 
 ### 7. Connect the React Native remote adapter
 
-Use the stage-3d phone experiment and Rust view/display helpers through the thin client; reuse stage-2b screens where available without making that track a dependency. Share transport and UI wiring where useful; native views need their own label/approval tests. Add pairing, protected pending-message storage, target selection, and connection/controller status. Remote-only use does not start the embedded runtime; never fall back to local execution automatically.
+Use the stage-3d phone experiment and Rust view/display helpers through the thin client; reuse stage-2b screens where available without making that track a dependency. Share transport and UI wiring where useful; native views need their own label/approval tests. Add pairing, protected pending-message storage, target selection, connection status, and the device that acted last. Remote-only use does not start the embedded runtime; never fall back to local execution automatically.
 
-Done when the phone starts host work, takes control from the second TypeScript client, answers supported approvals, cancels, and returns control. Repeat with Electron when stage 5b is ready; desktop handoff remains required for the full demo. Test phone process recreation after host acceptance but before acknowledgement using the persisted message ID. Test keyboard/layout and full approval details on hardware.
+Done when the phone starts host work, joins a session the second TypeScript client started, answers supported approvals and cancels, and the test client shows each of those actions and that the phone made it. Repeat with the desktop app when stage 5b is ready; desktop attachment remains required for the full demo. Test phone process recreation after host acceptance but before acknowledgement using the persisted message ID. Test keyboard/layout and full approval details on hardware.
 
-Keep the phone foregrounded when demonstrating approvals. Also lock/background it deliberately and show that unavailable questions are refused, not silently approved or promised for later. Returning to the app shows the actual resulting state.
+Keep the phone foregrounded when demonstrating approvals. Also lock/background it deliberately. With no other attached client able to answer, show that unavailable questions are refused, not silently approved or promised for later. With the test client attached, show that the question stays open there and the phone cannot answer it. Returning to the app shows the actual resulting state.
 
-Choose a demo task that does not require phone approval of command-output admission, or demonstrate explicit desktop takeover before that question. The phone cannot authorize “let the model read this output”; a run-tests-then-read-failures loop needs host handling. If no capable controller is ready, the question is refused rather than held for later.
+Choose a demo task that does not require phone approval of command-output admission, or answer that question on the desktop. The phone cannot authorize “let the model read this output”; a run-tests-then-read-failures loop needs host handling. If no capable client is ready, the question is refused rather than held for later.
 
 ### 8. Demonstrate away-from-desktop use
 
-Test away from local Wi-Fi and across Wi-Fi/mobile-data changes. Show the same host-owned session on desktop and phone, explicit takeover, and recovery while the host remains alive. Host sleep/restart shows unavailable/interrupted state and no unsupported continuation claim.
+Test away from local Wi-Fi and across Wi-Fi/mobile-data changes. Show the same host-owned session on desktop and phone, actions from each device shown on the other, and recovery while the host remains alive. Host sleep/restart shows unavailable/interrupted state and no unsupported continuation claim.
 
 Record device/OS versions and tested platforms. Done when stage 5b and the required acceptance rows below have recorded evidence. The overall initial result includes this remote demonstration and the bounded embedded proof. Later on-device work should target useful tasks and their actual platform permissions, without requiring desktop command parity.
 
@@ -247,14 +255,47 @@ Each row applies when its named milestone is enabled; the table is not a prerequ
 | 4a | Snapshot/subscription boundary and gap resynchronization preserve authoritative state and labels within defined bounds; omissions are visible and slow clients do not stall execution. |
 | 4b | Lost send acknowledgement produces one turn; changed payload under one ID fails; explicit lookup works after display eviction; capacity exhaustion does not forget retry IDs. |
 | 4b and 7 | Persist send identity before transmission. Kill/recreate the phone client after host acceptance and reconcile without a duplicate effect. Restarted-host outcomes remain unknown. |
-| 5a–5b | One controller plus viewers. Host-local startup trust uses that controller state; phone capability claims cannot enable host-only replies. Explicit takeover invalidates previous-controller actions; viewers cannot mutate; busy send is not queued. |
-| 6 | Unauthorized, revoked, wrong-host, out-of-scope, and forbidden-field requests disclose nothing protected and have no effects. Include `remember`, attachments, arbitrary directories, and raw-dispatch attempts. |
+| 5a–5b | Two clients attached to one session see the same view and each can send, answer and cancel. The first answer counts and the second fails; a busy send is not queued; one client leaving refuses no question the other can answer. Each action records the client that made it. Host-local startup trust is answered only on a connection the host lets answer it; phone capability claims cannot enable host-only replies. |
+| 6 | Unauthorized, revoked, wrong-host, out-of-scope, and forbidden-field requests, and read-only-grant sends, answers, cancels and closes, disclose nothing protected and have no effects. Include `remember`, attachments, arbitrary directories, and raw-dispatch attempts. |
 | 6 | Changed effective grants suspend remote access until authorized. Pairing never answers trust. Destination authorization is explicit before private content leaves the host. |
-| 7–8 | Foreground approvals work; background/lock refuses unavailable questions. Network changes recover actual state; host sleep/restart never claims continued or saved work without evidence. |
+| 7–8 | Foreground approvals work; a locked or backgrounded phone cannot answer, and a question no attached client can answer is refused. Network changes recover actual state; host sleep/restart never claims continued or saved work without evidence. |
 | Persistence | Force save failure after an observed effect. Live completion remains truthful and saved progress remains unknown. |
+
+## End goal beyond the prototype
+
+The end goal is one host that runs sessions and several clients of them at once: the desktop app, and Android, iOS and iPad apps. A person sends a prompt from a phone, opens an iPad, and sees the same session there with the latest prompt, tool calls and results. The terminal UI is not one of these clients ([sessions the terminal UI runs](#sessions-the-terminal-ui-runs)). The bounded snapshot (256 rows, 4 MiB) is enough to show the most recent work.
+
+The prototype leaves these for later:
+
+- the host as a long-running service that starts without a terminal and outlives its clients, with automatic startup and restart;
+- attaching a client the host did not launch ([U4](open-questions.md#u4-attaching-a-client-the-host-did-not-launch));
+- the desktop app as a full client of host sessions, beyond the stage-5b subset;
+- one session store that every client lists and resumes, and that survives a host restart;
+- several paired devices at once, such as a phone and an iPad, with revoking a lost device from another paired device;
+- a question waiting when the last device that can answer it leaves stays open for a device that attaches later, instead of being refused;
+- the terminal UI as a client of the host.
+
+### Sessions the terminal UI runs
+
+A phone reaches only sessions that an application runs on `bravebot-host`. In this plan that is the desktop app, for the sessions it runs on the host (stage 5b). A session started in the terminal UI, including a background session (`--bg`, `/bg`, [background-sessions.md](../../specs/background-sessions.md)), runs in a process of the terminal UI's own, so neither the phone nor the desktop app can follow or control it while it runs. The desktop app's ordinary path can resume it from the shared store once it has ended ([SESSION-28](../../specs/sessions.md#SESSION-28), [SESSION-38](../../specs/sessions.md#SESSION-38)). A person who works in the terminal UI cannot use the phone with those sessions, and the first release says so.
+
+Making the terminal UI a host client is a separate task outside this plan. The terminal UI would stop running sessions itself, start or connect to `bravebot-host`, and draw the host's view of the session.
+
+What it gives:
+
+- **Live control.** A phone sees a running turn and can answer an approval the terminal is waiting on, so a person can start a long task at the terminal, leave, and approve or cancel it from the phone. The desktop app can follow the same session.
+- **The plan's model with one more client.** Every attached device can act ([decision 5](decisions-and-tradeoffs.md#5-every-attached-device-can-act-with-no-takeover-step)), the view shows which device acted last, and the [U3](open-questions.md#u3-effective-session-scope) scope check applies without new rules.
+- **One place to run sessions.** The host owns execution, saving and permissions, and the terminal UI no longer keeps its own driver loop.
+
+What it costs:
+
+- **A large rewrite.** The terminal UI draws from in-process agent events today and would draw from the host's view instead.
+- **A larger host protocol.** Everything the terminal UI shows and does needs a host message, including shell mode, `@` files, pasting, dropping, undo, the inspector panes and hooks. The host's view does not carry all of these today. Each is a new place to check the rule that untrusted content never reaches the driver or the planner.
+- **A running host.** The terminal UI needs the long-running host from the list above, or starts its own as the desktop app does. Either way its reliability depends on the host, and it loses its standalone mode unless it keeps a fallback path.
+- **Background sessions.** They already give the terminal UI a long-running session process, with a supervisor, a roster of sessions across projects, a named socket guarded by a secret ([BG-15](../../specs/background-sessions.md#BG-15)) and one attached terminal at a time ([BG-9](../../specs/background-sessions.md#BG-9)). This plan's host has no name to be found by ([HOST-13](../../specs/local-host.md#HOST-13)) and lets every attached device act. Before the long-running host is built, the task has to decide whether background sessions become host sessions, and which attach model and which rule for attached clients hold.
 
 ## Deferred work and open implementation choices
 
-Optional follow-ons are shared queues, concurrent controllers, shared-store record locks/import, complete history, automatic host startup/restart, generic mutation retries, notifications/bounded approval waiting, broader on-device tools, and offline inference. None blocks the bounded prototype.
+Optional follow-ons are shared queues, the takeover confirmation dialog in [decision 5](decisions-and-tradeoffs.md#5-every-attached-device-can-act-with-no-takeover-step), complete history, generic mutation retries, notifications, broader on-device tools, and offline inference. None blocks the bounded prototype.
 
 Routine choices left to implementation include listener naming, local socket library, network library, schema spellings, buffer/submission budgets, heartbeat duration, pairing-code presentation, and protected mobile storage APIs. Pairing identity/security and effective-scope policy require the stage-6 decision notes. Record these with tests when they become relevant. Revise the architecture and proposed behavior when implementation evidence warrants it. Minor gaps are expected; they do not require predicting every remaining case before coding.

@@ -1211,6 +1211,196 @@ fn an_unconfined_hook_the_host_runs_holds_no_socket() {
     client.leave();
 }
 
+// ---------------------------------------------------------------- what a program can find the host by
+
+/// The sockets of a process that a program could find, read with `lsof`, keyed by the kernel
+/// address `lsof` gives in its DEVICE column: a TCP port listening, a UDP port bound, and a Unix
+/// socket bound to a path. Also the number of Unix sockets listed, which is at least one where
+/// `lsof` saw the host at all, since its channel is one.
+#[cfg(target_os = "macos")]
+fn findable_sockets_of(pid: u32) -> (std::collections::HashMap<String, String>, usize) {
+    let lsof = |kind: &str| {
+        let listed = bravebot_sandbox::process::starting_a_program(|| {
+            Command::new("/usr/sbin/lsof")
+                .args(["-nP", "-a", "-p", &pid.to_string(), kind])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+        })
+        .expect("lsof runs");
+        String::from_utf8_lossy(&listed.stdout).into_owned()
+    };
+    let internet = lsof("-i");
+    let unix = lsof("-U");
+    let unix_lines: Vec<&str> = unix.lines().skip(1).collect();
+    let keyed = |line: &str| {
+        let device = line.split_whitespace().nth(5).unwrap_or_default();
+        (device.to_string(), line.to_string())
+    };
+    let mut found: std::collections::HashMap<String, String> = internet
+        .lines()
+        .skip(1)
+        .filter(|line| line.contains("(LISTEN)") || line.contains(" UDP "))
+        .map(keyed)
+        .collect();
+    found.extend(
+        unix_lines
+            .iter()
+            // No column before NAME starts with `/`, and a path may hold spaces.
+            .filter(|line| line.contains(" /"))
+            .map(|line| keyed(line)),
+    );
+    (found, unix_lines.len())
+}
+
+/// Each socket in this network namespace that a program could find, keyed by inode, with the line
+/// `/proc/net` gave for it: a TCP port of this user's listening, a UDP port of this user's bound,
+/// and a Unix socket listening, or not connected and bound to a path or an abstract name.
+#[cfg(target_os = "linux")]
+fn findable_sockets_now() -> std::collections::HashMap<u64, String> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata("/proc/self").unwrap().uid().to_string();
+    let mut found = std::collections::HashMap::new();
+    for (table, findable_state) in [("tcp", "0A"), ("tcp6", "0A"), ("udp", "07"), ("udp6", "07")] {
+        let listed = std::fs::read_to_string(format!("/proc/net/{table}")).unwrap_or_default();
+        for line in listed.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() > 9 && fields[3] == findable_state && fields[7] == uid {
+                found.insert(fields[9].parse().unwrap(), format!("{table} {line}"));
+            }
+        }
+    }
+    let listed = std::fs::read_to_string("/proc/net/unix").unwrap();
+    for line in listed.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let listening = u32::from_str_radix(fields[3], 16).unwrap() & 0x10000 != 0;
+        // State 03 is connected, which an accepted connection is, and it shows its listener's path.
+        let named_and_unconnected = fields.len() > 7 && fields[5] != "03";
+        if listening || named_and_unconnected {
+            found.insert(fields[6].parse().unwrap(), format!("unix {line}"));
+        }
+    }
+    found
+}
+
+/// The inodes of the sockets held by each process but `host` whose descriptors this user can read.
+/// The host is left out by its id, so its own sockets count where root can read them.
+#[cfg(target_os = "linux")]
+fn sockets_other_readable_processes_hold(host: u32) -> std::collections::HashSet<u64> {
+    let mut held = std::collections::HashSet::new();
+    for process in std::fs::read_dir("/proc").unwrap().flatten() {
+        if process.file_name() == host.to_string().as_str() {
+            continue;
+        }
+        let Ok(descriptors) = std::fs::read_dir(process.path().join("fd")) else {
+            continue;
+        };
+        for descriptor in descriptors.flatten() {
+            if let Ok(target) = std::fs::read_link(descriptor.path())
+                && let Some(inode) = target
+                    .to_str()
+                    .and_then(|name| name.strip_prefix("socket:["))
+                    .and_then(|rest| rest.strip_suffix(']'))
+            {
+                held.insert(inode.parse().unwrap());
+            }
+        }
+    }
+    held
+}
+
+/// Starts a host, serves a turn through its client, and returns the findable sockets that appeared
+/// after the host started, were gone once it was killed, and that no process this user can read
+/// held. A process of another test that this user cannot read, such as a `bravebot` started with
+/// a network proxy, can open a socket after the first read and close it as the host is killed.
+#[cfg(target_os = "linux")]
+fn findable_sockets_that_went_with_a_host_serving_a_turn(
+    scratch: &Scratch,
+    endpoint: &str,
+) -> Vec<String> {
+    let before = findable_sockets_now();
+    let mut host = Host::start(scratch, endpoint);
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    client.event("turn.done");
+    let held = sockets_other_readable_processes_hold(host.child.id());
+    let now = findable_sockets_now();
+    host.child.kill().unwrap();
+    host.child.wait().unwrap();
+    let after = findable_sockets_now();
+    assert!(
+        now.values().any(|line| line.contains("relay.sock")),
+        "/proc/net/unix did not show the test's own relay socket: {now:?}"
+    );
+    client.leave();
+    now.into_iter()
+        .filter(|(inode, _)| {
+            !before.contains_key(inode) && !after.contains_key(inode) && !held.contains(inode)
+        })
+        .map(|(_, line)| line)
+        .collect()
+}
+
+/// A program the host did not start has no way to find it, so it cannot attach to it (U4). After
+/// a client has opened a session and run a turn, the host holds no TCP port listening, no UDP port
+/// bound and no Unix socket with a name. On macOS `lsof` lists the host's own sockets, less any
+/// the test process holds too, which the host inherited. On Linux the host is non-dumpable, so a
+/// process of the same user without privilege cannot read its descriptors, and the test reads the
+/// whole system's sockets instead. A socket another test opens can be counted there by chance, so
+/// a socket found is looked for again beside a second host, and the test fails only if that host
+/// has one too. A host's own socket is found both times. A socket the host opened and closed
+/// before the turn ended, or opens only on some later request, is not seen.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_host_serving_a_turn_has_no_socket_another_program_can_find() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+
+    #[cfg(target_os = "macos")]
+    let found = {
+        let host = Host::start(&scratch, &endpoint);
+        let mut client = host.client();
+        let session = client.session_in(&scratch.project());
+        client.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+        );
+        client.event("turn.done");
+        let (found, unix_sockets) = findable_sockets_of(host.child.id());
+        assert!(
+            unix_sockets > 0,
+            "lsof listed no Unix socket of the host, not even its channel"
+        );
+        let (inherited, _) = findable_sockets_of(std::process::id());
+        client.leave();
+        found
+            .into_iter()
+            .filter(|(device, _)| !inherited.contains_key(device))
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+    };
+    #[cfg(target_os = "linux")]
+    let found = {
+        let first = findable_sockets_that_went_with_a_host_serving_a_turn(&scratch, &endpoint);
+        if first.is_empty() {
+            first
+        } else {
+            findable_sockets_that_went_with_a_host_serving_a_turn(&scratch, &endpoint)
+        }
+    };
+    assert!(
+        found.is_empty(),
+        "the host has a socket another program can find: {found:?}"
+    );
+}
+
 /// The directory a session opens in is the one that was checked, not a name that leads to it.
 #[test]
 fn a_session_opens_in_the_directory_that_was_checked() {

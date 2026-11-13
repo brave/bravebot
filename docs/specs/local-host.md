@@ -210,3 +210,10 @@ It listens on 127.0.0.1 only, on a port the system picks, and shows the port and
 The TypeScript client reaches the relay only through its `./dev-relay` export, which the package's main entry does not import. It refuses a port outside 1 to 65535 or a code that is not six digits before it opens anything, and reports a wrong code apart from a relay that could not be reached.
 
 `verified-by: by-construction (packages/agent-client/tests/dev-relay.test.ts starts a built bravebot-host with the relay as its client against a model service of its own, and checks that an app giving the code drives a session to an approved write that lands, that a wrong code ends that relay and leaves the host running and the next launch has a new port and code, that a second app cannot connect while the first is connected, that the app closing ends the relay and the host quitting ends the app's connection, and that a bad port or code opens nothing; packages/agent-client/tests/websocket.test.ts checks fragment reassembly, ping, and the close code for each frame the relay refuses; make check-agent-client runs both, and the Front end CI job runs that target)`
+
+<a id="HOST-13"></a>
+### HOST-13: the host can be found by no name
+
+The host listens on no TCP port, binds no UDP port, and binds no Unix socket to a path or, on Linux, to an abstract name. A program the host did not start therefore has no address to reach it by. The development relay of [HOST-12](#HOST-12) listens on loopback in a client process the host starts, not in the host. The test lists the sockets the host holds after it has served a turn, so a socket it opened and closed before then, or opens only on a later request, is not seen. On Linux the test does not count a Unix socket that is connected, since its peer is the only program that can reach it.
+
+`verified-by: bravebot_ui_bridge::host_process::a_host_serving_a_turn_has_no_socket_another_program_can_find`

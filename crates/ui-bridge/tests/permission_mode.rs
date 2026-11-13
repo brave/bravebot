@@ -684,3 +684,66 @@ fn planning_chosen_while_a_turn_runs_refuses_the_rest_of_that_turn() {
         "the planner was not told plan mode began"
     );
 }
+
+/// RUN-5: a command vouched for in one turn runs unasked in the turns after it, and once the
+/// grant is revoked between turns the next run of it is asked about again. The failures this
+/// rejects are a vouch that lasts one turn, a vouched command refused without a question, and a
+/// revocation the next turn does not see. The command prints `vouched-ran`, which its arguments do
+/// not contain, so only a run that happened puts it in the tool result.
+#[test]
+fn a_command_vouched_for_holds_for_later_turns_until_it_is_revoked() {
+    let scratch = Scratch::new("bridge-mode-command-grant");
+    let (endpoint, rounds) = a_planner(|_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({"command": "/usr/bin/printf vouched%sran -"})))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+
+    front.ask(&session);
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "run.request", "{question}");
+    front.call(
+        "run.reply",
+        json!({"session": session, "request": question["data"]["request"],
+            "decision": "approve", "remember": true}),
+    );
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    front.ask(&session);
+    let ended = front.question_or_the_end();
+    assert_eq!(
+        ended["event"], "turn.done",
+        "the vouched command was asked about: {ended}"
+    );
+    let sent: Vec<String> = rounds.try_iter().collect();
+    let told = tool_results(sent.last().expect("a round of the second turn"));
+    assert!(
+        told.matches("vouched-ran").count() == 2,
+        "the vouched command did not run in the second turn: {told}"
+    );
+
+    let listed = front.call("permissions.list", json!({"session": session}));
+    let command = listed["commands"][0].clone();
+    assert!(
+        command["display"]
+            .as_str()
+            .is_some_and(|display| display.starts_with("/usr/bin/printf")),
+        "{listed}"
+    );
+    front.call(
+        "permissions.revoke",
+        json!({"session": session, "kind": "command", "command": {
+            "program": command["program"], "startedAs": command["startedAs"],
+            "args": command["args"],
+        }}),
+    );
+
+    front.ask(&session);
+    let question = front.question_or_the_end();
+    assert_eq!(
+        question["event"], "run.request",
+        "the revoked command ran unasked: {question}"
+    );
+    front.reply("run.reply", &session, &question, "reject");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+}
