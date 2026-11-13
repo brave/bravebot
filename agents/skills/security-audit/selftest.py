@@ -5112,7 +5112,7 @@ def test_the_checkout_lane_starts_from_the_layers():
     check(
         "the merge, the unread keys, the permission texts and the names a file set are on the lane's list",
         {
-            ("settings.rs", "layered_since"),
+            ("settings.rs", "layered"),
             ("settings.rs", "unread_keys"),
             ("settings.rs", "rule_texts"),
             ("settings.rs", "names"),

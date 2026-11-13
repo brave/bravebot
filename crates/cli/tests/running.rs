@@ -123,9 +123,8 @@ fn bravebot(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Ou
 /// The directory a run with no directory of its own starts in: a sibling of `home` that holds a
 /// `.git`, so it is its own checkout and not part of the home a test inspects.
 ///
-/// The binary leaves out of its lookups the checkout holding the directory it ran in (SANDBOX-30),
-/// and a named settings file inside that checkout is a checkout's file (PERM-14). The scratch
-/// directories are under this repository's `target`, so a run left in the directory the tests
+/// The binary leaves out of its lookups the checkout holding the directory it ran in (SANDBOX-30).
+/// The scratch directories are under this repository's `target`, so a run left in the directory the tests
 /// started in would have this whole repository as its checkout and lose the stand-ins and files
 /// the scratch holds.
 fn a_checkout_of_its_own_under(home: &Path) -> PathBuf {

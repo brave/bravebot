@@ -265,7 +265,7 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Seventeen names are read from your own file and a `--settings` file outside the project, and from no
+Seventeen names are read from your own file and the file `--settings` names, and from no
 project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
 `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
@@ -311,16 +311,16 @@ one thing leaves everything else in force:
 |---|---|
 | `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
-| `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
+| `permissions.allow` | your own file's entries, the file `--settings` names, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
-| `references` | your own file and a `--settings` file outside the project and its checkout; a project or local file's block, and a `--settings` file that resolves inside either, is ignored and reported, and a later file's block replaces an earlier one's |
+| `references` | your own file and the file `--settings` names; a project or local file's block is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
-| `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and a `--settings` file outside the project; a project or local file's are ignored and reported |
+| `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and the file `--settings` names; a project or local file's are ignored and reported |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
-| `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
-| `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
-| `askIdleSeconds` | your own file and a `--settings` file outside the project; a project or local file's is ignored and reported |
+| `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and the file `--settings` names; a project or local file's are ignored and reported |
+| `git.identities` | your own file and the file `--settings` names, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
+| `askIdleSeconds` | your own file and the file `--settings` names; a project or local file's is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -341,9 +341,8 @@ write or a fetch on your behalf. Entries in those two files are instead **propos
 in the project lists them in one box with the file each came from, and only your yes puts them in
 force. The answer is kept per project in `~/.bravebot/granted/`, so you are asked once rather than at
 every launch, and a rule the project edits afterwards is asked about again. `bravebot doctor` names
-every such entry and says whether it is granted. A file `--settings` names is yours, since you typed
-the path, unless it resolves inside the project you are working in, or inside the git checkout holding it or a
-directory you moved out of, which makes it the checkout's file under another name.
+every such entry and says whether it is granted. A file `--settings` names is yours wherever it sits,
+inside the project included, since you typed the path.
 
 **The project files are read from the directory you started bravebot in, and from no directory above
 it.** Searching upward would make what configures a session depend on which directory you happened to
@@ -888,7 +887,7 @@ The session says that a question was closed, and a question that closed is asked
 asks it again.
 
 A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves a
-question waiting. Only your own file and a `--settings` file outside the project set it: a
+question waiting. Only your own file and the file `--settings` names set it: a
 `.bravebot/settings.json` that arrived with a checkout is ignored and named by `bravebot doctor`,
 since a question closed on a clock is one you were not asked.
 
@@ -1136,7 +1135,7 @@ means the key belongs to another account, and that only you choose the key. It t
 an entry and does not retry the same push.
 
 On the commands it applies to it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` of
-yours. Your own file and a `--settings` file outside the project may write it; a project or local
+yours. Your own file and the file `--settings` names may write it; a project or local
 file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and a key it would not
 lend: a path that is not a regular `*.pub` file, one inside another credential location such as
 `~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
@@ -1281,7 +1280,7 @@ a path no rule covers; these two state a standing refusal instead, and are descr
 [two refusals you do not have to enumerate](#two-refusals-you-do-not-have-to-enumerate) below.
 
 `deny` and `ask` work from any of the files. `allow` works from `~/.bravebot/settings.json` and from
-a `--settings` file outside your project; a project's own entries are proposed to you in a box when
+the file `--settings` names; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
 A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:

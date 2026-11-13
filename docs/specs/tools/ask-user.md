@@ -244,8 +244,8 @@ was closed ([ASK-13](#ASK-13)) says `closed on the clock` for that question alon
 Only the questions the planner puts with `ask_user` close this way. A plan to approve, a spend limit
 and a repeated call are the driver's own questions, asked of a person who has to be there, and they
 wait for as long as it takes whatever the setting says. The setting is read from the person's own
-settings file and a `--settings` file outside the project, and a file that arrived with a checkout
-is ignored and named by `doctor`.
+settings file and the file `--settings` names, and a project or local file that arrived with a
+checkout is ignored and named by `doctor`.
 
 **Why.** A question with nobody at the keyboard blocks the turn for good, and a person who starts a
 long task and leaves finds it stopped at a question. The decision is a clock and a setting the person

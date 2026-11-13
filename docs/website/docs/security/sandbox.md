@@ -169,7 +169,7 @@ holding a credential location beneath it, such as the home directory, a director
 `~/.config`, is refused; a wildcard entry drops those matches and keeps the rest. Linux and macOS
 are unchanged.
 
-Your own file and a `--settings` file outside the project may write all four. A project or local file
+Your own file and the file `--settings` names may write all four. A project or local file
 may write `denyRead` and `denyWrite` and not the other two, so a repository you clone cannot widen
 what its own commands reach; `bravebot doctor` names the file that tried. A machine-level file can pin
 any list: a pinned `allowRead` or `allowWrite` replaces yours, and a pinned refusal is one nothing
@@ -202,6 +202,6 @@ A program that makes a scratch file there is refused, such as a shell heredoc, `
 compiler's intermediate files, and the planner is told so in the `run` description. A `denyWrite`
 entry naming the directory refuses it as well, and is the way to hold back one path inside it.
 
-The key is read from your own file and a `--settings` file outside the project, as `sandbox.mode`
+The key is read from your own file and the file `--settings` names, as `sandbox.mode`
 is. A project or local file that sets it is not obeyed and `bravebot doctor` reports the key as
 unread. Any value but `true` asks for nothing.

@@ -210,25 +210,22 @@ pub(super) fn rules_from(
 /// Where a workspace's rules are read from, bar the workspace itself.
 ///
 /// The state directory holds the person's own settings layer and the record of what they granted,
-/// and `named` is the file `--settings` named. Neither moves with the session, so rules read again
-/// after `/cd` differ from the ones before it by the checkout's layers alone. `left` is every root
-/// the session has been in, starting with the one it opened in, which keeps a named file inside any
-/// of them, or inside the checkout holding one, the checkout's wherever the session goes.
+/// and `named` is the file `--settings` named, which is the person's own wherever it sits
+/// (PERM-14). Neither moves with the session, so rules read again after `/cd` differ from the ones
+/// before it by the checkout's layers alone.
 pub(super) struct RuleSources {
     pub(super) state: Option<std::path::PathBuf>,
     pub(super) named: Option<std::path::PathBuf>,
-    pub(super) left: Vec<std::path::PathBuf>,
     /// The administrator's file, whose `deny` and `ask` rules join every layer's own (PERM-19).
     pub(super) managed: bravebot_config::Managed,
 }
 
 impl RuleSources {
-    /// The ones this process reads, for a session that opened in `started`.
-    pub(super) fn ambient(started: &std::path::Path) -> Self {
+    /// The ones this process reads.
+    pub(super) fn ambient() -> Self {
         Self {
             state: bravebot_agent::home::directory(),
             named: bravebot_config::named_settings_file().map(std::path::Path::to_path_buf),
-            left: vec![started.to_path_buf()],
             managed: bravebot_config::Managed::load(),
         }
     }
@@ -237,21 +234,8 @@ impl RuleSources {
     ///
     /// The root rather than the process's own directory, which `/cd` does not change.
     pub(super) fn settings(&self, root: &std::path::Path) -> bravebot_config::Settings {
-        bravebot_config::Settings::layered_since(
-            self.state.clone(),
-            Some(root),
-            self.named.as_deref(),
-            &self.left,
-        )
-        .under(&self.managed)
-    }
-
-    /// Remember that the session has been in `root`, so a named file inside it stays the checkout's
-    /// after the session moves elsewhere.
-    pub(super) fn leave(&mut self, root: &std::path::Path) {
-        if !self.left.iter().any(|left| left == root) {
-            self.left.push(root.to_path_buf());
-        }
+        bravebot_config::Settings::layered(self.state.clone(), Some(root), self.named.as_deref())
+            .under(&self.managed)
     }
 
     /// The record of what was granted in `root`.
