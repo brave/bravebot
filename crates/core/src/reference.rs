@@ -1228,8 +1228,7 @@ mod tests {
              to read it yourself, vet_content is how to ask for it. A directory: this listing \
              stopped at it rather than at a file in it, so there is nothing behind its reference \
              to read, process or write. List the directory you named again with a greater depth \
-             to reach what is inside it. A range of references covers every reference from its \
-             first to its last.\n\n[ref:1] file (U,priv)\n[ref:2] directory (U,priv)"
+             to reach what is inside it.\n\n[ref:1] file (U,priv)\n[ref:2] directory (U,priv)"
         );
     }
 
