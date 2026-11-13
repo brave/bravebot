@@ -1403,8 +1403,8 @@ fn offering_a_model(session: &mut Session) -> Action {
 /// One ladder rather than one per caller, because there were two and they drifted. Mid-turn, Up
 /// and Down reached no arm at all and fell through to nothing, so a person who could see their
 /// last prompt in the transcript could not recall it into the box, and the keys that scroll did
-/// not scroll either. `handle_paste_while_working` was already named for this reason; this is the
-/// same lesson in the same file.
+/// not scroll either. The paste handling was made one function, `handle_paste`, for the same
+/// reason.
 fn navigate(session: &mut Session, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {

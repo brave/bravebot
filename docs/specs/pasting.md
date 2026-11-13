@@ -350,7 +350,7 @@ Persian, Indic and emoji text needs only the first of each, after a character th
 `verified-by: bravebot_tui::state::a_paste_of_nothing_but_hidden_characters_writes_nothing_and_says_so`
 `verified-by: bravebot_tui::state::a_folded_paste_is_put_back_without_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::state::a_paste_into_a_command_line_loses_what_a_terminal_draws_as_nothing`
-`verified-by: bravebot_tui::app::a_paste_loses_what_a_terminal_draws_as_nothing_at_rest_and_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_paste_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
 
