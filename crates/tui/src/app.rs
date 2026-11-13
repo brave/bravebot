@@ -21461,17 +21461,17 @@ mod tests {
     fn a_limit_in_credits_reports_the_credentials_spent() {
         struct Wallet;
         impl bravebot_agent::shared::Spends for Wallet {
-            fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
-                Ok(bravebot_aichat::SubscriptionCredential {
+            fn spend_one(&self) -> bravebot_aichat::SubscriptionCredential {
+                bravebot_aichat::SubscriptionCredential {
                     key: bravebot_config::Secret::new("value"),
-                })
+                }
             }
         }
         let mut session = Session::new("none");
         session.tokens = 9_000;
         let counted = bravebot_agent::shared::Counted::new(&Wallet, session.spend_limit().clone());
         for _ in 0..3 {
-            bravebot_agent::shared::Spends::spend_one(&counted).expect("a credential");
+            bravebot_agent::shared::Spends::spend_one(&counted);
         }
 
         dispatch_command(&mut session, commanded("/limit 5 credits"));

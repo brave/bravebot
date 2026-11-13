@@ -2351,9 +2351,9 @@ of tries: `bravebot auth status` shows the sign-in or key in use and `bravebot d
 endpoint. Every source of that category says it the same way: a status of 401 or 403, a token the
 Google Cloud CLI would not give, a sign-in AWS would not resolve, and a refusal the service reported
 as one of authentication, permission or billing. A failure of a request that carried the stored
-premium key, or of a key that could not be presented, reports that as a closed flag beside its
-category, set by the step that made the request and never read from a reply, and its line names the
-commands of [PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
+premium key reports that as a closed flag beside its category, set by the step that made the
+request and never read from a reply, and its line names the commands of
+[PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
 driver's own, so no text from a reply, header, URL or credential is in them, and a failure of the
 account of a ChatGPT or an xAI sign-in keeps its own sentence. The flag and the commands are for the
 person only: the planner is told the category and the request count and no more.
@@ -2658,8 +2658,8 @@ service". Afterwards the question a person has is why the answers are bad, which
 configuration cannot be reached from.
 
 Refusing rather than letting the request go, for the reason
-[PREM-10](premium-credentials.md#PREM-10) fails a request that cannot present its key rather than
-sending it without one: what comes back from a request that was never going to be served carries no
+[PREM-10](premium-credentials.md#PREM-10) gives against a request that silently loses its key:
+what comes back from a request that was never going to be served carries no
 sign of why, and nothing about a bad session points at where a request went.
 
 Five routes rather than one, and each named by what to type, because a refusal that states the

@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 /// A failure from whichever backend was asked.
 ///
 /// One type so a caller handles one error. The variants stay distinct because the remedies differ:
-/// an expired AWS session is fixed by signing in, and an unusable premium key by unsetting it.
+/// an expired AWS session is fixed by signing in, and a refused premium key by replacing it.
 #[derive(Debug)]
 pub enum BackendError {
     Aichat(ChatError),
@@ -302,11 +302,6 @@ impl BackendError {
             Self::Aichat(error) => match error {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
-                ChatError::Subscription(_) => {
-                    // The key could not be presented, so the person is sent to the key's own
-                    // commands (PREM-10) rather than told only that credentials were refused.
-                    return Diagnosis::of(Category::Unauthorized).with_premium_key();
-                }
                 ChatError::Account(failure) => category_of_account(failure),
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
                 ChatError::Incomplete => Category::Incomplete,
@@ -3850,7 +3845,6 @@ mod tests {
             status(401),
             status(429),
             status(503),
-            BackendError::from(ChatError::Subscription("none".to_string())),
             BackendError::from(ChatError::NoContent),
             BackendError::from(ChatError::Incomplete),
             BackendError::from(ChatError::Cancelled),
@@ -5688,11 +5682,10 @@ mod tests {
 
     /// BACKEND-37: a refusal of a request that carried the premium key is marked as the key's, and
     /// the mark survives the count of attempts that wraps it. A refusal with a 401 or a 403 of any
-    /// other request is not marked. A premium key that could not be produced is marked too.
+    /// other request is not marked.
     ///
-    /// The regressions it rejects are a mark lost when the failure is counted, a mark set on every
-    /// unauthorized failure, and a premium key that could not be produced told in the generic
-    /// sentence.
+    /// The regressions it rejects are a mark lost when the failure is counted and a mark set on
+    /// every unauthorized failure.
     #[test]
     fn a_refusal_of_the_premium_key_is_marked_through_the_count_of_attempts() {
         let status = |code: u16| {
@@ -5722,11 +5715,6 @@ mod tests {
             .counted(1, None, None)
             .diagnosis();
         assert_eq!(other.category, Category::Unavailable);
-        let unusable = BackendError::from(ChatError::Subscription("not held".into()))
-            .counted(0, None, None)
-            .diagnosis();
-        assert_eq!(unusable.category, Category::Unauthorized);
-        assert!(unusable.premium_key);
     }
 
     /// BACKEND-37, PREM-10: the mark on a refused premium key is set where the backend makes the
@@ -5740,12 +5728,10 @@ mod tests {
     fn a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend() {
         struct Lent;
         impl Subscription for Lent {
-            fn next_credential(
-                &mut self,
-            ) -> Result<bravebot_aichat::SubscriptionCredential, String> {
-                Ok(bravebot_aichat::SubscriptionCredential {
+            fn next_credential(&mut self) -> bravebot_aichat::SubscriptionCredential {
+                bravebot_aichat::SubscriptionCredential {
                     key: bravebot_config::Secret::new("a-key"),
-                })
+                }
             }
         }
 
@@ -5826,9 +5812,8 @@ mod tests {
         }
     }
 
-    /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
-    /// and an unusable premium key by unsetting it, and a person shown the wrong one is sent to
-    /// fix something that is not broken.
+    /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in,
+    /// and a person shown another backend's remedy is sent to fix something that is not broken.
     #[test]
     fn each_backend_keeps_its_own_explanation() {
         let bedrock = BackendError::from(BedrockError::Credentials(
@@ -5838,10 +5823,6 @@ mod tests {
         ))
         .to_string();
         assert!(bedrock.contains("aws sso login"), "{bedrock}");
-
-        let premium = BackendError::from(ChatError::Subscription("not held".into())).to_string();
-        assert!(premium.contains("bravebot auth login brave"), "{premium}");
-        assert!(!premium.contains("aws sso login"), "{premium}");
     }
 
     /// A gateway nothing holds a token for is a setting somebody has not finished, not a service

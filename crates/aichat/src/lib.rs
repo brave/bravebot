@@ -74,10 +74,6 @@ pub enum ChatError {
     /// problem is that there was going to be more. Retried like a connection that died, because
     /// that is most often what it is.
     Incomplete,
-    /// The premium tier is configured but its key could not be presented.
-    ///
-    /// Fails the request rather than falling back: see [`AichatClient::route`].
-    Subscription(String),
     /// The ChatGPT account's access token could not be had or was refused twice, or the serving host
     /// refused a request in a code that names the account
     /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
@@ -146,12 +142,6 @@ impl fmt::Display for ChatError {
             }
             Self::Account(failure @ AccountFailure::Xai(_)) => write!(f, "xAI account: {failure}"),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
-            Self::Subscription(detail) => write!(
-                f,
-                "the premium key could not be used: {detail}. Run `bravebot auth login brave` to \
-                 replace it, or `bravebot auth logout brave` to send requests to the free endpoint \
-                 instead"
-            ),
         }
     }
 }
@@ -449,11 +439,7 @@ impl fmt::Display for AccountFailure {
 /// because it keeps this crate independent of where the key comes from.
 pub trait Subscription {
     /// The key presenting the next premium request.
-    ///
-    /// An error here fails the request. It deliberately does not fall back to sending none: a
-    /// configured premium tier that silently stops being used looks like the model got worse for
-    /// no reason, and the one thing worse than an error is an unexplained downgrade.
-    fn next_credential(&mut self) -> Result<SubscriptionCredential, String>;
+    fn next_credential(&mut self) -> SubscriptionCredential;
 }
 
 /// The key ready to be attached to one request.
@@ -477,15 +463,12 @@ pub struct AichatClient<'a> {
     subscription: Option<&'a mut dyn Subscription>,
     /// Whether a request of this client was routed to the premium host with a key from the
     /// subscription source. Set by [`Self::route`] once the source has produced the key, and never
-    /// from a reply. It stays false where no premium host is configured, where no source was lent,
-    /// and where the source could not produce a key (that request fails as
-    /// [`ChatError::Subscription`], which names the key by its own variant). It is not cleared
-    /// between requests, and the decision not to is deliberate: the configuration and whether a
-    /// source was lent are fixed for the life of a client, and with both a premium host and a
-    /// source `route` sends premium or fails, so a client never sends a premium request and a free
-    /// one. Once a request carried the key the flag stays set, so a later request in the same call
-    /// that finds the source empty still reports the key an earlier one carried. A request through
-    /// a gateway does not call `route` and does not set it.
+    /// from a reply. It stays false where no premium host is configured and where no source was
+    /// lent. It is not cleared between requests, and the decision not to is deliberate: the
+    /// configuration and whether a source was lent are fixed for the life of a client, and with
+    /// both a premium host and a source every request `route` makes is premium, so a client never
+    /// sends a premium request and a free one. A request through a gateway does not call `route`
+    /// and does not set it.
     premium_key: bool,
     gateway: Option<Gateway<'a>>,
     /// What this service has refused for the model of the call in progress.
@@ -695,9 +678,8 @@ impl<'a> AichatClient<'a> {
     /// a build with no premium host sends no key rather than sending one somewhere it does not
     /// belong.
     ///
-    /// With both a premium host and a key, this is premium or nothing. A key that cannot be
-    /// produced fails the request rather than quietly sending none, because a downgrade nobody was
-    /// told about is indistinguishable from the service getting worse.
+    /// With both a premium host and a source of the key, every request is premium and carries the
+    /// key the source gives.
     fn route(&mut self) -> Result<(String, Option<SubscriptionCredential>), ChatError> {
         let base = self.config.chat_completions_url();
 
@@ -706,13 +688,10 @@ impl<'a> AichatClient<'a> {
         };
 
         match self.subscription.as_mut() {
-            Some(source) => match source.next_credential() {
-                Ok(credential) => {
-                    self.premium_key = true;
-                    Ok((premium_url, Some(credential)))
-                }
-                Err(detail) => Err(ChatError::Subscription(detail)),
-            },
+            Some(source) => {
+                self.premium_key = true;
+                Ok((premium_url, Some(source.next_credential())))
+            }
             // Premium is configured but no key is held, which is not an error: a caller with none
             // sends the free endpoint's signed request.
             None => Ok((base, None)),

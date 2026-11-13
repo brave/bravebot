@@ -170,11 +170,11 @@ impl<'a, T: ?Sized> Lent<'a, T> {
 /// belongs to the run that took it from the configuration.
 pub trait Spends: Sync {
     /// Take the lock and spend the next credential.
-    fn spend_one(&self) -> Result<SubscriptionCredential, String>;
+    fn spend_one(&self) -> SubscriptionCredential;
 }
 
 impl<T: Subscription + Send + ?Sized> Spends for Lent<'_, T> {
-    fn spend_one(&self) -> Result<SubscriptionCredential, String> {
+    fn spend_one(&self) -> SubscriptionCredential {
         self.hold().next_credential()
     }
 }
@@ -195,10 +195,10 @@ impl<'a> Counted<'a> {
 }
 
 impl Spends for Counted<'_> {
-    fn spend_one(&self) -> Result<SubscriptionCredential, String> {
-        let credential = self.source.spend_one()?;
+    fn spend_one(&self) -> SubscriptionCredential {
+        let credential = self.source.spend_one();
         self.limit.add_credit();
-        Ok(credential)
+        credential
     }
 }
 
@@ -215,7 +215,7 @@ impl<'a> Spending<'a> {
 }
 
 impl Subscription for Spending<'_> {
-    fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+    fn next_credential(&mut self) -> SubscriptionCredential {
         self.0.spend_one()
     }
 }
@@ -1000,23 +1000,19 @@ mod tests {
             asked: usize,
         }
         impl Subscription for Counting {
-            fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+            fn next_credential(&mut self) -> SubscriptionCredential {
                 self.asked += 1;
-                Ok(SubscriptionCredential {
+                SubscriptionCredential {
                     key: bravebot_config::Secret::new("a-key"),
-                })
+                }
             }
         }
 
         let mut source = Counting { asked: 0 };
         {
             let lent = Lent::new(&mut source);
-            Spending::new(&lent)
-                .next_credential()
-                .expect("the turn presents the key");
-            Spending::new(&lent)
-                .next_credential()
-                .expect("the delegate presents the key");
+            Spending::new(&lent).next_credential();
+            Spending::new(&lent).next_credential();
         }
 
         assert_eq!(
