@@ -1476,7 +1476,7 @@ fn a_socket_the_bridge_was_started_with_reaches_none_of_the_programs_it_starts()
     let scratch = Scratch::new("control-boundary-leaked");
     let reach = |name: &str| {
         format!(
-            "if echo {name} 2>/dev/null >&{LEAKED}; then echo held; else echo absent; fi > '{}'",
+            "if [ -e /dev/fd/{LEAKED} ]; then echo held; echo {name} 2>/dev/null > /dev/fd/{LEAKED}; else echo absent; fi > '{}'",
             scratch.project().join(format!("{name}.txt")).display()
         )
     };
