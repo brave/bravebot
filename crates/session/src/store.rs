@@ -1080,7 +1080,10 @@ and this?
             "the merged settings do not hold the home file's key"
         );
         assert_eq!(
-            checkout.model_ignored().count(),
+            checkout
+                .not_obeyed_all()
+                .filter(|(key, _)| *key == "model")
+                .count(),
             1,
             "the checkout's key is not what is reported as ignored"
         );

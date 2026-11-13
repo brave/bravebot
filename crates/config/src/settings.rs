@@ -178,63 +178,59 @@ impl Entitled {
 /// because the merge unions every name a layer set and a removed key cannot reach
 /// [`Settings::from_map`]. The layer is recorded under the key in `Settings::not_obeyed`.
 /// [`Settings::not_obeyed_all`] answers for every row, which is what `doctor` and the desktop
-/// settings view read, so a row added here is reported by both. The accessor named in the comment
-/// on a row answers for that key alone and is read by tests only.
+/// settings view read, so a row added here is reported by both.
 const HOME_ONLY: &[(&str, Entitled)] = &[
-    // The key picking which of the providers answers: [`Settings::model_ignored`].
+    // The key picking which of the providers answers.
     ("model", Entitled::OwnOrNamed),
     // A provider block decides where a request is sent and which of the person's environment
     // variables are read as its credential, so a checkout naming one has to be told the block was
-    // dropped rather than left to conclude the gateway it named is in force:
-    // [`Settings::providers_ignored`].
+    // dropped rather than left to conclude the gateway it named is in force.
     (PROVIDER_BLOCK, Entitled::OwnOrNamed),
     // The model it names is sent the whole conversation, which makes it a destination, and a
-    // checkout cannot choose one: [`Settings::advisor_ignored`].
+    // checkout cannot choose one.
     ("advisorModel", Entitled::OwnOrNamed),
     // The model it names is sent the whole conversation once the primary fails, which makes it a
-    // destination, and a checkout cannot choose one: [`Settings::fallback_ignored`].
+    // destination, and a checkout cannot choose one.
     ("fallbackModel", Entitled::OwnOrNamed),
     // The model it names is sent the conversation to summarise and the exchange to judge, which
-    // makes it a destination, and a checkout cannot choose one: [`Settings::summary_ignored`].
+    // makes it a destination, and a checkout cannot choose one.
     ("summaryModel", Entitled::OwnOrNamed),
     // The model it names is sent the whole conversation while the session is in plan mode, which
-    // makes it a destination, and a checkout cannot choose one: [`Settings::plan_ignored`].
+    // makes it a destination, and a checkout cannot choose one.
     ("planModel", Entitled::OwnOrNamed),
     // The model it names is sent the files a processor reads, which makes it a destination, and a
-    // checkout cannot choose one: [`Settings::processor_ignored`].
+    // checkout cannot choose one.
     ("processorModel", Entitled::OwnOrNamed),
     // Its words steer a model that reads files nobody vouched for, and a checkout's file would be
-    // writing the instructions of the person's commit messages: [`Settings::commit_message_ignored`].
+    // writing the instructions of the person's commit messages.
     (COMMIT_MESSAGE_BLOCK, Entitled::OwnOrNamed),
     // A definition chosen for every turn is a prompt and a narrowing nobody vouched for where a
-    // checkout wrote it, so only a file the person wrote or named can choose one:
-    // [`Settings::agent_ignored`].
+    // checkout wrote it, so only a file the person wrote or named can choose one.
     ("agent", Entitled::OwnOrNamed),
     // A style's words open the system prompt, so which one a session starts in is the person's to
-    // say and not a checkout's: [`Settings::style_ignored`].
+    // say and not a checkout's.
     ("style", Entitled::OwnOrNamed),
     // Naming a directory puts every skill in it in front of the planner, so a checkout's file would
-    // be choosing what the person's home contributes to the prompt (INSTR-17):
-    // [`Settings::shared_skill_directories_ignored`].
+    // be choosing what the person's home contributes to the prompt (INSTR-17).
     (SHARED_SKILLS_KEY, Entitled::OwnOrNamed),
     // Turning it on sends a bot's conversation to an embeddings endpoint, which makes it a
-    // destination, and a checkout cannot choose one (RETRIEVE-1): [`Settings::retrieval_ignored`].
+    // destination, and a checkout cannot choose one (RETRIEVE-1).
     (RETRIEVAL_BLOCK, Entitled::OwnOrNamed),
     // The interface is in one language for the whole process and is chosen before the command line
     // is read, so the one file that can say which is the person's own: a checkout's file would be
-    // choosing the language for whoever opened the checkout: [`Settings::language_ignored`].
+    // choosing the language for whoever opened the checkout.
     ("language", Entitled::Own),
     // A checkout's file choosing when the person's own records are deleted is the case this key is
-    // read from the home layer alone to prevent: [`Settings::retention_ignored`].
+    // read from the home layer alone to prevent.
     (RETENTION_KEY, Entitled::Own),
     // An entry makes a directory reachable and puts its description in front of the planner, so a
-    // checkout's file cannot write one (REFER-2): [`Settings::references_ignored`].
+    // checkout's file cannot write one (REFER-2).
     (REFERENCES_BLOCK, Entitled::OwnOrNamed),
     // The block's free text reaches the planner's standing instructions on every round, so a
-    // checkout's file cannot put it there: [`Settings::attribution_ignored`].
+    // checkout's file cannot put it there.
     ("attribution", Entitled::OwnOrNamed),
     // A question closed on a clock is one the person was not asked, so a clock that closes the
-    // person's questions is theirs to set and not the checkout's: [`Settings::ask_idle_ignored`].
+    // person's questions is theirs to set and not the checkout's.
     ("askIdleSeconds", Entitled::OwnOrNamed),
 ];
 
@@ -1666,7 +1662,7 @@ impl Settings {
 
     /// Whether [`Settings::model`] came from a file above the person's own: a checkout's, or the
     /// one `--settings` named. Always false now: such a file may not name `model` at all, so a
-    /// saved pick is never outranked through it, and [`Settings::model_ignored`] is where a file
+    /// saved pick is never outranked through it, and [`Settings::not_obeyed_all`] is where a file
     /// that tried is reported.
     pub fn model_outranks_a_pick(&self) -> bool {
         self.model_outranks_a_pick
@@ -1721,11 +1717,6 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn commit_message_instructions(&self) -> Option<&str> {
         self.commit_message_instructions.as_deref()
-    }
-
-    /// The files that wrote `commitMessage` from a layer not entitled to, weakest first.
-    pub fn commit_message_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed(COMMIT_MESSAGE_BLOCK)
     }
 
     /// The definition the settings in force name for every turn of a session to be addressed to,
@@ -1818,7 +1809,7 @@ impl Settings {
     ///
     /// Off unless `retrieval.enabled` is a real `true`: turning it on sends the conversation to
     /// another endpoint, so a quoted `"true"` is absence. A checkout's file is never obeyed: see
-    /// [`Settings::retrieval_ignored`].
+    /// [`Settings::not_obeyed_all`].
     pub fn retrieval(&self) -> bool {
         self.retrieval == Some(true)
     }
@@ -1834,11 +1825,6 @@ impl Settings {
     /// (RETRIEVE-33), read from the same files [`Settings::retrieval`] is.
     pub fn embeddings(&self) -> &crate::embeddings::Choice {
         &self.embeddings
-    }
-
-    /// The files that named `retrieval` from a layer not entitled to, weakest first.
-    pub fn retrieval_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed(RETRIEVAL_BLOCK)
     }
 
     /// Whether the settings in force let the interface recap a session by itself when a person has
@@ -1897,11 +1883,6 @@ impl Settings {
             return Retention::Paused;
         }
         Retention::Days(self.retention_days.unwrap_or(DEFAULT_RETENTION_DAYS))
-    }
-
-    /// The files that named `retentionDays` from a layer not entitled to, weakest first.
-    pub fn retention_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed(RETENTION_KEY)
     }
 
     /// The home layer's file when [`Settings::retention`] is paused for want of a readable period.
@@ -2454,64 +2435,15 @@ impl Settings {
         &self.chatgpt_models
     }
 
-    /// The files that named a `provider` block from a layer not entitled to, weakest first.
-    ///
-    /// A provider block decides where a request is sent and which of the person's environment
-    /// variables are read as its credential, so a checkout naming one is dropped here and named
-    /// rather than obeyed.
-    pub fn providers_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed(PROVIDER_BLOCK)
-    }
-
-    /// The files that named the top-level `model` key from a layer not entitled to, weakest first.
-    pub fn model_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("model")
-    }
-
-    /// The files that named `advisorModel` from a layer not entitled to, weakest first.
-    pub fn advisor_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("advisorModel")
-    }
-
-    /// The files that named `fallbackModel` from a layer not entitled to, weakest first.
-    pub fn fallback_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("fallbackModel")
-    }
-
-    /// The files that named `summaryModel` from a layer not entitled to, weakest first.
-    pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("summaryModel")
-    }
-
-    /// The files that named `planModel` from a layer not entitled to, weakest first.
-    pub fn plan_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("planModel")
-    }
-
-    /// The files that named `processorModel` from a layer not entitled to, weakest first.
-    pub fn processor_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("processorModel")
-    }
-
     /// The output style the settings in force named, as the file spelled it (INSTR-12).
     pub fn style(&self) -> Option<&str> {
         self.style.as_deref()
-    }
-
-    /// The files that named `style` from a layer not entitled to, weakest first.
-    pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("style")
     }
 
     /// The directories the settings in force named as ones to read skills from, as the file spelled
     /// them (INSTR-17).
     pub fn shared_skill_directories(&self) -> &[String] {
         &self.shared_skills
-    }
-
-    /// The files that named `sharedSkillDirectories` from a layer not entitled to, weakest first.
-    pub fn shared_skill_directories_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed(SHARED_SKILLS_KEY)
     }
 
     /// The language the person's own file asked the interface to be read in, as the file spelled it
@@ -2523,40 +2455,15 @@ impl Settings {
         self.language.as_deref()
     }
 
-    /// The files that named `language` from a layer other than the person's own, weakest first.
-    pub fn language_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("language")
-    }
-
     /// How many seconds a question the planner puts waits with no key pressed before it is closed
     /// without an answer, if the settings in force said (ASK-9).
     ///
     /// `None` where nobody named a usable count, which is a question that waits for as long as it
     /// takes. Zero would close every question before it could be read, so it is absence, and so is
     /// anything that is not a whole count. A checkout's file is never obeyed: see
-    /// [`Settings::ask_idle_ignored`].
+    /// [`Settings::not_obeyed_all`].
     pub fn ask_idle_seconds(&self) -> Option<u64> {
         self.ask_idle_seconds
-    }
-
-    /// The files that named `askIdleSeconds` from a layer not entitled to, weakest first.
-    pub fn ask_idle_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("askIdleSeconds")
-    }
-
-    /// The files that named `agent` from a layer not entitled to, weakest first.
-    pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("agent")
-    }
-
-    /// The layers that wrote `references` without being entitled to, weakest first.
-    pub fn references_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed(REFERENCES_BLOCK)
-    }
-
-    /// The layers that wrote `attribution` without being entitled to, weakest first.
-    pub fn attribution_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.not_obeyed("attribution")
     }
 
     /// The directories the `references` block names, by alias (REFER-1).
@@ -6290,7 +6197,7 @@ mod tests {
             .map(|provider| provider.id.as_str())
             .collect();
         assert_eq!(hosts, ["personal"]);
-        assert_eq!(settings.providers_ignored().count(), 1);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 1);
     }
 
     /// A provider block naming no host is a mistake in the layer it sits in, and a mistake in a
@@ -6308,7 +6215,7 @@ mod tests {
             settings.providers()[0].base_url,
             "https://personal.invalid/v1"
         );
-        assert_eq!(settings.providers_ignored().count(), 1);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 1);
     }
 
     /// A checkout that stretches a timeout or multiplies attempts would spend the person's account
@@ -6345,7 +6252,7 @@ mod tests {
             Some(std::time::Duration::from_secs(60)),
             "a checkout stretched the window"
         );
-        assert_eq!(settings.providers_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 2);
     }
 
     /// A file the command line named beats every file that was found (BACKEND-24), and naming it
@@ -6356,7 +6263,7 @@ mod tests {
             .named(r#"{"provider": {"gw": {"options": {"baseURL": "https://flag.invalid/v1"}}}}"#)
             .read();
         assert!(!settings.providers().is_empty());
-        assert_eq!(settings.providers_ignored().count(), 0);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 0);
     }
 
     /// The whole of the mechanism: a checkout naming a provider block also names which environment
@@ -6378,7 +6285,7 @@ mod tests {
             settings.providers().is_empty(),
             "a checkout picked a backend and a credential with it"
         );
-        assert_eq!(settings.providers_ignored().count(), 1);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 1);
     }
 
     /// CHATGPT-9: the models an entry named `chatgpt` offers the account are read from the layers a
@@ -6395,7 +6302,7 @@ mod tests {
             settings.chatgpt_models().is_empty(),
             "a checkout chose the account's models"
         );
-        assert_eq!(settings.providers_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 2);
 
         for settings in [
             Layers::new("provider-chatgpt-home").global(block).read(),
@@ -6407,7 +6314,7 @@ mod tests {
                 .map(|model| model.id.as_str())
                 .collect();
             assert_eq!(ids, ["gpt-5"]);
-            assert_eq!(settings.providers_ignored().count(), 0);
+            assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 0);
         }
     }
 
@@ -6424,7 +6331,7 @@ mod tests {
             .read();
         assert_eq!(settings.providers().len(), 1);
         assert_eq!(settings.providers()[0].env, ["GATEWAY_KEY"]);
-        assert_eq!(settings.providers_ignored().count(), 0);
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 0);
     }
 
     /// BACKEND-24: `options.headers` goes on every request to that gateway, so a layer able to add
@@ -6480,7 +6387,7 @@ mod tests {
         );
 
         let dropped: Vec<PathBuf> = settings
-            .providers_ignored()
+            .not_obeyed(PROVIDER_BLOCK)
             .map(Path::to_path_buf)
             .collect();
         assert_eq!(
@@ -6506,7 +6413,7 @@ mod tests {
                 .all(|provider| provider.request_headers(|_| None).is_empty()),
             "a checkout with no home layer above it configured a header"
         );
-        assert_eq!(only_project.providers_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed(PROVIDER_BLOCK).count(), 1);
 
         // The file `--settings` named is the person's own act, so it names headers as the home
         // file does and is not reported.
@@ -6528,7 +6435,7 @@ mod tests {
             from_named,
             [("x-route".to_string(), "named-eu".to_string())]
         );
-        assert_eq!(named.providers_ignored().count(), 0);
+        assert_eq!(named.not_obeyed(PROVIDER_BLOCK).count(), 0);
     }
 
     /// A mistake in a checkout must not decide that somebody's own profile no longer applies, which
@@ -7976,7 +7883,7 @@ mod tests {
             .project(r#"{"retrieval": {"enabled": true}}"#)
             .read();
         assert!(!checkout.retrieval());
-        assert_eq!(checkout.retrieval_ignored().count(), 1);
+        assert_eq!(checkout.not_obeyed(RETRIEVAL_BLOCK).count(), 1);
 
         let own = Layers::new("retrieval-home")
             .global(r#"{"retrieval": {"enabled": true}}"#)
@@ -8063,19 +7970,19 @@ mod tests {
             .read();
         assert_eq!(settings.attribution().commit.as_deref(), Some(""));
         assert_eq!(settings.attribution().pr, None);
-        assert_eq!(settings.attribution_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("attribution").count(), 2);
 
         let only_project = Layers::new("attribution-only-project")
             .project(r#"{"attribution": {"commit": "Trailer"}}"#)
             .read();
         assert!(only_project.attribution().is_empty());
-        assert_eq!(only_project.attribution_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("attribution").count(), 1);
 
         let named = Layers::new("attribution-named")
             .named(r#"{"attribution": {"commit": "Chosen"}}"#)
             .read();
         assert_eq!(named.attribution().commit.as_deref(), Some("Chosen"));
-        assert_eq!(named.attribution_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("attribution").count(), 0);
     }
 
     /// A named file is the person's own wherever it sits, so one inside the workspace sets the
@@ -8086,7 +7993,7 @@ mod tests {
             .named_inside_the_workspace(r#"{"attribution": {"commit": "Chosen"}}"#)
             .read();
         assert_eq!(settings.attribution().commit.as_deref(), Some("Chosen"));
-        assert_eq!(settings.attribution_ignored().count(), 0);
+        assert_eq!(settings.not_obeyed("attribution").count(), 0);
     }
 
     /// The named key, the value a layer states for it, and whether a file the command line named
@@ -8112,37 +8019,6 @@ mod tests {
         ("attribution", false, false),
         ("askIdleSeconds", false, false),
     ];
-
-    /// What reads the files refused a key, as a list.
-    type Reported = fn(&Settings) -> Vec<PathBuf>;
-
-    /// The accessor each key of [`HOME_ONLY`] is reported by.
-    fn home_only_accessors() -> Vec<(&'static str, Reported)> {
-        fn paths<'a>(found: impl Iterator<Item = &'a Path>) -> Vec<PathBuf> {
-            found.map(Path::to_path_buf).collect()
-        }
-        vec![
-            ("model", |s| paths(s.model_ignored())),
-            ("provider", |s| paths(s.providers_ignored())),
-            ("advisorModel", |s| paths(s.advisor_ignored())),
-            ("fallbackModel", |s| paths(s.fallback_ignored())),
-            ("summaryModel", |s| paths(s.summary_ignored())),
-            ("planModel", |s| paths(s.plan_ignored())),
-            ("processorModel", |s| paths(s.processor_ignored())),
-            ("commitMessage", |s| paths(s.commit_message_ignored())),
-            ("agent", |s| paths(s.agent_ignored())),
-            ("style", |s| paths(s.style_ignored())),
-            ("sharedSkillDirectories", |s| {
-                paths(s.shared_skill_directories_ignored())
-            }),
-            ("retrieval", |s| paths(s.retrieval_ignored())),
-            ("language", |s| paths(s.language_ignored())),
-            ("retentionDays", |s| paths(s.retention_ignored())),
-            ("references", |s| paths(s.references_ignored())),
-            ("attribution", |s| paths(s.attribution_ignored())),
-            ("askIdleSeconds", |s| paths(s.ask_idle_ignored())),
-        ]
-    }
 
     /// The text of a layer naming only `key`.
     fn naming_only(key: &str) -> String {
@@ -8214,35 +8090,6 @@ mod tests {
         }
     }
 
-    /// Each accessor reports the files refused its own key and no other key's, so one reading the
-    /// wrong key of the table answers for another setting.
-    #[test]
-    fn each_not_obeyed_accessor_reports_its_own_key() {
-        let accessors = home_only_accessors();
-        assert_eq!(accessors.len(), HOME_ONLY.len());
-        for (key, _) in HOME_ONLY {
-            let settings = Layers::new(&format!("table-accessor-{key}"))
-                .project(&naming_only(key))
-                .read();
-            for (accessor_key, accessor) in &accessors {
-                let reported = accessor(&settings);
-                match accessor_key == key {
-                    true => {
-                        assert_eq!(reported.len(), 1, "{key}: its own accessor");
-                        assert_eq!(
-                            reported[0].file_name(),
-                            Some(std::ffi::OsStr::new(SETTINGS_FILE))
-                        );
-                    }
-                    false => assert!(
-                        reported.is_empty(),
-                        "{key} reported by the accessor of {accessor_key}"
-                    ),
-                }
-            }
-        }
-    }
-
     /// The two caps are unrelated bounds that share a block, so a checkout widening the walk for
     /// its own size must not hand back the reading time a person's own file had cut.
     #[test]
@@ -8284,7 +8131,7 @@ mod tests {
             .project(r#"{"model": "this-checkout"}"#)
             .read();
         assert_eq!(settings.model(), Some("personal-choice"));
-        assert_eq!(settings.model_ignored().count(), 1);
+        assert_eq!(settings.not_obeyed("model").count(), 1);
     }
 
     /// With nothing in the home layer, a checkout's model is dropped rather than used: the fallback
@@ -8295,7 +8142,7 @@ mod tests {
             .project(r#"{"model": "this-checkout"}"#)
             .read();
         assert_eq!(settings.model(), None);
-        assert_eq!(settings.model_ignored().count(), 1);
+        assert_eq!(settings.not_obeyed("model").count(), 1);
     }
 
     /// BACKEND-33: where a request goes and which authority is trusted are the person's to say, so
@@ -8803,7 +8650,7 @@ mod tests {
                 *model_outranks,
                 "{seen:?}"
             );
-            assert_eq!(settings.model_ignored().count(), *dropped, "{seen:?}");
+            assert_eq!(settings.not_obeyed("model").count(), *dropped, "{seen:?}");
             assert_eq!(
                 settings.effort_outranks_a_pick(),
                 *level_outranks,
@@ -8850,7 +8697,7 @@ mod tests {
             .project(r#"{"model": "  ", "effort": 3}"#)
             .read();
         assert_eq!(settings.model(), Some("personal"));
-        assert_eq!(settings.model_ignored().count(), 1);
+        assert_eq!(settings.not_obeyed("model").count(), 1);
         assert!(!settings.model_outranks_a_pick());
         assert!(!settings.effort_outranks_a_pick());
     }
@@ -8869,7 +8716,7 @@ mod tests {
             let seen = settings.layers().collect::<Vec<_>>();
             assert_eq!(settings.model(), None, "{name}: {seen:?}");
             assert!(!settings.model_outranks_a_pick(), "{name}: {seen:?}");
-            assert_eq!(settings.model_ignored().count(), 0, "{name}: {seen:?}");
+            assert_eq!(settings.not_obeyed("model").count(), 0, "{name}: {seen:?}");
         }
     }
 
@@ -8896,13 +8743,13 @@ mod tests {
             .local(r#"{"fallbackModel": "also-this-checkout"}"#)
             .read();
         assert_eq!(settings.fallback_model(), Some("personal-fallback"));
-        assert_eq!(settings.fallback_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("fallbackModel").count(), 2);
 
         let only_project = Layers::new("fallback-only-project")
             .project(r#"{"fallbackModel": "this-checkout"}"#)
             .read();
         assert_eq!(only_project.fallback_model(), None);
-        assert_eq!(only_project.fallback_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("fallbackModel").count(), 1);
 
         let named = Layers::new("fallback-named")
             .global(r#"{"fallbackModel": "personal-fallback"}"#)
@@ -8921,13 +8768,13 @@ mod tests {
             .local(r#"{"summaryModel": "also-this-checkout"}"#)
             .read();
         assert_eq!(settings.summary_model(), Some("personal-summary"));
-        assert_eq!(settings.summary_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("summaryModel").count(), 2);
 
         let only_project = Layers::new("summary-only-project")
             .project(r#"{"summaryModel": "this-checkout"}"#)
             .read();
         assert_eq!(only_project.summary_model(), None);
-        assert_eq!(only_project.summary_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("summaryModel").count(), 1);
 
         // The file `--settings` named is the person's own act, so it may name one and wins over the
         // home file.
@@ -8936,7 +8783,7 @@ mod tests {
             .named(r#"{"summaryModel": "named-summary"}"#)
             .read();
         assert_eq!(named.summary_model(), Some("named-summary"));
-        assert_eq!(named.summary_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("summaryModel").count(), 0);
     }
     /// PROC-13: the processor model is a destination for the files a processor reads, so a
     /// checkout's layers cannot name it, the layers that can are reported for the ones that could
@@ -8949,20 +8796,20 @@ mod tests {
             .local(r#"{"processorModel": "also-this-checkout"}"#)
             .read();
         assert_eq!(settings.processor_model(), Some("personal-processor"));
-        assert_eq!(settings.processor_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("processorModel").count(), 2);
 
         let only_project = Layers::new("processor-only-project")
             .project(r#"{"processorModel": "this-checkout"}"#)
             .read();
         assert_eq!(only_project.processor_model(), None);
-        assert_eq!(only_project.processor_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("processorModel").count(), 1);
 
         let named = Layers::new("processor-named")
             .global(r#"{"processorModel": "personal-processor"}"#)
             .named(r#"{"processorModel": "named-processor"}"#)
             .read();
         assert_eq!(named.processor_model(), Some("named-processor"));
-        assert_eq!(named.processor_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("processorModel").count(), 0);
 
         let inherit = Layers::new("processor-inherit")
             .global(r#"{"processorModel": "Inherit"}"#)
@@ -8984,20 +8831,20 @@ mod tests {
             settings.commit_message_instructions(),
             Some("Conventional Commits")
         );
-        assert_eq!(settings.commit_message_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed(COMMIT_MESSAGE_BLOCK).count(), 2);
 
         let only_project = Layers::new("commit-message-only-project")
             .project(r#"{"commitMessage": {"instructions": "this-checkout"}}"#)
             .read();
         assert_eq!(only_project.commit_message_instructions(), None);
-        assert_eq!(only_project.commit_message_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed(COMMIT_MESSAGE_BLOCK).count(), 1);
 
         let named = Layers::new("commit-message-named")
             .global(r#"{"commitMessage": {"instructions": "personal"}}"#)
             .named(r#"{"commitMessage": {"instructions": "named"}}"#)
             .read();
         assert_eq!(named.commit_message_instructions(), Some("named"));
-        assert_eq!(named.commit_message_ignored().count(), 0);
+        assert_eq!(named.not_obeyed(COMMIT_MESSAGE_BLOCK).count(), 0);
 
         for blank in [
             r#"{"commitMessage": {"instructions": "   "}}"#,
@@ -9025,13 +8872,13 @@ mod tests {
             .local(r#"{"planModel": "also-this-checkout"}"#)
             .read();
         assert_eq!(settings.plan_model(), Some("personal-plan"));
-        assert_eq!(settings.plan_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("planModel").count(), 2);
 
         let only_project = Layers::new("plan-only-project")
             .project(r#"{"planModel": "this-checkout"}"#)
             .read();
         assert_eq!(only_project.plan_model(), None);
-        assert_eq!(only_project.plan_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("planModel").count(), 1);
 
         // The file `--settings` named is the person's own act, so it may name one and wins over the
         // home file.
@@ -9040,7 +8887,7 @@ mod tests {
             .named(r#"{"planModel": "named-plan"}"#)
             .read();
         assert_eq!(named.plan_model(), Some("named-plan"));
-        assert_eq!(named.plan_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("planModel").count(), 0);
     }
 
     /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
@@ -9053,20 +8900,20 @@ mod tests {
             .local(r#"{"agent": "also-this-checkout"}"#)
             .read();
         assert_eq!(settings.agent(), Some("my-reviewer"));
-        assert_eq!(settings.agent_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("agent").count(), 2);
 
         let only_project = Layers::new("agent-only-project")
             .project(r#"{"agent": "this-checkout"}"#)
             .read();
         assert_eq!(only_project.agent(), None);
-        assert_eq!(only_project.agent_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("agent").count(), 1);
 
         let named = Layers::new("agent-named")
             .global(r#"{"agent": "my-reviewer"}"#)
             .named(r#"{"agent": "named-reviewer"}"#)
             .read();
         assert_eq!(named.agent(), Some("named-reviewer"));
-        assert_eq!(named.agent_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("agent").count(), 0);
     }
 
     /// ASK-9: the time is a whole positive count of seconds. Zero would close every question before
@@ -9106,26 +8953,26 @@ mod tests {
             .local(r#"{"askIdleSeconds": 7}"#)
             .read();
         assert_eq!(settings.ask_idle_seconds(), Some(600));
-        assert_eq!(settings.ask_idle_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("askIdleSeconds").count(), 2);
 
         let only_project = Layers::new("ask-idle-only-project")
             .project(r#"{"askIdleSeconds": 5}"#)
             .read();
         assert_eq!(only_project.ask_idle_seconds(), None);
-        assert_eq!(only_project.ask_idle_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("askIdleSeconds").count(), 1);
 
         let named = Layers::new("ask-idle-named")
             .global(r#"{"askIdleSeconds": 600}"#)
             .named(r#"{"askIdleSeconds": 120}"#)
             .read();
         assert_eq!(named.ask_idle_seconds(), Some(120));
-        assert_eq!(named.ask_idle_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("askIdleSeconds").count(), 0);
 
         let inside = Layers::new("ask-idle-named-inside")
             .named_inside_the_workspace(r#"{"askIdleSeconds": 5}"#)
             .read();
         assert_eq!(inside.ask_idle_seconds(), Some(5));
-        assert_eq!(inside.ask_idle_ignored().count(), 0);
+        assert_eq!(inside.not_obeyed("askIdleSeconds").count(), 0);
     }
 
     /// INSTR-17: naming a directory to read skills from is the person's, so a checkout's layers
@@ -9138,19 +8985,19 @@ mod tests {
             .local(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
             .read();
         assert_eq!(settings.shared_skill_directories(), ["~/.claude/skills"]);
-        assert_eq!(settings.shared_skill_directories_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed(SHARED_SKILLS_KEY).count(), 2);
 
         let only_project = Layers::new("shared-skills-only-project")
             .project(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
             .read();
         assert!(only_project.shared_skill_directories().is_empty());
-        assert_eq!(only_project.shared_skill_directories_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed(SHARED_SKILLS_KEY).count(), 1);
 
         let named = Layers::new("shared-skills-named")
             .named(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
             .read();
         assert_eq!(named.shared_skill_directories(), ["~/.agents/skills"]);
-        assert_eq!(named.shared_skill_directories_ignored().count(), 0);
+        assert_eq!(named.not_obeyed(SHARED_SKILLS_KEY).count(), 0);
 
         let nothing = Layers::new("shared-skills-unset").global("{}").read();
         assert!(nothing.shared_skill_directories().is_empty());
@@ -9165,20 +9012,20 @@ mod tests {
             .local(r#"{"style": "explanatory"}"#)
             .read();
         assert_eq!(settings.style(), Some("concise"));
-        assert_eq!(settings.style_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("style").count(), 2);
 
         let only_project = Layers::new("style-only-project")
             .project(r#"{"style": "proactive"}"#)
             .read();
         assert_eq!(only_project.style(), None);
-        assert_eq!(only_project.style_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("style").count(), 1);
 
         let named = Layers::new("style-named")
             .global(r#"{"style": "concise"}"#)
             .named(r#"{"style": "terse"}"#)
             .read();
         assert_eq!(named.style(), Some("terse"));
-        assert_eq!(named.style_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("style").count(), 0);
     }
 
     /// LOCALE-8: the catalog is chosen once for the process and before the command line is read, so
@@ -9193,19 +9040,19 @@ mod tests {
             .named(r#"{"language": "ja"}"#)
             .read();
         assert_eq!(settings.language(), Some("fr"));
-        assert_eq!(settings.language_ignored().count(), 3);
+        assert_eq!(settings.not_obeyed("language").count(), 3);
 
         let only_project = Layers::new("language-only-project")
             .project(r#"{"language": "ja"}"#)
             .read();
         assert_eq!(only_project.language(), None);
-        assert_eq!(only_project.language_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("language").count(), 1);
 
         let named = Layers::new("language-named")
             .named(r#"{"language": "ja"}"#)
             .read();
         assert_eq!(named.language(), None);
-        assert_eq!(named.language_ignored().count(), 1);
+        assert_eq!(named.not_obeyed("language").count(), 1);
     }
 
     /// LOCALE-8: the reader that answers before the command line is read sees the home layer and
@@ -9372,7 +9219,7 @@ mod tests {
             .local(r#"{"retentionDays": 1}"#)
             .read();
         assert_eq!(settings.retention(), kept_for(90));
-        assert_eq!(settings.retention_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed(RETENTION_KEY).count(), 2);
 
         let only_project = Layers::new("retention-only-project")
             .project(r#"{"retentionDays": 1}"#)
@@ -9381,21 +9228,21 @@ mod tests {
             only_project.retention(),
             Retention::Days(DEFAULT_RETENTION_DAYS)
         );
-        assert_eq!(only_project.retention_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed(RETENTION_KEY).count(), 1);
 
         let named = Layers::new("retention-named")
             .global(r#"{"retentionDays": 90}"#)
             .named(r#"{"retentionDays": 1}"#)
             .read();
         assert_eq!(named.retention(), kept_for(90));
-        assert_eq!(named.retention_ignored().count(), 1);
+        assert_eq!(named.not_obeyed(RETENTION_KEY).count(), 1);
 
         let named_home = Layers::new("retention-named-home")
             .global(r#"{"retentionDays": 90}"#)
             .naming_the_home_layer()
             .read();
         assert_eq!(named_home.retention(), kept_for(90));
-        assert_eq!(named_home.retention_ignored().count(), 0);
+        assert_eq!(named_home.not_obeyed(RETENTION_KEY).count(), 0);
     }
 
     /// STATE-4: a value that is not a whole number of days above zero cannot be turned into a period
@@ -9544,19 +9391,19 @@ mod tests {
             .read();
         let aliases: Vec<_> = settings.references().iter().map(|r| &*r.alias).collect();
         assert_eq!(aliases, ["mine"]);
-        assert_eq!(settings.references_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed(REFERENCES_BLOCK).count(), 2);
 
         let only_project = Layers::new("references-only-project")
             .project(r#"{"references": {"theirs": "/etc"}}"#)
             .read();
         assert!(only_project.references().is_empty());
-        assert_eq!(only_project.references_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed(REFERENCES_BLOCK).count(), 1);
 
         let named = Layers::new("references-named")
             .named(r#"{"references": {"chosen": "/srv/chosen"}}"#)
             .read();
         assert_eq!(named.references().len(), 1);
-        assert_eq!(named.references_ignored().count(), 0);
+        assert_eq!(named.not_obeyed(REFERENCES_BLOCK).count(), 0);
     }
 
     /// REFER-2: a named file is the person's own wherever it sits, so one inside the workspace
@@ -9569,7 +9416,7 @@ mod tests {
             .read();
         let aliases: Vec<_> = settings.references().iter().map(|r| &*r.alias).collect();
         assert_eq!(aliases, ["notes"]);
-        assert_eq!(settings.references_ignored().count(), 0);
+        assert_eq!(settings.not_obeyed(REFERENCES_BLOCK).count(), 0);
     }
 
     /// REFER-1: the person's file named on the command line replaces the home file's block as a
@@ -9610,13 +9457,13 @@ mod tests {
             .local(r#"{"advisorModel": "also-this-checkout"}"#)
             .read();
         assert_eq!(settings.advisor_model(), Some("personal-advisor"));
-        assert_eq!(settings.advisor_ignored().count(), 2);
+        assert_eq!(settings.not_obeyed("advisorModel").count(), 2);
 
         let only_project = Layers::new("advisor-project-only")
             .project(r#"{"advisorModel": "this-checkout"}"#)
             .read();
         assert_eq!(only_project.advisor_model(), None);
-        assert_eq!(only_project.advisor_ignored().count(), 1);
+        assert_eq!(only_project.not_obeyed("advisorModel").count(), 1);
     }
 
     /// The file `--settings` named is the person's own act, so it may name an advisor and wins
@@ -9627,14 +9474,14 @@ mod tests {
             .global(r#"{"advisorModel": "  personal-advisor "}"#)
             .read();
         assert_eq!(home.advisor_model(), Some("personal-advisor"));
-        assert_eq!(home.advisor_ignored().count(), 0);
+        assert_eq!(home.not_obeyed("advisorModel").count(), 0);
 
         let named = Layers::new("advisor-named")
             .global(r#"{"advisorModel": "personal-advisor"}"#)
             .named(r#"{"advisorModel": "named-advisor"}"#)
             .read();
         assert_eq!(named.advisor_model(), Some("named-advisor"));
-        assert_eq!(named.advisor_ignored().count(), 0);
+        assert_eq!(named.not_obeyed("advisorModel").count(), 0);
     }
 
     /// The reason to report an override at all: somebody seeing a value they did not set has three
