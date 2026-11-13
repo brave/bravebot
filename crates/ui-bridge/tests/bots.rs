@@ -1,3 +1,7 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "the shared profile helper unwraps, and a test that unwraps fails at the line that did"
+)]
 #[allow(
     dead_code,
     reason = "this test uses the isolation and not the project helper"

@@ -220,7 +220,6 @@ export type DefineRequest = (method: 'bot.define' | 'bot.redefine', params: Reco
  * and the file never disagree about what the bot is for.
  */
 export async function saveFormBot(next: Bot, define: DefineRequest | null): Promise<Bot> {
-  let kept = next
   const stored = await bot(next.slug)
   if (!stored) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be made.')
@@ -231,17 +230,20 @@ export async function saveFormBot(next: Bot, define: DefineRequest | null): Prom
       ...(next.model === null ? {} : { model: next.model }),
     })) as { name?: unknown } | null
     if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
-    kept = { ...next, definition: made.name }
-  } else if (stored.definition !== null) {
+    return saveBot({ ...next, definition: made.name })
+  }
+  if (stored.definition !== null) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
     await redefine(stored.definition, next, define)
     // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
     // a session released. Only the fields the form carries are laid over it.
-    kept = { ...((await bot(next.slug)) ?? stored), name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
-  } else {
-    kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
+    return (await changeBot(next.slug, (held) => ({
+      ...held, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar,
+    }))) ?? stored
   }
-  return saveBot(kept)
+  return (await changeBot(next.slug, (held) => ({
+    ...held, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar,
+  }))) ?? stored
 }
 
 let saving: Promise<unknown> = Promise.resolve()
@@ -305,10 +307,10 @@ export async function migrateBot(
     directory: oldMemoryFolder(held),
     ...(held.model === null ? {} : { model: held.model }),
   })) as { name?: unknown } | null
-  if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
-  const next = { ...held, definition: made.name }
-  await saveBot(next)
-  return next
+  const name = made?.name
+  if (!isSlug(name)) throw new Error('The agent did not name the bot’s definition.')
+  return (await changeBot(held.slug, (current) => ({ ...current, definition: name })))
+    ?? { ...held, definition: name }
 }
 
 /**
@@ -318,12 +320,11 @@ export async function migrateBot(
  * worked, so a bot's turns, which run under the file, never run on a model the row no longer names.
  */
 export async function saveBotModel(held: Bot, model: string | null, define: DefineRequest | null): Promise<Bot> {
-  const next = { ...held, model }
   if (held.definition !== null) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(held.definition, next, define)
+    await redefine(held.definition, { ...held, model }, define)
   }
-  return saveBot(next)
+  return (await changeBot(held.slug, (current) => ({ ...current, model }))) ?? { ...held, model }
 }
 
 /** The agent requests that read and rewrite a bot's `mcpServers:` line. */
@@ -477,23 +478,21 @@ export async function forgetBotConversation(directory: string, id: string): Prom
  * `releaseBotSession` above has and for the same reason.
  */
 export async function retireBot(slug: unknown, retired: boolean): Promise<Bot | null> {
-  const held = await bot(slug)
-  if (!held) return null
-  const next = { ...held, retired: retired ? Date.now() : 0 }
-  await saveBot(next)
-  return next
+  if (!isSlug(slug)) return null
+  return changeBot(slug, (held) => ({ ...held, retired: retired ? Date.now() : 0 }))
 }
 
 export async function removeBot(slug: string): Promise<void> {
   await updateBots((all) => withoutBot(all, slug))
 }
 
-async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<void> {
-  await updateBots((all) => {
+async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<Bot | null> {
+  const written = await updateBots((all) => {
     const held = botOf(all, slug)
     const next = held && change(held)
     return next ? withBot(all, { ...next, updated: Date.now() }) : null
   })
+  return written.find((each) => each.slug === slug) ?? null
 }
 
 /** Where this app keeps its own files for a bot. Composed from a slug that has been judged. */
@@ -562,13 +561,15 @@ function memoryStamp(bot: Bot, directory: string): number {
  * checkout or a branch is switched. What matters is only that it differs from the mark.
  */
 export async function noteBotMemory(slug: string, directory: string): Promise<void> {
-  const held = await bot(slug)
   // A bot with a definition is told where its memory is by the agent on every turn (MEMORY-4), so
   // there is no briefing for a quiet spell to bring back and nothing to count (MEMORY-10).
-  if (!held || held.definition !== null) return
-  const stamp = memoryStamp(held, directory)
-  if (stamp !== held.remembered) await saveBot({ ...held, remembered: stamp, quiet: 0 })
-  else await saveBot({ ...held, quiet: held.quiet + 1 })
+  await changeBot(slug, (held) => {
+    if (held.definition !== null) return null
+    const stamp = memoryStamp(held, directory)
+    return stamp !== held.remembered
+      ? { ...held, remembered: stamp, quiet: 0 }
+      : { ...held, quiet: held.quiet + 1 }
+  })
 }
 
 /**
@@ -579,11 +580,14 @@ export async function noteBotMemory(slug: string, directory: string): Promise<vo
  */
 export async function keepingMemoryMark(slug: string, directory: string, change: () => void): Promise<void> {
   const before = await bot(slug)
-  if (!before) return change()
+  if (!before) {
+    change()
+    return
+  }
   const stamp = memoryStamp(before, directory)
   change()
-  const after = await bot(slug)
-  if (after && after.remembered === stamp) await saveBot({ ...after, remembered: memoryStamp(after, directory) })
+  const moved = memoryStamp(before, directory)
+  await changeBot(slug, (held) => (held.remembered === stamp ? { ...held, remembered: moved } : null))
 }
 
 /**
@@ -605,9 +609,7 @@ export function nudgeDue(bot: Bot): boolean {
  * everything it is ever asked, which is the failure that would make this worse than nothing.
  */
 export async function noteBotNudged(slug: string): Promise<void> {
-  const held = await bot(slug)
-  if (!held || held.quiet === 0) return
-  await saveBot({ ...held, quiet: 0 })
+  await changeBot(slug, (held) => (held.quiet === 0 ? null : { ...held, quiet: 0 }))
 }
 
 /**

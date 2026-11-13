@@ -48,7 +48,8 @@ fn failure(refused: &Refused) -> Failure {
         Refused::Unreadable(_) | Refused::OldFile(_) | Refused::Locked(_) => {
             ErrorCode::StateUnusable
         }
-        Refused::NoFolder | Refused::Incognito | Refused::Io(_) => ErrorCode::NoHome,
+        Refused::NoFolder | Refused::Incognito => ErrorCode::NoHome,
+        Refused::Io(_) => ErrorCode::StateUnusable,
     };
     Failure::new(code, refused.to_string())
 }
@@ -80,7 +81,7 @@ mod tests {
             ),
             (Refused::NoFolder, "no_home"),
             (Refused::Incognito, "no_home"),
-            (Refused::Io(problem()), "no_home"),
+            (Refused::Io(problem()), "state_unusable"),
             (Refused::Unreadable(problem()), "state_unusable"),
             (Refused::OldFile(problem()), "state_unusable"),
             (

@@ -26,6 +26,12 @@ pub struct Conversation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LastHome {
+    pub id: String,
+    pub prompt: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub slug: String,
     pub name: String,
@@ -36,6 +42,7 @@ pub struct Row {
     pub definition: Option<String>,
     pub session: Option<String>,
     pub conversations: Vec<Conversation>,
+    pub last_home: Option<LastHome>,
     pub archived: u64,
     pub retired: f64,
     pub created: f64,
@@ -61,6 +68,13 @@ impl Row {
                     .map(|each| json!({"id": each.id, "directory": each.directory}))
                     .collect(),
             ),
+        );
+        fields.insert(
+            "lastHome".into(),
+            match &self.last_home {
+                None => Value::Null,
+                Some(last) => json!({"id": last.id, "prompt": last.prompt}),
+            },
         );
         fields.insert("archived".into(), Value::from(self.archived));
         fields.insert("retired".into(), number(self.retired));
@@ -249,9 +263,8 @@ pub fn data_folder(
     let named = |variable: &str| environment(variable).filter(|value| !value.is_empty());
     let (base, separator, below) = match system {
         System::Linux => match named("XDG_CONFIG_HOME").filter(|value| {
-            value
-                .to_str()
-                .is_some_and(|text| text.starts_with('/') && !text.contains('\0'))
+            let bytes = value.as_encoded_bytes();
+            bytes.first() == Some(&b'/') && !bytes.contains(&0)
         }) {
             Some(config) => (config, '/', None),
             None => (named("HOME")?, '/', Some(".config")),
@@ -448,6 +461,7 @@ fn read_entry(entry: &Value, reading: &Reading, seen: &HashSet<String>) -> Resul
             .filter(|definition| is_slug(definition))
             .map(str::to_string),
         session,
+        last_home: read_last_home(fields.get("lastHome")),
         archived: fields
             .get("archived")
             .and_then(Value::as_f64)
@@ -478,6 +492,22 @@ fn number_when_present(value: Option<&Value>) -> Result<Option<f64>, NotANumber>
 }
 
 struct NotANumber;
+
+fn read_last_home(value: Option<&Value>) -> Option<LastHome> {
+    let fields = value?.as_object()?;
+    let id = fields
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| is_identifier(id))?;
+    let prompt = fields
+        .get("prompt")
+        .and_then(Value::as_f64)
+        .filter(|prompt| prompt.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(prompt))?;
+    Some(LastHome {
+        id: id.to_string(),
+        prompt: prompt as u64,
+    })
+}
 
 fn conversations(
     value: Option<&Value>,
@@ -843,6 +873,32 @@ mod tests {
             environment(&[("XDG_CONFIG_HOME", "/cfg"), ("HOME", "/home/p")]),
         );
         assert_eq!(found, Some(PathBuf::from("/cfg/bravebot-ui")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_keeps_an_absolute_xdg_config_home_that_is_not_text() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw = std::ffi::OsStr::from_bytes(b"/cfg\xff");
+        let text = std::ffi::OsStr::new("/cfg\u{FFFD}");
+        let home = OsString::from("/home/p");
+        let folder = |xdg: &std::ffi::OsStr| {
+            let xdg = xdg.to_os_string();
+            data_folder(System::Linux, |name| match name {
+                "XDG_CONFIG_HOME" => Some(xdg.clone()),
+                "HOME" => Some(home.clone()),
+                _ => None,
+            })
+        };
+        let mut raw_folder = PathBuf::from(raw);
+        raw_folder.push("bravebot-ui");
+        let mut text_folder = PathBuf::from(text);
+        text_folder.push("bravebot-ui");
+
+        assert_ne!(raw.as_encoded_bytes(), text.as_encoded_bytes());
+        assert_eq!(folder(raw), Some(raw_folder));
+        assert_eq!(folder(text), Some(text_folder));
     }
 
     #[test]
@@ -1242,6 +1298,69 @@ mod tests {
         assert_eq!(listing.rows[0].to_value(), stored[0]);
         assert_eq!(listing.rows[0].model.as_deref(), Some("provider/m"));
         assert_eq!(listing.rows[0].archived, 3);
+    }
+
+    #[test]
+    fn a_last_home_round_trips_including_prompt_zero_and_an_id_that_is_not_a_conversation() {
+        let scratch = Scratch::made("last-home-roundtrip");
+        let mut row = bot("keep");
+        row["conversations"] = json!([]);
+        row["lastHome"] = json!({"id": "not-listed", "prompt": 0});
+
+        let written = replace_in(&scratch.home(), &scratch.data(), &[row], 1.0, LOCK_WAIT).unwrap();
+
+        let pair = json!({"id": "not-listed", "prompt": 0});
+        assert_eq!(written[0].to_value()["lastHome"], pair);
+        assert_eq!(scratch.stored()[0]["lastHome"], pair);
+        assert!(
+            written[0]
+                .conversations
+                .iter()
+                .all(|each| each.id != "not-listed")
+        );
+    }
+
+    #[test]
+    fn a_last_home_that_is_not_a_pair_is_none_and_the_row_is_kept() {
+        let cases = [
+            ("absent", None),
+            ("null", Some(json!(null))),
+            ("not-an-object", Some(json!("nope"))),
+            ("empty-id", Some(json!({"id": "", "prompt": 1}))),
+            ("slash", Some(json!({"id": "a/b", "prompt": 1}))),
+            (
+                "null-character",
+                Some(json!({"id": "a\u{0}b", "prompt": 1})),
+            ),
+            ("missing-prompt", Some(json!({"id": "conv"}))),
+            ("string-prompt", Some(json!({"id": "conv", "prompt": "1"}))),
+            ("negative", Some(json!({"id": "conv", "prompt": -1}))),
+            ("fraction", Some(json!({"id": "conv", "prompt": 1.5}))),
+        ];
+        for (name, last_home) in cases {
+            let scratch = Scratch::made(&format!("last-home-{name}"));
+            let mut row = bot("keep");
+            match &last_home {
+                None => {
+                    row.as_object_mut().unwrap().remove("lastHome");
+                }
+                Some(value) => row["lastHome"] = value.clone(),
+            }
+            scratch.write_bots(&json!([row.clone()]));
+
+            let listing = scratch.list();
+
+            assert_eq!(slugs(&listing), ["keep"], "{name}");
+            assert!(listing.dropped.is_empty(), "{name}");
+            assert_eq!(
+                listing.rows[0].to_value()["lastHome"],
+                Value::Null,
+                "{name}"
+            );
+            replace_in(&scratch.home(), &scratch.data(), &[row], 1.0, LOCK_WAIT)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(scratch.stored()[0]["lastHome"], Value::Null, "{name}");
+        }
     }
 
     #[test]

@@ -78,6 +78,7 @@ Bringing it back resumes its session. Archived bots count toward the ceiling in
 
 `verified-by: bravebot_agent::bots::a_written_row_reads_back_without_the_fields_the_row_no_longer_has`
 `verified-by: bravebot_agent::bots::a_bots_file_lists_each_bot_the_way_the_gui_read_it`
+`verified-by: bravebot_agent::bots::a_last_home_round_trips_including_prompt_zero_and_an_id_that_is_not_a_conversation`
 
 <a id="BOT-2"></a>
 ### BOT-2: a slug is lowercase letters and digits in runs joined by single hyphens
@@ -182,6 +183,7 @@ it.
 `verified-by: bravebot_agent::bots::an_absolute_path_is_either_spelling_and_never_a_device_or_stream`
 `verified-by: bravebot_agent::bots::a_bots_file_lists_each_bot_the_way_the_gui_read_it`
 `verified-by: bravebot_agent::bots::a_row_with_a_repairable_field_is_listed_repaired`
+`verified-by: bravebot_agent::bots::a_last_home_that_is_not_a_pair_is_none_and_the_row_is_kept`
 `verified-by: bravebot_agent::bots::a_home_in_the_windows_spelling_is_kept_and_a_relative_one_is_replaced`
 `verified-by: bravebot_agent::bots::every_entry_the_rules_drop_is_reported_with_its_reason`
 `verified-by: bravebot_agent::bots::rows_past_the_hundredth_are_reported_with_their_slugs`

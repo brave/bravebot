@@ -78,7 +78,8 @@ test('the label map names the bot for each summoned prompt of the open conversat
 test('a turn that ends without a summon removes what was recorded at its prompt, and a summoned one records it', () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-summons-'))
   try {
-    const store = load(`export * from './src/main/summons'`, profile)
+    const store = load(`export * from './src/main/summons'\nexport { allowStateWrites } from './src/main/state'`, profile)
+    store.allowStateWrites()
     const pending = { slug: 'reviewer', host: { kind: 'bot', slug: 'ada' }, after: { id: HOME, prompt: 1 } }
     store.noteTurnEnded(project, 2, pending, 'Reviewed.')
     store.noteTurnEnded(project, 3, null, 'Not summoned.')
