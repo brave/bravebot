@@ -27,7 +27,7 @@ pub mod protocol;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, Usage};
 use crate::{
-    Arrived, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
+    Arrived, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, addressed,
     attempts_allowed, learned_key, log_retry, pause_before_retry, read_in_background,
     refuses_the_body, remember, remembered, reply_bound, worth_another_attempt,
 };
@@ -363,36 +363,15 @@ impl<'a> AnthropicClient<'a> {
         let body =
             serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
 
-        let mut http = Request::post(self.provider.completion_url(), body)
-            .with_client_certificate()
-            .header("content-type", "application/json");
-        for (name, value) in self.provider.fixed_headers() {
-            http = http.header(*name, *value);
-        }
-        if let Some(token) = self.token.as_ref().map(Secret::expose) {
-            // Attached to the socket the request was addressed to and to no other, so a hop to
-            // another host does not carry the key along. `authorization` gets that from the egress
-            // layer, which does not know this header is a credential.
-            let (name, value) = self.provider.credential_header(token);
-            http = http.socket_header(name, value);
-        }
-        // After the credential, and never over it: a name this request already set is refused
-        // where the block is read, because `Request::header` appends and a second copy of one of
-        // these would be sent rather than replace the first.
-        for (name, value) in &self.headers {
-            http = http.header(name.clone(), value.expose());
-        }
-        // A stream's headers come at once and the model writes after them; a reply asked for whole
-        // is written before any of it is sent.
-        let mut http = if streaming {
-            http.stream_within(bound)
-        } else {
-            http.reply_within(bound)
-        };
-        if let Some(gap) = self.provider.patience.idle_timeout {
-            http = http.idle_within(gap);
-        }
-        Ok(http)
+        Ok(addressed(
+            self.provider.completion_url(),
+            body,
+            self.provider,
+            self.token.as_ref(),
+            &self.headers,
+            streaming,
+            bound,
+        ))
     }
 
     /// Send a request and wait for the whole reply.

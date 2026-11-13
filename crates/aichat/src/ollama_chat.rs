@@ -17,8 +17,8 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, ToolCall, Usage};
 use crate::{
-    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, learned_key, log_retry,
-    pause_before_retry, read_in_background, remember, remembered, reply_bound,
+    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, addressed, learned_key,
+    log_retry, pause_before_retry, read_in_background, remember, remembered, reply_bound,
     worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
@@ -238,28 +238,15 @@ impl<'a> OllamaChatClient<'a> {
         let body =
             serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
 
-        let mut http = Request::post(self.provider.completion_url(), body)
-            .with_client_certificate()
-            .header("content-type", "application/json");
-        if let Some(token) = self.token.as_ref().map(Secret::expose) {
-            let (name, value) = self.provider.credential_header(token);
-            http = http.header(name, value);
-        }
-        // After the credential, and never over it: a name this request already set is refused
-        // where the block is read.
-        for (name, value) in &self.headers {
-            http = http.header(name.clone(), value.expose());
-        }
-        let bound = reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING));
-        let mut http = if streaming {
-            http.stream_within(bound)
-        } else {
-            http.reply_within(bound)
-        };
-        if let Some(gap) = self.provider.patience.idle_timeout {
-            http = http.idle_within(gap);
-        }
-        Ok(http)
+        Ok(addressed(
+            self.provider.completion_url(),
+            body,
+            self.provider,
+            self.token.as_ref(),
+            &self.headers,
+            streaming,
+            reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING)),
+        ))
     }
 
     /// Send a request and wait for the whole reply.

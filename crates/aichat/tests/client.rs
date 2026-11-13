@@ -10438,6 +10438,55 @@ fn a_models_options_join_the_window_and_never_replace_it() {
     assert_eq!(body["keep_alive"], "30m");
 }
 
+/// An Ollama entry's key is a bearer in `authorization` on the server the entry names, after which
+/// the block's own headers go out. This pins the bytes sent to each server: the redirected request
+/// carries the block's header and not the key, since egress keeps `authorization` off another host
+/// as well as keeping a socket header off it.
+#[test]
+fn an_ollama_key_goes_to_the_server_the_entry_names_and_not_where_it_redirects() {
+    const OLLAMA_KEY: &str = "placeholder-ollama-key-51d9";
+    let (elsewhere, landed) = serve(OLLAMA_REPLY);
+    let (endpoint, redirected) = serve_redirect(format!("{elsewhere}/api/chat"));
+    let provider = ollama_at(&endpoint, "");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    OllamaChatClient::new(
+        &egress,
+        &provider,
+        "qwen3:8b",
+        Some(bravebot_config::Secret::new(OLLAMA_KEY)),
+    )
+    .with_gateway_headers(vec![(
+        "x-team".to_string(),
+        bravebot_config::Secret::new("blue"),
+    )])
+    .with_backoff(Duration::from_millis(1))
+    .complete(
+        &mut policy,
+        &ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]),
+    )
+    .expect("the redirected request was answered");
+
+    let first = redirected
+        .recv()
+        .expect("the request arrived where it was addressed");
+    let bearer = format!("Bearer {OLLAMA_KEY}");
+    assert_eq!(first.header("authorization"), Some(bearer.as_str()));
+    assert_eq!(first.header("x-team"), Some("blue"));
+    let second = landed
+        .recv()
+        .expect("the request was sent again where it was redirected");
+    assert_eq!(
+        second.header("authorization"),
+        None,
+        "the key followed the redirect"
+    );
+    assert_eq!(second.header("x-team"), Some("blue"));
+    assert!(!second.body.contains(OLLAMA_KEY));
+}
+
 /// A stream is a JSON object a line. The words arrive as they are written, the reasoning reaches
 /// the display alone, a call arrives whole and is given an id, and the cost is the last line's.
 #[test]

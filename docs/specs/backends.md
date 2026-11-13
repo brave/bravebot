@@ -4635,6 +4635,7 @@ short rather than refused.
 `verified-by: bravebot_aichat::client::an_ollama_reply_the_ceiling_stopped_is_kept_and_said_to_be_cut_off`
 `verified-by: bravebot_aichat::client::an_error_line_from_ollama_is_reported_rather_than_read_past`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_ollama_model_to_start_writing`
+`verified-by: bravebot_aichat::client::an_ollama_key_goes_to_the_server_the_entry_names_and_not_where_it_redirects`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_is_messages_with_the_window_and_ceiling_in_options`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_nobody_asked_anything_of_carries_only_the_conversation`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_schema_goes_in_format`

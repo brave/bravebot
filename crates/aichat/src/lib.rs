@@ -1285,6 +1285,52 @@ pub fn reply_bound(ceiling: u64) -> Duration {
         .max(bravebot_net::Timeouts::default().reply)
 }
 
+/// A model request to `url` carrying `body`, addressed, authenticated and bounded.
+///
+/// The one place the Anthropic, generateContent and Ollama clients attach the service's fixed
+/// headers, the key the entry names (`token`), the headers the block's `options.headers` asked for
+/// and the bound on the reply, so a change to any of them is made once.
+pub(crate) fn addressed(
+    url: String,
+    body: Vec<u8>,
+    provider: &bravebot_config::provider::Provider,
+    token: Option<&Secret>,
+    headers: &[(String, Secret)],
+    streaming: bool,
+    bound: Duration,
+) -> Request {
+    let mut http = Request::post(url, body)
+        .with_client_certificate()
+        .header("content-type", "application/json");
+    for (name, value) in provider.fixed_headers() {
+        http = http.header(*name, *value);
+    }
+    if let Some(token) = token.map(Secret::expose) {
+        // Attached to the socket the request was addressed to and to no other, so a hop to
+        // another host does not carry the key along. `authorization` gets that from the egress
+        // layer, which does not know this header is a credential.
+        let (name, value) = provider.credential_header(token);
+        http = http.socket_header(name, value);
+    }
+    // After the credential, and never over it: a name this request already set is refused
+    // where the block is read, because `Request::header` appends and a second copy of one of
+    // these would be sent rather than replace the first.
+    for (name, value) in headers {
+        http = http.header(name.clone(), value.expose());
+    }
+    // A stream's headers come at once and the model writes after them; a reply asked for whole
+    // is written before any of it is sent.
+    let mut http = if streaming {
+        http.stream_within(bound)
+    } else {
+        http.reply_within(bound)
+    };
+    if let Some(gap) = provider.patience.idle_timeout {
+        http = http.idle_within(gap);
+    }
+    http
+}
+
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
 /// The same interval the rest of the system waits on for the same question, and short enough that
