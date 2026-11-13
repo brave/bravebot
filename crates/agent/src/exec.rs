@@ -2021,29 +2021,11 @@ fn command_for(
 /// it is in the foreground, and so is the session's own directory: a program left running is one
 /// with more reason to want somewhere to write, not less.
 ///
-/// For a caller with no turn behind it: a substitution in a step's assignments runs under the
-/// built-in [`LIMIT`] and a token nobody holds. The `run` tool calls [`start_steps_within`].
-pub fn start_steps(
-    steps: &[Step],
-    directory: &std::path::Path,
-    scratch: Option<&std::path::Path>,
-    confinement: Option<&Confinement>,
-) -> Result<Background, ExecError> {
-    start_steps_within(
-        steps,
-        directory,
-        scratch,
-        confinement,
-        &Cancel::new(),
-        LIMIT,
-    )
-}
-
-/// [`start_steps`] with the call's own cancellation and deadline for the substitutions in the
-/// steps' assignments, which are run before the first step starts and so while the call is still
-/// in progress. A cancelled call ends the substitution and starts nothing; one that outlasts
-/// `limit` is refused with its source and no output. The job that is started is not bound by
-/// `limit`: it outlives the call.
+/// The call's own cancellation and deadline hold the substitutions in the steps' assignments,
+/// which are run before the first step starts and so while the call is still in progress. A
+/// cancelled call ends the substitution and starts nothing; one that outlasts `limit` is refused
+/// with its source and no output. The job that is started is not bound by `limit`: it outlives the
+/// call.
 pub fn start_steps_within(
     steps: &[Step],
     directory: &std::path::Path,

@@ -1501,8 +1501,15 @@ fn a_program_left_running_is_confined_as_well() {
     let finished = |line: &str| {
         let plan = places.plan(line);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
-        let mut job = exec::start_steps(steps, &places.session, None, Some(&places.confinement()))
-            .expect("the job starts");
+        let mut job = exec::start_steps_within(
+            steps,
+            &places.session,
+            None,
+            Some(&places.confinement()),
+            &Cancel::new(),
+            exec::LIMIT,
+        )
+        .expect("the job starts");
         for _ in 0..200 {
             if job.ended() {
                 break;

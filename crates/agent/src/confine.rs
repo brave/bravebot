@@ -12001,7 +12001,14 @@ mod tests {
         let plan = plan_of("true | echo hi", &session);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
 
-        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+        let refused = crate::exec::start_steps_within(
+            steps,
+            &session,
+            None,
+            Some(&confinement),
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        );
 
         assert!(
             matches!(
@@ -12025,7 +12032,14 @@ mod tests {
         let plan = plan_of(A_SLOW_WRITER_INTO_A_PIPE, &session);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
 
-        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+        let refused = crate::exec::start_steps_within(
+            steps,
+            &session,
+            None,
+            Some(&confinement),
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        );
 
         assert!(
             matches!(&refused, Err(ExecError::NotConfined { program, .. }) if program == "cat"),
