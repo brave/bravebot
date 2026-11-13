@@ -565,7 +565,7 @@ against one.
 `verified-by: bravebot_cli::main::a_substitution_the_command_line_did_not_ask_for_is_reported_and_not_failed`
 
 <a id="CLI-11"></a>
-### CLI-11: `--add-dir` makes a directory reachable, and vouches for nothing
+### CLI-11: `--add-dir` makes a directory reachable, and trusted where the run trusts its working directory
 
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. The path may be relative, resolved against the working directory the same
@@ -576,22 +576,45 @@ left to the shell, which ordinarily expands it before this ever sees the path, a
 one is read as an ordinary directory component rather than as the home directory, since a second
 reading of it here is a second place for it to resolve apart from the shell's own. A path that is
 not absolute once resolved, does not exist, is not a directory, or is already inside the working
-one is refused by name and the run stops before the turn. The run's trust map holds nothing for
-it, so a file read there is read on the same footing as the project's own files without an answer
-about them: nothing vouched for it. `--trust-workspace` covers the working directory alone. A
-write there is refused as any other write in an unattended run is, and the flag in CLI-1 lifts
-that exactly as it does elsewhere, `--approve-input-lines` included.
+one is refused by name and the run stops before the turn.
+
+Where the map the run starts with trusts its working directory, through `--trust-workspace`
+([TRUST-26](trust-map.md#TRUST-26)), a kept answer ([TRUST-23](trust-map.md#TRUST-23)) or the
+session it carries on ([CLI-25](#CLI-25)), each directory this opens is trusted too, by the rule
+`/add-dir` records in a session ([TRUST-9](trust-map.md#TRUST-9)): a rule under the canonical path
+the directory was opened at, which covers the directory and what is beneath it and nothing beside or
+above it. A file read there reaches the planner as a file of the project does, and a link inside the
+directory that leads out of it is refused as in any added directory
+([TRUST-10](trust-map.md#TRUST-10)). Nothing is written under `~/.bravebot/trusted`. The session
+record keeps the rule with the rest of the map, as it keeps the working directory's, and a run that
+carries the session on reaches the directory only where its own command line opens it again
+([TRUST-10](trust-map.md#TRUST-10)). Where the map does not trust the working directory, nothing
+vouches for an added directory either, and a file read there is quarantined. A directory a settings
+file declares as a reference is opened the same way and is trusted by nothing
+([REFER-3](references.md#REFER-3)): only a directory the command line named is trusted with the
+working directory.
+
+The trust approves no effect. A write there is refused as any other write in an unattended run is,
+and the flag in CLI-1 lifts that exactly as it does elsewhere, `--approve-input-lines` included. A
+line that starts in an added directory is not run unasked because of it, since the person's trust
+lets a confined line through only where the line starts in the root the yes was given for
+([RUN-5](tools/run.md#RUN-5)). Where that clause reads the words of a line, a word naming a file in
+a trusted added directory counts as trusted, as it does after `/add-dir` in a session.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
 outside the working directory is otherwise refused whatever else is true, so without this the task
-cannot be done at all.
+cannot be done at all. A file the run reaches and does not trust is read only through a processor
+or a file named with `--file`, one file at a time, which a task reading another checkout cannot work
+with.
 
-Vouching is a separate grant, and it is the one an unattended run cannot make. The interactive
-command of the same name records that a person vouched for the directory, which it can do because a
-person typed it in a session whose map already holds their answer about the directory they are
-working in. A run nobody is watching holds no such answer unless the person gave one for its working
-directory (`--trust-workspace`, or a kept answer), so a rule trusting the tree named on the command
-line would leave it more trusted than the tree the run works in. Reaching a directory is what the work needs; trusting what is in it is not.
+The interactive command of the same name trusts its directory because a person typed it in a session
+whose map already holds their answer about the directory they work in. A run whose map trusts its
+working directory holds that answer too, typed as a flag or kept, and the directories named on the
+same command line are the person's own choice of what the run is to read beside it. A run whose map
+trusts nothing holds no such answer, and a rule trusting a directory named on its command line would
+leave that directory more trusted than the tree the run works in, so the run trusts neither. A
+reference is left out because a settings file names it for every run that reads the file, which is
+not a choice made for this run.
 
 Stopping rather than carrying on, because the two audiences differ: a session says the path was not
 opened and leaves the person to retype it, and a script that carried on would fail somewhere further
@@ -603,6 +626,14 @@ in, over a file it was told it could open.
 `verified-by: bravebot_cli::main::a_directory_the_command_line_named_is_reachable`
 `verified-by: bravebot_cli::main::a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory`
 `verified-by: bravebot_cli::main::a_directory_that_cannot_be_opened_stops_the_run`
+`verified-by: bravebot_cli::main::a_trusted_run_trusts_the_directories_the_command_line_opened_and_nothing_beside_them`
+`verified-by: bravebot_cli::main::an_untrusted_run_trusts_no_directory_the_command_line_opened`
+`verified-by: bravebot_cli::main::a_run_trusting_a_kept_answer_trusts_the_directories_the_command_line_opened`
+`verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted`
+`verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_file_in_an_added_directory_quarantined`
+`verified-by: bravebot_cli::running::a_continued_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted`
+`verified-by: bravebot_cli::running::a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_added_directory`
+`verified-by: bravebot_cli::running::a_link_out_of_a_trusted_added_directory_does_not_reach_the_planner`
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
 `verified-by: bravebot_agent::workspace::an_absolute_directory_name_is_not_joined_onto_a_root`
 `verified-by: bravebot_agent::workspace::a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`

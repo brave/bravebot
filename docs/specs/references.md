@@ -66,22 +66,27 @@ checkout that could write either would choose both for whoever opened it.
 ### REFER-3: a reference is reachable exactly as a directory opened with `--add-dir` is, and records no trust
 
 When a workspace is built for a turn, every usable entry is opened the way `--add-dir` opens a
-directory: its files are reachable by absolute path and nothing is recorded in the trust map. Files
-there are read on the footing of any file the person has not vouched for. A directory that cannot
+directory: its files are reachable by absolute path. Nothing is recorded in the trust map for it,
+including in a one-shot run that trusts the directories its command line opens
+([CLI-11](cli.md#CLI-11)). Files there are read on the footing of any file the person has not
+vouched for. A directory that cannot
 be opened, because it is missing, is not a directory, lies inside the working directory or is
 refused by `permissions.readsStayInWorkspace`, is told to the person with its alias, is not offered
 to the planner, and does not stop the entries after it from opening. The terminal, the one-shot
 command line and the desktop bridge each build the workspace this way.
 
-**Why.** Declaring a directory in a settings file is the person naming it, as `--add-dir` is. It is
-not a statement that they vouch for its contents, so the trust map is left alone and `/add-dir`
-stays the way to say that.
+**Why.** Declaring a directory in a settings file names it for every run that reads the file. It is
+not a statement that the person vouches for its contents, so the trust map is left alone and
+`/add-dir` stays the way to say that. A directory named on the command line of a run that trusts its
+working directory is a choice made for that run, which is why a one-shot run trusts it
+([CLI-11](cli.md#CLI-11)) and does not trust a reference.
 
 `verified-by: bravebot_agent::preamble::a_reference_is_reachable_and_nothing_else_is_granted`
 `verified-by: bravebot_agent::preamble::a_reference_that_cannot_open_is_a_notice_and_not_a_line`
 `verified-by: bravebot_agent::workspace::a_tilde_reference_under_a_home_that_is_not_text_is_not_opened_by_its_lookalike`
 `verified-by: bravebot_ui_bridge::workspace::a_turn_opens_the_references_the_home_layer_named_and_not_a_projects`
 `verified-by: bravebot_cli::running::a_run_tells_the_planner_about_the_references_only_the_person_declared`
+`verified-by: bravebot_cli::running::a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_added_directory`
 `verified-by: by-construction (the terminal and the one-shot command line both build their workspace in cli's current_workspace, which calls with_references)`
 
 <a id="REFER-4"></a>

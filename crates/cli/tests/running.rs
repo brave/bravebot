@@ -12376,7 +12376,18 @@ fn a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_count
 /// request when the run trusts the file, and a reference to them takes their place when it does
 /// not.
 fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathBuf) {
-    let gateway = a_gateway(r#"["tools"]"#, |body| {
+    let gateway = a_gateway_whose_model_reads(|| "notes.md".to_string());
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    (gateway, scratch, cwd)
+}
+
+/// A gateway whose model, asked to read the notes, reads the path `path` gives it and then says it
+/// is done, and answers any other prompt with a plain reply.
+fn a_gateway_whose_model_reads(path: impl Fn() -> String + Send + 'static) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
         if !body.contains("read the notes") {
             return answered("hello")(body);
         }
@@ -12388,7 +12399,7 @@ fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathB
                 "index":0,"delta":{"role":"assistant","tool_calls":[{
                     "index":0,"id":"call-1","type":"function","function":{
                         "name":"read_file",
-                        "arguments":serde_json::json!({"path": "notes.md"}).to_string()}}]},
+                        "arguments":serde_json::json!({"path": path()}).to_string()}}]},
                 "finish_reason":"tool_calls"}]}),
         };
         let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
@@ -12396,12 +12407,39 @@ fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathB
             "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
         )
+    })
+}
+
+/// A project with a directory beside it for `--add-dir` to open, holding `notes.md`, and a
+/// gateway whose model reads `read`, a name under that directory, by its full path.
+///
+/// Returns the directory beside the project as the command line names it. The gateway is made
+/// before the scratch, which names the directory, so the path is handed to it once it exists.
+fn a_directory_beside_whose_notes_the_model_reads(
+    name: &str,
+    read: &str,
+) -> (Gateway, Scratch, PathBuf, PathBuf) {
+    let path = Arc::new(std::sync::OnceLock::<String>::new());
+    let given = Arc::clone(&path);
+    let gateway = a_gateway_whose_model_reads(move || {
+        given
+            .get()
+            .cloned()
+            .expect("the path is set before the run")
     });
     let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
     let cwd = scratch.path.join("project");
     std::fs::create_dir_all(&cwd).expect("create the project");
-    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
-    (gateway, scratch, cwd)
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&beside).expect("create the directory beside");
+    std::fs::write(beside.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    let full = beside
+        .canonicalize()
+        .expect("the directory beside")
+        .join(read);
+    path.set(full.display().to_string())
+        .expect("the path is set once");
+    (gateway, scratch, cwd, beside)
 }
 
 /// Whether the planner was handed the words of the file: a request carrying a tool result that
@@ -12663,6 +12701,204 @@ fn a_run_without_the_workspace_flag_reads_a_project_file_quarantined() {
     assert!(
         !the_planner_saw_the_notes(&gateway),
         "an untrusted file reached the planner as its own words"
+    );
+}
+
+/// CLI-11, TRUST-26. A run that trusts its working directory trusts the directories `--add-dir`
+/// opened as well, so a file in one reaches the planner as its own words, and no answer is kept
+/// for later runs. Rejects a run that trusted the working directory alone and quarantined the file.
+#[test]
+fn a_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted() {
+    let (gateway, scratch, cwd, beside) =
+        a_directory_beside_whose_notes_the_model_reads("cli-running-trust-flag-added", "notes.md");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the file in the added directory did not reach the planner"
+    );
+    assert!(
+        !scratch.path.join(".bravebot").join("trusted").exists(),
+        "the flag kept an answer for later runs"
+    );
+}
+
+/// CLI-11, the control: without the flag the run trusts its working directory no more than it
+/// trusts the directory beside it, and the file there is read quarantined.
+#[test]
+fn a_run_without_the_workspace_flag_reads_a_file_in_an_added_directory_quarantined() {
+    let (gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-trust-flag-absent-added",
+        "notes.md",
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "a file in an added directory reached the planner from a run that trusts nothing"
+    );
+}
+
+/// CLI-11, TRUST-26. A run carrying on an earlier session builds its map from that session's
+/// record, and the directories the command line opened are trusted with the working directory
+/// there too. Rejects a continued run that added the working directory's rule and left the added
+/// directories out.
+#[test]
+fn a_continued_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted() {
+    let (gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-trust-flag-continued-added",
+        "notes.md",
+    );
+    let earlier = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--json", "-p", "hello"],
+    );
+    let (stdout, stderr) = said(&earlier);
+    assert!(earlier.status.success(), "{stderr}");
+    let session = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let _ = requests(&gateway);
+
+    let continued = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "--resume",
+            &session,
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&continued);
+    assert!(continued.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the continued run did not trust the directory the command line opened"
+    );
+}
+
+/// CLI-11, REFER-3. Only a directory the command line named is trusted with the working directory.
+/// A reference a settings file declares is opened the same way and records no trust, so a file in
+/// it is read quarantined in a run that trusts its added directories. Rejects a run that vouched for
+/// every directory its workspace holds.
+#[test]
+fn a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_added_directory() {
+    let path = Arc::new(std::sync::OnceLock::<String>::new());
+    let given = Arc::clone(&path);
+    let gateway = a_gateway_whose_model_reads(move || {
+        given
+            .get()
+            .cloned()
+            .expect("the path is set before the run")
+    });
+    let scratch = Scratch::new("cli-running-trust-flag-added-reference");
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&beside).expect("create the directory beside");
+    let referenced = scratch.path.join("referenced");
+    std::fs::create_dir_all(&referenced).expect("create the referenced directory");
+    std::fs::write(
+        referenced.join("notes.md"),
+        "THE-WORDS-IN-THE-PROJECT-NOTES",
+    )
+    .expect("write the referenced notes");
+    let referenced = referenced.canonicalize().expect("the referenced directory");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("the settings are JSON");
+    settings["references"] = serde_json::json!({"docs": referenced.display().to_string()});
+    let scratch = scratch.with_settings(&settings.to_string());
+    path.set(referenced.join("notes.md").display().to_string())
+        .expect("the path is set once");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "a reference was trusted with the directory the command line opened"
+    );
+}
+
+/// CLI-11, TRUST-10. The rule recorded for an added directory is about the directory as it was
+/// opened, so a link inside it that leads out of it carries none of its trust: the file the link
+/// reaches is not given to the planner as its own words. Rejects trust decided by the name as the
+/// model typed it rather than by where it leads.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_a_trusted_added_directory_does_not_reach_the_planner() {
+    let (gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-trust-flag-added-link",
+        "out/notes.md",
+    );
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create the directory the link leads to");
+    std::fs::write(elsewhere.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES")
+        .expect("write the notes the link leads to");
+    std::os::unix::fs::symlink(&elsewhere, beside.join("out")).expect("link out of the directory");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "a file reached through a link out of the added directory reached the planner: {stderr}"
     );
 }
 

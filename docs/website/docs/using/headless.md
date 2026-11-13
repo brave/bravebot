@@ -60,16 +60,16 @@ bravebot --add-dir /srv/other-checkout "how does their error type differ from ou
 ```
 
 `--add-dir` makes a directory outside the working one reachable for the run, and may be given more
-than once. It vouches for nothing: files read there are quarantined like any others, because a run
-nobody is watching cannot be asked to trust a tree. See
-[`--add-dir`](../reference/cli.md#--add-dir-path).
+than once. A run that trusts its working directory (below) trusts the directories `--add-dir` opens
+as well. Otherwise files read there are quarantined like any others, because a run nobody is
+watching cannot be asked to trust a tree. See [`--add-dir`](../reference/cli.md#--add-dir-path).
 
 ## Reading the project's own files
 
 A run starts with nothing trusted, so the planner reads project files only through a processor or a
 file named with `--file`. `--trust-workspace` trusts the working directory and everything under it
-for this run, as answering yes to the startup question does, and nothing else: directories from
-`--add-dir` stay untrusted and no record is written. Trusting the directory opens reads only: a
+for this run, as answering yes to the startup question does, together with the directories
+`--add-dir` opens, and no record is written. Trusting the directory opens reads only: a
 write is still refused unless the run was given `--accept-edits` or `--dangerously-skip-permissions`.
 
 ```sh
@@ -329,7 +329,7 @@ the wrong thing to search for.
 |---|---|
 | `--file <path>` | include a workspace file as trusted context; repeatable |
 | `--session-ref <id>` | add the newest 8,000 characters of an earlier session of this directory to the task; repeatable |
-| `--add-dir <path>` | make another directory reachable, trusting nothing in it; repeatable |
+| `--add-dir <path>` | make another directory reachable, trusted only where the run trusts its working directory; repeatable |
 | `--trust-workspace` | trust the working directory for this run, as answering yes to the startup question does |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
 | `--trace` | print the audit trail to stderr |

@@ -76,7 +76,8 @@ use crate::one_shot::OneShot;
 use crate::usage::print_help;
 use crate::workspace::{
     confinement_name, current_workspace, definition_for_a_run, open_directories,
-    rules_for_a_one_shot_run, scratch_for_this_run, unattended_trust,
+    rules_for_a_one_shot_run, scratch_for_this_run, trusting_the_added_directories,
+    unattended_trust,
 };
 use bravebot_agent::Mode;
 use bravebot_agent::turn::{self, SystemPrompts, Task};
@@ -901,6 +902,9 @@ struct Prepared {
     as_json: bool,
     as_stream: bool,
     trust_workspace: bool,
+    /// The directories `--add-dir` opened, as the workspace opened them, which the run trusts where
+    /// it trusts its working directory (CLI-11).
+    added: Vec<std::path::PathBuf>,
     named_on_the_command_line: bool,
     permission_mode: bravebot_agent::PermissionMode,
     goal: Option<String>,
@@ -1120,10 +1124,13 @@ fn prepare_the_run(
     // Fatal rather than said and carried on with. A session leaves the person to retype it; a
     // script that asked to reach a directory and did not gets a turn that fails somewhere further
     // in, over a file it was told it could open.
-    match open_directories(&mut workspace, &directories) {
-        Ok(notices) => say_notices(&mut std::io::stderr().lock(), &notices),
+    let added = match open_directories(&mut workspace, &directories) {
+        Ok(opened) => {
+            say_notices(&mut std::io::stderr().lock(), &opened.notices);
+            opened.directories
+        }
         Err(problem) => return Err(stopped_before_the_turn(as_json, Ending::Argument, problem)),
-    }
+    };
 
     // Found before anything is sent, so a session that is not there exits with the status for an
     // argument and costs nothing (CLI-25).
@@ -1326,6 +1333,7 @@ fn prepare_the_run(
         as_json,
         as_stream,
         trust_workspace,
+        added,
         named_on_the_command_line,
         permission_mode,
         goal,
@@ -1566,6 +1574,7 @@ fn run_and_report(
         as_json,
         as_stream,
         trust_workspace,
+        added,
         named_on_the_command_line,
         permission_mode,
         goal,
@@ -1658,6 +1667,7 @@ fn run_and_report(
                     workspace,
                     task,
                     trust_workspace,
+                    added,
                     agent: agent.as_deref(),
                     goal: goal.as_deref(),
                     model,
@@ -1683,7 +1693,10 @@ fn run_and_report(
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            unattended_trust(workspace.root(), trust_workspace),
+            trusting_the_added_directories(
+                unattended_trust(workspace.root(), trust_workspace),
+                added,
+            ),
             &Cancel::new(),
         ),
     };
@@ -1970,6 +1983,9 @@ struct TurnRun<'a> {
     workspace: &'a bravebot_agent::Workspace,
     task: &'a Task,
     trust_workspace: bool,
+    /// The directories `--add-dir` opened, trusted where the map trusts the working directory
+    /// (CLI-11).
+    added: &'a [std::path::PathBuf],
     agent: Option<&'a str>,
     /// The condition the run works towards (CLI-35), and the model its rounds are asked of, which
     /// the judge is asked too unless `summaryModel` names another.
@@ -2002,6 +2018,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         workspace,
         task,
         trust_workspace,
+        added,
         agent,
         goal,
         model,
@@ -2014,22 +2031,26 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
     let permission_mode = task.permission_mode.clone();
     // What a continued session vouched for comes back with it, as it does in a session
     // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
-    // the record keeps the ones it holds.
-    let trust = match continued
-        .as_ref()
-        .and_then(|record| record.trust_map(workspace.root()))
-    {
-        Some(mut carried) => {
-            if trust_workspace {
-                carried.trust(".");
+    // the record keeps the ones it holds. Whichever map the run starts from, the directories the
+    // command line opened are trusted with the working directory (CLI-11).
+    let trust = trusting_the_added_directories(
+        match continued
+            .as_ref()
+            .and_then(|record| record.trust_map(workspace.root()))
+        {
+            Some(mut carried) => {
+                if trust_workspace {
+                    carried.trust(".");
+                }
+                carried
             }
-            carried
-        }
-        None => match carry.as_deref().and_then(Option::as_ref) {
-            Some(held) => held.trust.clone(),
-            None => unattended_trust(workspace.root(), trust_workspace),
+            None => match carry.as_deref().and_then(Option::as_ref) {
+                Some(held) => held.trust.clone(),
+                None => unattended_trust(workspace.root(), trust_workspace),
+            },
         },
-    };
+        added,
+    );
     let mut conversation = match (
         continued.as_ref(),
         carry.as_deref().and_then(Option::as_ref),
@@ -3220,8 +3241,8 @@ mod tests {
     }
 
     /// TRUST-26. The flag gives the run the map a yes writes: the working directory and what is
-    /// under it. A directory `--add-dir` opened sits beside it and is not covered, and neither is
-    /// anything above it.
+    /// under it. A directory beside it is not covered by that rule, and neither is anything above
+    /// it; a directory the command line opened is added to the map by a step of its own.
     #[test]
     fn a_flagged_run_trusts_its_directory_and_nothing_outside_it() {
         let scratch = Scratch::new("trust-flag-covers");
@@ -3260,6 +3281,111 @@ mod tests {
         let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
         assert!(!trust.is_trusted("."), "nothing was said and nothing kept");
         assert_eq!(notice, None);
+    }
+
+    /// CLI-11, TRUST-26. A run that trusts its working directory trusts each directory the command
+    /// line opened, as `/add-dir` does in a session: the directory and what is beneath it. A
+    /// directory beside it that nobody named and the directory holding it stay outside the rule,
+    /// and nothing is kept for a later run. Rejects trust recorded under a parent of the added
+    /// directory, a rule that reached a sibling, and a step that wrote to the store of kept answers.
+    #[test]
+    fn a_trusted_run_trusts_the_directories_the_command_line_opened_and_nothing_beside_them() {
+        let scratch = Scratch::new("trust-flag-added");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        scratch.directory("sibling");
+        let state = scratch.directory("state");
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        let opened =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let added = opened.directories.first().expect("one directory opened");
+        let holding = added.parent().expect("the scratch directory");
+        let key = |path: &Path| bravebot_agent::workspace::key_of(path);
+
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, true);
+        let trust = trusting_the_added_directories(trust, &opened.directories);
+
+        assert!(trust.is_trusted("src/lib.rs"), "the working directory");
+        assert!(
+            trust.is_trusted(&key(&added.join("notes.md"))),
+            "a file in the directory the command line opened"
+        );
+        assert!(
+            trust.is_trusted(&key(&added.join("deep/er/notes.md"))),
+            "a file beneath it"
+        );
+        assert!(
+            !trust.is_trusted(&key(&holding.join("sibling/notes.md"))),
+            "a directory beside it that nobody named"
+        );
+        assert!(
+            !trust.is_trusted(&key(&holding.join("notes.md"))),
+            "the directory holding it"
+        );
+        assert!(
+            !state.join("trusted").exists(),
+            "trusting the added directories kept an answer for later runs"
+        );
+    }
+
+    /// CLI-11. A run whose map does not trust its working directory trusts no directory the command
+    /// line opened either, so an added directory is never more trusted than the tree the run works
+    /// in. Rejects a step that vouched for the added directories whatever the map said.
+    #[test]
+    fn an_untrusted_run_trusts_no_directory_the_command_line_opened() {
+        let scratch = Scratch::new("trust-unflagged-added");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let state = scratch.directory("state");
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        let opened =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let added = opened.directories.first().expect("one directory opened");
+
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, false);
+        let trust = trusting_the_added_directories(trust, &opened.directories);
+
+        assert!(
+            !trust.is_trusted("."),
+            "nothing trusted the working directory"
+        );
+        assert!(
+            !trust.is_trusted(&bravebot_agent::workspace::key_of(&added.join("notes.md"))),
+            "an added directory was trusted by a run that trusts nothing"
+        );
+    }
+
+    /// CLI-11, TRUST-23. A kept answer about the working directory trusts the run's added
+    /// directories as the flag does, since it is the person's answer about the directory the run
+    /// works in. Rejects a step that read the flag rather than the map.
+    #[test]
+    fn a_run_trusting_a_kept_answer_trusts_the_directories_the_command_line_opened() {
+        let scratch = Scratch::new("trust-kept-added");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            // A filesystem that cannot say when a directory was made keeps no answer to read.
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7, false), "not kept");
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        let opened =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let added = opened.directories.first().expect("one directory opened");
+
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(
+            trust.is_trusted("."),
+            "the kept answer trusts the directory"
+        );
+        let trust = trusting_the_added_directories(trust, &opened.directories);
+
+        assert!(
+            trust.is_trusted(&bravebot_agent::workspace::key_of(&added.join("notes.md"))),
+            "a kept answer did not trust the directory the command line opened"
+        );
     }
 
     /// RUN-5. A one-shot run starts from a kept answer, and what that answer says about confined
@@ -5494,11 +5620,13 @@ mod tests {
         let beside = scratch.directory("beside");
         let mut workspace = Workspace::new(project).expect("a workspace");
 
-        let notices =
-            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let notices = open_directories(&mut workspace, &[beside.display().to_string()])
+            .expect("opens")
+            .notices;
         assert!(notices.is_empty(), "{notices:?}");
-        let notices =
-            open_directories(&mut workspace, &[scratch.path.display().to_string()]).expect("opens");
+        let notices = open_directories(&mut workspace, &[scratch.path.display().to_string()])
+            .expect("opens")
+            .notices;
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(
             notices[0].contains("no delegate is given a checkout while it is open"),

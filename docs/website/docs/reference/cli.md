@@ -328,7 +328,8 @@ bravebot --trust-workspace -p "summarise what src/ does"
 
 Starts the run from what a yes to the startup question writes: the working directory and everything
 beneath it is trusted, so the planner can read project files. Nothing is written to
-`~/.bravebot/trusted`, and directories opened with `--add-dir` stay untrusted. A run carrying on an
+`~/.bravebot/trusted`. Directories opened with `--add-dir` are trusted with the working directory
+([below](#--add-dir-path)). A run carrying on an
 earlier session keeps that session's trust and adds the working directory to it.
 
 It is a flag and nothing else: no settings file, environment variable or file in the directory turns
@@ -345,11 +346,14 @@ Opens a directory outside the working one for the length of the run, and may be 
 An absolute path outside the working directory is otherwise refused whatever else is true, so without
 this a task pointed at one checkout cannot read another at all.
 
-**It makes the directory reachable and vouches for nothing.** A file read there is quarantined on the
-same terms as a file nobody vouched for, and a write there is refused as any write in an unattended
-run is. A run nobody is watching holds no answer about the directory it works in, so a flag that
-trusted the tree beside it would leave that tree better trusted than the project. The interactive
-[`/add-dir`](../security/trust.md#add-dir) grants both halves, because a person typed it.
+**It makes the directory reachable, and trusted where the run trusts its working directory.** With
+`--trust-workspace`, or a kept answer about the directory the run works in, each directory
+`--add-dir` opens is trusted for the run as [`/add-dir`](../security/trust.md#add-dir) trusts its
+directory in a session, and nothing is written to `~/.bravebot/trusted`. Without either, a file read
+there is quarantined on the same terms as a file nobody vouched for, since a tree beside the project
+must not end up better trusted than the project. The trust approves no effect: a write there is
+refused as any write in an unattended run is. A directory a settings file declares under
+`references` is reachable the same way and is never trusted with it.
 
 The path must be absolute, must exist, must be a directory, and must not already sit inside the
 working one. Anything else is refused by name and the run stops before the turn, rather than failing

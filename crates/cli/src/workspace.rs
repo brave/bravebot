@@ -134,13 +134,22 @@ pub(crate) fn unattended_trust_with(
     }
 }
 
+/// What opening the directories the command line named leaves the run with.
+#[derive(Debug)]
+pub(crate) struct Opened {
+    /// What the person is to be told about the ones that opened: a directory holding the working
+    /// directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is watching
+    /// to find that out.
+    pub(crate) notices: Vec<String>,
+    /// Each directory as the workspace opened it, in the order the command line named them: the
+    /// canonical path, which is what a rule about it is recorded under (TRUST-9).
+    pub(crate) directories: Vec<std::path::PathBuf>,
+}
+
 /// Open every directory the command line named, or say which one could not be opened.
 ///
-/// Reachability and nothing else. `/add-dir` grants a second thing, recording that the person
-/// vouched for the directory, and this deliberately does not: a run nobody is watching holds an
-/// empty trust map, the directory it was started in included, so a rule trusting a sibling
-/// checkout would leave the tree the run was pointed at more trusted than the one it works in.
-/// Reads there are on the same footing as reads of the project's own files.
+/// Reachability only. Whether the run trusts what it opened is decided from the map the run
+/// starts with, by [`trusting_the_added_directories`], once that map exists.
 ///
 /// A relative name, such as `--add-dir ../notes`, is resolved against the working directory
 /// first (CLI-11), through the one implementation `/cd` and `/add-dir` resolve a name against it
@@ -153,15 +162,12 @@ pub(crate) fn unattended_trust_with(
 ///
 /// A path that is not absolute once resolved, does not exist, is not a directory, or lies inside
 /// the working one is refused by the workspace, and the refusal names which.
-///
-/// Returns what the person is to be told about the ones that opened: a directory holding the
-/// working directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is
-/// watching to find that out.
 pub(crate) fn open_directories(
     workspace: &mut Workspace,
     directories: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<Opened, String> {
     let mut notices = Vec::new();
+    let mut opened = Vec::new();
     for directory in directories {
         let named = bravebot_agent::workspace::named_directory(workspace.root(), directory)
             .map_err(|problem| {
@@ -184,8 +190,38 @@ pub(crate) fn open_directories(
                 directory = added.display().to_string()
             ));
         }
+        opened.push(added);
     }
-    Ok(notices)
+    Ok(Opened {
+        notices,
+        directories: opened,
+    })
+}
+
+/// `trust` with each directory the command line opened vouched for, where `trust` vouches for the
+/// working directory (CLI-11, TRUST-26).
+///
+/// The rule `/add-dir` records in a session (TRUST-9), under the canonical path the directory was
+/// opened at, so it covers that directory and what is beneath it and nothing beside or above it.
+/// The person who trusted the directory the run works in, with `--trust-workspace`, a kept answer
+/// or the session the run carries on, also named these directories on the same command line, which
+/// is the gesture `/add-dir` is in a session whose map trusts its directory. A map that does not
+/// trust the working directory is returned as it is: a rule trusting a directory beside it would
+/// leave that directory more trusted than the tree the run works in.
+///
+/// Only `opened` is vouched for. A directory a settings file declares as a reference is opened the
+/// same way and records no trust (REFER-3), so the directories the workspace holds are not read
+/// here. Nothing is written to the store of kept answers.
+pub(crate) fn trusting_the_added_directories(
+    mut trust: bravebot_core::TrustStore,
+    opened: &[std::path::PathBuf],
+) -> bravebot_core::TrustStore {
+    if trust.is_trusted(".") {
+        for directory in opened {
+            trust.trust(&bravebot_agent::workspace::key_of(directory));
+        }
+    }
+    trust
 }
 
 /// The rules a one-shot run works under.
