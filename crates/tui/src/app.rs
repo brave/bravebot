@@ -1647,13 +1647,7 @@ fn after_the_word<'a>(argument: &'a str, word: &str) -> Option<&'a str> {
 /// are counted. It is refused as a reply is: a number that is not one, no block at all, and a
 /// number past the oldest block each come back as the note that says so.
 fn block_to_copy(session: &Session, back: &str) -> Result<String, String> {
-    let steps = if back.is_empty() {
-        1
-    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
-        back.parse::<usize>().unwrap_or(usize::MAX)
-    } else {
-        0
-    };
+    let steps = steps_back(back);
     if steps == 0 {
         return Err(t!(session_copy_block_needs_a_number).to_string());
     }
@@ -1674,14 +1668,7 @@ fn reply_to_copy(session: &Session, back: &str) -> Result<String, String> {
 /// The reply `/copy` was asked for: the latest when nothing follows the word, otherwise the one
 /// that many replies back. What it refuses comes back as the note that says so (CMD-11).
 fn reply_back<'a>(session: &'a Session, back: &str) -> Result<&'a str, String> {
-    // Digits alone: `+2` is a word, and a number too long to hold is still past the oldest reply.
-    let steps = if back.is_empty() {
-        1
-    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
-        back.parse::<usize>().unwrap_or(usize::MAX)
-    } else {
-        0
-    };
+    let steps = steps_back(back);
     if steps == 0 {
         return Err(t!(session_copy_needs_a_number).to_string());
     }
@@ -1692,6 +1679,19 @@ fn reply_back<'a>(session: &'a Session, back: &str) -> Result<&'a str, String> {
     match session.replies_newest_first().count() {
         0 => Err(t!(session_copy_no_reply).to_string()),
         replies => Err(t!(session_copy_goes_no_further, replies = replies)),
+    }
+}
+
+/// How many back `/copy` and `/copy block` were asked for: 1 when nothing follows the word, and 0
+/// for a word that is not a count, which each caller refuses with its own note.
+fn steps_back(back: &str) -> usize {
+    // Digits alone: `+2` is a word, and a number too long to hold is still past the oldest reply.
+    if back.is_empty() {
+        1
+    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
+        back.parse::<usize>().unwrap_or(usize::MAX)
+    } else {
+        0
     }
 }
 
