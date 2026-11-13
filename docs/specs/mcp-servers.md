@@ -718,6 +718,11 @@ a rule a person wrote ([MODE-6](permission-modes.md#MODE-6) says the same of a m
 declaration says every call is asked about is the exception: its calls ask whatever a rule or a
 standing answer says ([SERVERS-21](#SERVERS-21)).
 
+A call a manifest plan fixed puts no question where nothing else decides it: approving the plan,
+whose line showed the call with every argument, answers it
+([manifest.md](manifest.md#MANIFEST-15)). A rule, a declaration asking every call and private
+arguments decide first, as they do here.
+
 **The routing field of a call is the alias and the tool, and never the arguments.**
 [PERM-1](permissions.md#PERM-1) matches a specifier against a routing field and nothing else, for the
 reason that routing is trusted before it reaches a gate while observed bytes are not. For a call the

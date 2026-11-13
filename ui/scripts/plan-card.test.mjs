@@ -73,7 +73,7 @@ test('the plan card says what approving it does and does not do', () => {
   const text = markup.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ')
   assert.ok(text.includes('Nothing the run reads can add a step, drop one, or send anything anywhere this plan does not already name'), text)
   assert.ok(text.includes('Nothing has been read or written yet, so declining leaves everything as it is'), text)
-  assert.ok(markup.includes('Approving the plan does not approve its writes'), markup)
+  assert.ok(text.includes('Approving the plan answers the calls to a server’s tools it shows, and does not approve its writes'), text)
   assert.ok(markup.includes('This answer covers this plan only'), markup)
 })
 

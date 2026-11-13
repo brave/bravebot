@@ -1434,7 +1434,10 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     // a whole program before answering for it. Left uncounted it would be reported as time the run
     // spent working.
     let mut waiting = crate::confirm::Timed::new(confirmer);
-    let verdict = waiting.confirm_manifest(&proposal);
+    // A plan bypassing approved was seen by nobody, so its approval answers no call's question for
+    // a person (MANIFEST-15).
+    let (verdict, answered_by) = waiting.confirm_manifest_noting_the_mode(&proposal);
+    let a_person_answered = answered_by.is_none();
     accounting.elapsed.stalled += waiting.waited();
     accounting.publish(reporter);
     if verdict == Decision::Reject {
@@ -1503,6 +1506,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut chat,
                 &mut asking,
                 permission_mode,
+                a_person_answered,
                 index,
                 shown_only(&plan, index),
                 step,
@@ -1710,6 +1714,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     chat: &mut Chat<'_>,
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
+    a_person_answered: bool,
     index: usize,
     shown_only: bool,
     step: &Step,
@@ -1940,7 +1945,15 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let word = locked(policy, index, "tool")?;
             Ok(Done {
                 note: servers.call(
-                    policy, egress, confirmer, reporter, &alias, &word, step, None,
+                    policy,
+                    egress,
+                    confirmer,
+                    reporter,
+                    &alias,
+                    &word,
+                    step,
+                    None,
+                    a_person_answered && !permission_mode.get().refuses_writes(),
                 )?,
                 ..Done::default()
             })
@@ -1977,6 +1990,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     &word,
                     step,
                     Some((out_slot, slots)),
+                    a_person_answered && !permission_mode.get().refuses_writes(),
                 )?,
                 ..Done::default()
             })

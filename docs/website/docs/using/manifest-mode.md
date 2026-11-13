@@ -50,9 +50,10 @@ The question is asked **once**, and has no standing form: nothing between the pl
 reshape the plan, and a plan is written afresh for each run, so remembering an answer would be
 approving steps nobody has seen.
 
-**Approving a plan is not approving its writes, or its calls to a server's tools.** This mode widens
-the scope of what you commit to in advance and does not replace the gates inside it, so each write is
-still put to you as its step reaches it, and each call is decided as it is in a turn.
+**Approving a plan is not approving its writes.** This mode widens the scope of what you commit to in
+advance and does not replace the gates inside it, so each write is still put to you as its step
+reaches it. Approving the plan answers the calls to a server's tools its lines show, unless a rule,
+the server's declaration, plan mode or private data in the call asks about one at its step.
 
 Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal is
 somebody: the plan goes out beside the progress and the answer is read back, which is the one question
@@ -97,10 +98,11 @@ arguments in full, as the server will receive them.
 - A call is an action, so it comes after every read and transform. It has no way to name what an
   earlier step produced, so every argument is fixed by the plan, and what a tool answers is shown to
   you in the margin as it comes and goes to no model and to no later step.
-- Each call is decided as a turn's is. A `deny` rule about the tool refuses it, an `allow` rule or a
-  standing answer lets it through, and a server declared with `--ask-every-call` asks at its step in
-  every mode, [bypassing](../security/permission-modes.md) included. Approving the plan answers none
-  of these.
+- Approving the plan answers each call its lines show. A `deny` rule about the tool still refuses
+  it, and an `ask` rule, plan mode, private data in the call, or a server declared with
+  `--ask-every-call` still asks at its step, the last in every mode,
+  [bypassing](../security/permission-modes.md) included. A plan bypassing approved was read by
+  nobody, so its calls are decided as a turn's are.
 - A call that is refused, declined, cannot be made or gets no reply ends the run: the steps after
   it do not run, and the steps before it are not undone. A reply that arrived ends nothing, whatever
   it holds. A tool that answers that it failed has still answered: its account is shown in the

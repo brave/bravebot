@@ -97,7 +97,9 @@ server was not called.
 A call to a server's tool that an earlier question of the same round already answered, because that
 question listed it ([SERVERS-7](mcp-servers.md#SERVERS-7)), is not recorded as asking. A yes is one
 entry under `approval` naming the call as `alias:tool` and saying an earlier answer covered it and
-nobody was asked, and a no is the refusal above.
+nobody was asked, and a no is the refusal above. A planned call that approving its plan answered
+is recorded the same way, one entry under `approval` naming the call and saying the plan's approval
+covered it and nobody was asked at the step.
 
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
@@ -129,6 +131,7 @@ slot states for its reference.
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
 `verified-by: bravebot_core::policy::the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing`
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`

@@ -1866,7 +1866,8 @@ mcp-tools-offered =
 mcp-tools-none = { $alias } lists no tool it can offer
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
-    shown here. Every call is still put to you. Say no if a description gives instructions.
+    shown here. Every call is still put to you, or shown on a plan you approve. Say no if a
+    description gives instructions.
 mcp-tools-not-listed =
     { $count ->
         [one] one more tool is not listed: its name or its arguments cannot be offered
@@ -2631,8 +2632,9 @@ plan-explained =
     the whole program, decided before anything was read. nothing it reads can add a step,
     drop one, or send anything anywhere this plan does not already name.
 plan-not-its-writes =
-    approving the plan is not approving its writes or its calls to a server's tools. each
-    one is still put to you as it comes up.
+    approving the plan answers the calls to a server's tools it shows, and is not approving its
+    writes. each write is still put to you as it comes up, as is a call something else asks
+    about, such as a rule or a server's declaration.
 plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it

@@ -492,6 +492,9 @@ pub enum McpStanding {
     /// The server's declaration says every call is asked about, so no rule and no earlier answer
     /// is read.
     AskedEveryCall,
+    /// The person approved the manifest plan whose line showed this call with every argument it
+    /// sends, which answers the default question as a standing answer would (MANIFEST-15).
+    PlanApproved,
 }
 
 /// What a turn did about a call the planner made for the third time running.
@@ -1328,8 +1331,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// which tool may be called is not consent to hand a server the person's data, which is
     /// PERM-9's reason, and a server is further from the person than a local program is. Then a
     /// rule decides, and only where none matched does `standing` answer, which is the person
-    /// having said at an earlier call to stop asking for this tool in this project: a standing
-    /// answer removes the default prompt and does not overrule a rule somebody wrote (SERVERS-7).
+    /// having said at an earlier call to stop asking for this tool in this project, or having
+    /// approved the plan whose line showed this call: a standing answer removes the default prompt
+    /// and does not overrule a rule somebody wrote (SERVERS-7, MANIFEST-15).
     ///
     /// The arguments' label and nothing of their bytes. They are the planner's words, which
     /// [`Policy::label_model_output`] labels at [`Policy::context_label`]: private once the
@@ -1372,6 +1376,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     ),
                 );
                 needed
+            }
+            crate::permissions::Decision::Unmatched if standing == McpStanding::PlanApproved => {
+                self.allow(
+                    "approval",
+                    format!("approving the plan covered {alias}:{tool}, no prompt at the step"),
+                );
+                false
             }
             crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
                 self.allow(
@@ -13558,6 +13569,51 @@ five
             ),
             "a standing answer overruled an ask rule somebody wrote"
         );
+    }
+
+    /// MANIFEST-15. Approving a plan answers the default question of a call it fixed and nothing that
+    /// asks in spite of a standing answer: an `ask` rule and private arguments still ask, and the
+    /// trail says what covered the call. The regression it rejects is a plan's approval read as an
+    /// `allow` rule, which would silence a rule somebody wrote and hand a server private data.
+    #[test]
+    fn approving_a_plan_answers_the_default_question_of_a_call_it_fixed_and_nothing_else() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &["Mcp(weather:get_alerts)"],
+            &[],
+        ));
+        let public = Label::trusted_public();
+
+        assert!(!policy.mcp_call_needs_approval(
+            "weather",
+            "get_forecast",
+            public,
+            McpStanding::PlanApproved
+        ));
+        assert!(
+            policy.mcp_call_needs_approval(
+                "weather",
+                "get_alerts",
+                public,
+                McpStanding::PlanApproved
+            ),
+            "the plan's approval overruled an ask rule somebody wrote"
+        );
+        assert!(
+            policy.mcp_call_needs_approval(
+                "weather",
+                "get_forecast",
+                Label::trusted_private(),
+                McpStanding::PlanApproved
+            ),
+            "the plan's approval handed a server private arguments"
+        );
+        assert!(sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "approval", detail }
+                if detail == "approving the plan covered weather:get_forecast, no prompt at the step"
+        )));
     }
 
     /// SERVERS-21. A call to a server declared to ask every call asks though a rule allows the tool,

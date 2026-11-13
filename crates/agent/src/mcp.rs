@@ -2219,6 +2219,20 @@ fn fill_from_a_choice<'a, S: Sink>(
     }))
 }
 
+/// Whether any text in `value`, a name or a string, holds a character the call's question writes
+/// out because it would draw as nothing or as something else (PROMPT-13).
+fn holds_a_hidden_character(value: &Value) -> bool {
+    match value {
+        Value::String(text) => bravebot_core::invisible::spelled_code(text).hidden > 0,
+        Value::Array(items) => items.iter().any(holds_a_hidden_character),
+        Value::Object(pairs) => pairs.iter().any(|(name, item)| {
+            bravebot_core::invisible::spelled_code(name).hidden > 0
+                || holds_a_hidden_character(item)
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 /// Put one call to the person and make it (SERVERS-7).
 ///
 /// A `deny` rule refuses it before anybody is asked. Then it asks, unless a rule allows the tool or
@@ -2230,6 +2244,12 @@ fn fill_from_a_choice<'a, S: Sink>(
 /// declaration says takes one, always asks. The question draws the number, and the number is put
 /// into the argument only after the answer, by [`Policy::carry_a_choice`] (ROUTE-10, MCP-14).
 /// `slots` holds the choices of the turn making the call, and a plan has none to give.
+///
+/// `plan_approved` says the person approved the plan whose line showed this call with every
+/// argument it sends, which answers the default question (MANIFEST-15). A plan run in plan mode,
+/// or one bypassing approved, passes false, so the call is asked at its step there. A call whose
+/// arguments hold a character the plan's line draws as nothing is asked at its step too, where the
+/// question writes each one out.
 #[expect(
     clippy::too_many_arguments,
     reason = "the arguments are the policy, offer, egress, confirmer, reporter and the alias, tool and arguments of a call"
@@ -2248,6 +2268,7 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     tool: &str,
     arguments: &Value,
     slots: Option<&mut SlotStore>,
+    plan_approved: bool,
 ) -> Called {
     let name = format!("{alias}:{tool}");
     if let Err(denial) = policy.before_mcp_call_rules(alias, tool) {
@@ -2285,6 +2306,8 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     // An answer recorded for the tool before the declaration said so is not read.
     let standing = if every_call {
         McpStanding::AskedEveryCall
+    } else if plan_approved && !holds_a_hidden_character(arguments) {
+        McpStanding::PlanApproved
     } else if session.stands(alias, tool) {
         McpStanding::StoppedAsking
     } else {

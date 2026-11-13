@@ -2515,8 +2515,9 @@ function Card({
           <p className="permission-scope" data-deciding="all">
             These steps run in this order, decided before anything was read. Nothing the run reads
             can add a step, drop one, or send anything anywhere this plan does not already name.
-            Approving the plan does not approve its writes or its calls to a server’s tools: each is
-            still put to you when its step is reached. Nothing has been read or written yet, so
+            Approving the plan answers the calls to a server’s tools it shows, and does not approve
+            its writes: each write is still put to you when its step is reached, as is a call something
+            else asks about, such as a rule or a server’s declaration. Nothing has been read or written yet, so
             declining leaves everything as it is. This answer covers this plan only.
           </p>
 
@@ -2747,7 +2748,8 @@ function Card({
           )}
 
           <p className="permission-scope" data-deciding="all">
-            Every call to one of these tools is still put to you. Your answer is remembered for
+            Every call to one of these tools is still put to you, or shown on a plan you approve.
+            Your answer is remembered for
             this exact list, so the same list is not asked about again.
           </p>
         </DecisionCard>
