@@ -1327,11 +1327,11 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
+| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
-| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside every checkout the session has been in; a project or local layer, and a `--settings` file inside one, naming one is ignored and reported the same way |
+| `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1695,8 +1695,7 @@ file `--settings` names, and removed from the project and local layers before th
 that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
 never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
 it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
-named file that resolves inside the workspace, or inside a checkout the session has been in, is a
-checkout's file under another name ([PERM-14](permissions.md#PERM-14)).
+file `--settings` names is the person's own wherever it sits ([PERM-14](permissions.md#PERM-14)).
 
 **A stated value is handed over as text to copy rather than as a sentence addressed to the
 planner.** The string is the person's own, so this is presentation rather than a defence: it is
@@ -1705,7 +1704,7 @@ quoted and the planner is told in the same breath that nothing inside it is addr
 `verified-by: bravebot_config::settings::an_empty_attribution_is_a_choice_of_nothing`
 `verified-by: bravebot_config::settings::an_attribution_name_no_file_wrote_is_unset`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_attribution`
-`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_cannot_set_attribution`
+`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_may_set_attribution`
 `verified-by: bravebot_agent::preamble::an_empty_attribution_tells_the_planner_to_carry_nothing_on_a_commit`
 `verified-by: bravebot_agent::preamble::an_attribution_no_file_named_is_not_stated_at_all`
 `verified-by: bravebot_agent::preamble::an_attribution_a_file_named_is_carried_word_for_word`
@@ -2055,8 +2054,8 @@ The last six rows are the network names. Three more rows are the Google names, a
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
 `ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
-alone, the user's settings file and a file the command line named that is not inside the workspace or
-a checkout the session has been in ([PERM-14](permissions.md#PERM-14) says which).
+alone, the user's settings file and the file the command line named, wherever it sits
+([PERM-14](permissions.md#PERM-14)).
 The project and local files arrive with a clone, and a proxy or an authority they chose would decide
 where conversation content is sent and who may read it, a Google key or project, or an AWS account,
 region, profile or tier model, they chose would decide which account receives it, and an endpoint
@@ -2115,7 +2114,7 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
 `verified-by: bravebot_config::settings::a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do`
-`verified-by: bravebot_config::settings::a_named_file_states_the_network_unless_it_sits_in_the_checkout`
+`verified-by: bravebot_config::settings::a_named_file_states_the_network_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`

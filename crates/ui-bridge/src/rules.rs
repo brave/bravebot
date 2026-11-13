@@ -543,11 +543,10 @@ mod tests {
         assert_eq!(unreadable.rule, " Fetchh(domain:denied.test) ");
     }
 
-    /// PERM-14: a settings file the person selected may write an `allow` rule where it is outside
-    /// the workspace. One inside the workspace is the checkout's file under another name, so
-    /// its `allow` rule is proposed and not in force.
+    /// PERM-14: a settings file the person selected is their own wherever it sits, so its `allow`
+    /// rule is in force, outside the workspace and inside it alike, and nothing is proposed.
     #[test]
-    fn a_selected_file_grants_only_from_outside_the_workspace() {
+    fn a_selected_file_grants_wherever_it_sits() {
         let mut builder = tempfile::Builder::new();
         builder.prefix("bravebot-rules-selected-");
         #[cfg(unix)]
@@ -578,8 +577,8 @@ mod tests {
             &Settings::layered(Some(home), Some(&project), Some(&inside)),
             &project,
         );
-        assert_eq!(fetching(&rules, "example.com"), None);
-        assert_eq!(rules.proposed.len(), 1, "{:?}", rules.proposed);
+        assert_eq!(fetching(&rules, "example.com"), Some(Ruling::Allow));
+        assert!(rules.proposed.is_empty(), "{:?}", rules.proposed);
     }
 
     /// PERM-10: a directory a file named is reported and is not something this module opens.

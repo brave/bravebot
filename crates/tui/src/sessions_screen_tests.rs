@@ -266,7 +266,6 @@ impl Loop {
                     sources: super::opening::RuleSources {
                         state: None,
                         named: None,
-                        left: vec![root.to_path_buf()],
                         managed: bravebot_config::Managed::default(),
                     },
                     permissions: Permissions::new(),

@@ -409,7 +409,7 @@ SELECTOR_DOCS = ("docs/specs/sandboxing.md", "docs/best-practices/paths.md")
 
 # What a checkout's own files can reach, which is the settings layers and the clauses that say which
 # layers answer for which name.
-LAYERED_CALLS = re.compile(r"\b(?:layered_since|unread_keys|rule_texts)\b")
+LAYERED_CALLS = re.compile(r"\b(?:fn layered|unread_keys|rule_texts)\b")
 SETTINGS_FILE = Path("crates/config/src/settings.rs")
 SETTINGS_STRUCT = re.compile(r"^pub struct Settings\s*\{")
 SETTINGS_FIELD = re.compile(r"^\s{4}([a-z_][a-z0-9_]*)\s*:")

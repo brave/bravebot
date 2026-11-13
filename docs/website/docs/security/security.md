@@ -57,8 +57,7 @@ keys your `~/.ssh/config` names for the host. ssh otherwise offers the agent's k
 GitHub takes the first one it knows, so with keys of two accounts in one agent every push goes out
 as one of them. A remote given by name, such as `origin`, is not matched, because its address is in
 the repository's own configuration. On those commands it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or
-`core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
-workspace can set it.
+`core.sshCommand` of yours. Only your own settings file and the file `--settings` names can set it.
 
 Without an entry for the owner, the run prompt in the terminal interface numbers the public keys
 your own ssh files name and asks which one to offer, once per owner, and keeps the answer in
@@ -290,7 +289,7 @@ version. `bravebot doctor` reports both, which is where to look first when a con
 
 A process started from a launcher or a service has no shell profile, so the six names below
 (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`) may also be
-set in the `env` block of `~/.bravebot/settings.json` or of a `--settings` file outside the project, in
+set in the `env` block of `~/.bravebot/settings.json` or of the file `--settings` names, in
 upper case. A name exported in the environment wins, and the certificate pair and the proxy each
 come whole from one place, so a bundle in a file is never added to an exported directory. `NO_PROXY`
 is the one name read on its own. A `.bravebot/settings.json` or `.bravebot/settings.local.json` arrives
