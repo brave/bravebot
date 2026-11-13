@@ -19,6 +19,8 @@ the offset names which page of the matches to return, the flag decides which of 
 match, and the context is a count of how many neighbouring lines to show with each, and the output names whether
 to return the lines, only the files they are in, or a count ([SEARCH-12](#SEARCH-12)). `directory` may
 name one file instead of a directory ([SEARCH-11](#SEARCH-11)).
+`read` is the planner's request, as `fetch_url`'s is, for a quarantined result to be released in
+the result that returned it ([VET-6](vet-content.md#VET-6)); it names no path and decides no label.
 The only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the matching lines, the files or counts, or a reference.
 
@@ -91,7 +93,9 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 ### SEARCH-2: a result touching several files is trusted only if every one of them is
 
 Otherwise it is quarantined whole. Unlike a listing, a search returns one reference for the whole
-result rather than one per hit, so its hits are not addresses.
+result rather than one per hit, so its hits are not addresses. A call with `read: true` has that
+reference released in the same result where the mode or a check answers `vet_content`, with the
+label and trail entry a `vet_content` call on it would give ([VET-6](vet-content.md#VET-6)).
 
 The label comes from the paths the walk reached, before any file is opened, each asked about under
 every name the file has, as a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). What a file holds does
@@ -106,6 +110,7 @@ known costs, with what an attacker who owns the file gains.
 `verified-by: bravebot_agent::workspace::what_an_unvouched_file_holds_changes_a_searchs_counts_and_not_its_label`
 `verified-by: bravebot_agent::turn::a_search_touching_one_unvouched_file_is_quarantined_whole`
 `verified-by: bravebot_agent::turn::untrusted_search_results_never_reach_the_model`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result`
 
 <a id="SEARCH-3"></a>
 ### SEARCH-3: a truncated search tells the planner it is incomplete
@@ -143,6 +148,8 @@ a second run of the same call. The planner is told the search is incomplete eith
 `verified-by: bravebot_agent::workspace::a_search_that_reached_every_file_makes_no_claim`
 `verified-by: bravebot_agent::workspace::a_capped_search_keeps_the_same_files_every_time`
 `verified-by: bravebot_agent::workspace::a_capped_search_prefers_a_directorys_own_files`
+`verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_cap_and_paging_notes`
+`verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes`
 
 <a id="SEARCH-4"></a>
 ### SEARCH-4: a pattern that will not compile is reported as such, never as an empty result
@@ -302,6 +309,8 @@ file again is the cost of not keeping one.
 `verified-by: bravebot_agent::workspace::the_reported_offset_returns_the_following_matches`
 `verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_offers_no_later_page`
 `verified-by: bravebot_agent::workspace::a_walk_that_stopped_short_has_no_end_of_matches_count`
+`verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_cap_and_paging_notes`
+`verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes`
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_offers_no_page_and_no_count`
 `verified-by: bravebot_agent::workspace::an_offset_past_the_last_match_says_how_many_there_were`
 `verified-by: bravebot_agent::workspace::an_offset_into_a_pattern_that_is_absent_is_not_a_page_past_the_end`

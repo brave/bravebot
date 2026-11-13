@@ -201,8 +201,11 @@ sample says where its middle begins, so the first page can start there. A turn t
 have ([TOOL-6](tool-surface.md#TOOL-6)).
 
 The refusals of `read_output` for a reference no program printed and for a `pattern`, and the refusal
-of `job_output` for a name no run handed back, still name `run` without reading the list. They are
-not yet written from it ([TOOL-6](tool-surface.md#TOOL-6)).
+of `job_output` for a name that is no job, name `run` only where the turn's list holds it
+([TOOL-6](tool-surface.md#TOOL-6)). Without it, they say a reference to what a program printed, or a
+job name handed back, and leave out the sentence that a program can filter the output.
+
+`verified-by: bravebot_agent::tools::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
 
 **Why nobody is asked.** The cap is a budget and not an authority ([RUN-21](run.md#RUN-21)). The
 label on these bytes already let the planner read them, and the only thing that kept them out of the

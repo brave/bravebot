@@ -13,8 +13,8 @@ that is merely carried.
 | Tool | Routing | Content | Asks you? |
 |---|---|---|---|
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
-| [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
-| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | no |
+| [`list_files`](#list_files) | `directory`, `pattern`, `depth`, `read` | none | no |
+| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output`, `read` | none | no |
 | [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
@@ -24,7 +24,7 @@ that is merely carried.
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
-| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit` | none | no |
+| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit`, `read` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
 | [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
 | [`spawn_processor`](#spawn_processor) | `reads`, `about`, `choose_upto` | `instruction` | no |
@@ -186,6 +186,7 @@ Lists files under a directory.
 | `directory` | workspace-relative; `.` for the root |
 | `pattern` | optional glob: `*`, `?`, `**` and brace groups like `**/*.{rs,toml}`. One with a `/` may be written from `directory` or from the workspace root |
 | `depth` | optional; how many directory levels below `directory` to walk, `1` being that directory and no further |
+| `read` | `true` to ask for a quarantined listing in the result of this call, given only where the session is offered `vet_content` ([Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call)) |
 
 Set a `depth`. Without one the walk reaches every file underneath, which in a real repository is
 thousands of paths. You pay for them in the planner's context, again on every round that resends it,
@@ -199,9 +200,10 @@ A listing of a directory nobody vouched for is quarantined, because a filename i
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
 process it and write it back without ever being told what it is called. The directories a bounded
 walk stopped at are entries too. The result says once what a reference to a file and a reference to a
-directory are for, gives each file a line with its reference and label, and gives the directories as
-a count with the first and last reference. There is nothing behind a directory to read, and the way
-to what is inside it is another listing with a greater depth.
+directory are for. Files that sit next to each other and share a label are given as one line, a count
+with the first and last reference and the label, and so are the directories; a file or directory on
+its own has a line with its reference and label. There is nothing behind a directory to read, and the
+way to what is inside it is another listing with a greater depth.
 
 What a reference to a file is for depends on the label its line shows, and the result says it once
 for each label among the files. A file labelled untrusted is one nobody vouched
@@ -266,6 +268,7 @@ Finds lines matching a **regular expression** in workspace files.
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
 | `context` | lines to show before and after each match, as `grep -C` does: none unless given, at most 10 |
 | `output` | `lines` (the default), `files` for only the paths of the files with a match, or `count` for the matching lines per file and in all. The last two ignore `offset` and `context` and are not held to the match cap ([below](#files-and-counts)) |
+| `read` | `true` to ask for a quarantined result in the result of this call, given only where the session is offered `vet_content` ([Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call)) |
 
 Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and negation,
 `\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to
@@ -687,6 +690,13 @@ Hands back a slice of what a [background job](run-tool.md#leaving-a-pipeline-run
 | `kill` | stop the pipeline |
 | `wait_seconds` | sit and watch for up to this long ([below](#a-look-may-wait)) |
 | `until_exit` | with `wait_seconds`, wait for the job to end and not for its output ([below](#a-look-may-wait)) |
+| `read` | ask for the slice as text in this result, where `read_output` would hand it back without asking you |
+
+`read: true` works as it does on [`run`](run-tool.md): where permissions are bypassed with no
+screening, or a check answers and says the output is safe, the slice comes back as text the agent can
+read in the same result, with no `read_output` call. Anywhere else it changes nothing, and a slice
+longer than one result may hold still comes back as a reference. When the job ends, the account the
+turn gives of it is released the same way if the job's latest look passed `read: true`.
 
 Each look hands back a slice: the bytes the job printed since the previous look, and whether the job
 has ended. A line is counted once, by the look that holds its first byte, and the next look begins

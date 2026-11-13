@@ -1012,6 +1012,10 @@ struct Job {
     /// asking for this line (RUN-19). Decides whether the account of its finish may advise
     /// vouching for the command (RUN-14).
     covered_by_record: bool,
+    /// Whether the latest `job_output` look at it asked, with `read`, for its output in the result.
+    /// The planner's own boolean, carried to the account of its end, which no call carries
+    /// (RUN-22).
+    read_asked: bool,
     /// The token the person sets to stop this job, read here at the turn's next step.
     stop: bravebot_core::cancel::JobStop,
     /// How long it had run when the person's stop was carried out, so a look after the account
@@ -1197,6 +1201,9 @@ pub struct Ended {
     /// Whether a record of remembered lines stopped the asking for this line (RUN-19), in which
     /// case the account of a quarantined output leaves out the advice about vouching (RUN-14).
     pub covered_by_record: bool,
+    /// Whether the job's latest `job_output` look asked to read its output in the result, so the
+    /// account is released as that look would have been (RUN-22).
+    pub read_asked: bool,
 }
 
 impl Jobs {
@@ -1263,6 +1270,7 @@ impl Jobs {
                 drawn: crate::exec::Seen::default(),
                 reported: false,
                 covered_by_record,
+                read_asked: false,
                 stop: stop.clone(),
                 stopped_by_the_person: None,
                 confinement: None,
@@ -1371,6 +1379,7 @@ impl Jobs {
                 whole,
                 look,
                 covered_by_record: job.covered_by_record,
+                read_asked: job.read_asked,
             });
         }
         finished
@@ -2986,16 +2995,34 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         }
         "load_tool" if loads_a_tool => load_tool(policy, tools.mcp, &arguments),
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
-        "list_files" => match ahead
-            .take()
-            .filter(|read| read.reading == Reading::ListFiles)
-        {
-            Some(read) => read.rejoin(policy),
-            None => list_files(policy, tools.workspace, &arguments),
+        // `read` asks for vet_content's release in the result, so it is checked to be a boolean
+        // and carried, as fetch_url's is, and a delegate's is ignored as fetch_url's would be
+        // were it offered one (VET-6).
+        "list_files" => match read_asked_of(&arguments) {
+            Ok(read_asked) => {
+                let mut produced = match ahead
+                    .take()
+                    .filter(|read| read.reading == Reading::ListFiles)
+                {
+                    Some(read) => read.rejoin(policy),
+                    None => list_files(policy, tools.workspace, &arguments),
+                };
+                produced.read_asked = read_asked && !tools.delegated;
+                produced
+            }
+            Err(refusal) => *refusal,
         },
-        "search" => match ahead.take().filter(|read| read.reading == Reading::Search) {
-            Some(read) => read.rejoin(policy),
-            None => search(policy, tools.workspace, &arguments),
+        "search" => match read_asked_of(&arguments) {
+            Ok(read_asked) => {
+                let mut produced = match ahead.take().filter(|read| read.reading == Reading::Search)
+                {
+                    Some(read) => read.rejoin(policy),
+                    None => search(policy, tools.workspace, &arguments),
+                };
+                produced.read_asked = read_asked && !tools.delegated;
+                produced
+            }
+            Err(refusal) => *refusal,
         },
         "read_git" => read_git(policy, tools, confirmer, &arguments),
         "repo_map" => repo_map(policy, tools.workspace, &arguments),
@@ -3660,7 +3687,9 @@ pub(crate) fn accept_named_reference<S: Sink>(
     .collect();
     let held = if known.is_empty() {
         match listing {
-            NamesToList::Output => "No run has printed anything under a reference yet.".to_string(),
+            NamesToList::Output => {
+                "No program has printed anything under a reference yet.".to_string()
+            }
             NamesToList::Choices => "No processor has made a choice yet.".to_string(),
             NamesToList::Text => "No reference has been given yet.".to_string(),
         }
@@ -5445,7 +5474,16 @@ fn list_files<S: Sink>(
                     paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
                     paths
                 });
-                return Produced::new(Labelled::trusted(String::new()), proposed_dir.clone(), note)
+                // A call that asked to read gets the listing as one document too, under the
+                // listing's label, for the turn to release in this result where the mode or a
+                // check answers vet_content (VET-6). The planner's argument decides, and the turn
+                // hands the planner the entries instead wherever the release is not made.
+                let text = if read_asked_of(arguments).unwrap_or(false) {
+                    render_listing(policy, &listing, had_pattern, &unmatched_note)
+                } else {
+                    Labelled::trusted(String::new())
+                };
+                return Produced::new(text, proposed_dir.clone(), note)
                     .of_content()
                     .capped(incomplete)
                     .linked(links)
@@ -5460,92 +5498,7 @@ fn list_files<S: Sink>(
                     });
             }
 
-            let rendered = policy.render_in_place("list_files", &listing, |listing| {
-                // Before the directories are folded in among the files below: a pattern selects
-                // files, and a bounded walk lists its directories whatever the pattern says.
-                let selected_no_file = listing.files.is_empty();
-                let mut entries: Vec<String> = listing.files.clone();
-                entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
-                // A directory the per-directory cap cut, with how many of its files are not shown,
-                // so the planner knows to list it by name for the rest (LIST-5).
-                entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
-                    format!(
-                        "{name}/ ({} not listed)",
-                        tally(*left_out, "more file", "more files")
-                    )
-                }));
-                entries.sort();
-                let cut_per_directory = !listing.partly_listed.is_empty();
-                let listing = Listing {
-                    files: entries,
-                    directories: Vec::new(),
-                    truncated: listing.truncated,
-                    at_the_cap: listing.at_the_cap,
-                    unreadable: listing.unreadable,
-                    links: listing.links,
-                    partly_listed: Vec::new(),
-                };
-                let mut body = if listing.files.is_empty() && listing.links > 0 {
-                    // An empty listing beside links is not an empty directory: a skills
-                    // directory made only of links read as one, and the model went looking
-                    // elsewhere for files that were one step away.
-                    format!(
-                        "(no files; {} not entered, so this does not say the directory is \
-                         empty)",
-                        tally(listing.links, "symbolic link was", "symbolic links were")
-                    )
-                } else if listing.files.is_empty() {
-                    "(no files)".to_string()
-                } else if listing.truncated {
-                    // Said plainly, because a model given a silently capped listing will treat
-                    // it as the whole tree and conclude a file does not exist. Each cap that left
-                    // files out has its own sentence, as `listing_capped_note` does for a
-                    // quarantined listing: "stopped at N files" misstates a per-directory cut,
-                    // and the per-directory sentence alone hides that the walk stopped as well.
-                    let mut body = listing.files.join("\n");
-                    if listing.at_the_cap || !cut_per_directory {
-                        body.push_str(&format!(
-                            "\n\n(this listing stopped at {} files and is incomplete; \
-                             list a subdirectory to see more)",
-                            listing.files.len()
-                        ));
-                    }
-                    if cut_per_directory {
-                        // A listing of that directory with a depth is cut the same way, so the
-                        // rest is reached with none.
-                        body.push_str(&format!(
-                            "\n\n(this listing took at most {} files from any one directory and \
-                             is incomplete; to see the rest of a directory marked \"not \
-                             listed\", list that directory by its name with no depth)",
-                            crate::workspace::MAX_FILES_PER_DIRECTORY
-                        ));
-                    }
-                    body
-                } else {
-                    listing.files.join("\n")
-                };
-                if had_pattern && selected_no_file {
-                    body.push_str(&format!("\n\n{unmatched_note}"));
-                }
-                if listing.unreadable {
-                    // Said without a name: the directory's own name is a filename out of the
-                    // tree, and this sentence is the driver's to word (LIST-2).
-                    body.push_str(
-                        "\n\n(part of this tree could not be read and is not in this \
-                         listing, so it says nothing about what is there)",
-                    );
-                }
-                if listing.links > 0 && !listing.files.is_empty() {
-                    // A number and no names, like the sentence above: a link's name is a
-                    // filename out of the tree (LIST-2).
-                    body.push_str(&format!(
-                        "\n\n({} not entered and {} not in this listing)",
-                        tally(listing.links, "symbolic link was", "symbolic links were"),
-                        if listing.links == 1 { "is" } else { "are" }
-                    ));
-                }
-                body
-            });
+            let rendered = render_listing(policy, &listing, had_pattern, &unmatched_note);
             // The entries alone: "(no files)" and the notices after a listing are the driver's
             // words and are not glimpsed (VIEW-24).
             let glimpsed = policy.render_in_place("list_files", &listing, |listing| {
@@ -5571,6 +5524,103 @@ fn list_files<S: Sink>(
         // Worded about the name typed. The error carries where it landed, which a link can choose.
         Err(e) => file_tool_problem(policy, "list_files", "directory", &e, &proposed_dir),
     }
+}
+
+/// A listing as the planner reads it where it may: one entry a line, a directory with a trailing
+/// slash, and the driver's sentences about a cap, a pattern that matched nothing, a directory that
+/// could not be opened and links not entered. Rendered inside the kernel under the listing's label.
+fn render_listing<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    listing: &Labelled<Listing>,
+    had_pattern: bool,
+    unmatched_note: &str,
+) -> Labelled<String> {
+    policy.render_in_place("list_files", listing, |listing| {
+        // Before the directories are folded in among the files below: a pattern selects
+        // files, and a bounded walk lists its directories whatever the pattern says.
+        let selected_no_file = listing.files.is_empty();
+        let mut entries: Vec<String> = listing.files.clone();
+        entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
+        // A directory the per-directory cap cut, with how many of its files are not shown,
+        // so the planner knows to list it by name for the rest (LIST-5).
+        entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
+            format!(
+                "{name}/ ({} not listed)",
+                tally(*left_out, "more file", "more files")
+            )
+        }));
+        entries.sort();
+        let cut_per_directory = !listing.partly_listed.is_empty();
+        let listing = Listing {
+            files: entries,
+            directories: Vec::new(),
+            truncated: listing.truncated,
+            at_the_cap: listing.at_the_cap,
+            unreadable: listing.unreadable,
+            links: listing.links,
+            partly_listed: Vec::new(),
+        };
+        let mut body = if listing.files.is_empty() && listing.links > 0 {
+            // An empty listing beside links is not an empty directory: a skills
+            // directory made only of links read as one, and the model went looking
+            // elsewhere for files that were one step away.
+            format!(
+                "(no files; {} not entered, so this does not say the directory is \
+                         empty)",
+                tally(listing.links, "symbolic link was", "symbolic links were")
+            )
+        } else if listing.files.is_empty() {
+            "(no files)".to_string()
+        } else if listing.truncated {
+            // Said plainly, because a model given a silently capped listing will treat
+            // it as the whole tree and conclude a file does not exist. Each cap that left
+            // files out has its own sentence, as `listing_capped_note` does for a
+            // quarantined listing: "stopped at N files" misstates a per-directory cut,
+            // and the per-directory sentence alone hides that the walk stopped as well.
+            let mut body = listing.files.join("\n");
+            if listing.at_the_cap || !cut_per_directory {
+                body.push_str(&format!(
+                    "\n\n(this listing stopped at {} files and is incomplete; \
+                     list a subdirectory to see more)",
+                    listing.files.len()
+                ));
+            }
+            if cut_per_directory {
+                // A listing of that directory with a depth is cut the same way, so the
+                // rest is reached with none.
+                body.push_str(&format!(
+                    "\n\n(this listing took at most {} files from any one directory and \
+                     is incomplete; to see the rest of a directory marked \"not \
+                     listed\", list that directory by its name with no depth)",
+                    crate::workspace::MAX_FILES_PER_DIRECTORY
+                ));
+            }
+            body
+        } else {
+            listing.files.join("\n")
+        };
+        if had_pattern && selected_no_file {
+            body.push_str(&format!("\n\n{unmatched_note}"));
+        }
+        if listing.unreadable {
+            // Said without a name: the directory's own name is a filename out of the
+            // tree, and this sentence is the driver's to word (LIST-2).
+            body.push_str(
+                "\n\n(part of this tree could not be read and is not in this \
+                         listing, so it says nothing about what is there)",
+            );
+        }
+        if listing.links > 0 && !listing.files.is_empty() {
+            // A number and no names, like the sentence above: a link's name is a
+            // filename out of the tree (LIST-2).
+            body.push_str(&format!(
+                "\n\n({} not entered and {} not in this listing)",
+                tally(listing.links, "symbolic link was", "symbolic links were"),
+                if listing.links == 1 { "is" } else { "are" }
+            ));
+        }
+        body
+    })
 }
 
 /// `repo_map`: the declarations of the source files beneath a directory that the trust map
@@ -7981,9 +8031,15 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         } else {
             ""
         };
+        // `run` is named only where the turn's list holds it (TOOL-6).
+        let only = if tools.running.offered() {
+            "Only a reference that came back from run can be read this way."
+        } else {
+            "Only a reference to what a program printed can be read this way."
+        };
         return Produced::problem(format!(
             "refused: {slot} is not something a program printed, so there is nothing to show. \
-             Only a reference that came back from run can be read this way.{route}"
+             {only}{route}"
         ));
     }
 
@@ -8046,8 +8102,13 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
             "refused: a pattern searches output you may already read, and {slot} is quarantined. \
              Which lines matched, how many there are and where the result stopped are all worked \
              out from the bytes, so searching this one would answer with numbers nobody vouched \
-             for. Without a pattern, {}, and run can put the output through a program instead.{}",
+             for. Without a pattern, {}{}.{}",
             whole_of_it(tools),
+            if tools.running.offered() {
+                ", and run can put the output through a program instead"
+            } else {
+                ""
+            },
             stated_cost(tools, &slot)
         ));
     }
@@ -12979,6 +13040,13 @@ fn job_output<S: Sink, R: Reporter>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
+    // Refused before anything happens, so a planner that believed it had asked is not handed a
+    // reference instead, and a kill in the same call is not carried out (RUN-22).
+    let read_asked = match read_asked_of(arguments) {
+        Ok(read_asked) => read_asked,
+        Err(refusal) => return *refusal,
+    };
+
     let (wait, until_exit) = match wait_from(arguments).and_then(|wait| {
         until_exit_from(arguments, wait, kill).map(|until_exit| (wait, until_exit))
     }) {
@@ -13011,11 +13079,20 @@ fn job_output<S: Sink, R: Reporter>(
                  working."
             ));
         }
+        // `run` is named only where the turn's list holds it (TOOL-6).
+        let handed_back = if tools.running.offered() {
+            "run handed back"
+        } else {
+            "handed back"
+        };
         return Produced::problem(format!(
-            "error: there is no background job called '{name}'. Only a job name run handed back \
+            "error: there is no background job called '{name}'. Only a job name {handed_back} \
              in this turn can be read, and they do not outlive the turn."
         ));
     };
+
+    // The latest look's answer is the one the account of the job's end follows (RUN-22).
+    job.read_asked = read_asked;
 
     // None where there was nothing to wait for: a caller with unseen output already waiting for it
     // asked to be told about output, and it is here. Whether there is any is byte counts the driver
@@ -13114,6 +13191,7 @@ fn job_output<S: Sink, R: Reporter>(
         .capped(whole.is_some());
     produced.whole = whole;
     produced.untrusted = !label.is_trusted();
+    produced.read_asked = read_asked;
     produced.look = Some(look);
     // So a person can be asked to read it later, and can see which command they are reading. This is
     // also the one place the window a wait watched is said to the planner, which the note above is
@@ -17892,6 +17970,78 @@ mod tests {
         }
     }
 
+    /// VET-6 and TOOL-6 for `search` and `list_files` (R12, R17 of #3995). `read` is offered only
+    /// on a list that holds `vet_content`, the other arguments stay where it is removed, nothing
+    /// on a list without it names `vet_content`, and the text names `vet_content` and neither the
+    /// mode nor the check (VET-5).
+    ///
+    /// A wrong implementation offers `read` to a delegate, removes the routing arguments with it,
+    /// or says in the shared text that a check reads the result.
+    #[test]
+    fn search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word() {
+        for (tool, kept) in [("search", "pattern"), ("list_files", "directory")] {
+            let properties_of = |offered: &[bravebot_aichat::protocol::Tool]| {
+                offered
+                    .iter()
+                    .find(|offered| offered.function.name == tool)
+                    .expect("the tool is offered")
+                    .function
+                    .parameters["properties"]
+                    .clone()
+            };
+            let with = the_table_without(&[]);
+            let properties = properties_of(&with);
+            assert_eq!(
+                properties["read"]["type"], "boolean",
+                "{tool}: a list holding vet_content was not offered read"
+            );
+            let without = the_table_without(&["vet_content"]);
+            let left = properties_of(&without);
+            assert!(
+                left.get("read").is_none(),
+                "{tool}: read was offered on a list with no vet_content: {left}"
+            );
+            assert!(
+                left.get(kept).is_some() && left.get("why").is_some(),
+                "{tool}: the other arguments were lost with read: {left}"
+            );
+            assert!(
+                !names_the_tool(&description_of(&without, tool), "vet_content")
+                    && !names_the_tool(&left.to_string(), "vet_content"),
+                "{tool}: a list without vet_content was pointed at it"
+            );
+            let read = properties["read"]["description"].as_str().unwrap_or("");
+            assert!(
+                names_the_tool(read, "vet_content"),
+                "{tool}: read does not say which tool it asks the release of: {read}"
+            );
+            let words: Vec<String> = read
+                .to_ascii_lowercase()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .map(str::to_string)
+                .collect();
+            for forbidden in [
+                "bypass",
+                "bypassed",
+                "auto-vetting",
+                "screening",
+                "permissions",
+                "check",
+                "checked",
+                "safe",
+                "unsafe",
+                "verdict",
+                "classifier",
+                "injection",
+            ] {
+                assert!(
+                    !words.iter().any(|word| word == forbidden),
+                    "{tool}: read names '{forbidden}': {read}"
+                );
+            }
+        }
+    }
+
     /// The words a description names a tool with: the tool's name as a word of its own.
     fn names_the_tool(description: &str, tool: &str) -> bool {
         description
@@ -18701,6 +18851,28 @@ mod tests {
                     "{file_gone} {program_gone} {neither} comparing two looks needs a later look."
                 )
             )
+        );
+    }
+
+    /// TOOL-6. The `read` argument of `job_output` names `read_output` only where the list holds
+    /// it, as `run`'s does, and says the account of the job's end follows the latest look.
+    #[test]
+    fn the_job_output_read_argument_names_read_output_only_where_the_list_holds_it() {
+        let full = argument_of(&the_table_without(&[]), "job_output", "read");
+        assert!(names_the_tool(&full, "read_output"), "{full}");
+        assert!(
+            full.contains(
+                "The account of the job's end that the turn gives you follows your \
+                           latest look's read."
+            ),
+            "{full}"
+        );
+        let without = argument_of(&the_table_without(&["read_output"]), "job_output", "read");
+        assert!(!names_the_tool(&without, "read_output"), "{without}");
+        assert_eq!(
+            without,
+            "Ask to read what the job printed in this result. This changes nothing in this turn: \
+             output you may not read comes back as a reference. Defaults to false."
         );
     }
 
@@ -30049,7 +30221,7 @@ mod tests {
 
             let (told, _) = read_output_answer("7", &[("ref:1", false)], false);
             assert!(
-                told.contains("No run has printed anything under a reference yet."),
+                told.contains("No program has printed anything under a reference yet."),
                 "{told}"
             );
         }
@@ -30336,6 +30508,101 @@ mod tests {
                 "refused: ref:1 is not something a program printed, so there is nothing to show. \
                  Only a reference that came back from run can be read this way. Where you have to \
                  read it yourself, vet_content is how to ask for it.",
+            );
+        }
+
+        /// TOOL-6. The refusals of `read_output` for a reference no program printed and for a
+        /// `pattern` on quarantined output, and the refusal of `job_output` for a name that is no
+        /// job, name `run` only where the turn's list holds it. Each is asserted whole beside the
+        /// full list as the control. The regression it rejects is a refusal written without reading
+        /// the list, which sends a turn left without `run` to a tool it does not have.
+        #[test]
+        fn read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one() {
+            let scratch = Scratch::new("refusals-name-run");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let refused = |running: Running, arguments: Value, from_command: bool| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.running = running;
+                    tools.beside = Beside::every().without(Named::VetContent);
+                    let id = bravebot_core::slot::SlotId::new("ref:1");
+                    let label = if from_command {
+                        bravebot_core::label::Label::untrusted_private()
+                    } else {
+                        bravebot_core::label::Label::trusted_private()
+                    };
+                    tools
+                        .slots
+                        .writer_for(id.clone(), label)
+                        .expect("a writer")
+                        .write("bytes")
+                        .expect("written");
+                    if from_command {
+                        policy.came_from_command(&id, "a command", tools.slots);
+                    }
+                    if arguments.get("job").is_some() {
+                        job_output(
+                            &mut policy,
+                            tools,
+                            &mut crate::report::IgnoreReports,
+                            &arguments,
+                        )
+                    } else {
+                        read_output(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveWrites,
+                            &mut crate::report::IgnoreReports,
+                            &arguments,
+                        )
+                    }
+                });
+                assert!(produced.failed, "{arguments}: the call was not refused");
+                told(&mut policy, &produced.text)
+            };
+
+            let not_output = json!({"ref": "ref:1"});
+            assert_eq!(
+                refused(Running::Offered, not_output.clone(), false),
+                "refused: ref:1 is not something a program printed, so there is nothing to show. \
+                 Only a reference that came back from run can be read this way.",
+            );
+            assert_eq!(
+                refused(Running::Withheld, not_output, false),
+                "refused: ref:1 is not something a program printed, so there is nothing to show. \
+                 Only a reference to what a program printed can be read this way.",
+            );
+
+            let pattern = json!({"ref": "ref:1", "pattern": "x"});
+            let with_run = refused(Running::Offered, pattern.clone(), true);
+            assert!(
+                with_run.starts_with("refused: a pattern searches output you may already read")
+                    && with_run.contains(", and run can put the output through a program instead."),
+                "{with_run}"
+            );
+            let without_run = refused(Running::Withheld, pattern, true);
+            assert!(
+                without_run.starts_with("refused: a pattern searches output you may already read")
+                    && !without_run.contains("run can put"),
+                "{without_run}"
+            );
+            assert_eq!(
+                without_run,
+                with_run.replace(", and run can put the output through a program instead", ""),
+                "the refusal changed beyond the sentence naming run"
+            );
+
+            let no_job = json!({"job": "job:9"});
+            assert_eq!(
+                refused(Running::Offered, no_job.clone(), false),
+                "error: there is no background job called 'job:9'. Only a job name run handed \
+                 back in this turn can be read, and they do not outlive the turn.",
+            );
+            assert_eq!(
+                refused(Running::Withheld, no_job, false),
+                "error: there is no background job called 'job:9'. Only a job name handed back \
+                 in this turn can be read, and they do not outlive the turn.",
             );
         }
 

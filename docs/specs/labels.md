@@ -147,7 +147,7 @@ guards:
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 16
+      - crates/agent/src/turn.rs: 17
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:

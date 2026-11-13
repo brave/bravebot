@@ -540,7 +540,10 @@ reference, nobody is asked, and the result says the argument did not return it. 
 person is also told that auto-vetting kept the output back. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
-holds nothing the job has printed. [`fetch_url`](tools.md#fetch_url) and the tools of an
+holds nothing the job has printed. [`job_output`](tools.md#job_output) takes `read` too: a look that
+passes `read: true` gets the slice in its own result on the same terms, and the account of a job's
+end does too where the job's latest look passed it. [`fetch_url`](tools.md#fetch_url), [`search`](tools.md#search),
+[`list_files`](tools.md#list_files) and the tools of an
 [MCP server](../customize/mcp-servers.md) take the same argument, described under
 [Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
