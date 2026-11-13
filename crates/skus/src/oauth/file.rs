@@ -5,6 +5,7 @@
 
 use super::Kind;
 use crate::Secret;
+use crate::secret::Document;
 use crate::store::{Claim, StoreError, beside, write_through};
 use std::path::{Path, PathBuf};
 
@@ -93,6 +94,46 @@ pub(crate) fn load_at<K: Kind>(path: &Path) -> Result<Option<K::Account>, Accoun
     K::decode(raw.expose()).map(Some)
 }
 
+/// The parsed text of a file that is not empty, is JSON and was written by `version`.
+///
+/// The guard clears the copy of each token the parse makes however the caller returns. The parse
+/// error is not repeated: it can quote the text it stopped at.
+pub(crate) fn versioned(raw: &str, version: u64) -> Result<Document, AccountError> {
+    // A file can exist holding nothing, if a write was interrupted partway.
+    if raw.trim().is_empty() {
+        return Err(AccountError::Malformed(Defect::Empty));
+    }
+    let document = Document::of(
+        serde_json::from_str(raw).map_err(|_| AccountError::Malformed(Defect::NotJson))?,
+    );
+    if document
+        .read()
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(version)
+    {
+        return Err(AccountError::Malformed(Defect::OtherVersion));
+    }
+    Ok(document)
+}
+
+/// The string field `name` of a file, where it is present and not empty.
+pub(crate) fn text(value: &serde_json::Value, name: &str) -> Option<String> {
+    value
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+/// The instant the access token of a file expires, in seconds since 1970-01-01.
+pub(crate) fn expiry(value: &serde_json::Value) -> Result<u64, AccountError> {
+    value
+        .get("expires_at")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or(AccountError::Malformed(Defect::NoExpiry))
+}
+
 pub(crate) fn save_at<K: Kind>(path: &Path, account: &K::Account) -> Result<(), AccountError> {
     let _claim = claim::<K>(path)?;
     write_held::<K>(path, account)
@@ -126,5 +167,21 @@ pub(crate) fn remove_held(path: &Path) -> Result<bool, AccountError> {
         Err(e) => Err(AccountError::Unwritable {
             detail: format!("{}: {e}", path.display()),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file is read as the version the caller names. A check that held every caller to the
+    /// first version would refuse the file a later format writes and read an old one as current.
+    #[test]
+    fn a_file_is_read_as_the_version_the_caller_names_and_no_other() {
+        assert!(versioned("{\"version\": 2}", 2).is_ok());
+        assert!(matches!(
+            versioned("{\"version\": 1}", 2),
+            Err(AccountError::Malformed(Defect::OtherVersion))
+        ));
     }
 }
