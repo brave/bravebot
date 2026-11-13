@@ -13,8 +13,6 @@ workspace = true
 [dependencies]
 # Where the entries are kept, through the state directory's helpers.
 bravebot-agent = { path = "../agent" }
-# A directory drawn in a listing, as every other crate draws a name a checkout chose (LAYER-3).
-bravebot-approval = { path = "../approval" }
 # The credentials a scheduled run's helper programs are started without.
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
