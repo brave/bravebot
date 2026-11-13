@@ -86,11 +86,6 @@ pub fn said_of_failure(failure: XaiFailure) -> String {
     }
 }
 
-/// The sentence for why no access token could be had.
-pub fn said_of_renewal(failure: &TokenError) -> String {
-    said_of_failure(failure_of(failure))
-}
-
 /// The renewer, made at the first request that needs a token. One for the process, for the reason
 /// the ChatGPT account has one: a renewal the file could not take is held by it, and a second renewer
 /// would present a refresh token the server has already replaced.
@@ -538,6 +533,12 @@ pub fn remedy_of_failure(failure: XaiFailure) -> Option<Remedy> {
 mod tests {
     use super::*;
     use bravebot_skus::xai::{AccountError, Defect};
+
+    /// The sentence for why no access token could be had, as a turn is told it: the renewer's failure
+    /// through `failure_of`, which `told_of` applies, then `said_of_failure`.
+    fn said_of_renewal(failure: &TokenError) -> String {
+        said_of_failure(failure_of(failure))
+    }
 
     const CLASSES: [Class; 5] = [
         Class::Refused,
