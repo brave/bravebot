@@ -700,6 +700,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         self.asking().confirm_apply(request)
     }
 
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.asking().can_put_apply_lists()
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,

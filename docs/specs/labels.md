@@ -474,6 +474,11 @@ An argument naming something the driver minted is held the same way, since the p
 who picks which of those names a call is about. [routing.md](routing.md) is where that case is
 settled.
 
+One exception is named, and it is narrow: within a manifest plan a person approved, the calls of an
+`apply` step whose tools the person marked plan-covered are selected by a processor that read
+untrusted content, among calls of the plan's tools, arguments and lists, each acceptable on its own,
+within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
+
 `verified-by: bravebot_core::policy::requesting_untrusted_content_is_refused`
 `verified-by: bravebot_core::policy::an_argument_cannot_be_read_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
@@ -488,6 +493,7 @@ settled.
 `verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
 `verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect

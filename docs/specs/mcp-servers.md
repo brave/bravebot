@@ -719,9 +719,10 @@ declaration says every call is asked about is the exception: its calls ask whate
 standing answer says ([SERVERS-21](#SERVERS-21)).
 
 A call a manifest plan fixed puts no question where nothing else decides it: approving the plan,
-whose line showed the call with every argument, answers it
-([manifest.md](manifest.md#MANIFEST-15)). A rule, a declaration asking every call and private
-arguments decide first, as they do here.
+whose line showed the call with every argument, answers it ([manifest.md](manifest.md#MANIFEST-15)).
+A rule, a declaration asking every call and private arguments decide first, as they do here. The
+calls of an `apply` step are put as one list, or, for a step whose tools the person marked
+plan-covered, answered by the plan ([manifest.md](manifest.md#MANIFEST-17)).
 
 **The routing field of a call is the alias and the tool, and never the arguments.**
 [PERM-1](permissions.md#PERM-1) matches a specifier against a routing field and nothing else, for the
@@ -1542,15 +1543,17 @@ not to request it.
 <a id="SERVERS-13"></a>
 ### SERVERS-13: bypassing answers this spec's three prompts and reaches nothing else here
 
-[MODE-4](permission-modes.md#MODE-4) already decides the first half: `--dangerously-skip-permissions`
-answers every permission question. [SERVERS-4](#SERVERS-4)'s question about a server,
-[SERVERS-8](#SERVERS-8)'s about its list and [SERVERS-7](#SERVERS-7)'s about a call are permission
-questions, so each is answered yes without being drawn, except a call to a server whose declaration
-says every call is asked about, which is put to the person in this mode as in every other
-([SERVERS-21](#SERVERS-21)). This clause does not grant that
-and could not withhold it. It says what the mode does **not** reach, which is everything else in this
-spec, and it is [MODE-7](permission-modes.md#MODE-7)'s rule applied here: no mode answers a question
-that is not a permission, and most of what protects a person from a server is not a question at all.
+[MODE-4](permission-modes.md#MODE-4) already decides the first half:
+`--dangerously-skip-permissions` answers every permission question. [SERVERS-4](#SERVERS-4)'s
+question about a server, [SERVERS-8](#SERVERS-8)'s about its list and [SERVERS-7](#SERVERS-7)'s
+about a call are permission questions, so each is answered yes without being drawn, except a call to
+a server whose declaration says every call is asked about, which is put to the person in this mode
+as in every other ([SERVERS-21](#SERVERS-21)), and the calls of a manifest's `apply` step, which are
+put as one list in this mode too ([manifest.md](manifest.md#MANIFEST-16),
+[manifest.md](manifest.md#MANIFEST-17)). This clause does not grant that and could not withhold it.
+It says what the mode does **not** reach, which is everything else in this spec, and it is
+[MODE-7](permission-modes.md#MODE-7)'s rule applied here: no mode answers a question that is not a
+permission, and most of what protects a person from a server is not a question at all.
 
 Nothing in a declaration, a request key or a settings layer turns the mode on: it is chosen with the
 command line or the mode key ([MODE-5](permission-modes.md#MODE-5)), and a settings layer can only
@@ -2564,18 +2567,22 @@ the server wrote. A change of one of them to `Stream::Inherited` is found by a r
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
 
 <a id="SERVERS-26"></a>
-### SERVERS-26: a declaration may name what a row of an `apply` step may fill
+### SERVERS-26: a declaration may name what a row of an `apply` step may fill, and mark a tool plan-covered
 
 `--apply tool:argument=kind` names an argument a row of a manifest's `apply` step may fill and the
 one or more kinds it may take: `entry`, `entries`, `new` or `row`
-([manifest.md](manifest.md#MANIFEST-16)). Only a local stdio server that does not ask every call may
-hold one. It is part of what the person approves for the server, and `mcp get`, `mcp list` and the
-approval question show it.
+([manifest.md](manifest.md#MANIFEST-16)). `--plan-covers tool` marks a tool with such an argument
+whose calls may run on a person's approval of the plan ([manifest.md](manifest.md#MANIFEST-17)).
+Only a local stdio server that does not ask every call may hold either, both are part of what the
+person approves for the server, and `mcp get`, `mcp list` and the approval question show them.
 
-**Why.** Every argument a row fills is one a processor chose, so which arguments it may fill is the
-person's to say about each tool. A server asking every call has said each of its calls is put on its
-own, which a list of calls would undo.
+**Why.** Every argument a row fills is one a processor chose, so which arguments it may fill, and
+whether a tool's calls may run without a list nobody reads, are the person's to say about each tool.
+A server asking every call has said each of its calls is put on its own, which neither may undo.
 
 `verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
 `verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
+`verified-by: bravebot_config::mcp::plan_covers_marks_only_a_tool_with_an_apply_declaration_on_a_local_server`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_keeps_what_a_row_may_fill_and_what_the_plan_covers`
+`verified-by: bravebot_cli::mcp::add_writes_the_plan_covers_marks_and_the_question_and_get_say_them`
 `verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`

@@ -116,6 +116,8 @@ pub struct Reached {
     choice_arguments: ChoiceArguments,
     /// The arguments of its tools the declaration says a row of an `apply` step may fill.
     apply_arguments: bravebot_config::mcp::ApplyArguments,
+    /// The tools the declaration marks plan-covered in an `apply` step (SERVERS-26).
+    covered_tools: bravebot_config::mcp::CoveredTools,
     /// The headers and bearer token the declaration names, as the environment gave them when the
     /// server was started, which a server moved during a turn is reached with (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -145,6 +147,7 @@ impl Reached {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
             headers: Vec::new(),
             sandboxed: None,
             sandbox: None,
@@ -189,6 +192,12 @@ impl Reached {
     /// step may fill.
     pub fn applying(mut self, apply_arguments: bravebot_config::mcp::ApplyArguments) -> Self {
         self.apply_arguments = apply_arguments;
+        self
+    }
+
+    /// The same server, with the tools its declaration marks plan-covered.
+    pub fn covered(mut self, tools: bravebot_config::mcp::CoveredTools) -> Self {
+        self.covered_tools = tools;
         self
     }
 
@@ -374,6 +383,8 @@ struct Server {
     choice_arguments: ChoiceArguments,
     /// The arguments of its tools the declaration says a row of an `apply` step may fill.
     apply_arguments: bravebot_config::mcp::ApplyArguments,
+    /// The tools the declaration marks plan-covered in an `apply` step (SERVERS-26).
+    covered_tools: bravebot_config::mcp::CoveredTools,
     /// The headers and bearer token its first connection sent, which a move sends to the new
     /// destination as well (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -496,6 +507,7 @@ impl Session {
                     ask_every_call: reached.ask_every_call,
                     choice_arguments: reached.choice_arguments,
                     apply_arguments: reached.apply_arguments,
+                    covered_tools: reached.covered_tools,
                     headers: reached.headers,
                     _home: reached.home,
                     sandboxed: reached.sandboxed,
@@ -1064,6 +1076,16 @@ impl Session {
     fn apply_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeMap<String, String>> {
         let server = self.0.servers.iter().find(|server| server.alias == alias)?;
         server.apply_arguments.get(tool)
+    }
+
+    /// Whether the declaration of the server reached as `alias` marks `tool` plan-covered in an
+    /// `apply` step (SERVERS-26).
+    fn covered(&self, alias: &str, tool: &str) -> bool {
+        self.0
+            .servers
+            .iter()
+            .find(|server| server.alias == alias)
+            .is_some_and(|server| server.covered_tools.contains(tool))
     }
 
     /// Whether answer 2 was given about this tool in this project.
@@ -2004,6 +2026,11 @@ impl Offer {
         self.session.apply_arguments(alias, tool)
     }
 
+    /// Whether the declaration of the server `alias` marks `tool` plan-covered.
+    pub fn covered(&self, alias: &str, tool: &str) -> bool {
+        self.session.covered(alias, tool)
+    }
+
     /// The arguments of the tool `tool` of the server `alias` that are offered as a choice: those
     /// its declaration names, less those the server lists an argument `<argument>_ref` for itself
     /// (SERVERS-22). That argument is the server's, and a call that gives it is sent as written.
@@ -2497,7 +2524,9 @@ fn wire(sent: bravebot_core::apply::Sent) -> Value {
 /// spends the grant their answer minted for exactly that call (`docs/design/manifest-apply.md`).
 ///
 /// Nobody is asked here: the list was the question, and it covered this call with every value
-/// shown. A `deny` rule is read again first, as for every call, and a move the server answers with
+/// shown, or `covered` says the person's approval of the plan did (MANIFEST-17), which is recorded
+/// once the rules let the call through and before it is sent, so a call with no reply is still
+/// credited to it. A `deny` rule is read again first, as for every call, and a move the server answers with
 /// is put to the person as [`call`] puts it. The reply is classified as [`call`] classifies it, so
 /// a failure the server reported is told apart by the protocol's `isError` and never by its text.
 #[expect(
@@ -2513,6 +2542,7 @@ pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
     alias: &str,
     index: usize,
     resolved: &Labelled<bravebot_core::apply::Resolved>,
+    covered: bool,
 ) -> Called {
     let (tool, arguments) = match policy.carry_applied_call(alias, index, resolved) {
         Ok(carried) => carried,
@@ -2521,6 +2551,9 @@ pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
     let name = format!("{alias}:{tool}");
     if let Err(denial) = policy.before_mcp_call_rules(alias, &tool) {
         return Called::Problem(format!("refused: {denial}"));
+    }
+    if covered {
+        policy.record_plan_covered_call(alias, &tool);
     }
     // Each value was typed by the resolver as the vouched list gives its argument.
     let arguments = Value::Object(

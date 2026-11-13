@@ -1378,10 +1378,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 needed
             }
             crate::permissions::Decision::Unmatched if standing == McpStanding::PlanApproved => {
-                self.allow(
-                    "approval",
-                    format!("approving the plan covered {alias}:{tool}, no prompt at the step"),
-                );
+                self.record_plan_covered_call(alias, tool);
                 false
             }
             crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
@@ -1402,6 +1399,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 true
             }
         }
+    }
+
+    /// Record that a person's approval of the plan answered this call to `tool` of `alias`, so
+    /// nobody was asked at its step (MANIFEST-15, MANIFEST-17).
+    pub fn record_plan_covered_call(&mut self, alias: &str, tool: &str) {
+        self.allow(
+            "approval",
+            format!("approving the plan covered {alias}:{tool}, no prompt at the step"),
+        );
     }
 
     /// Record that a call to `tool` of `alias` was answered by the question about an earlier call of
@@ -5860,6 +5866,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is kept too, in an [`crate::apply::Applying`] the driver makes them through. A grant is
     /// minted for each kept call, bound to the server, the tool and the call's place in the list,
     /// so an approval cannot be spent on another call or reused. Refused where no call is kept.
+    /// `ticked` is the person's answer to the list, or, for a step whose tools are all
+    /// plan-covered, every call, by their answer to the plan (MANIFEST-17).
     pub fn keep_applied(
         &mut self,
         alias: &str,
@@ -5893,8 +5901,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The grant the person's answer minted for this call is consumed. The arguments are not
     /// refused for being untrusted or private, as [`Policy::before_mcp_call`] would refuse them:
     /// each value is one the person was shown resolved, with where it came from, and approved for
-    /// this call and this server. That approval is the trusted selector. The trail line holds the
-    /// alias, the tool, the call's place and the label, and no value.
+    /// this call and this server, or one of a step whose tools they marked plan-covered, within the
+    /// bound the plan they approved stated. That approval is the trusted selector, the second under
+    /// LABEL-5's named exception. The trail line holds the alias, the tool, the call's place and
+    /// the label, and no value.
     pub fn carry_applied_call(
         &mut self,
         alias: &str,

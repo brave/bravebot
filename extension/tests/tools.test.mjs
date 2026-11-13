@@ -3554,15 +3554,21 @@ test("list_bookmark_folder refuses a title that is not exactly one folder", asyn
 
 // The browser is asked for as many as the call wants, or for more while a site
 // is blocked, since the entries at it are dropped after. An entry with no
-// address is a folder.
-test("list_recent_bookmarks gives the newest bookmarks first with when each was added, leaving out a blocked site", async () => {
+// address is a folder. Each bookmark names the folder it sits in, so a plan
+// can move a bookmark into a folder that already exists instead of making a
+// second of the same title.
+test("list_recent_bookmarks gives the newest bookmarks first with when each was added and its folder, leaving out a blocked site", async () => {
   const recent = [
-    { id: "1", title: "B", url: "https://b.example/", dateAdded: 1_700_000_100_000 },
-    { id: "2", title: "Bank", url: `${bank}/`, dateAdded: 1_700_000_300_000 },
-    { id: "3", title: "A", url: "https://a.example/", dateAdded: 1_700_000_200_000 },
-    { id: "4", title: "Folder", dateAdded: 1_700_000_400_000 },
+    { id: "1", title: "B", url: "https://b.example/", dateAdded: 1_700_000_100_000, parentId: "f1" },
+    { id: "2", title: "Bank", url: `${bank}/`, dateAdded: 1_700_000_300_000, parentId: "f1" },
+    { id: "3", title: "A", url: "https://a.example/", dateAdded: 1_700_000_200_000, parentId: "f2" },
+    { id: "4", title: "Folder", dateAdded: 1_700_000_400_000, parentId: "f2" },
   ];
-  const open = browser({ recent, stored: bookmarksOn });
+  const bookmarkTree = [
+    { id: "f1", title: "Work", children: [] },
+    { id: "f2", title: "News", children: [] },
+  ];
+  const open = browser({ recent, bookmarkTree, stored: bookmarksOn });
   const unlimited = await handle(
     { id: 1, method: "list_recent_bookmarks", params: { max_results: 2 } },
     open,
@@ -3576,14 +3582,14 @@ test("list_recent_bookmarks gives the newest bookmarks first with when each was 
     ["Bank", "B"],
   );
 
-  const chrome = browser({ recent, stored: blocking([bank], bookmarksOn) });
+  const chrome = browser({ recent, bookmarkTree, stored: blocking([bank], bookmarksOn) });
   const reply = await handle(
     { id: 2, method: "list_recent_bookmarks", params: { max_results: 2 } },
     chrome,
   );
   assert.deepEqual(reply.result, [
-    { title: "A", url: "https://a.example/", added: "2023-11-14T22:16:40.000Z" },
-    { title: "B", url: "https://b.example/", added: "2023-11-14T22:15:00.000Z" },
+    { title: "A", url: "https://a.example/", added: "2023-11-14T22:16:40.000Z", folder: "News" },
+    { title: "B", url: "https://b.example/", added: "2023-11-14T22:15:00.000Z", folder: "Work" },
   ]);
   assert.deepEqual(
     chrome.calls.find(([name]) => name === "bookmarks.getRecent"),
@@ -5459,18 +5465,26 @@ test("focus_tab makes the tab at exactly that URL active and brings its window f
 // The reply says what the browser did, which is not always what was asked: a
 // tab the browser will not pin is not pinned.
 test("pin_tab and mute_tab pin or mute by default, undo it on false, and report what the browser did", async () => {
-  for (const [method, flag, field] of [
-    ["pin_tab", "pinned", "pinned"],
-    ["mute_tab", "muted", "muted"],
+  // pin_tab also says whether the tab was pinned before, so a covered call can be undone by hand.
+  const already = browser({ tabs: tabs.map((tab) => ({ ...tab, pinned: true })), stored: pageAndTabToolsOn });
+  assert.deepEqual(
+    (await call(already, "pin_tab", { url: "https://brave.com/search", pinned: false })).result,
+    { url: "https://brave.com/search", was: true, pinned: false },
+  );
+  for (const [method, flag, field, before] of [
+    ["pin_tab", "pinned", "pinned", { was: false }],
+    ["mute_tab", "muted", "muted", {}],
   ]) {
     const url = "https://brave.com/search";
     const chrome = browser({ tabs, stored: pageAndTabToolsOn });
     assert.deepEqual((await call(chrome, method, { url })).result, {
       url,
+      ...before,
       [field]: true,
     });
     assert.deepEqual((await call(chrome, method, { url, [flag]: false })).result, {
       url,
+      ...before,
       [field]: false,
     });
     assert.deepEqual(
@@ -5485,6 +5499,7 @@ test("pin_tab and mute_tab pin or mute by default, undo it on false, and report 
     const stubborn = browser({ tabs, stored: pageAndTabToolsOn, unchanged: true });
     assert.deepEqual((await call(stubborn, method, { url })).result, {
       url,
+      ...before,
       [field]: false,
     });
 
@@ -6727,13 +6742,13 @@ test("create_bookmark_folder refuses a title or parent that is not text, a paren
   }
 });
 
-test("move_bookmark moves the bookmark at exactly that URL to the end of the folder with exactly that title, and says the folder the browser put it in", async () => {
+test("move_bookmark moves the bookmark at exactly that URL to the end of the folder with exactly that title, and says the folder it left and the folder the browser put it in", async () => {
   const chrome = browser({ bookmarkTree: saved, stored: writingOn });
   const reply = await call(chrome, "move_bookmark", {
     url: "https://docs.rs/",
     folder: "Reading",
   });
-  assert.deepEqual(reply.result, { url: "https://docs.rs/", folder: "Reading" });
+  assert.deepEqual(reply.result, { url: "https://docs.rs/", from: "Work", folder: "Reading" });
   assert.deepEqual(writes(chrome, "bookmarks.search"), [
     ["bookmarks.search", { url: "https://docs.rs/" }],
     ["bookmarks.search", { title: "Reading" }],
@@ -6748,7 +6763,7 @@ test("move_bookmark moves the bookmark at exactly that URL to the end of the fol
     url: "https://docs.rs/",
     folder: "Reading",
   });
-  assert.deepEqual(kept.result, { url: "https://docs.rs/", folder: "Work" });
+  assert.deepEqual(kept.result, { url: "https://docs.rs/", from: "Work", folder: "Work" });
 });
 
 // A bookmark is named by its URL, as a tab is, so a URL that is not exactly one
@@ -6983,13 +6998,18 @@ test("move_bookmark moves a bookmark into a built-in folder and back out of it",
   });
   assert.deepEqual(into.result, {
     url: "https://docs.rs/",
+    from: "Work",
     folder: "Other bookmarks",
   });
   const back = await call(chrome, "move_bookmark", {
     url: "https://docs.rs/",
     folder: "Work",
   });
-  assert.deepEqual(back.result, { url: "https://docs.rs/", folder: "Work" });
+  assert.deepEqual(back.result, {
+    url: "https://docs.rs/",
+    from: "Other bookmarks",
+    folder: "Work",
+  });
   assert.deepEqual(writes(chrome, "bookmarks.move"), [
     ["bookmarks.move", "11", { parentId: "2" }],
     ["bookmarks.move", "11", { parentId: "10" }],
@@ -7067,13 +7087,13 @@ test("list_bookmark_folder with no folder lists the titles of the built-in folde
   );
 });
 
-test("rename_bookmark gives the bookmark at exactly that URL the title asked for and nothing else, and says the title the browser holds", async () => {
+test("rename_bookmark gives the bookmark at exactly that URL the title asked for and nothing else, and says the title it replaced and the title the browser holds", async () => {
   const chrome = browser({ bookmarkTree: saved, stored: writingOn });
   const reply = await call(chrome, "rename_bookmark", {
     url: "https://docs.rs/",
     title: "Rust docs",
   });
-  assert.deepEqual(reply.result, { url: "https://docs.rs/", title: "Rust docs" });
+  assert.deepEqual(reply.result, { url: "https://docs.rs/", replaced: "Docs", title: "Rust docs" });
   assert.deepEqual(writes(chrome, "bookmarks.update"), [
     ["bookmarks.update", "11", { title: "Rust docs" }],
   ]);
@@ -7083,7 +7103,7 @@ test("rename_bookmark gives the bookmark at exactly that URL the title asked for
     url: "https://docs.rs/",
     title: "Rust docs",
   });
-  assert.deepEqual(kept.result, { url: "https://docs.rs/", title: "Docs" });
+  assert.deepEqual(kept.result, { url: "https://docs.rs/", replaced: "Docs", title: "Docs" });
 
   for (const params of [
     { url: "https://docs.rs/" },
@@ -10766,7 +10786,7 @@ test("a tool that manages a tab still names a tab at an address that is not on t
     { id: 1, method: "pin_tab", params: { url: "chrome://settings/", pinned: true } },
     chrome,
   );
-  assert.deepEqual(reply.result, { url: "chrome://settings/", pinned: true });
+  assert.deepEqual(reply.result, { url: "chrome://settings/", was: false, pinned: true });
 });
 
 test("take_held is refused, and takes nothing, while its tool or group is off, its lifetime has ended or contextMenus is not held", async () => {

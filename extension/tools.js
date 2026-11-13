@@ -2197,25 +2197,36 @@ export const TOOLS = {
       );
   },
 
-  // The newest bookmarks, newest first. While a site is blocked the browser is
-  // asked for more than the count, as a history search is, so that leaving
-  // out the entries at a blocked site does not return fewer than there are.
+  // The newest bookmarks, newest first, each with the title of the folder it
+  // sits in, so a plan can move a bookmark into a folder that already exists
+  // rather than make a second of the same title. While a site is blocked the
+  // browser is asked for more than the count, as a history search is, so that
+  // leaving out the entries at a blocked site does not return fewer than there
+  // are.
   async list_recent_bookmarks(chrome, params) {
     const sites = await blockedSites(chrome);
     const wanted = count(params);
     const nodes = await chrome.bookmarks.getRecent(
       sites.length === 0 ? wanted : BLOCKED_SCAN_LIMIT,
     );
-    return nodes
+    const kept = nodes
       .filter((node) => typeof node.url === "string")
       .filter((node) => !isBlocked(sites, node.url))
       .sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0))
-      .slice(0, wanted)
-      .map((node) => ({
-        title: node.title ?? "",
-        url: node.url,
-        added: isoTime(node.dateAdded),
-      }));
+      .slice(0, wanted);
+    const folders = new Map();
+    for (const id of new Set(kept.map((node) => node.parentId))) {
+      // A folder the browser cannot find names no folder, rather than failing the list.
+      if (id !== undefined) {
+        folders.set(id, await folderTitled(chrome, id).catch(() => ""));
+      }
+    }
+    return kept.map((node) => ({
+      title: node.title ?? "",
+      url: node.url,
+      added: isoTime(node.dateAdded),
+      folder: folders.get(node.parentId) ?? "",
+    }));
   },
 
   // The reading list, newest first. An entry at a blocked site is left out.
@@ -2669,7 +2680,8 @@ export const TOOLS = {
     const pinned = flag(params, "pinned");
     const { url, tab } = await tabNamed(chrome, params);
     const changed = await chrome.tabs.update(tab.id, { pinned });
-    return { url, pinned: changed.pinned === true };
+    // What the tab was before, so a call a plan's approval covered can be undone by hand.
+    return { url, was: tab.pinned === true, pinned: changed.pinned === true };
   },
 
   async mute_tab(chrome, params) {
@@ -3183,21 +3195,28 @@ export const TOOLS = {
     refuseBlocked(await blockedSites(chrome), url);
     const bookmark = await bookmarkAt(chrome, url);
     const folder = await bookmarkFolder(chrome, title);
+    // The folder it leaves, so a person reading the reply can put it back.
+    const from =
+      bookmark.parentId === undefined
+        ? ""
+        : await folderTitled(chrome, bookmark.parentId).catch(() => "");
     const moved = await chrome.bookmarks.move(bookmark.id, {
       parentId: folder.id,
     });
-    return { url, folder: await folderTitled(chrome, moved.parentId) };
+    return { url, from, folder: await folderTitled(chrome, moved.parentId) };
   },
 
-  // Changes the title of the bookmark at `url`. The reply carries the title the
+  // Changes the title of the bookmark at `url`. The reply carries the title it
+  // replaced, so a person reading it can give that title back, and the title the
   // browser holds.
   async rename_bookmark(chrome, params) {
     const url = text(params, "url");
     const title = text(params, "title");
     refuseBlocked(await blockedSites(chrome), url);
     const bookmark = await bookmarkAt(chrome, url);
+    const replaced = bookmark.title ?? "";
     const renamed = await chrome.bookmarks.update(bookmark.id, { title });
-    return { url, title: renamed.title ?? "" };
+    return { url, replaced, title: renamed.title ?? "" };
   },
 
   // Adds an entry for an HTTP or HTTPS URL to the reading list, unread unless

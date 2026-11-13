@@ -172,7 +172,8 @@ impl Servers {
     }
 
     /// The tools a plan may call, one per line: `alias:tool`, then each argument by name, `*` after
-    /// a required one, and its type where the list gave one.
+    /// a required one, and its type where the list gave one, then whether it is read-only, what a
+    /// row of an `apply` step may fill and whether a plan's approval covers it.
     pub(crate) fn listing(&self) -> String {
         let Some(offer) = &self.offer else {
             return String::new();
@@ -200,8 +201,14 @@ impl Servers {
                     format!(" apply ({})", kinds.join(", "))
                 })
                 .unwrap_or_default();
+            // Which tools a plan's approval covers, so a planner can tell a step that runs on it
+            // from one that puts its list (SERVERS-26).
+            let covered = match offer.covered(&tool.alias, &tool.tool) {
+                true => " plan-covered",
+                false => "",
+            };
             lines.push_str(&format!(
-                "  {}:{} ({}){}{applies}\n",
+                "  {}:{} ({}){}{applies}{covered}\n",
                 tool.alias,
                 tool.tool,
                 arguments.join(", "),
@@ -313,47 +320,67 @@ impl Servers {
         Ok(())
     }
 
-    /// The words after each call on the line a person approves: its arguments, as the server will
-    /// receive them, in full. Compact JSON, so a line break or a control character in a value is
-    /// escaped and the line stays one line. Decides nothing.
-    pub(crate) fn notes(plan: &Manifest) -> BTreeMap<usize, String> {
+    /// The `apply` steps of `plan` that run on a person's approval of it: each whose tools the
+    /// declaration of its server all marks plan-covered, where no `ask` rule names one of them and
+    /// `mode` is neither plan mode, which asks at the step, nor bypassing, which approves the plan
+    /// in place of a person (MANIFEST-17). Decided once, before the plan's line is written, so the
+    /// line and the step agree.
+    pub(crate) fn covered_steps(
+        &self,
+        plan: &Manifest,
+        permissions: &bravebot_core::permissions::Permissions,
+        mode: crate::PermissionMode,
+    ) -> std::collections::BTreeSet<usize> {
+        if matches!(
+            mode,
+            crate::PermissionMode::Plan | crate::PermissionMode::Bypass
+        ) {
+            return std::collections::BTreeSet::new();
+        }
         plan.steps()
             .iter()
             .enumerate()
-            .filter_map(|(index, step)| match step.tool() {
-                manifest::APPLY => shape_of(step).ok().map(|shape| {
-                    let tools: Vec<String> = shape
-                        .tools
-                        .iter()
-                        .map(|tool| {
-                            let arguments: Vec<String> = tool
-                                .arguments
-                                .iter()
-                                .map(|(name, kind)| {
-                                    format!("{name}: {}", kind_in_words(kind, &shape))
-                                })
-                                .collect();
-                            format!("{} ({})", tool.name, arguments.join(", "))
+            .filter(|(_, step)| step.tool() == manifest::APPLY)
+            .filter(|(_, step)| {
+                let alias = step.text("server");
+                shape_of(step).is_ok_and(|shape| {
+                    let literals_hide =
+                        shape
+                            .tools
+                            .iter()
+                            .flat_map(|tool| &tool.arguments)
+                            .any(|(_, kind)| {
+                                matches!(kind, bravebot_core::apply::Kind::Literal(value)
+                                if hides_a_character(value))
+                            });
+                    !literals_hide
+                        && self.all_covered(alias, &shape)
+                        // A rule about a tool decides it: an ask asks, and a deny would stop the
+                        // step part-way, so a step either names runs only with its list put.
+                        && !shape.tools.iter().any(|tool| {
+                            matches!(
+                                permissions.for_mcp(alias, &tool.name),
+                                bravebot_core::permissions::Decision::Ruled(
+                                    bravebot_core::permissions::Ruling::Ask
+                                        | bravebot_core::permissions::Ruling::Deny
+                                )
+                            )
                         })
-                        .collect();
-                    (
-                        index,
-                        format!(
-                            "{}; up to {} calls and {} new names, all put to you as one list \
-                             first; the processor is told \"{}\"",
-                            tools.join(", then "),
-                            shape.max_rows,
-                            shape.max_new,
-                            step.text("instruction")
-                        ),
-                    )
-                }),
-                tool if manifest::is_server_call(tool) => arguments_of(step)
-                    .ok()
-                    .map(|arguments| (index, format!("arguments {}", Value::Object(arguments)))),
-                _ => None,
+                })
             })
+            .map(|(index, _)| index)
             .collect()
+    }
+
+    /// Whether the declaration of `alias` marks every tool of the step `shape` plan-covered
+    /// (SERVERS-26).
+    fn all_covered(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
+        self.offer.as_ref().is_some_and(|offer| {
+            shape
+                .tools
+                .iter()
+                .all(|tool| offer.covered(alias, &tool.name))
+        })
     }
 
     /// Make the call a step names, through the one function a turn's call goes through. The
@@ -471,7 +498,8 @@ impl Servers {
 /// What the planner is told an apply step is, where an offered tool lets a row fill an argument.
 const APPLY_CATALOGUE: &str = " A tool listed with apply may be called by an APPLY step for each \
 item of a list a SERVER_READ step read: an isolated processor proposes the calls, row by row, and \
-the person approves the whole list before any is made. Its arguments give each argument of each \
+the person approves the whole list before any is made, or, where every tool of the step is marked \
+plan-covered, approving the plan covers them. Its arguments give each argument of each \
 tool a kind: a fixed value {\"literal\": \"text\"}, a field of an entry {\"entry\": \"field\"} \
 (of the first list, or {\"entry\": \"list.field\"} of another), that field of several entries as \
 one array {\"entries\": \"field\"} for an argument the tool takes as a list, new text for a value \
@@ -521,6 +549,20 @@ impl Servers {
                      cannot point into it"
                 ));
             }
+        }
+        // Where each list sits in its read's reply is checked here rather than at the step, after
+        // the person answered: a pointer without its leading slash points at nothing, and the step
+        // would end with nothing to do and no word that the plan was wrong.
+        let pointers = pointers_of(step.text("entries"), &shape.lists)
+            .map_err(|why| format!("step {number}: {why}"))?;
+        if let Some(pointer) = pointers
+            .iter()
+            .find(|pointer| !pointer.is_empty() && !pointer.starts_with('/'))
+        {
+            return Err(format!(
+                "step {number}: the entries {pointer} of an APPLY step is not a JSON pointer, \
+                 which starts with /"
+            ));
         }
         let offered = offer.callable();
         for tool in &shape.tools {
@@ -590,6 +632,7 @@ impl Servers {
         index: usize,
         alias: &str,
         step: &Step,
+        covered: bool,
     ) -> Result<(String, bravebot_aichat::protocol::Usage), String> {
         let Some(offer) = &self.offer else {
             return Err(format!("{alias} is not offered to this run"));
@@ -708,7 +751,13 @@ impl Servers {
                 .map(|(why, count)| (why.describe().to_string(), *count))
                 .collect(),
         };
-        let decision = confirmer.confirm_apply(&request);
+        // A step the plan's line said runs without asking does so on the person's approval of
+        // the plan (MANIFEST-17); which steps those are was decided once, before the line, and
+        // nothing the step resolved changes it, since nobody reads a covered step's values.
+        let decision = match covered {
+            true => crate::confirm::ApplyDecision::keep((0..shown.calls.len()).collect()),
+            false => confirmer.confirm_apply(&request),
+        };
         if decision.unasked {
             return Err(format!(
                 "the calls to {alias} are put to the person as one list, and nobody could be asked"
@@ -721,10 +770,23 @@ impl Servers {
             .map_err(|denial| denial.message)?;
         while let Some(at) = applying.next_call() {
             let called = crate::mcp::call_applied(
-                policy, offer, egress, confirmer, reporter, alias, at, &resolved,
+                policy, offer, egress, confirmer, reporter, alias, at, &resolved, covered,
             );
             match called {
-                crate::mcp::Called::Answered(_) => applying.made(at),
+                // What a made call returned is drawn as a failure's is, so a reply that says what
+                // the call replaced, such as the folder a bookmark left, lets the person undo it.
+                crate::mcp::Called::Answered(output) => {
+                    applying.made(at);
+                    let name = format!("{alias}:{}", shown.calls[at].name);
+                    let preview = crate::turn::preview_for(policy, manifest::APPLY, &output.text);
+                    reporter.quarantined(Shown {
+                        origin: crate::mcp::origin_of_reply(&name, false),
+                        reach: Reach::NoModel,
+                        label: output.text.label().to_string(),
+                        lines: preview.lines,
+                        preview: preview.preview,
+                    });
+                }
                 crate::mcp::Called::Failed(text) => {
                     applying.failed(at);
                     let name = format!("{alias}:{}", shown.calls[at].name);
@@ -850,6 +912,28 @@ fn dropped_note(resolved: &bravebot_core::apply::Resolved) -> String {
         0 => String::new(),
         _ => format!("; {count} proposed rows dropped"),
     }
+}
+
+/// Whether `value` holds a character a line would draw as nothing or as something else, which the
+/// list question writes out (PROMPT-13).
+fn hides_a_character(value: &str) -> bool {
+    bravebot_core::invisible::spelled_code(value).hidden > 0
+}
+
+/// The server whose read filled the list `list` before step `index`, as the plan line names it.
+fn read_from(plan: &Manifest, index: usize, list: &str) -> String {
+    plan.steps()[..index]
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, earlier)| earlier.out_slot().is_some_and(|slot| slot.as_str() == list))
+        .map_or_else(
+            || "a read".to_string(),
+            |(at, earlier)| match earlier.text("server") {
+                "" => format!("step {} ({})", at + 1, earlier.tool()),
+                server => server.to_string(),
+            },
+        )
 }
 
 /// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
@@ -1023,9 +1107,14 @@ fn kind_in_words(kind: &bravebot_core::apply::Kind, shape: &bravebot_core::apply
     use bravebot_core::apply::Kind;
     match kind {
         // A number or a switch is sent as one, so it reads as one; text reads quoted.
+        // Escaped as compact JSON, with every character that would draw as nothing written out,
+        // so the line shows the value the call sends and stays one line.
         Kind::Literal(value) => match serde_json::from_str::<Value>(value) {
-            Ok(Value::Number(_) | Value::Bool(_)) => value.clone(),
-            _ => format!("\"{value}\""),
+            Ok(parsed @ (Value::Number(_) | Value::Bool(_))) => parsed.to_string(),
+            _ => {
+                let quoted = Value::String(value.clone()).to_string();
+                bravebot_core::invisible::spelled_code(&quoted).text
+            }
         },
         Kind::Entry { list, field } => format!(
             "the {field} of an entry of {}",
@@ -1049,6 +1138,84 @@ fn kind_in_words(kind: &bravebot_core::apply::Kind, shape: &bravebot_core::apply
             .collect::<Vec<_>>()
             .join(" or "),
     }
+}
+
+/// The number of the first `apply` step of `plan` that would put its list to the person,
+/// being none of `covered`, or nothing where every one runs on the plan's approval.
+pub(crate) fn puts_a_list(
+    plan: &Manifest,
+    covered: &std::collections::BTreeSet<usize>,
+) -> Option<usize> {
+    plan.steps()
+        .iter()
+        .enumerate()
+        .find(|(index, step)| step.tool() == manifest::APPLY && !covered.contains(index))
+        .map(|(index, _)| index + 1)
+}
+
+/// The words after each call on the line a person approves: its arguments, as the server will
+/// receive them, in full. Compact JSON, so a line break or a control character in a value is
+/// escaped and the line stays one line. Decides nothing.
+pub(crate) fn notes(
+    plan: &Manifest,
+    covered: &std::collections::BTreeSet<usize>,
+) -> BTreeMap<usize, String> {
+    plan.steps()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| match step.tool() {
+            manifest::APPLY => shape_of(step).ok().map(|shape| {
+                let alias = step.text("server");
+                let covered = covered.contains(&index);
+                let tools: Vec<String> = shape
+                    .tools
+                    .iter()
+                    .map(|tool| {
+                        let arguments: Vec<String> = tool
+                            .arguments
+                            .iter()
+                            .map(|(name, kind)| format!("{name}: {}", kind_in_words(kind, &shape)))
+                            .collect();
+                        format!("{} ({})", tool.name, arguments.join(", "))
+                    })
+                    .collect();
+                // A step that runs unasked says so, and says where its lists' private entries
+                // were read from and go, since approving the plan is what releases them there.
+                let asked = match covered {
+                    true => {
+                        let read: Vec<String> = shape
+                            .lists
+                            .iter()
+                            .map(|list| {
+                                format!("{list} (read from {})", read_from(plan, index, list))
+                            })
+                            .collect();
+                        format!(
+                            "run without asking you, with {} going to {alias}",
+                            read.join(" and ")
+                        )
+                    }
+                    false => "all put to you as one list first".to_string(),
+                };
+                (
+                    index,
+                    format!(
+                        "{}; up to {} calls and {} new names, {asked}; the processor is told \
+                         \"{}\"",
+                        tools.join(", then "),
+                        shape.max_rows,
+                        shape.max_new,
+                        // Written out, so the line holds no character the person could not read.
+                        bravebot_core::invisible::spelled_code(step.text("instruction")).text
+                    ),
+                )
+            }),
+            tool if manifest::is_server_call(tool) => arguments_of(step)
+                .ok()
+                .map(|arguments| (index, format!("arguments {}", Value::Object(arguments)))),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The arguments a call step carries: the JSON object its text holds, or an empty one where the

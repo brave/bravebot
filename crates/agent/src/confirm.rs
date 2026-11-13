@@ -2317,6 +2317,13 @@ pub trait Confirmer {
         ApplyDecision::unasked()
     }
 
+    /// Whether [`Confirmer::confirm_apply`] can put a list to a person here. A plan whose `apply`
+    /// step would put its list is refused before it is put to anybody where it cannot, rather than
+    /// failing at the step after the person approved it and the reads ran (MANIFEST-16).
+    fn can_put_apply_lists(&mut self) -> bool {
+        false
+    }
+
     /// Ask whether a remote MCP server is now where its request was redirected. Implementations must
     /// refuse when they cannot ask, and bypassing every check refuses too (SERVERS-13).
     ///
@@ -3336,6 +3343,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_apply(&mut self, request: &ApplyRequest) -> ApplyDecision {
         self.timing(|inner| inner.confirm_apply(request))
+    }
+
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.inner.can_put_apply_lists()
     }
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {

@@ -1585,6 +1585,7 @@ mcp-image-not-a-reference = it is not an image reference
 mcp-image-refused = its registry answered { $status }, which is so of a private image or one that does not exist
 mcp-choice-needs-a-pair = --choice needs a tool and an argument, written <TOOL>:<ARGUMENT>
 mcp-apply-needs-a-kind = --apply needs a tool, an argument and a kind, written <TOOL>:<ARGUMENT>=<entry|entries|new|row>, several kinds joined by commas
+mcp-plan-covers-needs-a-tool = --plan-covers needs the tool whose calls may run on a plan's approval
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1628,6 +1629,7 @@ mcp-problem-backend-image = image must be one container image reference, given w
 mcp-problem-apply =
     apply_arguments must be an object of tool names, each with an object of argument names and one or more of entry, entries, new or row joined by commas
 mcp-problem-apply-while-asking = apply_arguments needs ask_every_call to be false
+mcp-problem-plan-covers = covered_tools must list tools that have apply_arguments
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1674,6 +1676,7 @@ mcp-declaration-asks-every-call = every call is asked about, and no answer to on
 # The arguments a declaration says a choice may fill, each as tool:argument.
 mcp-declaration-choice-arguments = arguments that take a choice: { $pairs }
 mcp-declaration-apply-arguments = arguments a plan's apply step may fill: { $named }
+mcp-declaration-covered-tools = tools an apply step runs on a plan's approval, unasked: { $named }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }

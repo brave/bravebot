@@ -351,7 +351,7 @@ pub const TOOLS: &[Tool] = &[
         name: "list_recent_bookmarks",
         group: "bookmarks-read",
         description: "List the bookmarks added most recently, newest first: each bookmark's \
-            title, URL and when it was added.",
+            title, URL, when it was added and the title of the folder it is in.",
         schema: || {
             json!({
                 "type": "object",

@@ -1602,6 +1602,7 @@ mod tests {
             choice_arguments: Default::default(),
             backend: bravebot_config::mcp::Backend::Native,
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut deciding = vec!["/opt/tool/serve".to_string()];
         deciding.extend(reads);

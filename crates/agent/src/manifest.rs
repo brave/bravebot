@@ -106,19 +106,28 @@ const SERVER_SHAPE: &str = "\n\
 It can also call the tools of servers a person has vouched for, listed below as alias:tool. A step \
 may call one tool with arguments written out in the plan. What a call returns is shown to the \
 person and is not available to later steps, so nothing a call returns can be an argument of \
-another. Every call is put to the person as it comes up. The plan is fixed before anything is \
-read, so a wrong name cannot be recovered from: never guess the name of a folder, file or other \
-thing the task does not give. Where it gives none, use a tool that needs no name, or leave an \
+another. Approving the plan, whose line shows each call in full, approves the call, though a rule \
+or the server's declaration may still put it to the person as it comes up. The plan is fixed \
+before anything is read, so a wrong name cannot be recovered from: never guess the name of a \
+folder, file or other thing the task does not give. Where it gives none, use a tool that needs no name, or leave an \
 optional name out so the tool uses its own default. The tools:";
 
 /// Added to [`SERVER_SHAPE`] where a listed tool lets a row of an apply step fill an argument.
 const SERVER_APPLY_SHAPE: &str = "\n\
 A tool listed with apply can be called once for each item of a list that was read: an isolated \
 processor reads the list and proposes the calls, such as which folder each bookmark goes in and \
-what the new folders are called, and the person approves the whole list before any call is made. \
-So a task that reorganises many items is one read, then one apply. The read must return the items \
+what the new folders are called; the person approves the whole list before any call is made, \
+unless the person's declaration marks every tool of the step plan-covered, when approving the plan \
+covers it. The step's own processor decides its calls, and what became of each is shown after, \
+so a step that drafts or shows a grouping beforehand describes calls that will not be made. \
+So a task that reorganises many items is one read, then one apply, and no process or answer step \
+besides to propose or preview what the apply will do. The read must return the items \
 themselves, each with what the calls need, such as every bookmark with its url, and not only the \
-names of the places that hold them; where unsure which read does, prefer one that needs no name.";
+names of the places that hold them; where unsure which read does, prefer one that needs no name. \
+Where a later call names something an earlier call of the step creates, such as the folder a \
+bookmark moves into, and the list's entries already name such things, let that argument take \
+either, as [{\"row\": \"tool.argument\"}, {\"entry\": \"field\"}], so an existing one is used \
+rather than made twice.";
 
 /// Added to [`SERVER_SHAPE`] where a listed tool is marked read-only.
 const SERVER_READ_SHAPE: &str = "\n\
@@ -317,8 +326,8 @@ const REGISTRY: &[Advertised] = &[
         // The capability names the server, which only the step says, so the handler asks for it.
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for. The arguments are \
-                  written out in full here and fixed; the call is put to the person as it comes up, \
-                  and what it returns is shown to them",
+                  written out in full here and fixed, so approving the plan approves the call, \
+                  and what it returns is shown to the person",
         args: "server* (an alias from the list below), tool*, arguments (a JSON object; nothing \
                a step read can be named in it)",
     },
@@ -329,7 +338,7 @@ const REGISTRY: &[Advertised] = &[
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for that is marked \
                   read-only, and put what it returns in a slot. The arguments are written out in \
-                  full here and fixed; the call is put to the person as it comes up",
+                  full here and fixed, so approving the plan approves the call",
         args: "server* (an alias from the list below), tool* (one marked read-only), out_slot*, \
                arguments (a JSON object; nothing a step read can be named in it)",
     },
@@ -340,7 +349,8 @@ const REGISTRY: &[Advertised] = &[
         gate: None,
         summary: "For each item of a list a SERVER_READ step read, call tools of one server listed \
                   with apply: an isolated processor proposes the calls, and the person approves the \
-                  whole list before any is made",
+                  whole list before any is made, or, where every tool of the step is marked \
+                  plan-covered, approving the plan covers them",
         args: "server*, tools* (comma-separated tool names of that server), lists* (the slots \
                SERVER_READ steps filled, the first being the main one), entries (where each list \
                is in its reply, as a JSON pointer such as /items, or an object of pointers by \
@@ -825,12 +835,14 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     }
     let servers = Servers::of(task);
 
+    let puts_lists = confirmer.can_put_apply_lists();
     let planned = match plan(
         config,
         egress,
         task,
         &connectors,
         &servers,
+        puts_lists,
         &dropped,
         reporter,
         sink,
@@ -892,6 +904,9 @@ fn stopped(attempt: Attempt, error: TurnError) -> TurnError {
 /// What planning produced, ready for a driver.
 struct Planned {
     plan: Manifest,
+    /// The `apply` steps whose plan line says they run without asking, decided once from the
+    /// declarations, the mode and the rules before the line was written (MANIFEST-17).
+    covered: std::collections::BTreeSet<usize>,
     /// The label the plan carries, which every field lifted out of it carries too.
     label: Label,
     model: String,
@@ -967,7 +982,8 @@ impl Attempt {
     }
 }
 
-/// Phase 1, in two calls, then phases 2 and 3.
+/// Phase 1, in two calls, then phases 2 and 3. `puts_lists` says whether the client can put an
+/// `apply` step's list to the person.
 #[expect(
     clippy::too_many_arguments,
     reason = "the planning calls' collaborators, plus the attempt and accounting that run_accounted owns across the run"
@@ -978,6 +994,7 @@ fn plan<S: Sink, R: Reporter>(
     task: &Task,
     connectors: &crate::connectors::Connectors,
     servers: &Servers,
+    puts_lists: bool,
     dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
@@ -1110,7 +1127,7 @@ fn plan<S: Sink, R: Reporter>(
         catalogue(connectors, servers)
     );
     let mut round = "fit";
-    let (plan, label) = loop {
+    let (plan, label, covered) = loop {
         let proposal_wire = ask(
             config,
             egress,
@@ -1153,7 +1170,8 @@ fn plan<S: Sink, R: Reporter>(
         // in from the item it lands on, so the plan a person reads says both.
         let mut notes = connectors.notes(&plan);
         // And the arguments of each server call, in full, since a person approves the call by them.
-        notes.extend(Servers::notes(&plan));
+        let covered = servers.covered_steps(&plan, &task.permissions, task.permission_mode.get());
+        notes.extend(crate::server_calls::notes(&plan, &covered));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
@@ -1166,8 +1184,19 @@ fn plan<S: Sink, R: Reporter>(
         // it is shown is its own plan and the check's words about it, so its context still holds
         // the task and the driver's words alone. A plan with no connector step passes the check,
         // so this never asks again in a run that uses no connector and calls no server.
-        match connectors.check(&plan).and_then(|()| servers.check(&plan)) {
-            Ok(()) => break (plan, label),
+        let listed = crate::server_calls::puts_a_list(&plan, &covered);
+        let checked = connectors
+            .check(&plan)
+            .and_then(|()| servers.check(&plan))
+            .and_then(|()| match listed {
+                Some(number) if !puts_lists => Err(format!(
+                    "step {number}: this client cannot put an APPLY step's calls to the person as \
+                     a list, so only a step whose tools the plan covers can run here"
+                )),
+                _ => Ok(()),
+            });
+        match checked {
+            Ok(()) => break (plan, label, covered),
             Err(why) if round == "fit" => {
                 reporter.narration(format!(
                     "The plan failed a connector check, so it was asked for once more: {why}"
@@ -1236,6 +1265,7 @@ fn plan<S: Sink, R: Reporter>(
 
     Ok(Planned {
         plan,
+        covered,
         label,
         model,
         clean: policy.finish(),
@@ -1350,6 +1380,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 ) -> Result<Outcome, TurnError> {
     let Planned {
         plan,
+        covered,
         label,
         model,
         clean: planning_was_clean,
@@ -1438,6 +1469,12 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     // a person (MANIFEST-15).
     let (verdict, answered_by) = waiting.confirm_manifest_noting_the_mode(&proposal);
     let a_person_answered = answered_by.is_none();
+    // The steps the line said run without asking do so only where a person answered it outside
+    // plan mode; otherwise each puts its list, which asks more than the line promised, never less.
+    let covered = match a_person_answered && !permission_mode.get().refuses_writes() {
+        true => covered,
+        false => std::collections::BTreeSet::new(),
+    };
     accounting.elapsed.stalled += waiting.waited();
     accounting.publish(reporter);
     if verdict == Decision::Reject {
@@ -1507,6 +1544,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut asking,
                 permission_mode,
                 a_person_answered,
+                covered.contains(&index),
                 index,
                 shown_only(&plan, index),
                 step,
@@ -1715,6 +1753,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
     a_person_answered: bool,
+    covered: bool,
     index: usize,
     shown_only: bool,
     step: &Step,
@@ -1963,8 +2002,10 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let alias = locked(policy, index, "server")?;
             locked(policy, index, "tools")?;
             let began = std::time::Instant::now();
+            // A change of mode since the plan was answered can add the list, never take it away.
+            let covered = covered && !permission_mode.get().refuses_writes();
             let applied = servers.apply(
-                policy, chat, egress, confirmer, reporter, slots, index, &alias, step,
+                policy, chat, egress, confirmer, reporter, slots, index, &alias, step, covered,
             );
             accounting.elapsed.inference += began.elapsed();
             let (note, usage) = applied?;

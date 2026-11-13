@@ -644,14 +644,17 @@ A run that would put the user's private data into a program asks whatever the ru
 whose destination is known only through a reference asks whatever the rules say. A run carrying an
 environment assignment written in front of one of its programs asks whatever the rules say. A call
 that would put the user's private data into a server's tool asks whatever the rules say, and
-whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)). A write whose destination
-is a protected path asks whatever the rules say, an `Edit` allow rule and the trust map included, and
-whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any
-`.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and
-`.pre-commit-config.yaml`, compared as a volume that folds case and normalizes opens them (`.GIT`,
-`.huſky`) and with a trailing dot or space dropped. The destination is read as named, as it lands after links are followed, and under each other
-name of a file with a hard link (PERM-7). A file with several links whose other names could not all
-be found is protected, since one of them may be a protected path.
+whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)); for the calls of an `apply`
+step whose tools are all marked plan-covered, the person's approval of the plan, whose line names
+where the lists came from and where they go, is that answer
+([manifest.md](manifest.md#MANIFEST-17)). A write whose destination is a protected path asks
+whatever the rules say, an `Edit` allow rule and the trust map included, and whatever the mode says
+short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any `.git`, `.bravebot` or
+`.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit-config.yaml`, compared
+as a volume that folds case and normalizes opens them (`.GIT`, `.huſky`) and with a trailing dot or
+space dropped. The destination is read as named, as it lands after links are followed, and under
+each other name of a file with a hard link (PERM-7). A file with several links whose other names
+could not all be found is protected, since one of them may be a protected path.
 
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
@@ -682,6 +685,7 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 The planner's arguments to a server's tool are private once private content was let out of
 quarantine for it, by `vet_content`, `read_output` or a delegate's report, and they stay private

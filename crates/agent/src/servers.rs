@@ -520,6 +520,8 @@ enum Plan {
         choice_arguments: ChoiceArguments,
         /// The arguments its declaration says a row of an `apply` step may fill.
         apply_arguments: bravebot_config::mcp::ApplyArguments,
+        /// The tools its declaration marks plan-covered in an `apply` step.
+        covered_tools: bravebot_config::mcp::CoveredTools,
     },
     /// A local server that runs in an NVIDIA OpenShell sandbox, offered to manifest runs only.
     OpenShell {
@@ -536,6 +538,10 @@ enum Plan {
         allowed_hosts: Option<Vec<String>>,
         ask_every_call: bool,
         choice_arguments: ChoiceArguments,
+        /// The arguments its declaration says a row of an `apply` step may fill.
+        apply_arguments: bravebot_config::mcp::ApplyArguments,
+        /// The tools its declaration marks plan-covered in an `apply` step.
+        covered_tools: bravebot_config::mcp::CoveredTools,
     },
     Http {
         url: String,
@@ -949,6 +955,8 @@ fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, 
         allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
         ask_every_call: declaration.asks_every_call(),
         choice_arguments: declaration.choice_arguments().clone(),
+        apply_arguments: declaration.apply_arguments().clone(),
+        covered_tools: declaration.covered_tools().clone(),
     })
 }
 
@@ -1100,6 +1108,7 @@ fn planned(
         ask_every_call: declaration.asks_every_call(),
         choice_arguments: declaration.choice_arguments().clone(),
         apply_arguments: declaration.apply_arguments().clone(),
+        covered_tools: declaration.covered_tools().clone(),
     })
 }
 
@@ -1735,6 +1744,7 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
     }
     lines.extend(choices_line(declaration).map(|line| format!("{indent}{line}")));
     lines.extend(applies_line(declaration).map(|line| format!("{indent}{line}")));
+    lines.extend(covered_line(declaration).map(|line| format!("{indent}{line}")));
     lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
     lines
 }
@@ -1767,6 +1777,17 @@ pub fn applies_line(declaration: &Declaration) -> Option<String> {
         })
         .collect();
     (!named.is_empty()).then(|| t!(mcp_declaration_apply_arguments, named = named.join(", ")))
+}
+
+/// The tools a declaration marks as running on a person's approval of a plan, or nothing where it
+/// marks none.
+pub fn covered_line(declaration: &Declaration) -> Option<String> {
+    let named: Vec<String> = declaration
+        .covered_tools()
+        .iter()
+        .map(|tool| shown(tool))
+        .collect();
+    (!named.is_empty()).then(|| t!(mcp_declaration_covered_tools, named = named.join(", ")))
 }
 
 /// The margin the lines under a declaration's first one start at.
@@ -1808,6 +1829,7 @@ pub fn problem(found: &Problem) -> String {
         Problem::Backend(_) => t!(mcp_problem_backend).to_string(),
         Problem::Apply => t!(mcp_problem_apply).to_string(),
         Problem::ApplyWhileAsking => t!(mcp_problem_apply_while_asking).to_string(),
+        Problem::PlanCovers => t!(mcp_problem_plan_covers).to_string(),
     }
 }
 
@@ -2654,6 +2676,7 @@ fn start_under(
                 ask_every_call,
                 choice_arguments,
                 apply_arguments,
+                covered_tools,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -2761,6 +2784,7 @@ fn start_under(
                             .asking_every_call(ask_every_call)
                             .choosing(choice_arguments)
                             .applying(apply_arguments)
+                            .covered(covered_tools)
                     });
                     let _ = sender.send((alias, outcome, None));
                 });
@@ -2776,11 +2800,14 @@ fn start_under(
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                apply_arguments,
+                covered_tools,
             } => {
                 #[cfg(not(unix))]
                 {
                     let _ = (program, arguments, image, declared, tools, exclude_tools);
                     let _ = (allowed_hosts, ask_every_call, choice_arguments, timeouts);
+                    let _ = (apply_arguments, covered_tools);
                     notes.push(t!(servers_openshell_unsupported, alias = alias).to_string());
                     continue;
                 }
@@ -2824,6 +2851,8 @@ fn start_under(
                                     .in_a_sandbox_for_manifest_runs(sandbox, shown)
                                     .asking_every_call(ask_every_call)
                                     .choosing(choice_arguments)
+                                    .applying(apply_arguments)
+                                    .covered(covered_tools)
                                     .noting(vec![started])
                             })
                         });
@@ -3649,6 +3678,7 @@ mod tests {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -5766,6 +5796,7 @@ mod tests {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let granting = Capabilities {
             network_denial_enforced: true,
@@ -6450,6 +6481,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -6614,6 +6646,7 @@ while {answering}"#
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7337,6 +7370,7 @@ while {answering}"#
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7432,6 +7466,7 @@ while {answering}"#
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7519,6 +7554,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let home = Home {
             directory: Some(state),
@@ -7767,6 +7803,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -7859,6 +7896,35 @@ done
         assert_eq!(arguments, vec!["-u".to_string(), "server.py".to_string()]);
         assert_eq!(image, PINNED_IMAGE);
         assert_eq!(allowed_hosts, Some(vec!["example.com".to_string()]));
+    }
+
+    /// SERVERS-26. A server in an OpenShell sandbox serves manifest runs, where `apply` runs, so
+    /// what its declaration says a row may fill and which tools a plan's approval covers reach the
+    /// plan it starts from. The regression it rejects is a sandboxed server that drops both, so a
+    /// declaration the person approved with them offers no apply step and covers nothing.
+    #[test]
+    fn an_openshell_declaration_keeps_what_a_row_may_fill_and_what_the_plan_covers() {
+        let applies: bravebot_config::mcp::ApplyArguments = [(
+            "move_mark".to_string(),
+            [("url".to_string(), "entry".to_string())].into(),
+        )]
+        .into();
+        let covered: bravebot_config::mcp::CoveredTools = ["move_mark".to_string()].into();
+        let declaration = in_openshell(&["server"])
+            .applying(applies.clone())
+            .expect("apply arguments")
+            .marking_covered(covered.clone())
+            .expect("a mark");
+        let Plan::OpenShell {
+            apply_arguments,
+            covered_tools,
+            ..
+        } = planned(&declaration, &|_| None).expect("a plan")
+        else {
+            panic!("an OpenShell declaration was not planned as one");
+        };
+        assert_eq!(apply_arguments, applies);
+        assert_eq!(covered_tools, covered);
     }
 
     /// Nothing of this machine's environment or files is passed into a sandbox yet, so a
@@ -8182,6 +8248,7 @@ for line in sys.stdin:
                 ask_every_call: asking,
                 choice_arguments: ChoiceArguments::new(),
                 apply_arguments: Default::default(),
+                covered_tools: Default::default(),
             };
             let mut notes = Vec::new();
             let started = start(
@@ -8271,6 +8338,7 @@ for line in sys.stdin:
                 ask_every_call: true,
                 choice_arguments: choices,
                 apply_arguments: Default::default(),
+                covered_tools: Default::default(),
             };
             let mut notes = Vec::new();
             let started = start(
@@ -8655,6 +8723,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -8916,6 +8985,7 @@ done
                     ask_every_call: false,
                     choice_arguments: ChoiceArguments::new(),
                     apply_arguments: Default::default(),
+                    covered_tools: Default::default(),
                 },
             )]
         };
@@ -8985,6 +9055,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let hosts = listing(Some(&["mine.example"]), &[]);
         let mut notes = Vec::new();
@@ -9052,6 +9123,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 

@@ -97,9 +97,10 @@ server was not called.
 A call to a server's tool that an earlier question of the same round already answered, because that
 question listed it ([SERVERS-7](mcp-servers.md#SERVERS-7)), is not recorded as asking. A yes is one
 entry under `approval` naming the call as `alias:tool` and saying an earlier answer covered it and
-nobody was asked, and a no is the refusal above. A planned call that approving its plan answered
-is recorded the same way, one entry under `approval` naming the call and saying the plan's approval
-covered it and nobody was asked at the step.
+nobody was asked, and a no is the refusal above. A planned call that approving its plan answered is
+recorded the same way, one entry under `approval` naming the call and saying the plan's approval
+covered it and nobody was asked at the step, and so is each call of an `apply` step whose tools are
+all marked plan-covered.
 
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
@@ -190,6 +191,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
 `verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

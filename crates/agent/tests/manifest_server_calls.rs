@@ -368,9 +368,14 @@ struct Calls {
     stopping: Option<bravebot_core::cancel::Cancel>,
     /// The lists of calls an apply step put, and which calls to keep: every one where `None`.
     applies: Vec<ApplyRequest>,
+    /// A mode the person moves the run into when a call is put to them at its step, after the plan
+    /// was answered and before the steps after it run, where a test says.
+    then_mode_at_call: Option<(bravebot_agent::LiveMode, PermissionMode)>,
     apply_keeps: Option<Vec<usize>>,
     /// Whether the list is answered as by a client that cannot put it.
     apply_unasked: bool,
+    /// Whether this client can put an apply step's list, which a desktop or one-shot client cannot.
+    puts_lists: bool,
 }
 
 impl Calls {
@@ -386,8 +391,10 @@ impl Calls {
             order: Vec::new(),
             stopping: None,
             applies: Vec::new(),
+            then_mode_at_call: None,
             apply_keeps: None,
             apply_unasked: false,
+            puts_lists: true,
         }
     }
 
@@ -458,6 +465,10 @@ impl Confirmer for Calls {
         self.list_answer
     }
 
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.puts_lists
+    }
+
     fn confirm_apply(&mut self, request: &ApplyRequest) -> ApplyDecision {
         self.order.push("apply");
         self.applies.push(request.clone());
@@ -473,6 +484,9 @@ impl Confirmer for Calls {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.order.push("call");
+        if let Some((live, mode)) = &self.then_mode_at_call {
+            live.set(*mode);
+        }
         let at = self.calls.len().min(self.answers.len() - 1);
         self.calls.push(request.clone());
         self.answers[at].clone()
@@ -2227,6 +2241,7 @@ fn marks_answered(body: &str) -> String {
                         {"title": "Brave", "url": "https://brave.com/"},
                         {"title": STEERING, "url": "https://example.com/a"},
                         {"title": "bravebot", "url": "https://github.com/brave/bravebot"},
+                        {"title": "Hidden", "url": "https://hidden.example/\u{200B}"},
                     ])
                     .to_string(),
                 ),
@@ -2256,6 +2271,28 @@ fn marks_session(url: &str, scratch: &Scratch, applies: &[(&str, &str, &str)]) -
             .insert((*argument).to_string(), (*kind).to_string());
     }
     session_of(reach(url, false).applying(declared), scratch, true)
+}
+
+/// [`marks_session`], with `covered` marked plan-covered.
+fn marked_session(
+    url: &str,
+    scratch: &Scratch,
+    applies: &[(&str, &str, &str)],
+    covered: &[&str],
+) -> Session {
+    let mut declared = bravebot_config::mcp::ApplyArguments::new();
+    for (tool, argument, kind) in applies {
+        declared
+            .entry((*tool).to_string())
+            .or_default()
+            .insert((*argument).to_string(), (*kind).to_string());
+    }
+    let marked = covered.iter().map(|tool| (*tool).to_string()).collect();
+    session_of(
+        reach(url, false).applying(declared).covered(marked),
+        scratch,
+        true,
+    )
 }
 
 const MARKS_DECLARED: &[(&str, &str, &str)] = &[
@@ -2617,7 +2654,8 @@ fn an_apply_whose_arguments_are_malformed_is_refused_before_anybody_is_asked() {
 }
 
 /// An apply step whose `entries` is not a pointer or an object of them, or names a list the step
-/// does not read, ends the run at the step, with none of its calls made.
+/// does not read, is refused with the plan, before it is put to anybody, so none of its calls is
+/// made and nothing is read for it.
 ///
 /// Rejects an implementation that reads a malformed `entries` as the whole reply or an unknown list
 /// as no pointer, which would number entries from somewhere the plan did not say.
@@ -2635,20 +2673,15 @@ fn an_apply_whose_entries_are_malformed_makes_no_call() {
             session: marks_session(&url, &scratch, MARKS_DECLARED),
             mode: PermissionMode::Ask,
             task: Task::new("organise my bookmarks into folders"),
-            replies: vec![shape(), plan(steps), says(ROWS)],
+            replies: vec![shape(), plan(steps.clone()), plan(steps)],
             mcp: &mcp,
             confirmer: Calls::answering(vec![CallDecision::approve()]),
             grants: None,
         });
         let failure = ran.outcome.expect_err("refused").to_string();
         assert!(failure.contains(says_why), "{says_why}: {failure}");
-        assert!(
-            ran.called
-                .iter()
-                .all(|(tool, _)| tool != "make_folder" && tool != "move_mark"),
-            "{says_why}: {:?}",
-            ran.called
-        );
+        assert!(ran.asked.plans.is_empty(), "{says_why}");
+        assert!(ran.called.is_empty(), "{says_why}: {:?}", ran.called);
     }
 }
 
@@ -2683,6 +2716,86 @@ fn an_apply_of_literals_alone_is_refused_before_anybody_is_asked() {
     );
     assert!(ran.asked.plans.is_empty());
     assert!(ran.called.is_empty());
+}
+
+/// Where an apply step's list sits in its read's reply is checked with the rest of the plan, so a
+/// pointer without its leading slash, or one naming a list the step does not read, is refused
+/// before the plan is put to anybody rather than ending the step with nothing to do.
+#[test]
+fn an_apply_whose_entries_point_at_nothing_is_refused_before_anybody_is_asked() {
+    for (entries, says) in [
+        (json!("items"), "is not a JSON pointer"),
+        (json!({"other": "/items"}), "name no list other"),
+    ] {
+        let scratch = Scratch::new("apply-pointer");
+        let (url, mcp) = serve_marks();
+        let mut steps = organise();
+        steps[1]["args"]["entries"] = entries;
+        let ran = walk(Walk {
+            session: marks_session(&url, &scratch, MARKS_DECLARED),
+            mode: PermissionMode::Ask,
+            task: Task::new("organise my bookmarks into folders"),
+            replies: vec![shape(), plan(steps.clone()), plan(steps)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        let failure = ran.outcome.expect_err("refused").to_string();
+        assert!(failure.contains(says), "{failure}");
+        assert!(ran.asked.plans.is_empty());
+        assert!(ran.called.is_empty());
+    }
+}
+
+/// A client that cannot put an apply step's list, as the desktop and a one-shot cannot, has a plan
+/// whose step would put one refused before it is put to anybody, so nothing is read for a step that
+/// would then fail. A step whose tools the plan covers needs no list, and runs there.
+///
+/// Rejects an implementation that approves the plan, runs the reads and fails at the step, and one
+/// that refuses a covered step for want of a list it never puts.
+#[test]
+fn a_client_that_cannot_put_the_list_refuses_its_step_before_anybody_is_asked() {
+    let scratch = Scratch::new("no-list");
+    let (url, mcp) = serve_marks();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.puts_lists = false;
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), plan(organise())],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(
+        failure.contains("cannot put an APPLY step's calls"),
+        "{failure}"
+    );
+    assert!(ran.asked.plans.is_empty());
+    assert!(ran.called.is_empty());
+
+    let scratch = Scratch::new("no-list-covered");
+    let (url, mcp) = serve_marks();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.puts_lists = false;
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.called.iter().any(|(tool, _)| tool == "move_mark"));
 }
 
 /// A list an apply step points into is what a read returned. A plan that points it at what a
@@ -2743,6 +2856,372 @@ fn an_apply_whose_call_could_depend_on_two_rows_is_refused() {
     let failure = ran.outcome.expect_err("refused").to_string();
     assert!(failure.contains("one earlier call only"), "{failure}");
     assert!(ran.called.is_empty());
+}
+
+/// A step whose tools are all marked plan-covered makes its calls on the person's approval of the
+/// plan, with no list put. The plan line says the step runs without asking and names the server its
+/// list was read from, and the trail credits the plan's approval once for each call it made.
+///
+/// Rejects an implementation that still puts the list, that runs it without saying so on the line
+/// the person approved, and that leaves the trail silent about what answered the calls.
+#[test]
+fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
+    let scratch = Scratch::new("covered");
+    let (url, mcp) = serve_marks();
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty(), "the list was put");
+    assert!(ran.asked.calls.is_empty(), "{:?}", ran.asked.calls);
+    let tools: Vec<&str> = ran.called.iter().map(|(tool, _)| tool.as_str()).collect();
+    assert!(
+        tools.contains(&"make_folder") && tools.contains(&"move_mark"),
+        "{tools:?}"
+    );
+    // What each call that was made returned is drawn for the person, behind the margin and to no
+    // model, so a reply that says what a call replaced lets them put it back.
+    let replies = ran
+        .reporter
+        .shown
+        .iter()
+        .filter(|shown| shown.origin == "what brave:move_mark returned with no failure reported")
+        .count();
+    assert!(replies >= 1, "{:?}", ran.reporter.shown);
+    assert!(
+        ran.reporter
+            .shown
+            .iter()
+            .all(|shown| shown.reach == bravebot_agent::report::Reach::NoModel)
+    );
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(line.contains("run without asking you"), "{line}");
+    assert!(line.contains("marks (read from brave)"), "{line}");
+    // The planner is told to let a later call reuse a thing the list already names rather than
+    // make it twice, which is what keeps a duplicate folder from being proposed.
+    assert!(
+        ran.chat
+            .iter()
+            .any(|body| body.contains("so an existing one is used rather than made twice")),
+        "no planning request held the guidance"
+    );
+    // And that the apply step's own processor decides its calls, so no other step can preview them.
+    assert!(
+        ran.chat
+            .iter()
+            .any(|body| body.contains("So a task that reorganises many items is one read, then one apply, and no process or answer step besides")),
+        "no planning request said a separate step cannot preview the calls"
+    );
+    // The planner sees which tools a plan's approval covers, beside what a row may fill.
+    assert!(
+        ran.chat
+            .iter()
+            .any(|body| body.contains("brave:move_mark") && body.contains("plan-covered\\n")),
+        "no planning request named the covered tools"
+    );
+    // The trail credits the plan's approval once for each call the step made, and for no other.
+    let applied = |tool: &str| tool == "make_folder" || tool == "move_mark";
+    let mut credited: Vec<String> = ran
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            bravebot_core::event::Event::GatePassed {
+                gate: "approval",
+                detail,
+            } => detail
+                .strip_prefix("approving the plan covered brave:")
+                .and_then(|rest| rest.strip_suffix(", no prompt at the step"))
+                .filter(|tool| applied(tool))
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect();
+    let mut made: Vec<String> = ran
+        .called
+        .iter()
+        .map(|(tool, _)| tool.clone())
+        .filter(|tool| applied(tool))
+        .collect();
+    credited.sort();
+    made.sort();
+    assert_eq!(credited, made);
+}
+
+/// A step whose tools are all marked still puts its list where one tool is not marked, where bypass
+/// mode and not a person approved the plan, where an `ask` rule names one of its tools, and in plan
+/// mode, and its plan line does not say it runs without asking.
+///
+/// Rejects an implementation that runs a step without asking on a mark it does not wholly have, on
+/// a plan nobody read, past a rule somebody wrote, or in a mode that asks at the step, and one
+/// whose plan line promises what the step does not do.
+#[test]
+fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks() {
+    let scratch = Scratch::new("covered-asks");
+    let (url, mcp) = serve_marks();
+    let all = ["make_folder", "move_mark"];
+    let (asking, _) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &["Mcp(brave:move_mark)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    let cases: [(&str, &[&str], PermissionMode, Task); 4] = [
+        (
+            "one tool unmarked",
+            &all[..1],
+            PermissionMode::Ask,
+            Task::new("organise"),
+        ),
+        (
+            "bypass approved",
+            &all,
+            PermissionMode::Bypass,
+            Task::new("organise"),
+        ),
+        (
+            "an ask rule",
+            &all,
+            PermissionMode::Ask,
+            Task::new("organise").with_permissions(asking),
+        ),
+        (
+            "plan mode",
+            &all,
+            PermissionMode::Plan,
+            Task::new("organise").with_permission_mode(PermissionMode::Plan),
+        ),
+    ];
+    for (case, marked, mode, task) in cases {
+        let ran = walk(Walk {
+            session: marked_session(&url, &scratch, MARKS_DECLARED, marked),
+            mode,
+            task,
+            replies: vec![shape(), plan(organise()), says(ROWS)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        assert!(ran.outcome.is_ok(), "{case}: {:?}", ran.outcome.err());
+        assert_eq!(ran.asked.applies.len(), 1, "{case}: the list was not put");
+        // The line the person approved says what the step then does.
+        for plan in &ran.asked.plans {
+            assert!(
+                !plan.steps[1].contains("run without asking you"),
+                "{case}: {}",
+                plan.steps[1]
+            );
+        }
+    }
+}
+
+/// A `deny` rule about a tool of a marked step makes the step put its list, as an `ask` rule does,
+/// so its plan line does not promise a run that the rule would stop part-way, and the trail credits
+/// the plan's approval for no call.
+///
+/// Rejects an implementation that promises to run without asking a tool a rule refuses, and one
+/// that records approvals for calls that were never made.
+#[test]
+fn a_deny_rule_about_a_marked_tool_puts_the_steps_list() {
+    let scratch = Scratch::new("covered-deny");
+    let (url, mcp) = serve_marks();
+    let (denying, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(brave:move_mark)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders").with_permissions(denying),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(!line.contains("run without asking you"), "{line}");
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+    assert!(!ran.events.iter().any(|event| matches!(
+        event,
+        bravebot_core::event::Event::GatePassed { gate: "approval", detail }
+            if detail.starts_with("approving the plan covered brave:move_mark")
+    )));
+}
+
+/// A switch into plan mode between steps, after the person approved the plan and before a marked
+/// step runs, puts that step's list back: a change of mode can add a question, never take one away.
+/// The read before it is asked at its step, by an `ask` rule, and the person moves the run into plan
+/// mode while answering it, so only the check at the marked step can see the switch.
+///
+/// Rejects an implementation that reads the mode only when the plan is written or answered, which
+/// would run a step unasked in a mode that asks at each step.
+#[test]
+fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
+    let scratch = Scratch::new("covered-switch");
+    let (url, mcp) = serve_marks();
+    let (asking, rejected) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &["Mcp(brave:list_marks)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let task = Task::new("organise my bookmarks into folders").with_permissions(asking);
+    let live = task.permission_mode.clone();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.then_mode_at_call = Some((live, PermissionMode::Plan));
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task,
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(line.contains("run without asking you"), "{line}");
+    assert_eq!(
+        ran.asked.order,
+        ["plan", "call", "apply"],
+        "the switch came between steps"
+    );
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+}
+
+/// A marked step sends an entry's value holding a character a line draws as nothing exactly as the
+/// list holds it, with no question at the step: nobody reads a covered step's values, so what a list
+/// returned decides nothing about whether the step asks (MANIFEST-17).
+///
+/// Rejects an implementation that decides from a resolved value whether to put the list, which
+/// takes a decision in the driver from bytes nobody vouched for.
+#[test]
+fn a_marked_step_sends_an_entry_holding_a_hidden_character_as_the_list_holds_it() {
+    let scratch = Scratch::new("covered-hidden-entry");
+    let (url, mcp) = serve_marks();
+    let rows =
+        "new 1 = \"Work\"\nrow 1: tool 1 title=new:1\nrow 2: tool 2 url=entry:4 folder=row:1\n";
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(rows)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty(), "the list was put");
+    let moved = ran
+        .called
+        .iter()
+        .find(|(tool, _)| tool == "move_mark")
+        .map(|(_, arguments)| arguments["url"].clone());
+    assert_eq!(
+        moved,
+        Some(json!("https://hidden.example/\u{200B}")),
+        "{:?}",
+        ran.called
+    );
+}
+
+/// A marked step whose values hold a character the plan's line draws as nothing puts its list, where
+/// the question writes each one out, and its line does not say it runs without asking.
+///
+/// Rejects an implementation that runs unasked on a line the person could not read in full.
+#[test]
+fn a_marked_step_holding_a_hidden_character_puts_its_list() {
+    let scratch = Scratch::new("covered-hidden");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["arguments"]["make_folder"]["parent"] =
+        json!({"literal": "Org\u{202E}anised"});
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(!line.contains("run without asking you"), "{line}");
+    assert!(
+        !line.contains('\u{202E}'),
+        "the line drew the character raw: {line}"
+    );
+}
+
+/// A marked step's instruction to its processor is written out on its plan line, so a character
+/// in it that would draw as nothing is shown, and the step still runs on the plan's approval.
+///
+/// Rejects an implementation that draws the instruction raw on a line a step runs unasked on.
+#[test]
+fn a_marked_steps_instruction_is_written_out_on_its_plan_line() {
+    let scratch = Scratch::new("covered-instruction");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["instruction"] = json!("group these\u{202E} bookmarks into folders");
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty(), "the list was put");
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(line.contains("run without asking you"), "{line}");
+    assert!(line.contains("U+202E"), "{line}");
+    assert!(
+        !line.contains('\u{202E}'),
+        "the line drew the character raw: {line}"
+    );
 }
 
 /// An argument the declaration names with two kinds takes whichever a row gives: a bookmark may

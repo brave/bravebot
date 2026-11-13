@@ -15,13 +15,14 @@ use crate::progress::{printable, printable_path};
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
-    Home, Person, applies_line, choices_line, drawn, indent, no_state_directory, problem, say,
+    Home, Person, applies_line, choices_line, covered_line, drawn, indent, no_state_directory,
+    problem, say,
 };
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
-    self, ApplyArguments, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field,
-    Problem, Projects, Standing, Timeouts, Unreadable,
+    self, ApplyArguments, Approvals, ChoiceArguments, CoveredTools, Declaration, Declarations,
+    Entry, Field, Problem, Projects, Standing, Timeouts, Unreadable,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -125,7 +126,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--apply <tool>:<argument>=<kind>]... [--openshell <image>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--apply <tool>:<argument>=<kind>]... [--plan-covers <tool>]... [--openshell <image>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
@@ -383,6 +384,7 @@ fn declared(
     let mut openshell: Option<String> = None;
     let mut choices = ChoiceArguments::new();
     let mut applies = ApplyArguments::new();
+    let mut covered = CoveredTools::new();
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -537,6 +539,15 @@ fn declared(
                 apply(named, &mut applies)?;
                 taken = 1;
             }
+            "--plan-covers" => {
+                let tool = value.ok_or_else(|| argument(t!(mcp_plan_covers_needs_a_tool)))?;
+                covered.insert(tool.clone());
+            }
+            joined if joined.starts_with("--plan-covers=") => {
+                let tool = joined.strip_prefix("--plan-covers=").unwrap_or_default();
+                covered.insert(tool.to_string());
+                taken = 1;
+            }
             "--startup-timeout" => {
                 startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
@@ -651,6 +662,7 @@ fn declared(
                 .map(|declaration| declaration.asking_every_call(ask_every_call))
                 .and_then(|declaration| declaration.choosing(choices))
                 .and_then(|declaration| declaration.applying(applies))
+                .and_then(|declaration| declaration.marking_covered(covered))
                 .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)?;
             shares_nothing(&declaration).map_err(argument)?;
@@ -673,6 +685,9 @@ fn declared(
         }
         Some(Transport::Http(_)) if !applies.is_empty() => {
             Err(Refusal::Problem(Problem::Remote("apply_arguments")))
+        }
+        Some(Transport::Http(_)) if !covered.is_empty() => {
+            Err(Refusal::Problem(Problem::Remote("covered_tools")))
         }
         Some(Transport::Http(url)) => Declaration::http(url)
             .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
@@ -1127,6 +1142,7 @@ pub(crate) fn report(
                 }
                 rows.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
                 rows.extend(applies_line(declaration).map(|line| format!("{under}{line}")));
+                rows.extend(covered_line(declaration).map(|line| format!("{under}{line}")));
                 let request = file.map(|file| {
                     match grant(
                         alias,
@@ -3631,6 +3647,74 @@ mod tests {
                 "click_element:element_number",
             ]),
             Problem::Remote("choice_arguments")
+        );
+    }
+
+    /// SERVERS-26. `--plan-covers`, in both its forms, marks a tool with apply arguments: the
+    /// question and `get` say which, and the file keeps it. A mark on a tool with no apply
+    /// arguments and one on a remote server are refused before anything is written.
+    #[test]
+    fn add_writes_the_plan_covers_marks_and_the_question_and_get_say_them() {
+        let directory = scratch("cli-mcp-plan-covers");
+        let said = t!(
+            mcp_declaration_covered_tools,
+            named = "make_folder, move_mark"
+        )
+        .to_string();
+        let args = [
+            "add",
+            "marks",
+            "--apply",
+            "make_folder:title=new",
+            "--apply=move_mark:url=entry",
+            "--plan-covers",
+            "make_folder",
+            "--plan-covers=move_mark",
+            "--",
+            "/opt/srv",
+        ];
+        let (outcome, screen) = typing(&directory, &args, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            screen.lines().any(|line| line.trim() == said),
+            "the question did not say it: {screen}"
+        );
+        let written = std::fs::read_to_string(mcp::declarations_file(&directory)).unwrap();
+        let marks = Declarations::parse(&written)
+            .unwrap()
+            .get("marks")
+            .unwrap()
+            .declaration
+            .clone()
+            .unwrap();
+        assert_eq!(
+            marks.covered_tools(),
+            &["make_folder", "move_mark"]
+                .iter()
+                .map(|tool| (*tool).to_string())
+                .collect::<CoveredTools>(),
+            "{written}"
+        );
+        let (outcome, got) = typing(&directory, &["get", "marks"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(got.lines().any(|line| line.trim() == said), "{got}");
+
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None);
+        assert!(
+            declared_by(&["--plan-covers", "pin_tab", "--", "/opt/srv"]).is_err(),
+            "a mark on a tool with no apply arguments was taken"
+        );
+        assert!(
+            matches!(
+                declared_by(&[
+                    "--plan-covers",
+                    "pin_tab",
+                    "--http",
+                    "https://example.com/mcp"
+                ]),
+                Err(Refusal::Problem(Problem::Remote("covered_tools")))
+            ),
+            "a mark on a remote server was taken"
         );
     }
 
