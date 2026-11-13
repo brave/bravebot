@@ -179,7 +179,7 @@ fn a_safe_session_reads_no_named_shared_skill_directory() {
     std::fs::create_dir_all(&project).unwrap();
     let workspace = Workspace::new(&project)
         .expect("workspace")
-        .with_profile_directory(Some(profile))
+        .with_home(Some(profile))
         .with_shared_skill_directories(&["~/.agents/skills".to_string()]);
     let mut sink = RecordingSink::new();
     let mut policy = policy(&mut sink);

@@ -459,10 +459,12 @@ impl Workspace {
     }
 
     /// Stand in for the environment's home directory, so a test does not depend on whose machine
-    /// it runs on.
-    #[cfg(test)]
+    /// it runs on. The directory set is what every leading `~` stands for, what a `~` in a shared
+    /// skill directory resolves against (INSTR-17), and what the refusal of a credential location
+    /// in `/add-dir` reads (SANDBOX-18).
+    #[doc(hidden)]
     #[must_use]
-    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
         self
     }

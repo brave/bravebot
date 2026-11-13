@@ -574,14 +574,6 @@ impl Workspace {
         &self.shared_skills
     }
 
-    /// Stand in for the environment's profile directory, which a `~` in a shared skill directory
-    /// (INSTR-17) stands for, so a test does not depend on whose machine it runs on.
-    #[must_use]
-    pub fn with_profile_directory(mut self, profile: Option<PathBuf>) -> Self {
-        self.home = profile;
-        self
-    }
-
     /// The home directory a leading `~` stands for in this workspace.
     pub(crate) fn profile_directory(&self) -> Option<&Path> {
         self.home.as_deref()
