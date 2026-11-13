@@ -1414,8 +1414,12 @@ fn an_mcp_server_a_host_starts_holds_no_end_of_the_channels_it_created() {
     ]
     .into_iter()
     .filter(|path| Path::new(path).exists())
+    // Network egress, as the MCP crate's own tests allow, so no network namespace is needed where
+    // the kernel refuses an unprivileged one. It does not change which descriptors are inherited.
     .fold(
-        SandboxPolicy::strict().allow_subprocesses(),
+        SandboxPolicy::strict()
+            .allow_network_egress()
+            .allow_subprocesses(),
         SandboxPolicy::allow_read,
     )
     .allow_read(exe.parent().expect("the test binary's directory"))
