@@ -5606,6 +5606,7 @@ hover-footer-cancel-shell = click to leave shell mode
 hover-footer-paste = click to paste the picture
 hover-item = click to choose this one, click again to take it
 hover-scrollbar = click to move the view here, drag the thumb to scroll
+hover-pinned = click to go to this prompt
 
 # The small menu a right click opens over a reply, a delegate's block or a held selection. One word
 # or short phrase to an item, and each item does what the command or the click it stands for does.

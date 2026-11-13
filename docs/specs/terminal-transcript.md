@@ -1495,6 +1495,57 @@ service wrote is read to make them, and the line is built from fixed words.
 `verified-by: bravebot_agent::turn::a_turn_survives_a_connection_that_died_mid_request`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/retry-countdown.test.mjs drives the window's own event reducer and word function with the bridge's events: the wait is counted from the moment the event arrives and down to the second it names, a count with no window names no time to give up, the pause being over or the next phase takes the countdown away, and a hook or a check keeps the row; make check-ui runs the test)`
 
+<a id="VIEW-44"></a>
+### VIEW-44: the prompt of the turn at the top of the view is drawn above it once it has scrolled off
+
+Where the first row of the view is not a row of a prompt the person typed, the first row of the
+transcript's pane holds the latest prompt that begins above it, and the view is drawn in the rows
+under it. The row is `> ` and the prompt's words, each run of blanks and line breaks as one space, cut
+with `…` where they do not fit, in the ink the prompt's own rows are drawn in. What is drawn under the
+entries from the session's live state, the reply still arriving among it, belongs to the turn of the
+last prompt.
+
+No prompt is drawn above the view where its first row is a row of a prompt, since that prompt is on
+the screen; where a shell command the person ran is later than the prompt, since what the command
+printed is not an answer to it; where the prompt has no words; in a pane of fewer than four rows or
+sixteen columns; and over a delegate's view or a request `/request` opened, neither of which holds
+the person's prompts. At the tail a view a row shorter begins a row further down, and a prompt is
+drawn only where one is to be drawn above both the view of the whole pane and that shorter view, so a
+view whose shorter form begins at the next prompt keeps the whole pane. A view held above the tail
+keeps the row it holds at its top, which is then drawn under the prompt. A scroller at the last row
+keeps the last row on the screen instead, as `G` asks, unless rows have arrived below it since the
+frame that left it there ([SCROLL-8](scroller.md#SCROLL-8)). The keys that move the view a screen
+count the rows under the prompt, so a page shows every row.
+
+It is drawn at rest and in the scroller alike, so opening the scroller moves no words
+([SCROLL-1](scroller.md#SCROLL-1)). The row is not one of the transcript's: a selection does not begin
+in it and a copy does not take it, the scroller's search, `v` and an export do not read it, and the
+scrollbar ([VIEW-39](#VIEW-39)) runs beside the rows under it, so its thumb stands for the rows the
+transcript is drawn in. A click on the row puts the prompt at the top of the view
+([MOUSE-54](mouse.md#MOUSE-54)).
+
+**Why.** A reply longer than the pane pushes the prompt that asked for it off the screen, and a person
+reading back through a long transcript sees answers with nothing on the screen to say what they
+answer. The prompt is drawn on one row so that it costs the transcript one row and no more.
+
+The words are the person's own prompt, which the transcript already draws. Which entry is a prompt is
+the speaker the session recorded, and which entry holds the first row of the view is read from the
+layout's row geometry, so the row holds no bytes of a reply, a result or a note.
+
+`verified-by: bravebot_tui::app::tests::pinned::the_prompt_of_the_turn_at_the_top_of_the_view_is_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::a_reply_still_arriving_has_the_prompt_that_asked_for_it_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::what_a_shell_command_printed_has_no_prompt_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::no_prompt_is_drawn_above_a_delegates_view_or_a_request`
+`verified-by: bravebot_tui::app::tests::pinned::the_prompt_above_the_view_is_drawn_in_the_ink_of_the_prompt`
+`verified-by: bravebot_tui::app::tests::pinned::a_selection_never_begins_on_the_prompt_drawn_above_the_view_or_takes_its_words`
+`verified-by: bravebot_tui::app::tests::pinned::the_scrollbar_runs_beside_the_rows_under_the_prompt_and_reaches_the_end_at_the_tail`
+`verified-by: bravebot_tui::app::tests::pinned::the_scroller_draws_the_prompt_above_its_view_and_opening_it_moves_no_words`
+`verified-by: bravebot_tui::app::tests::pinned::the_scroller_pages_by_the_rows_under_the_prompt_and_reaches_the_last_row`
+`verified-by: bravebot_tui::render::transcript::a_prompt_is_pinned_only_in_a_pane_with_room_and_where_the_shorter_view_has_one_too`
+`verified-by: bravebot_tui::render::transcript::the_prompt_pinned_is_the_latest_one_above_the_first_row_and_not_past_a_shell_command`
+`verified-by: bravebot_tui::render::transcript::a_prompt_on_one_row_joins_its_lines_and_is_cut_to_the_room`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+
 ## Known costs
 
 - **A picture is not drawn when it arrives.** The rows about a tool's picture or a read file's say

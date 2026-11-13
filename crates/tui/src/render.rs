@@ -1166,11 +1166,20 @@ fn inside_the_border(area: Rect) -> Rect {
 }
 
 /// The part of the transcript's pane a selection can reach. The scrollbar is chrome and not text, so
-/// the column it is in is left out (VIEW-39).
+/// the column it is in is left out (VIEW-39), and so is the row of a prompt drawn above the view,
+/// which is no row of the transcript (VIEW-44).
 fn text_beside_the_bar(laid: &Laid, pane: Rect) -> Rect {
-    match laid.bar {
+    let pane = match laid.bar {
         Some(_) => Rect {
             width: pane.width.saturating_sub(1),
+            ..pane
+        },
+        None => pane,
+    };
+    match laid.pinned {
+        Some(row) => Rect {
+            y: row.bottom(),
+            height: pane.bottom().saturating_sub(row.bottom()),
             ..pane
         },
         None => pane,
@@ -3369,7 +3378,8 @@ mod tests {
         /// transcript and scrolling it, from the bottom and from every row held above it, at a
         /// width where lines wrap and one where they do not. With the mouse captured the last
         /// column is the scrollbar (VIEW-39), so the picture is the whole transcript wrapped to one
-        /// column fewer, with that column left out.
+        /// column fewer, with that column left out. Where a prompt is drawn above the view
+        /// (VIEW-44), the picture is of the rows under it, and the row above them is that prompt.
         #[test]
         fn drawing_the_visible_slice_matches_wrapping_the_whole_transcript() {
             let reference = |session: &Session, width: u16, height: u16| -> String {
@@ -3404,6 +3414,8 @@ mod tests {
                 for width in [40u16, 90] {
                     let height = 12;
                     let text_width = if captured { width - 1 } else { width };
+                    // The rows of the view, from the first row under a prompt drawn above it, and the
+                    // frame's record.
                     let area = |session: &Session| {
                         let mut terminal =
                             Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -3412,28 +3424,38 @@ mod tests {
                             .draw(|frame| laid = draw_transcript(frame, frame.area(), session))
                             .expect("draw succeeds");
                         let buffer = terminal.backend().buffer();
-                        let drawn: String = (0..height)
+                        let first = laid.pinned.map_or(0, |row| row.bottom());
+                        let drawn: String = (first..height)
                             .flat_map(|row| (0..text_width).map(move |column| (row, column)))
                             .map(|(row, column)| buffer[(column, row)].symbol())
                             .collect();
+                        if let Some(row) = laid.pinned {
+                            let above: String = (0..text_width)
+                                .map(|column| buffer[(column, row.y)].symbol())
+                                .collect();
+                            assert!(above.starts_with("> prompt "), "{above:?}");
+                        }
                         (drawn, laid)
                     };
                     let (bottom, laid) = area(&session);
                     assert_eq!(
                         bottom,
-                        reference(&session, text_width, height),
+                        reference(&session, text_width, laid.height),
                         "at the bottom, captured {captured}"
                     );
                     session.note_layout(laid);
+                    let mut pinned = 0;
                     for held in [1u16, 2, 3, 7, 40, 301, 999] {
                         session.scroll = held;
-                        let (drawn, _) = area(&session);
+                        let (drawn, laid) = area(&session);
+                        pinned += usize::from(laid.pinned.is_some());
                         assert_eq!(
                             drawn,
-                            reference(&session, text_width, height),
+                            reference(&session, text_width, laid.height),
                             "held {held} rows up at {width} columns, captured {captured}"
                         );
                     }
+                    assert!(pinned > 0, "no view held a prompt above it");
                     session.scroll = 0;
                 }
             }

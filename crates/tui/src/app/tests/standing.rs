@@ -159,13 +159,14 @@ enum Kind {
     Text,
     Item,
     Scrollbar,
+    Pinned,
     Popup,
     PopupRows,
     Match,
     SessionsScreen,
 }
 
-const KINDS: [Kind; 20] = [
+const KINDS: [Kind; 21] = [
     Kind::Back,
     Kind::Reply,
     Kind::Block,
@@ -182,6 +183,7 @@ const KINDS: [Kind; 20] = [
     Kind::Text,
     Kind::Item,
     Kind::Scrollbar,
+    Kind::Pinned,
     Kind::Popup,
     Kind::PopupRows,
     Kind::Match,
@@ -206,6 +208,7 @@ fn kind_of(hit: Hit) -> Kind {
         Hit::Text { .. } => Kind::Text,
         Hit::Item(_) => Kind::Item,
         Hit::Scrollbar => Kind::Scrollbar,
+        Hit::Pinned(_) => Kind::Pinned,
         Hit::Popup(_) => Kind::Popup,
         Hit::PopupRows(_) => Kind::PopupRows,
         Hit::Match(_) => Kind::Match,
@@ -318,6 +321,7 @@ fn expected(name: &str) -> (Kind, Stands) {
             (Kind::Delegate, A_TARGET_OF_THE_TRANSCRIPT)
         }
         "the scrollbar beside the transcript" => (Kind::Scrollbar, THE_SCROLLBAR),
+        "the prompt drawn above the view" => (Kind::Pinned, A_TARGET_OF_THE_TRANSCRIPT),
         "a place in the text of the box" => (Kind::Text, A_ROW_OF_THE_PLAIN_FRAME),
         "the marker that leads a reply" => (Kind::Reply, A_TARGET_OF_THE_TRANSCRIPT),
         "the word that copies a fenced block" => (Kind::Block, A_TARGET_OF_THE_TRANSCRIPT),

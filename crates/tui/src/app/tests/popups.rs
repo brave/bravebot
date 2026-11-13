@@ -2,6 +2,7 @@
 //! drawn beneath it.
 
 use super::hints;
+use super::pinned;
 use super::scrollbar;
 use super::*;
 use crate::state::Popup;
@@ -193,6 +194,11 @@ pub(super) fn targets() -> Vec<Target> {
             "the scrollbar beside the transcript",
             scrollbar::located_in_the_track,
             scrollbar::bar_acted,
+        ),
+        Target::plain(
+            "the prompt drawn above the view",
+            pinned::located_on_the_pinned_prompt,
+            pinned::went_to_the_prompt,
         ),
         Target::plain(
             "a place in the text of the box",

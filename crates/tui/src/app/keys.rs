@@ -2215,6 +2215,11 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         }
         // A delegate's block opens that delegate's view as the watch key does (MOUSE-10, MOUSE-23).
         Hit::Delegate(index) => session.watch_delegate(index),
+        // The prompt drawn above the view goes to the top of it, as `{` puts one there (MOUSE-54).
+        Hit::Pinned(row) => {
+            session.go_to_the_pinned_prompt(row);
+            true
+        }
         // A prompt waiting behind the turn comes back into the box, with the ones typed after it, as
         // Up takes them all. A command a click queued has nothing to put there, so the click removes
         // it, and so do the words on the row (MOUSE-28).
@@ -2407,6 +2412,7 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Words(_)
         | Hit::Wheel(_)
         | Hit::Scrollbar
+        | Hit::Pinned(_)
         | Hit::Item(_)
         | Hit::Text { .. }
         | Hit::Link(_)
