@@ -54,6 +54,9 @@ pub enum Hit {
     /// The track of the scrollbar beside the transcript: a press on it puts the view there or takes
     /// hold of the thumb, which [`Laid::bar`] says where it is (MOUSE-49).
     Scrollbar,
+    /// The prompt drawn above the view, which begins at this row of the transcript: a click puts that
+    /// row at the top of the view (VIEW-44, MOUSE-54).
+    Pinned(u16),
     /// The row of the list of what could be typed under the box that holds this item of what is
     /// offered: a click puts the cursor on it, and a second takes it as Tab does (MOUSE-15).
     Item(usize),
@@ -150,6 +153,8 @@ impl Hit {
             Hit::Reply(_) | Hit::Block(..) | Hit::Words(_) => {
                 beneath && session.watching().is_none() && !session.files_open()
             }
+            // Drawn over the session's own transcript only, at rest and in the scroller.
+            Hit::Pinned(_) => beneath && session.watching().is_none() && !session.files_open(),
             Hit::Queued(_) | Hit::Discard(_) => {
                 beneath && !session.files_open() && session.in_the_plain_frame()
             }

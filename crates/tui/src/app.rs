@@ -45400,6 +45400,7 @@ mod tests {
     mod interrupt;
     mod menu;
     mod pickers;
+    mod pinned;
     mod popups;
     mod scrollbar;
     mod selection;

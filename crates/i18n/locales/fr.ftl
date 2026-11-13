@@ -4536,6 +4536,7 @@ hover-footer-cancel-shell = cliquer pour quitter le mode shell
 hover-footer-paste = cliquer pour coller l'image
 hover-item = cliquer pour choisir celui-ci, cliquer encore pour le prendre
 hover-scrollbar = cliquer pour amener la vue ici, glisser le curseur pour défiler
+hover-pinned = cliquer pour aller à cette invite
 
 # Le petit menu qu'un clic droit ouvre sur une réponse, le bloc d'un délégué ou une sélection tenue.
 # Un mot ou une courte expression par entrée, et chacune fait ce que fait la commande ou le clic

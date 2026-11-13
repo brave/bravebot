@@ -77,6 +77,9 @@ pub struct Laid {
     /// Where the thumb of the scrollbar the frame drew beside the transcript is, where it drew one
     /// (VIEW-39, MOUSE-49). The track is a target of its own.
     pub bar: Option<Bar>,
+    /// The row of the pane a prompt was drawn in above the view, where the frame drew one (VIEW-44).
+    /// It is no row of the transcript, so a selection does not begin in it.
+    pub pinned: Option<ratatui::layout::Rect>,
 }
 
 impl Laid {
@@ -756,7 +759,14 @@ impl Session {
         if self.scrolling() || self.scroll > 0 {
             let top = placed.unwrap_or_else(|| self.top_row());
             let furthest = laid.rows.saturating_sub(laid.height);
-            self.scroll = furthest.saturating_sub(top);
+            // A view at the last row that the frame drew at its last row is still there, though the
+            // row of a prompt drawn above it took a row from its view, which puts the last row a row
+            // further down than the row at the top of the frame before says (VIEW-44).
+            let at_the_end =
+                self.scroll == 0 && laid.window.is_some_and(|window| window.top == furthest);
+            if !at_the_end {
+                self.scroll = furthest.saturating_sub(top);
+            }
         }
         self.keep_selection_within(&laid);
         self.laid = laid;
@@ -931,6 +941,13 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Put the prompt drawn above the view at the top of it, which a click on that row asks for
+    /// (MOUSE-54). `row` is where the last frame's layout says the prompt begins, so the view goes
+    /// to the prompt that was drawn and to nothing a later frame put there.
+    pub fn go_to_the_pinned_prompt(&mut self, row: u16) {
+        self.scroller_to_row(row);
     }
 
     /// Move `times` prompts back, or to the first row past the earliest.

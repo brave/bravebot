@@ -1369,6 +1369,12 @@ mod tests {
         }
     }
 
+    /// The screen row the last frame drew the first row of the view on, which is under the prompt
+    /// drawn above the view where one is (VIEW-44).
+    fn first_row_of_the_view(session: &Session) -> usize {
+        usize::from(session.laid.window.expect("a transcript was drawn").area.y)
+    }
+
     /// The part of a screen row that the transcript draws, in a frame `columns` wide.
     fn transcript_part(row: &str, columns: u16) -> String {
         row.chars()
@@ -1398,13 +1404,13 @@ mod tests {
             ]));
             let rows = screen(&mut session, 120, 30);
             assert!(
-                !transcript_part(&rows[0], 120).contains(needle),
+                !transcript_part(&rows[first_row_of_the_view(&session)], 120).contains(needle),
                 "the task was on the first row before the click"
             );
             clicked(&mut session, panel_row(&rows, 120, needle), 120 - WIDTH + 4);
 
             let after = screen(&mut session, 120, 30);
-            let top = transcript_part(&after[0], 120);
+            let top = transcript_part(&after[first_row_of_the_view(&session)], 120);
             assert!(top.contains(needle), "{needle}: the view is at {top:?}");
             assert!(
                 top.contains('✓') || top.contains('■') || top.contains('□'),
@@ -1436,13 +1442,8 @@ mod tests {
         clicked(&mut session, row, 120 - WIDTH + 4);
 
         let after = screen(&mut session, 120, 14);
-        assert!(
-            transcript_part(&after[0], 120)
-                .trim_end()
-                .ends_with("task 15"),
-            "{:?}",
-            transcript_part(&after[0], 120)
-        );
+        let top = transcript_part(&after[first_row_of_the_view(&session)], 120);
+        assert!(top.trim_end().ends_with("task 15"), "{top:?}");
     }
 
     /// MOUSE-31. While the turn that wrote the plan is still running the plan is the list it

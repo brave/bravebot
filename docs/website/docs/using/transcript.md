@@ -318,6 +318,13 @@ All of these work while a turn is running, and the view does not jump to follow 
 While the view is held off the latest, the bottom line says so and counts the rows that are below it,
 and names **Ctrl-End**, which returns to the latest. The cue goes when the view is back.
 
+**The prompt you are reading the answer to stays at the top.** Once the prompt of the turn at the top
+of the view has scrolled off, the first row of the transcript holds it again, on one row and cut to
+fit, at rest and in the scroller. It is not part of the text, so a drag on it selects nothing and a
+copy never takes it. Clicking it puts that prompt back at the top of the view. Nothing is drawn there
+over what a shell command printed, or in a pane shorter than four rows or narrower than sixteen
+columns.
+
 ## The scroller
 
 **Ctrl-O** opens the scroller on the view already on the screen. Opening moves nothing: the row you
@@ -593,7 +600,8 @@ one chose.
 While the mouse is captured and the transcript is longer than the room for it, a scrollbar stands in
 the last column of the transcript, in the plain view and not in the scroller, a delegate's view, the
 search over earlier prompts or the opening screen. Its thumb shows where the view is in the whole,
-and the lines wrap to the columns it leaves. Pressing in the column puts the middle of the thumb where
+and the lines wrap to the columns it leaves. It runs beside the rows under the prompt kept at the
+top, where one is. Pressing in the column puts the middle of the thumb where
 you pressed, and dragging the thumb scrolls with the pointer, from wherever in the window the pointer
 goes: above or below the column is the first row or the last. It answers while a turn runs. It is not
 part of the text, so a drag across it copies nothing from it. The wheel, the arrow keys and the page

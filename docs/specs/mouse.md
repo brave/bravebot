@@ -1781,7 +1781,8 @@ nothing of the frame beneath it is a target, and the panel is found where it is 
 says whether a cell is a panel's. The way
 back out of a delegate's view ([MOUSE-24](#MOUSE-24)), the marker that leads a reply
 ([MOUSE-26](#MOUSE-26)), the word that copies a fenced block ([MOUSE-27](#MOUSE-27)), a prompt
-waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)) and each hint on the row under the box, with the
+waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)), the prompt drawn above the view
+([MOUSE-54](#MOUSE-54)) and each hint on the row under the box, with the
 permission mode ([MOUSE-14](#MOUSE-14), [MOUSE-48](#MOUSE-48)), are in the record. The marker and the word are not
 targets in a delegate's view, whose entries are the delegate's and not the session's, or in the files
 state.
@@ -1798,7 +1799,7 @@ last column is the state it is in whichever of those it was opened over.
 | a hint under the box, the permission mode included | yes | yes | no | no | no | no | no |
 | a place in the box's text, a prompt waiting behind a turn and the words that remove it | yes | yes | yes | no | no | no | no |
 | the track of the scrollbar, a row of the list under the box | yes | yes | yes | no | no | yes | no |
-| a reply's marker, the word that copies a block, a call, a delegate's block | yes | yes | yes | yes | no | no | no |
+| a reply's marker, the word that copies a block, a call, a delegate's block, the prompt drawn above the view | yes | yes | yes | yes | no | no | no |
 | a web address | yes | yes | yes | yes | no | yes | yes |
 | a file path | yes | no | no | yes | no | yes | no |
 | the way back out of a delegate's view | no | no | no | no | no | no | yes |
@@ -2055,3 +2056,24 @@ screen's own path.
 `verified-by: bravebot_tui::app::tests::wide::the_wheel_at_a_cell_past_223_turns_what_is_under_it`
 `verified-by: bravebot_tui::app::tests::wide::a_click_on_a_row_past_223_takes_the_row_it_names`
 `verified-by: bravebot_tui::input::a_report_past_column_223_is_handed_out_as_the_cell_it_names`
+
+<a id="MOUSE-54"></a>
+### MOUSE-54: a click on the prompt drawn above the view puts that prompt at the top of it
+
+A left click that sweeps nothing on the row of the prompt drawn above the view
+([VIEW-44](terminal-transcript.md#VIEW-44)) puts the row that prompt begins at at the top of the view,
+as `{` does in the scroller ([SCROLL-3](scroller.md#SCROLL-3)), and the prompt is then drawn in its own
+place and not above the view. The row is the one the frame that drew the prompt measured. At rest the
+view is then held there, as a view scrolled back is ([VIEW-27](terminal-transcript.md#VIEW-27)). The
+row is recorded as the cells of the screen it is drawn in and stands where the transcript's own
+targets do ([MOUSE-50](#MOUSE-50)): at rest, while a turn or a command runs and in the scroller. As for
+every click, the press and the release are on one cell and the press is a single click. A press on
+the row begins no selection, since the row is not the transcript's, so a drag along it selects
+nothing.
+
+`verified-by: bravebot_tui::app::tests::pinned::a_click_on_the_prompt_drawn_above_the_view_puts_that_prompt_at_the_top`
+`verified-by: bravebot_tui::app::tests::pinned::a_selection_never_begins_on_the_prompt_drawn_above_the_view_or_takes_its_words`
+`verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
+`verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
+`verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
+`verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`

@@ -178,6 +178,7 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Footer(Footer::Paste) => said(t!(hover_footer_paste)),
         Hit::Item(_) => said(t!(hover_item)),
         Hit::Scrollbar => said(t!(hover_scrollbar)),
+        Hit::Pinned(_) => said(t!(hover_pinned)),
         // The text of the box and of a reply, the panels that hold the input and the panes the
         // wheel scrolls have no click of their own to say.
         Hit::Text { .. }
