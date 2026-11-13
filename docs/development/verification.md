@@ -20,6 +20,11 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.
 
+`verify/history.rs` is a copy of three fixes from the history, 3facf14a, e0cd1903 and 20ce6086,
+with a contract each, written before the crates they are in carried contracts. Verus refuses each
+under the `before_<commit>` cfg that restores the code before the fix. A copy can drift from the
+code, so a fix there moves into its crate as a contract when the crate is set up for Verus.
+
 ## Writing one
 
 Only `bravebot-core` is set up for Verus today. `crates/core/src/lib.rs` imports the Verus prelude
@@ -65,7 +70,8 @@ Then:
   toolchain. It fails when a contract in `crates/` differs from `verify/contracts.txt`, so a
   contract that is removed, added or weakened shows in the diff. CI runs it in the Security job.
 - `make check-verus` runs Verus. Each crate in `CRATES` in `contrib/check-verus.py` has to verify,
-  and each mutation has to be refused.
+  each mutation has to be refused, and `verify/history.rs` has to verify and be refused under each
+  `before_<commit>` cfg.
 
 CI does not run `make check-verus` yet. Until it does, a change to a function with a contract runs
 it before it is pushed, and the pull request says that it passed.
