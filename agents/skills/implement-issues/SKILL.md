@@ -681,11 +681,41 @@ A row is `blocked` only when:
 Look for a public source before calling a row blocked on data: the documentation and the source
 code of the service or of a program that uses it. A new dependency, a manifest or lockfile edit, a
 hook bypass, a design that needs plumbing through several crates, and a test that needs a seam are
-not causes. They are the work.
+not causes. They are the work. A row that is work in another repository is not blocked either:
+[Work in another repository](#work-in-another-repository) says what to do with it.
 
 A blocked row files no issue. The item has `Part of` where some of it landed, or no closing line
 where nothing did, so its own issue stays open and holds the row. Its entry in the body says what
 remains, why it cannot be done here and who or what would unblock it, and the report repeats that.
+
+## Work in another repository
+
+An issue here can ask for a change whose code is in another repository, such as a step
+brave-experiments/brave-dev-loop runs. The part of it in bravebot is worked as any other row. The
+part in the other repository is done in that repository, and nothing about it goes into bravebot:
+no skill, script, doc, spec, comment or commit message here says what the other repository should
+run or do, and the pull request here names it only by a link.
+
+1. **Find the checkout.** Look for a clone of that repository beside this one (`../<name>`). Where
+   one exists and its files can be read, the row is worked there.
+2. **Work it there.** Make a branch and worktree in that clone from its default branch as fetched
+   now. Read and follow that repository's own rules for commits, tests, checks and the pull request
+   body, and its own account rules (`~/.bravebot/AGENTS.md` names the identity and the remote for
+   each repository). Run its checks, demonstrate each new test failing on the fault it rejects, as
+   step 4 says, and open the pull request there. The row is `met` by that pull request, and the
+   ledger records its link.
+3. **File it there where it cannot be worked.** Where there is no clone, or its files cannot be
+   read, file an issue in that repository saying what to change, after searching its open and
+   closed issues for the same work. The row's evidence is that issue's link. Do not mark it
+   `blocked` in bravebot, and file no bravebot issue for it.
+4. **Close the item.** An issue here whose rows are all `met`, counting the other repository's pull
+   request or issue as above, gets `Closes`. Its entry under `## The problem` links the pull request
+   or issue in the other repository in one sentence. Where the issue here was filed only for the
+   other repository's work, it has no bravebot rows left once that pull request or issue exists, so
+   it is closed with a comment linking it rather than worked here.
+
+The pull request in the other repository is reviewed by that repository's own process. Step 8's
+review loop is for the pull request here.
 
 ## Follow-up issues
 
@@ -722,6 +752,8 @@ this order:
   (each with what is missing);
 - one line per item: closed by the pull request, already fixed (with the test added), `Part of`,
   skipped (with the pull request that covers it or why it is closed), or blocked (with its cause);
+- the pull requests and issues opened in other repositories
+  ([Work in another repository](#work-in-another-repository)), each with its link;
 - the commits on the branch: the count, and each one beyond the first of its item with what it is
   (a dependency or a refactor) and what it changes;
 - the decisions to confirm, numbered as in the body;
