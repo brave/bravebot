@@ -73,6 +73,7 @@ The host keeps every session record it reads, lists or writes under `--sessions-
 The root is chosen once, before the first record is read or written, and a second choice is refused and the host says which root is in force (`sessions::keep_in`). The directory the host was started in contributes no settings of its own to the process-wide answers (the network its programs keep, the lists of paths, the hosts a stage is held to): only the person's settings, the file named with `--settings` and the managed pin do.
 
 `verified-by: bravebot_ui_bridge::host_process::the_host_keeps_its_records_apart_from_a_windows`
+`verified-by: bravebot_cli::running::the_terminal_does_not_list_or_continue_a_record_in_a_hosts_sessions_root`
 `verified-by: bravebot_ui_bridge::host_process::an_existing_sessions_root_that_others_can_read_or_a_link_is_refused`
 `verified-by: bravebot_ui_bridge::host_process::a_closed_network_in_the_settings_the_host_was_started_on_reaches_its_turns`
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`

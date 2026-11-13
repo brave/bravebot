@@ -14092,6 +14092,82 @@ fn a_one_shot_run_records_its_timing_and_when_it_began() {
     assert_eq!(continued["started"], record["started"]);
 }
 
+/// HOST-4: a record in a host's sessions root is neither listed by `sessions list` nor continued by
+/// `--resume` in the terminal on the same home, and the terminal leaves it as it was.
+///
+/// The host keeps a project's records under `<root>/<key>/`, the layout of the home's `sessions`
+/// directory, so the record here is the terminal's own, moved to a root the host could be given.
+/// The root is inside the state directory, so a terminal that looked for records anywhere in it, and
+/// not only in `sessions`, would fail. The terminal lists the record before the move, so the record
+/// is one it can read. That the host writes nothing to the home's `sessions` directory is the
+/// desktop test's to show; this test does not run the host.
+#[test]
+fn the_terminal_does_not_list_or_continue_a_record_in_a_hosts_sessions_root() {
+    let gateway = a_gateway("[]", |_| usage_reply(None, "done", 12, 5));
+    let scratch = Scratch::new("terminal-host-root").with_settings(&settings_for(&gateway));
+    let project = a_checkout_of_its_own_under(&scratch.path);
+    let first = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--json", "-p", "answer"],
+    );
+    let (stdout, stderr) = said(&first);
+    assert!(first.status.success(), "{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let listed = |what: &str| {
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &[],
+            &["sessions", "list", "--json"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{what}: {stderr}");
+        stdout
+    };
+    assert!(
+        listed("before the move").contains(&id),
+        "the terminal did not list its own record"
+    );
+
+    let host_root = scratch.path.join(".bravebot/host-sessions");
+    std::fs::rename(scratch.path.join(".bravebot/sessions"), &host_root)
+        .expect("move the records to the host's root");
+    let record = std::fs::read_dir(&host_root)
+        .expect("the host's root")
+        .map(|entry| entry.unwrap().path().join(format!("{id}.json")))
+        .find(|path| path.is_file())
+        .expect("the record in the host's root");
+    let before = std::fs::read(&record).unwrap();
+
+    let after = listed("after the move");
+    assert!(
+        !after.contains(&id),
+        "the terminal listed the host's record: {after}"
+    );
+    let resumed = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--resume", &id, "-p", "again"],
+    );
+    let (_, stderr) = said(&resumed);
+    assert!(
+        !resumed.status.success(),
+        "the terminal continued the host's record"
+    );
+    assert!(
+        stderr.contains(&format!("no session {id} in this directory")),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read(&record).unwrap(),
+        before,
+        "the host's record changed"
+    );
+}
+
 /// Set the modification time of every file in `directory` named `<stem>.<anything>` to `days` ago.
 fn written_days_ago(directory: &Path, stem: &str, days: u64) {
     let then = std::time::SystemTime::now() - Duration::from_secs(days * 86_400);
