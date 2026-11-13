@@ -74,7 +74,7 @@ Adding one means adding a clippy target for it to CI and to this page, then list
 `make check` and `make check-scripts` also fail when a Verus contract in `crates/` differs from
 `verify/contracts.txt`.
 `make check-verus` runs Verus, which brings its own toolchain, so it is run by name like
-`make check-fuzz`. [verification.md](verification.md) says how to run it.
+`make check-fuzz`. [verification.md](verification.md) says when a change runs it.
 
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started

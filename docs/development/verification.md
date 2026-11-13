@@ -25,6 +25,21 @@ with a contract each, written before the crates they are in carried contracts. V
 under the `before_<commit>` cfg that restores the code before the fix. A copy can drift from the
 code, so a fix there moves into its crate as a contract when the crate is set up for Verus.
 
+## When to write one
+
+Code a reviewer would otherwise have to trust gets a contract. Write one with:
+
+- a gate, or anything that decides from a label, so the outcome is stated as a function of the
+  label and not of the content;
+- a change to the label lattice or to `Labelled`;
+- arithmetic, an index or a slice on a length or an offset that came from outside: a frame header,
+  a reply, a file, a prompt the person edited. A wrapped sum or a slice past the end is a crash
+  under `panic = "abort"` or a wrong number in a release build. 3facf14a, e0cd1903 and 20ce6086
+  were each this, and each shipped.
+
+A fix for a panic or an overflow comes with the contract that refuses the old code, and a mutation
+that restores it. That is the regression test that holds for every input.
+
 ## Writing one
 
 Only `bravebot-core` is set up for Verus today. `crates/core/src/lib.rs` imports the Verus prelude
