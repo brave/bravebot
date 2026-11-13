@@ -40,6 +40,12 @@ blank in it. A run with such a marker inside it, as a link's target, an address,
 `foo**bar**` can have, is drawn as written, and so is a fenced block. Every other character is drawn
 in the order it was written, links, `#123`, escapes and HTML included, since nothing else is parsed.
 
+A question taller than the box is given its rows after the options, the free-text field and the
+keys, so every choice and the way out stay on the screen however long the question is. It keeps at
+least three rows, scrolls in them with PgUp and PgDn, with the field open as well as on the list,
+and the hints name PgDn. One of those rows says how many rows of the question are below, or, once
+its last line is on the screen, that the end is reached and how many rows are above.
+
 `verified-by: bravebot_core::ask::a_shaped_question_carries_the_tag_it_is_shown_under`
 `verified-by: bravebot_core::ask::a_question_with_no_options_is_still_a_question`
 `verified-by: bravebot_tui::ask::options_whose_labels_wrap_are_fitted_by_the_rows_they_draw`
@@ -47,6 +53,10 @@ in the order it was written, links, `#123`, escapes and HTML included, since not
 `verified-by: bravebot_tui::ask::a_plan_keeps_its_line_breaks_and_draws_its_markdown`
 `verified-by: bravebot_tui::ask::a_fenced_block_in_a_question_is_drawn_as_written`
 `verified-by: bravebot_tui::ask::every_character_of_a_question_is_drawn_but_the_markers_it_styles`
+`verified-by: bravebot_tui::ask::a_long_plan_leaves_every_choice_and_the_keys_on_screen`
+`verified-by: bravebot_tui::ask::page_keys_scroll_a_long_question_to_its_last_line_and_back`
+`verified-by: bravebot_tui::ask::the_cut_question_says_how_much_is_below_where_it_is_scrolled`
+`verified-by: bravebot_tui::ask::a_long_question_with_the_field_open_scrolls_and_keeps_its_way_out`
 
 <a id="ASK-2"></a>
 ### ASK-2: one to four questions, refused whole rather than trimmed

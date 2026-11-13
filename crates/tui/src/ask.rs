@@ -2890,6 +2890,59 @@ mod tests {
         assert!(!screen.contains("back to the options"));
     }
 
+    /// A question too tall for the box with the free-text field open scrolls with PgDn, its hints
+    /// name PgDn, and the way out stays on screen once a typed answer wraps onto several rows
+    /// (ASK-1). A question with no options opens the field at once. The regression it rejects is
+    /// the box fitted with the typed line counted as one row, so a person typing a long answer
+    /// pushes the field's own keys, and with them `esc`, off the bottom of the box.
+    #[test]
+    fn a_long_question_with_the_field_open_scrolls_and_keeps_its_way_out() {
+        let mut plan = String::from("Add a cache layer.\n## Steps\n");
+        for i in 0..60 {
+            plan.push_str(&format!("- step {i:02}. edit src/cache.rs and test it\n"));
+        }
+        let asking = one(&bravebot_core::ask::prompt(&Question::new(
+            "Plan",
+            &plan,
+            Vec::new(),
+            false,
+        )));
+        let start = rows_after(&asking, &[], 80, 24);
+        let keys = row_holding(&start, "skip the question");
+        assert!(
+            start[keys].contains("PgDn") && start[keys].contains("esc"),
+            "the field's hints do not name the scroll key:\n{}",
+            start.join("\n")
+        );
+        let start = start.join("\n");
+        assert!(
+            !start.contains("step 59.") && start.contains("more lines below"),
+            "the question is not cut, or the cut is not said:\n{start}"
+        );
+        let end = rows_after(&asking, &[KeyCode::PageDown; 80], 80, 24).join("\n");
+        assert!(
+            end.contains("step 59.") && end.contains("esc skip the question"),
+            "PgDn does not reach the last line with the field open:\n{end}"
+        );
+        // An answer of 300 characters wraps onto four rows of an 80-column box.
+        let mut typed = vec![KeyCode::Char('x'); 300];
+        typed.extend([KeyCode::PageDown; 80]);
+        let rows = rows_after(&asking, &typed, 80, 24);
+        let screen = rows.join("\n");
+        assert!(
+            screen.contains("esc skip the question") && screen.contains("PgDn"),
+            "a wrapping answer pushed the field's keys off the box:\n{screen}"
+        );
+        assert!(
+            screen.contains("step 59."),
+            "typing in the field stopped the question scrolling:\n{screen}"
+        );
+        assert!(
+            screen.matches('x').count() >= 300,
+            "the typed answer is not drawn whole:\n{screen}"
+        );
+    }
+
     /// What the session said beside the work, oldest first.
     fn said(session: &Session) -> Vec<String> {
         session
