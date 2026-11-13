@@ -3179,7 +3179,9 @@ under [BACKEND-47](#BACKEND-47), and the record is left as it is. The interface,
 and a one-shot run open on the configured model and say which pick they set aside and why. Where the
 configured model is refused as well there is nothing to fall to: nothing is set aside, and the start
 is refused with the file that refused and which of its lists did. A run whose model is refused for any
-other reason is refused the same way.
+other reason is refused the same way. So is a background session's process, whether `bravebot bg`
+started it or `reply`, `attach` or the supervisor started it again: it settles its model when it
+starts, and ends before its first turn where the layer refuses that model.
 
 **Why.** The names this layer may pin decide where a request goes, and after it has pinned the
 endpoint, the AWS switch, the region, the profile and the three tiers, every other model name still
@@ -3228,6 +3230,7 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_agent::backend::a_model_the_managed_layer_refuses_is_served_by_nothing`
 `verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
 `verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`
+`verified-by: bravebot_cli::plain::a_hosted_start_on_a_model_the_managed_layer_refuses_is_ended`
 `verified-by: bravebot_tui::app::the_picker_does_not_offer_a_model_this_machine_may_not_request`
 `verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
