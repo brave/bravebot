@@ -3910,7 +3910,7 @@ def test_the_stop_hook_answers_on_standard_output():
 
 
 def run_before_pr(base, touched, findings):
-    """Run `--before-pr BASE` through `main`, as brave-dev-loop runs it before opening a pull request.
+    """Run `--before-pr BASE` through `main`, as it is run before opening a pull request.
 
     The diff and the mechanical pass are replaced for the call, so what is measured is the mode's
     own decisions: whether it checks, and what exit status it gives. Returns the exit status, what
@@ -3940,7 +3940,7 @@ def run_before_pr(base, touched, findings):
 def test_the_check_before_a_pull_request():
     """`--before-pr` checks a branch whose diff reaches a path that keeps answers, and only that one.
 
-    brave-dev-loop opens the pull request when this exits 0 and stops when it exits 1, so a mode
+    A caller opens the pull request when this exits 0 and stops when it exits 1, so a mode
     that always exits 0, one that checks every branch, and one that checks none each fail a case
     below. The paths are the ones `touches_kept_answers` names, which the `Stop` hook checks too.
     Where a case's diff picks some lanes, `changed_lanes` is asked as well, and it picks the

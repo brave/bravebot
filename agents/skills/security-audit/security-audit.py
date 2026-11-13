@@ -4076,7 +4076,7 @@ def kept_answer_findings(touched, specs):
 
 
 def before_pull_request(base):
-    """Check a branch before its pull request is opened, as brave-dev-loop does.
+    """Check a branch before its pull request is opened.
 
     The files are the ones `--changed` measures: those the branch's commits change since `base`,
     and the staged and unstaged changes to tracked files. Untracked files are not counted, since a

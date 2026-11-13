@@ -25,7 +25,7 @@ hold?**
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
   one to run before asking for review on a diff that touches a label.
 - **Before a pull request** (`python3 agents/skills/security-audit/security-audit.py --before-pr
-  BASE`): what brave-dev-loop runs before it opens a pull request. Where the branch's commits since
+  BASE`): the check to run before opening a pull request. Where the branch's commits since
   `BASE`, or its staged and unstaged changes to tracked files, reach a path that keeps answers
   (the paths the `Stop` hook checks), it runs the mechanical half and exits
   1 on an error. Untracked files are not counted. Otherwise it checks nothing and exits 0. It
