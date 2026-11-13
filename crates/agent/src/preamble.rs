@@ -59,7 +59,7 @@ const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAU
 /// A volume that folds case answers an open of `agents.md` for `AGENTS.md`, so a name joined to a
 /// path and tested with `is_file` cannot tell the two apart. The directory's own listing holds the
 /// spelling the entry was made with. Only entry names are compared, never what a file holds.
-pub(crate) fn lists_entry_named(directory: &Path, name: &str) -> bool {
+pub fn lists_entry_named(directory: &Path, name: &str) -> bool {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return false;
     };

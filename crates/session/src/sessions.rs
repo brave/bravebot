@@ -1419,9 +1419,11 @@ fn in_the_stores(state: &Path, path: &Path) -> bool {
     let mut spellings = vec![state.to_path_buf()];
     spellings.extend(std::fs::canonicalize(state).ok());
     // A home rules file that is a link is backed up where it lands (RECALL-5), so that file is the
-    // name a backup of it carries.
-    let linked = std::fs::symlink_metadata(state.join("AGENTS.md"))
-        .is_ok_and(|meta| meta.file_type().is_symlink())
+    // name a backup of it carries. Only a link listed as `AGENTS.md` is the person's rules
+    // (INSTR-1): a volume that folds case answers the name for an `agents.md` link too.
+    let linked = bravebot_agent::preamble::lists_entry_named(state, "AGENTS.md")
+        && std::fs::symlink_metadata(state.join("AGENTS.md"))
+            .is_ok_and(|meta| meta.file_type().is_symlink())
         && std::fs::canonicalize(state.join("AGENTS.md")).is_ok_and(|lands| path == lands);
     linked
         || spellings.iter().any(|state| {
@@ -7321,6 +7323,49 @@ mod tests {
             assert_eq!(point.backups[0].kept, believed, "{}", path.display());
         }
         std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// RECALL-5. A kept mark is believed for the file a home rules link lands on only where the
+    /// link is listed as `AGENTS.md`. A link the person named `agents.md` is not read as their
+    /// rules (INSTR-1), even where a volume folding case opens it under that name.
+    ///
+    /// Rejects: a look-up of the link by the name `AGENTS.md`, which a folding volume answers with
+    /// `agents.md`. On a volume that does not fold case the fault cannot be reached, so the test
+    /// adds a link spelled `AGENTS.md` to another file and checks that a kept mark on where that
+    /// link lands is believed while one on where `agents.md` lands still is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_kept_mark_on_the_file_an_agents_md_link_lands_on_is_not_believed() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let base = scratch.path();
+        let state = base.join("state");
+        let dotfiles = base.join("dotfiles");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&dotfiles).expect("dotfiles");
+        std::fs::write(dotfiles.join("rules.md"), "- mine\n").expect("rules");
+        std::os::unix::fs::symlink(dotfiles.join("rules.md"), state.join("agents.md"))
+            .expect("link");
+        let lands = std::fs::canonicalize(dotfiles.join("rules.md")).expect("canonical");
+        let folds = state.join("AGENTS.md").exists();
+        let mut cases = vec![(lands, false)];
+        if !folds {
+            std::fs::write(dotfiles.join("AGENTS.md"), "- linked\n").expect("linked rules");
+            std::os::unix::fs::symlink(dotfiles.join("AGENTS.md"), state.join("AGENTS.md"))
+                .expect("exact link");
+            let exact = std::fs::canonicalize(dotfiles.join("AGENTS.md")).expect("canonical");
+            cases.push((exact, true));
+        }
+        for (path, believed) in cases {
+            let stored = a_stored_point(vec![StoredBackup {
+                kept: true,
+                path: path.display().to_string(),
+                before: BYTES.into(),
+                bytes: Some("b3JpZ2luYWw=".into()),
+                captured_trust: Some(UNTRUSTED.into()),
+            }]);
+            let point = stored.into_point_with_state(Path::new("/work"), Some(&state));
+            assert_eq!(point.backups[0].kept, believed, "{}", path.display());
+        }
     }
 
     /// RECALL-5, RECALL-8. The record keeps what a fact held before a save only where that fact

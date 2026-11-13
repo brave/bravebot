@@ -567,11 +567,12 @@ one of the enclosed alphanumerics U+2480 to U+249F; a text that holds the charac
 `␡` itself draws the same as the control it spells.
 The `bravebot` command line draws with `progress::printable`, which also spells a bidirectional
 control and a zero-width character as `‹U+XXXX›`, so every existing caller of it draws them that
-way as well as the control characters. The terminal client draws only control characters in notes;
-that is tracked in brave/bravebot#3829. The trail Ctrl-T shows in the terminal and the audit
+way as well as the control characters. The terminal client draws with its `render::printable`,
+which spells the same characters the same way. The trail Ctrl-T shows in the terminal and the audit
 inspector in the desktop window draw the same text the same way, so a control character is shown as
-a picture and is not dropped by the screen or the page. The desktop bridge sends, beside each audit
-event, the words `bravebot_agent::confirm::printable` makes of each string field of the event, and the
+a picture and is not dropped by the screen or the page, and a bidirectional control or a zero-width
+character is written out in both. The desktop bridge sends, beside each audit event, the words
+`bravebot_agent::confirm::printable_spelled` makes of each string field of the event, and the
 inspector draws the sentence from those words, so the window holds no list of the characters to
 picture. The inspector leaves the recorded evidence beside it as the audit file holds it.
 
@@ -585,6 +586,7 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_core::invisible::a_single_character_is_written_out_as_its_code_point`
 `verified-by: bravebot_cli::progress::a_c1_control_is_drawn_once_as_its_code_point_by_the_command_line`
 `verified-by: bravebot_cli::main::a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures`
+`verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters`
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
@@ -628,6 +630,7 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
 `verified-by: bravebot_ui_bridge::audit::the_live_audit_event_carries_each_string_field_drawn_by_printable`
+`verified-by: bravebot_ui_bridge::audit::the_live_audit_event_writes_out_a_bidirectional_control_in_a_field`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with the words the bridge sent for a name holding an escape and a bell and asserts the sentence is those words, and that a field with no words is drawn as nothing; make check-ui runs it)`
 
 ## Known costs
