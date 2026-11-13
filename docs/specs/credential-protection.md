@@ -367,6 +367,10 @@ one thing available before confinement is that nobody grants it thinking they gr
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_signed_part_is_not_a_spelling_of_the_metadata_address`
+`verified-by: bravebot_core::ambient::an_ipv4_address_inside_ipv6_is_the_metadata_service_it_carries`
+`verified-by: bravebot_core::ambient::an_ipv6_address_carrying_another_address_is_not_the_metadata_service`
+`verified-by: bravebot_core::ambient::a_host_is_put_in_one_form_whatever_its_spelling`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_ambient_authority_a_line_reaches`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_says_what_the_metadata_service_is`
 `verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`

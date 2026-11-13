@@ -38,7 +38,7 @@
 //!
 //! [TRACE-2]: ../../../docs/specs/trace.md
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::command::Plan;
 
@@ -478,11 +478,57 @@ fn parse_ipv4(host: &str) -> Option<Ipv4Addr> {
 /// An address that only `getaddrinfo` reads is the same host as the one `std` reads, so a host
 /// is parsed here before it is compared, and a spelling of the metadata service's address is
 /// named as the service however the number was written.
+///
+/// An IPv4 address written inside an IPv6 one, as `::ffff:a.b.c.d` or in `64:ff9b::/96`, is
+/// that IPv4 address. A connection to either goes to the IPv4 address, and the fetch and the
+/// sandbox proxy classify it as the IPv4 address too.
 fn parse_address(host: &str) -> Option<IpAddr> {
-    if let Ok(address) = host.parse::<IpAddr>() {
-        Some(address)
-    } else {
-        parse_ipv4(host).map(IpAddr::V4)
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V6(v6)) => Some(carried_ipv4(v6).map_or(IpAddr::V6(v6), IpAddr::V4)),
+        Ok(v4) => Some(v4),
+        Err(_) => parse_ipv4(host).map(IpAddr::V4),
+    }
+}
+
+/// The IPv4 address an IPv6 one carries: an IPv4-mapped address, or one in the NAT64 prefix
+/// `64:ff9b::/96`, which a resolver on a NAT64 network answers with for an IPv4-only name.
+///
+/// Not the deprecated IPv4-compatible form `::a.b.c.d`, which would read `::1` as `0.0.0.1`.
+fn carried_ipv4(address: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = address.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    let [a, b, c, d] = [12, 13, 14, 15].map(|index| address.octets()[index]);
+    (address.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| Ipv4Addr::new(a, b, c, d))
+}
+
+/// A host in the one form two spellings of the same host share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanonicalHost {
+    /// A host written as an address, in any spelling `std` or a resolver reads, with an IPv4
+    /// address carried inside an IPv6 one read as the IPv4 address.
+    Address(IpAddr),
+    /// A host written as a name, lowercased and without the root's trailing dot.
+    Name(String),
+}
+
+/// The one form of a host as a URL, a rule or a server wrote it.
+///
+/// A bracketed IPv6 literal and a trailing root dot are both spellings of the same host, so one
+/// pair of brackets and one trailing dot are dropped. An address is read by value, as
+/// [`CanonicalHost::Address`] says. Anything else is a name, compared without regard to ASCII
+/// case. A second trailing dot is kept, because a resolver does not read `example.com..` as
+/// `example.com`.
+pub fn canonical_host(host: &str) -> CanonicalHost {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    let host = host.to_ascii_lowercase();
+    match parse_address(&host) {
+        Some(address) => CanonicalHost::Address(address),
+        None => CanonicalHost::Name(host),
     }
 }
 
@@ -494,28 +540,14 @@ fn parse_address(host: &str) -> Option<IpAddr> {
 /// That is the one place in this module where a generous match costs something, since the
 /// sentence it draws would be false rather than merely unnecessary.
 pub fn at_host(host: &str) -> Option<Spent> {
-    // A bracketed IPv6 literal and a trailing root dot are both spellings of the same host, and
-    // the authority is a property of the host rather than of how a URL wrote it.
-    let host = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .trim_end_matches('.');
-    // An address is compared by value rather than by spelling, so `2852039166` and
-    // `0xA9FEA9FE` are the metadata service as much as `169.254.169.254` is. The literals are
-    // all addresses, so the comparison is an address one; an IPv4 address and an IPv6 one are
-    // different addresses even where one is a mapped spelling of the other, which is how
-    // `std` reads them too.
-    let parsed = parse_address(host);
-    let named = METADATA.iter().find(|address| {
-        if let Some(spelled) = parse_address(address) {
-            match (&parsed, spelled) {
-                (Some(found), candidate) => found == &candidate,
-                (None, _) => address.eq_ignore_ascii_case(host),
-            }
-        } else {
-            address.eq_ignore_ascii_case(host)
-        }
-    });
+    // The authority is a property of the host rather than of how a URL wrote it, so both sides
+    // are put in one form first. An address is compared by value, so `2852039166`,
+    // `0xA9FEA9FE` and `[::ffff:169.254.169.254]` are the metadata service as much as
+    // `169.254.169.254` is; a name is compared without regard to case.
+    let host = canonical_host(host);
+    let named = METADATA
+        .iter()
+        .find(|address| canonical_host(address) == host);
     named.map(|address| Spent {
         authority: Authority::MetadataService,
         named: address,
@@ -934,6 +966,83 @@ mod tests {
         assert_eq!(at_host("169.254.169.255"), None);
         assert_eq!(at_host("2852039167"), None);
         assert_eq!(at_host("evil.example"), None);
+    }
+
+    /// A connection to an IPv4 address written inside an IPv6 one goes to the IPv4 address, which
+    /// is how FETCH-8 and SANDBOX-24 classify it. So `[::ffff:169.254.169.254]` and the NAT64
+    /// spelling `64:ff9b::a9fe:a9fe` are the metadata service, for every IPv4 address it answers
+    /// on.
+    #[test]
+    fn an_ipv4_address_inside_ipv6_is_the_metadata_service_it_carries() {
+        for (spelling, named) in [
+            ("[::ffff:169.254.169.254]", "169.254.169.254"),
+            ("::ffff:169.254.169.254", "169.254.169.254"),
+            ("::ffff:a9fe:a9fe", "169.254.169.254"),
+            ("[::FFFF:A9FE:A9FE]", "169.254.169.254"),
+            ("[::ffff:169.254.169.254].", "169.254.169.254"),
+            ("64:ff9b::169.254.169.254", "169.254.169.254"),
+            ("[64:ff9b::a9fe:a9fe]", "169.254.169.254"),
+            ("[::ffff:169.254.170.2]", "169.254.170.2"),
+            ("64:ff9b::a9fe:aa02", "169.254.170.2"),
+            ("[::ffff:100.100.100.200]", "100.100.100.200"),
+            ("64:ff9b::6464:64c8", "100.100.100.200"),
+            ("[fd00:ec2::254]", "fd00:ec2::254"),
+        ] {
+            assert_eq!(
+                at_host(spelling),
+                Some(Spent {
+                    authority: Authority::MetadataService,
+                    named,
+                }),
+                "{spelling}"
+            );
+        }
+    }
+
+    /// Only the two prefixes that carry an IPv4 address are read through. An IPv6 address that
+    /// happens to end in the metadata address's 32 bits is another host, the deprecated
+    /// IPv4-compatible `::a9fe:a9fe` among them, and so is a mapped address one past it.
+    #[test]
+    fn an_ipv6_address_carrying_another_address_is_not_the_metadata_service() {
+        for spelling in [
+            "[::ffff:169.254.169.255]",
+            "64:ff9b::a9fe:a9ff",
+            "[fe80::a9fe:a9fe]",
+            "2001:db8::a9fe:a9fe",
+            "64:ff9b:0:0:1::a9fe:a9fe",
+            "[::a9fe:a9fe]",
+        ] {
+            assert_eq!(at_host(spelling), None, "{spelling}");
+        }
+    }
+
+    /// One form for a host, so two spellings of one host compare equal and a name stays a name.
+    #[test]
+    fn a_host_is_put_in_one_form_whatever_its_spelling() {
+        let metadata = CanonicalHost::Address(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)));
+        for spelling in [
+            "169.254.169.254",
+            "169.254.169.254.",
+            "[::ffff:169.254.169.254]",
+            "::FFFF:a9fe:a9fe",
+            "64:ff9b::a9fe:a9fe",
+            "2852039166",
+        ] {
+            assert_eq!(canonical_host(spelling), metadata, "{spelling}");
+        }
+        assert_eq!(
+            canonical_host("[::1]"),
+            CanonicalHost::Address("::1".parse().expect("an address"))
+        );
+        assert_eq!(
+            canonical_host("Docs.Example.COM."),
+            CanonicalHost::Name("docs.example.com".to_string())
+        );
+        // One trailing dot is the root; a second one is part of what was written.
+        assert_eq!(
+            canonical_host("example.com.."),
+            CanonicalHost::Name("example.com.".to_string())
+        );
     }
 
     /// A sign is not part of a number to a resolver, so a spelling holding one is not an address.

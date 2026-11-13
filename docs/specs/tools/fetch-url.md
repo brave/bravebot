@@ -91,6 +91,11 @@ metadata warning where the host is this machine's metadata service. A URL longer
 scrolls under them ([PROMPT-4](../prompting.md#PROMPT-4)). `y` is not taken at a draw that cuts
 off the host, the warning or the keys, or that leaves the URL no row.
 
+The host is the metadata service in every spelling a connection reads as one of its addresses: in
+brackets, with a trailing dot, as a number such as `2852039166`, and as an IPv4 address inside an
+IPv6 one (`::ffff:a.b.c.d`, `64:ff9b::/96`), which [FETCH-8](#FETCH-8) classifies as the IPv4
+address.
+
 **Why the host and not the URL.** A rule is a standing statement about who may be talked to, which
 is a thing a person can hold in their head. A path is where a URL carries the particular thing being
 asked for, so a rule matching one would be answering a different question on every call.
@@ -108,6 +113,8 @@ asked for, so a rule matching one would be answering a different question on eve
 `verified-by: bravebot_tui::confirm::grants::a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_scroll_moves_from_where_the_url_was_drawn`
 `verified-by: bravebot_agent::turn::a_fetch_prompt_carries_the_host_the_url_reaches_as_its_own_field`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is`
+`verified-by: bravebot_core::ambient::an_ipv4_address_inside_ipv6_is_the_metadata_service_it_carries`
 
 <a id="FETCH-3"></a>
 ### FETCH-3: an approval is bound to the URL it was given for, and nothing is remembered
@@ -174,6 +181,7 @@ knows because it set it, and which no reply can influence.
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_a_fetch_but_not_a_redirect`
 `verified-by: bravebot_approval::lib::the_fetch_lines_say_where_a_redirect_was_approved_for`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is`
 `verified-by: bravebot_ui_bridge::wire::a_fetch_a_redirect_led_to_names_the_host_that_was_approved`
 
 <a id="FETCH-5"></a>
