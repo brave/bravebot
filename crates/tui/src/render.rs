@@ -314,22 +314,31 @@ fn placeholder() -> &'static str {
     t!(input_placeholder)
 }
 
-/// Replace control characters, so drawn text cannot move the cursor or recolour the screen.
+/// Draw text so it can neither act on the terminal nor hide or reorder part of a row.
 ///
 /// The interface's structure is drawn by this module: the margin down a quarantine block, the `!`
 /// before a command, the colour that says which is which. An escape sequence in the text would let
 /// the text draw those instead, and a forged margin is worse than no margin, since the whole point
 /// of drawing one is that content cannot.
 ///
-/// Everything the terminal would act on becomes a visible glyph, so what is on the screen stays a
-/// faithful record of the bytes without being able to act. A tab is replaced like the rest, since
-/// ratatui drops it without drawing anything. Callers that lay a tab out as width do so before
-/// this, and lines are already split, so no newline reaches it.
+/// Every control character becomes its picture, so what is on the screen stays a faithful record
+/// of the bytes without being able to act. A tab is replaced like the rest, since ratatui drops it
+/// without drawing anything. Callers that lay a tab out as width do so before this, and lines are
+/// already split, so no newline reaches it.
 ///
-/// This is `bravebot_agent::confirm::printable_with_tab_pictured`, the one implementation the
-/// approval text and the command line share, named `printable` here so the module's callers read
-/// as they did.
-pub(crate) use bravebot_agent::confirm::printable_with_tab_pictured as printable;
+/// Then each character [`bravebot_core::invisible::draws_as_nothing`] holds (a bidirectional
+/// control, a zero-width character, a variation selector, a tag character) is written out as
+/// `‹U+XXXX›` by [`bravebot_core::invisible::spelled`]. None of them is a control character, so
+/// without this a bidirectional control in a name would reorder the row and a zero-width or tag
+/// character would hide in it (LAYER-3). Both steps are
+/// [`bravebot_agent::confirm::printable_spelled_with_tab_pictured`], the tab variant of what the
+/// command line's `progress::printable` and the desktop bridge draw through. An emoji's joiner and
+/// variation selector are written out too.
+///
+/// A map from characters to characters: no branch is taken on the text.
+pub(crate) fn printable(text: &str) -> String {
+    bravebot_agent::confirm::printable_spelled_with_tab_pictured(text)
+}
 
 /// Lay styled text out behind a margin, one drawn row at a time.
 ///
@@ -5716,22 +5725,27 @@ mod tests {
     /// sequence and a halfwidth voiced mark each take more than a count of characters says. Rejects:
     /// a cut by characters, which came to more than the room, so a path in wide characters lost the
     /// end of its name to the row's edge and a hover line ran past it. The end of a path and the start
-    /// of an address are what is kept, at every room.
+    /// of an address are what is kept, at every room. Both cuts return the text as [`printable`]
+    /// draws it, so the kept ends are compared with that: an emoji's variation selector is written
+    /// out as `‹U+FE0F›` before the cut is made, and an emoji two cells wide with no selector is
+    /// what still reaches it whole.
     #[test]
     fn a_cut_is_made_by_columns_whatever_the_characters_are() {
         use crate::wrap::display_width;
         let names = [
             "/\u{65e5}\u{672c}\u{8a9e}/\u{30d5}\u{30a1}\u{30a4}\u{30eb}\u{540d}/shot.png",
             "/\u{2764}\u{fe0f}\u{2764}\u{fe0f}\u{2764}\u{fe0f}/\u{2764}\u{fe0f}\u{2764}\u{fe0f}.png",
+            "/\u{1f600}\u{1f600}\u{1f600}/\u{1f600}\u{1f600}.png",
             "/\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}/\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}.png",
             "/e\u{301}e\u{301}e\u{301}e\u{301}/e\u{301}e\u{301}e\u{301}e\u{301}.png",
         ];
         for name in names {
-            let end: String = crate::wrap::cluster_strs(name)
+            let drawn = printable(name);
+            let end: String = crate::wrap::cluster_strs(&drawn)
                 .last()
                 .map(|(cluster, _)| cluster.to_string())
                 .expect("a cluster");
-            let start: String = crate::wrap::cluster_strs(name)
+            let start: String = crate::wrap::cluster_strs(&drawn)
                 .first()
                 .map(|(cluster, _)| cluster.to_string())
                 .expect("a cluster");
@@ -5740,7 +5754,7 @@ mod tests {
                 assert!(display_width(&tail) <= room, "{name:?} in {room}: {tail:?}");
                 let head = head_of(name, room);
                 assert!(display_width(&head) <= room, "{name:?} in {room}: {head:?}");
-                if display_width(name) > room {
+                if display_width(&drawn) > room {
                     assert!(
                         tail.starts_with('\u{2026}') && tail.ends_with(&end),
                         "{tail:?}"
@@ -5750,7 +5764,10 @@ mod tests {
                         "{head:?}"
                     );
                 } else {
-                    assert_eq!((tail.as_str(), head.as_str()), (name, name));
+                    assert_eq!(
+                        (tail.as_str(), head.as_str()),
+                        (drawn.as_str(), drawn.as_str())
+                    );
                 }
             }
         }
@@ -5775,6 +5792,79 @@ mod tests {
                 assert!(display_width(&tail) <= room, "{text:?} in {room}: {tail:?}");
             }
         }
+    }
+
+    /// A bidirectional control, a zero-width character and a tag character draw as no columns raw
+    /// and as `‹U+XXXX›` once written out, eight columns or more each. Rejects: `head_of` or
+    /// `tail_of` measuring the text before it is spelled, which returns a row of them whole because
+    /// its raw width is zero and lets it run past the room, and a cut or `fitting` that leaves one
+    /// of them raw.
+    #[test]
+    fn a_cut_fits_the_room_once_characters_that_draw_as_nothing_are_written_out() {
+        use crate::wrap::display_width;
+        for text in [
+            "\u{202e}\u{200b}".repeat(12),
+            "a\u{2066}b\u{2069}".repeat(12),
+            "\u{e0041}\u{e0042}x".repeat(12),
+        ] {
+            for room in 2..=40 {
+                let head = head_of(&text, room);
+                let tail = tail_of(&text, room);
+                let fit = fitting(&printable(&text), room);
+                for (cut, drawn) in [("head", &head), ("tail", &tail)] {
+                    assert!(
+                        display_width(drawn) <= room,
+                        "{cut} of {text:?} in {room}: {drawn:?}"
+                    );
+                }
+                // `fitting` does not cut: it leaves every cluster no wider than the room, and
+                // `marked_rows` breaks the rest over rows.
+                assert!(
+                    crate::wrap::clusters(&fit).all(|(_, columns)| columns <= room),
+                    "fitting of {text:?} in {room}: {fit:?}"
+                );
+                for (cut, drawn) in [("head", &head), ("tail", &tail), ("fitting", &fit)] {
+                    assert!(
+                        !drawn
+                            .chars()
+                            .any(bravebot_core::invisible::draws_as_nothing),
+                        "{cut} of {text:?} in {room} holds a character that draws as nothing: {drawn:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every character `bravebot_core::invisible::draws_as_nothing` holds is written out by the
+    /// terminal client's `printable`, alone and beside a control character on either side, and
+    /// nothing it draws is a control character or one that draws as nothing. Walks every code point,
+    /// so a character added to the core list is drawn here without being named. Rejects: a
+    /// `printable` that pictures control characters only, and one with its own shorter list.
+    #[test]
+    fn printable_writes_out_every_character_that_draws_as_nothing() {
+        use bravebot_core::invisible::draws_as_nothing;
+        let mut checked = 0;
+        for point in 0..=0x10_FFFF_u32 {
+            let Some(c) = char::from_u32(point) else {
+                continue;
+            };
+            if !draws_as_nothing(c) {
+                continue;
+            }
+            checked += 1;
+            for text in [c.to_string(), format!("\u{1b}{c}\u{85}")] {
+                let drawn = printable(&text);
+                assert!(
+                    !drawn.chars().any(|d| draws_as_nothing(d) || d.is_control()),
+                    "{text:?} is drawn as {drawn:?}"
+                );
+                assert!(
+                    drawn.contains(&format!("U+{point:04X}")),
+                    "{text:?} is drawn as {drawn:?}, which does not name it"
+                );
+            }
+        }
+        assert!(checked > 100, "only {checked} characters were checked");
     }
 
     /// A user about to send a file should be able to see which file: `[Image #1]` alone does not

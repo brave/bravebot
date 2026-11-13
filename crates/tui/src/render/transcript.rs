@@ -2330,6 +2330,39 @@ mod tests {
         );
     }
 
+    /// LAYER-3, NAME-12: a bidirectional control in a quoted name is not a control character, so
+    /// picturing controls alone leaves it in the row, where it reorders the text after it. Each one,
+    /// the override and the four isolates, is written out as its code point. Rejects a `printable`
+    /// that pictures control characters only.
+    #[test]
+    fn a_refusal_note_quoting_a_name_with_a_bidirectional_control_is_drawn_with_it_written_out() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::refused(
+                "@a\u{202e}b\u{2066}c\u{2067}d\u{2068}e\u{2069}f.txt is not a file in this project.",
+            ),
+            120,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            rows,
+            [
+                "  @a\u{2039}U+202E\u{203a}b\u{2039}U+2066\u{203a}c\u{2039}U+2067\u{203a}d\
+              \u{2039}U+2068\u{203a}e\u{2039}U+2069\u{203a}f.txt is not a file in this project."
+            ]
+        );
+        for row in &rows {
+            assert!(
+                !row.chars().any(bravebot_core::invisible::draws_as_nothing),
+                "{row:?}"
+            );
+        }
+    }
+
     /// LAYER-3: a note that quotes an alias with an escape in it, as `/mcp disable` does, is drawn
     /// with the escape made visible, so no rendered row holds a control character. Rejects a note
     /// row that wraps the entry's text as it stands.
@@ -2361,6 +2394,41 @@ mod tests {
         );
     }
 
+    /// LAYER-3: a note quoting an alias with a right-to-left override in it, as `/mcp disable`
+    /// does, is drawn with the override written out, so it cannot reorder the rest of the row.
+    /// Rejects a `printable` that pictures control characters only, which leaves U+202E raw.
+    #[test]
+    fn a_mcp_note_quoting_an_alias_with_a_bidirectional_control_is_drawn_with_it_written_out() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        let settings = bravebot_config::Settings::default();
+        crate::mcp_command::run(
+            &mut session,
+            &settings,
+            std::path::Path::new("."),
+            "disable a\u{202e}bc",
+            bravebot_agent::servers::Asking::Person,
+            &mut crate::mcp_command::tests::Never,
+        );
+        let rows: Vec<String> = transcript_lines(&session, 90, 40)
+            .iter()
+            .map(text)
+            .filter(|row| !row.trim().is_empty())
+            .collect();
+        assert!(!rows.is_empty(), "no note was drawn");
+        for row in &rows {
+            assert!(
+                !row.chars().any(bravebot_core::invisible::draws_as_nothing),
+                "{row:?}"
+            );
+        }
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("a\u{2039}U+202E\u{203a}bc")),
+            "{rows:?}"
+        );
+    }
+
     /// NAME-13: a failure line can quote a name the person typed or pasted, so an escape in it is
     /// drawn as its picture and the line holds no control character. The fault this rejects is
     /// wrapping the recorded text as it is, which leaves the escape in the row.
@@ -2377,6 +2445,28 @@ mod tests {
         .map(text)
         .collect();
         assert_eq!(rows, ["  'a\u{241b}[2Jb.txt' is not text\u{2407}"]);
+    }
+
+    /// LAYER-3, NAME-13: a zero-width space and a tag character in a quoted name draw as nothing,
+    /// so a name holding them reads as another. Each is written out, the tag with the letter a
+    /// model reads it as. Rejects a `printable` that pictures control characters only.
+    #[test]
+    fn a_failure_line_quoting_a_name_with_a_zero_width_or_tag_character_is_drawn_with_it_written_out()
+     {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::failure("'a\u{200b}b\u{e0041}.txt' is not text"),
+            90,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            rows,
+            ["  'a\u{2039}U+200B\u{203a}b\u{2039}U+E0041 A\u{203a}.txt' is not text"]
+        );
     }
 
     /// Who an entry is from decides how it reads: the person's words behind the marker they were
@@ -2566,6 +2656,31 @@ mod tests {
             "the name is not drawn as pictures: {text:?}"
         );
         assert!(!text.chars().any(char::is_control), "{text:?}");
+    }
+
+    /// TRACE-11, LAYER-3: a checkout's name in the trail can hold a bidirectional control, a
+    /// zero-width or a tag character, none of which is a control character. Each is written out,
+    /// so the trail line cannot be reordered or hide part of a name. Rejects a `printable` that
+    /// pictures control characters only.
+    #[test]
+    fn the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters() {
+        let drawn = trail_line(&TrailLine {
+            text: "slot ref:1 holds report\u{202e}fdp.exe and a\u{200b}b\u{e0041}.txt, unread"
+                .to_string(),
+            blocked: false,
+        });
+        let text: String = drawn.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains(
+                "holds report\u{2039}U+202E\u{203a}fdp.exe and \
+                 a\u{2039}U+200B\u{203a}b\u{2039}U+E0041 A\u{203a}.txt, unread"
+            ),
+            "the name is not written out: {text:?}"
+        );
+        assert!(
+            !text.chars().any(bravebot_core::invisible::draws_as_nothing),
+            "{text:?}"
+        );
     }
 
     /// The rows of a reply as text, each with the ink of its first span after the lead.

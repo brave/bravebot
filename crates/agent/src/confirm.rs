@@ -1253,6 +1253,25 @@ pub fn printable_with_tab_pictured(text: &str) -> String {
     pictured(text, false)
 }
 
+/// [`printable`], then each character [`bravebot_core::invisible::draws_as_nothing`] holds (a
+/// bidirectional control, a zero-width character, a variation selector, a tag character) written
+/// out as `‹U+XXXX›` by [`bravebot_core::invisible::spelled`] (LAYER-3).
+///
+/// None of those is a control character, so [`printable`] leaves them, and a bidirectional control
+/// in a name would reorder the text around it. A tab is kept. For the command line and the desktop
+/// bridge. An emoji's joiner and variation selector are written out too.
+///
+/// A map from characters to characters: no branch is taken on the text.
+pub fn printable_spelled(text: &str) -> String {
+    bravebot_core::invisible::spelled(printable(text)).text
+}
+
+/// [`printable_spelled`] with a tab pictured (`␉`), as [`printable_with_tab_pictured`] does. For
+/// the terminal interface.
+pub fn printable_spelled_with_tab_pictured(text: &str) -> String {
+    bravebot_core::invisible::spelled(printable_with_tab_pictured(text)).text
+}
+
 fn pictured(text: &str, keep_tab: bool) -> String {
     if !text.chars().any(char::is_control) {
         return text.to_string();

@@ -571,13 +571,14 @@ impl BridgeSink {
     }
 }
 
-/// Each top-level string field of a recorded event, drawn by `bravebot_agent::confirm::printable`,
-/// keyed by the field's name (TRACE-11).
+/// Each top-level string field of a recorded event, drawn by
+/// `bravebot_agent::confirm::printable_spelled`, keyed by the field's name (TRACE-11).
 ///
 /// Sent beside the event, which stays as the audit file holds it. The window draws these words
-/// instead of the field, so the terminal and the window picture a control character with one
-/// definition ([LAYER-3]), and a field added to an event is covered without being named. Every
-/// string field is drawn and none is chosen by its text.
+/// instead of the field, so the terminal and the window picture a control character and write out
+/// a character that draws as nothing with one definition ([LAYER-3]), and a field added to an
+/// event is covered without being named. Every string field is drawn and none is chosen by its
+/// text.
 ///
 /// [LAYER-3]: ../../../docs/specs/layering.md
 fn pictured_fields(event: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
@@ -589,7 +590,7 @@ fn pictured_fields(event: &serde_json::Value) -> serde_json::Map<String, serde_j
             let text = value.as_str()?;
             Some((
                 field.clone(),
-                serde_json::Value::String(bravebot_agent::confirm::printable(text)),
+                serde_json::Value::String(bravebot_agent::confirm::printable_spelled(text)),
             ))
         })
         .collect()
