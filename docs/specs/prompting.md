@@ -41,6 +41,7 @@ kept_in:
   - Confirmer::confirm_exposing_read_noting_the_mode: files sent despite a credential
   - Confirmer::confirm_tool_list: MCP tool lists approved
   - Confirmer::confirm_mcp_call: one effect; standing answers to an MCP tool
+  - Confirmer::confirm_apply: one effect
   - Confirmer::confirm_move: MCP server moves
   - Confirmer::confirm_path: paths reached
   - Confirmer::confirm_host: hosts answered

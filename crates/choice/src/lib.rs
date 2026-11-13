@@ -1,9 +1,14 @@
-//! Which whole number a processor's answer chose.
+//! What a processor's answer chose: one whole number, or the rows of an `apply` step.
 //!
 //! A processor asked to choose one entry of a numbered list answers in text. This crate decides
 //! from that text which number it chose, from 1 to a limit the planner wrote, or 0 where it chose
 //! none. It is not the driver: the text reaches it only through the policy layer's gate for this
 //! one read, [`Policy::read_a_number`], and what comes back out of the answer is one byte.
+//!
+//! A processor asked for the rows of an `apply` step is shown a list this crate numbered, through
+//! [`Policy::number_a_list`], and its answer comes back here through [`Policy::resolve_proposal`],
+//! which resolves the rows against the plan's shape. What comes back out is the resolved list,
+//! labelled, which the driver carries to the person without reading.
 //!
 //! The crate holds no `declassify` and no `Labelled::new`. A second comparison of an answer's text
 //! anywhere in it is found by reading the diff, and a second reader of an answer anywhere is a
@@ -11,10 +16,13 @@
 #![forbid(unsafe_code)]
 
 mod number;
+mod rows;
 
 pub use number::number_in;
 
-use bravebot_core::{Denial, Labelled, Policy, ProcessorSpec, Sink};
+use bravebot_core::apply::{Entries, Resolved, Shape};
+use bravebot_core::{Denial, Labelled, Policy, ProcessorSpec, Sink, SlotId, SlotStore};
+use std::collections::BTreeSet;
 
 /// Read a processor's answer for the number it chose, labelled as the answer was.
 ///
@@ -28,9 +36,36 @@ pub fn read<S: Sink>(
     policy.read_a_number(spec, answer, number_in)
 }
 
+/// Number the entries of the list in `list` for a processor, into `into`, and give back the
+/// entries the rows will be resolved against, labelled as the list was.
+pub fn number_a_list<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    list: &SlotId,
+    at: &str,
+    fields: &BTreeSet<String>,
+    into: &SlotId,
+    slots: &mut SlotStore,
+) -> Result<Labelled<Entries>, Denial> {
+    policy.number_a_list(list, at, fields, into, slots, rows::number)
+}
+
+/// Read a processor's answer for the rows it proposed, resolved against `entries` and `shape`.
+///
+/// The one call of [`Policy::resolve_proposal`] outside the policy layer. A spec that was not built
+/// to propose rows is refused.
+pub fn resolve_proposal<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    spec: &ProcessorSpec,
+    answer: Labelled<String>,
+    lists: &[Labelled<Entries>],
+    shape: &Shape,
+) -> Result<Labelled<Resolved>, Denial> {
+    policy.resolve_proposal(spec, answer, lists, shape, rows::resolve)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::read;
+    use super::{read, resolve_proposal};
     use bravebot_core::{
         CapabilitySet, Label, Policy, RecordingSink, ReleasePlan, Routing, SlotId, SlotStore,
     };
@@ -123,5 +158,45 @@ mod tests {
         let reply = slots.take_for_reading(&reply).expect("written");
         read(&mut policy, &spec, reply)
             .expect_err("a document processor's answer was read for a number");
+    }
+
+    /// MANIFEST-16. A spec built for a document is refused by the gate that reads rows, so this
+    /// crate cannot resolve calls out of a document processor's answer.
+    #[test]
+    fn a_processor_that_was_not_asked_for_rows_has_none_read_from_its_answer() {
+        let mut slots = SlotStore::new();
+        let page = slot_of(&mut slots, "ref:page", Label::trusted_public(), "a page");
+        let instruction = slot_of(&mut slots, "ref:said", Label::trusted_public(), "rewrite");
+        let instruction = slots.take_for_reading(&instruction).expect("written");
+
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "rewrite");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("a policy");
+        let spec = policy
+            .before_processor("p", &[page], &instruction, None, &slots)
+            .expect("a processor that writes a document");
+
+        let reply = slot_of(
+            &mut slots,
+            "ref:reply",
+            Label::trusted_public(),
+            "row 1: tool 1",
+        );
+        let reply = slots.take_for_reading(&reply).expect("written");
+        let shape = bravebot_core::apply::Shape {
+            lists: Vec::new(),
+            tools: Vec::new(),
+            max_rows: 50,
+            max_new: 12,
+        };
+        resolve_proposal(&mut policy, &spec, reply, &[], &shape)
+            .expect_err("a document processor's answer was read for rows");
     }
 }

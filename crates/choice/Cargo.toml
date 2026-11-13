@@ -1,6 +1,6 @@
 [package]
 name = "bravebot-choice"
-description = "Which whole number a processor's answer chose, read outside the driver"
+description = "What a processor's answer chose, a number or the rows of an apply step, read outside the driver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 bravebot-core = { path = "../core" }
+serde_json = { workspace = true }

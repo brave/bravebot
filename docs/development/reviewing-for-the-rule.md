@@ -69,8 +69,8 @@ the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_g
 `bravebot-agent`, the seventh is the text-or-binary sniff and decoding of a read of an unvouched
 file, in `Workspace::survey`, `Workspace::read` and `Workspace::page`, the eighth is the
 choice of which parts of a tool result are taken, in `ToolResult::output` and `ContentBlock::picture`
-in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number,
-in `bravebot_choice::number_in` in `crates/choice/src/number.rs`, and the tenth is the trigger
+in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number or
+for an `apply` step's rows, in `crates/choice/src/number.rs` and `rows.rs`, and the tenth is the trigger
 listener's reading of a request's framing, path, signature and body length, in
 `crates/cli/src/trigger.rs`. All ten are named under
 Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
@@ -99,10 +99,13 @@ The crate also sorts how a call ended from what the server wrote. `isError`, an 
 reply it cannot use and a line past 16 MiB are replies, and a connection closed with no reply and
 a bound that passed are not. Whether a plan run goes on is decided by one thing in that sorting,
 which is whether a reply arrived, so a branch in a plan run on which kind of reply arrived is a
-violation of shape 1.
+violation of shape 1, except in an `apply` step, where a call the server reported failed (`isError`,
+an error reply or a reply the client cannot use, never the reply's text) skips the calls of that step
+that depend on it ([MANIFEST-16](../specs/manifest.md#MANIFEST-16)).
 The ninth is the same shape in `bravebot-choice`, which is not the driver: it holds no
 `declassify` and no `Labelled::new`, and the text reaches it only through `Policy::read_a_number`,
-whose uses are pinned and which gives back one byte labelled as the answer was. A second comparison
+`Policy::number_a_list` and `Policy::resolve_proposal`, whose uses are pinned; the first gives back
+one byte labelled as the answer was. A second comparison
 of an answer's text anywhere else in that crate is found by reading the diff. What the driver does
 with the byte is carry it: as a `Labelled<u8>` in the slot store, as an opaque `Carried` into
 `bravebot_mcp::protocol::with_choice`, and as digits for the person's screen from
@@ -111,6 +114,16 @@ the planner for any value of it, or a reader whose failure depends on what the a
 violation of shape 1. A second function that releases an answer's text to another crate's function
 is one of shape 3 and moves a pinned count. A `Carried` turned into a number in `bravebot-core` or
 `bravebot-agent` is one of shape 3 as well, and moves the count of `Carried::into_wire`.
+The crate reads an `apply` step's lists and rows the same way, through two more pinned gates:
+`Policy::number_a_list` hands it a read's reply to number the entries that hold the fields the plan
+takes, and `Policy::resolve_proposal` hands it the processor's answer, which it resolves against the
+plan's shape and those entries, typing each value as the server's list declares and dropping and
+counting each row that does not fit. `Policy::keep_applied` works out which calls the person's
+ticks keep and which a failed call takes with it, and `Policy::proposes_nothing` whether there is
+any call. The driver carries the resolved list to the server and the call numbers it is handed, and
+reads it only through `Policy::proposal_for_display` to draw it for the person (the question, the
+outcome list and the count of dropped rows on the step's line), which no effect and no model reads.
+A branch in the driver on a resolved value for anything else is a violation of shape 1.
 The tenth is the trigger listener in `crates/cli/src/trigger.rs`, which is not the driver and holds
 no `declassify`. It decides from the request line and headers only: the framing refusals of
 `parse_head` (method, version, `Transfer-Encoding`, `Content-Length`, a path that is not a name),

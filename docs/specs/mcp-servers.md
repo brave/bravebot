@@ -2557,3 +2557,20 @@ the server wrote. A change of one of them to `Stream::Inherited` is found by a r
 `verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
+
+<a id="SERVERS-26"></a>
+### SERVERS-26: a declaration may name what a row of an `apply` step may fill
+
+`--apply tool:argument=kind` names an argument a row of a manifest's `apply` step may fill and the
+one or more kinds it may take: `entry`, `entries`, `new` or `row`
+([manifest.md](manifest.md#MANIFEST-16)). Only a local stdio server that does not ask every call may
+hold one. It is part of what the person approves for the server, and `mcp get`, `mcp list` and the
+approval question show it.
+
+**Why.** Every argument a row fills is one a processor chose, so which arguments it may fill is the
+person's to say about each tool. A server asking every call has said each of its calls is put on its
+own, which a list of calls would undo.
+
+`verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
+`verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
+`verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`

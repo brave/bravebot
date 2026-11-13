@@ -106,7 +106,19 @@ const SERVER_SHAPE: &str = "\n\
 It can also call the tools of servers a person has vouched for, listed below as alias:tool. A step \
 may call one tool with arguments written out in the plan. What a call returns is shown to the \
 person and is not available to later steps, so nothing a call returns can be an argument of \
-another. Every call is put to the person as it comes up. The tools:";
+another. Every call is put to the person as it comes up. The plan is fixed before anything is \
+read, so a wrong name cannot be recovered from: never guess the name of a folder, file or other \
+thing the task does not give. Where it gives none, use a tool that needs no name, or leave an \
+optional name out so the tool uses its own default. The tools:";
+
+/// Added to [`SERVER_SHAPE`] where a listed tool lets a row of an apply step fill an argument.
+const SERVER_APPLY_SHAPE: &str = "\n\
+A tool listed with apply can be called once for each item of a list that was read: an isolated \
+processor reads the list and proposes the calls, such as which folder each bookmark goes in and \
+what the new folders are called, and the person approves the whole list before any call is made. \
+So a task that reorganises many items is one read, then one apply. The read must return the items \
+themselves, each with what the calls need, such as every bookmark with its url, and not only the \
+names of the places that hold them; where unsure which read does, prefer one that needs no name.";
 
 /// Added to [`SERVER_SHAPE`] where a listed tool is marked read-only.
 const SERVER_READ_SHAPE: &str = "\n\
@@ -322,6 +334,21 @@ const REGISTRY: &[Advertised] = &[
                arguments (a JSON object; nothing a step read can be named in it)",
     },
     Advertised {
+        capability: "APPLY",
+        tool: manifest::APPLY,
+        tier: Tier::Act,
+        gate: None,
+        summary: "For each item of a list a SERVER_READ step read, call tools of one server listed \
+                  with apply: an isolated processor proposes the calls, and the person approves the \
+                  whole list before any is made",
+        args: "server*, tools* (comma-separated tool names of that server), lists* (the slots \
+               SERVER_READ steps filled, the first being the main one), entries (where each list \
+               is in its reply, as a JSON pointer such as /items, or an object of pointers by \
+               list, where a reply is not the list itself), instruction* (what to do with the \
+               items, for the processor), arguments* (a JSON object: for each tool, each \
+               argument with its kind), max_rows, max_new",
+    },
+    Advertised {
         capability: "ANSWER",
         tool: manifest::ANSWER,
         tier: Tier::Act,
@@ -345,6 +372,7 @@ fn offered(
     match entry.tool {
         manifest::MCP_CALL => servers.any(),
         manifest::MCP_READ => servers.any_read_only(),
+        manifest::APPLY => servers.any_applicable(),
         tool => connectors.any() || !manifest::is_connector(tool),
     }
 }
@@ -446,10 +474,12 @@ fn parse(source: &str) -> Result<Draft, PlanError> {
                 if value.is_null() {
                     continue;
                 }
-                // A call's arguments are a JSON object, which a planner writes as one. The step
-                // carries them as the object's text, so the grammar below stays three shapes.
-                let object_as_text =
-                    (key == "arguments" && value.is_object()).then(|| Arg::Text(value.to_string()));
+                // A call's arguments, and an apply step's entries, are a JSON object a planner
+                // writes as one. The step carries each as the object's text, so the grammar below
+                // stays three shapes.
+                let object_as_text = (matches!(key.as_str(), "arguments" | "entries")
+                    && value.is_object())
+                .then(|| Arg::Text(value.to_string()));
                 let arg = object_as_text.or_else(|| read_arg(value)).ok_or_else(|| {
                     PlanError::Malformed(format!(
                         "step {index}: '{key}' is not text, a whole number, or a list of names"
@@ -1041,10 +1071,15 @@ fn plan<S: Sink, R: Reporter>(
             },
             if servers.any() {
                 format!(
-                    "{SERVER_SHAPE}\n{}{}",
+                    "{SERVER_SHAPE}\n{}{}{}",
                     servers.listing(),
                     if servers.any_read_only() {
                         SERVER_READ_SHAPE
+                    } else {
+                        ""
+                    },
+                    if servers.any_applicable() {
+                        SERVER_APPLY_SHAPE
                     } else {
                         ""
                     }
@@ -1536,17 +1571,19 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let reply = match answer {
         Some(answered) => answered,
         None => {
-            shown = match plan
-                .steps()
-                .iter()
-                .any(|step| step.tool() == manifest::MCP_CALL)
-            {
-                true => format!(
+            let called = |tool: &str| plan.steps().iter().any(|step| step.tool() == tool);
+            shown = match (called(manifest::APPLY), called(manifest::MCP_CALL)) {
+                (true, _) => format!(
+                    "Ran the {} step(s) in the plan. What became of each call you approved is \
+                     listed under its step.",
+                    plan.len()
+                ),
+                (false, true) => format!(
                     "Ran the {} step(s) in the plan. It had no ANSWER step; what each server call \
                      returned is shown under it.",
                     plan.len()
                 ),
-                false => format!(
+                (false, false) => format!(
                     "Ran the {} step(s) in the plan. It had no ANSWER step, so there is nothing \
                      to show.",
                     plan.len()
@@ -1905,6 +1942,23 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 note: servers.call(
                     policy, egress, confirmer, reporter, &alias, &word, step, None,
                 )?,
+                ..Done::default()
+            })
+        }
+        // An apply's calls are proposed by a processor and approved by the person as one list.
+        manifest::APPLY => {
+            let alias = locked(policy, index, "server")?;
+            locked(policy, index, "tools")?;
+            let began = std::time::Instant::now();
+            let applied = servers.apply(
+                policy, chat, egress, confirmer, reporter, slots, index, &alias, step,
+            );
+            accounting.elapsed.inference += began.elapsed();
+            let (note, usage) = applied?;
+            accounting.spent.add_usage(usage);
+            accounting.publish(reporter);
+            Ok(Done {
+                note,
                 ..Done::default()
             })
         }
@@ -2826,7 +2880,9 @@ mod tests {
             &Servers::default(),
         );
         for entry in REGISTRY.iter().filter(|entry| {
-            !manifest::is_connector(entry.tool) && !manifest::is_server_call(entry.tool)
+            !manifest::is_connector(entry.tool)
+                && !manifest::is_server_call(entry.tool)
+                && entry.tool != manifest::APPLY
         }) {
             assert!(
                 shown.contains(entry.capability),

@@ -333,9 +333,10 @@ impl BackendError {
             Self::Bedrock(error) => match error {
                 BedrockError::Credentials(_) => Category::Unauthorized,
                 BedrockError::Encode(_) | BedrockError::Cancelled => Category::Internal,
-                BedrockError::Decode { .. } | BedrockError::Frame(_) | BedrockError::NoContent => {
-                    Category::Undecodable
-                }
+                BedrockError::Decode { .. }
+                | BedrockError::Frame(_)
+                | BedrockError::NoContent
+                | BedrockError::ThoughtOnly => Category::Undecodable,
                 BedrockError::Incomplete | BedrockError::Stalled => Category::Incomplete,
                 BedrockError::Reported { kind } => match kind.as_str() {
                     "validationException" => Category::Refused,
@@ -442,7 +443,8 @@ impl BackendError {
     /// to the conversation is what gets an answer.
     pub fn is_empty_reply(&self) -> bool {
         match self {
-            Self::Aichat(ChatError::NoContent) | Self::Bedrock(BedrockError::NoContent) => true,
+            Self::Aichat(ChatError::NoContent)
+            | Self::Bedrock(BedrockError::NoContent | BedrockError::ThoughtOnly) => true,
             Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.is_empty_reply(),
             _ => false,
         }
@@ -5556,6 +5558,7 @@ mod tests {
     fn only_a_finished_reply_with_nothing_in_it_is_an_empty_reply() {
         assert!(BackendError::from(ChatError::NoContent).is_empty_reply());
         assert!(BackendError::from(BedrockError::NoContent).is_empty_reply());
+        assert!(BackendError::from(BedrockError::ThoughtOnly).is_empty_reply());
         assert!(
             BackendError::from(BedrockError::NoContent)
                 .counted(1, None, None)
