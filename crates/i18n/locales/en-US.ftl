@@ -2094,6 +2094,9 @@ trust-directory-not-remembered =
 # together, which is when y is not taken. What y does comes first, so a narrow terminal that cuts the
 # line off keeps it.
 trust-directory-remember-unseen = ↑↓ y trusts nothing yet: what it keeps is not shown yet
+# Said in the row above the keys after keys that arrived together were refused as answers, such as
+# keys typed while bravebot started (PROMPT-7). They are put in the box once the question is answered.
+trust-question-keys-together = keys that came together are not an answer: press one alone
 # The same where those lines are taller than the box, so no scroll shows them together.
 trust-directory-remember-too-small = y trusts nothing: what it keeps is taller than this box
 quit = quit
@@ -3823,6 +3826,10 @@ session-permission-allow-granted-before =
 session-permissions-skipped =
     --dangerously-skip-permissions: nothing will be asked before a write, a command, or reading a
     file nobody vouched for. shift-tab to change
+# Said once, at the start of a session, when something typed while the terminal was being asked
+# about itself was read with the answer and could not be kept. Keys typed then are kept; this is
+# for the rest, such as a sequence the terminal cut in half.
+session-startup-input-lost = Some of what was typed while bravebot started was not kept. Type it again.
 session-directory-not-added = could not add { $directory }: { $problem }
 # The reason given for a name relative to a working directory whose own name is not text. Nothing
 # written as text names that directory, so no path is made from it.

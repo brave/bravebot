@@ -147,6 +147,7 @@ fr:session-preview-denied
 fr:session-preview-lines
 fr:session-preview-too-large
 fr:session-preview-unavailable
+fr:session-startup-input-lost
 fr:sessions-screen-agent-none
 fr:sessions-screen-archive-body
 fr:sessions-screen-archive-title
@@ -339,6 +340,7 @@ fr:trigger-serve-failed
 fr:trigger-stopped-at-question
 fr:trigger-store-failed
 fr:trigger-usage
+fr:trust-question-keys-together
 fr:ui-context-out-of-request
 fr:ui-recall-fix-key
 fr:ui-recall-heading

@@ -254,6 +254,103 @@ pub fn read() -> std::io::Result<Event> {
     }
 }
 
+/// Queue the events these bytes encode behind the events the reader already holds, so the next
+/// [`read`] hands them out in the order they were typed.
+///
+/// For bytes another reader took off the tty before the event reader saw them, such as a query
+/// that read the keys typed while it waited for its reply. Queued behind what the reader holds
+/// because what it holds was read earlier, by a query of crossterm's own that keeps what it skips,
+/// and in front of what is still on the tty, which was typed later. The bytes are parsed as the tty
+/// reader parses what it reads. Returns how many bytes were not part of any event and were dropped.
+#[cfg(unix)]
+pub fn push_input(bytes: &[u8]) -> usize {
+    use crate::event::sys::unix::parse::parse_event;
+
+    let mut reader = lock_internal_event_reader();
+    let mut sequence = Vec::new();
+    let mut dropped = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        sequence.push(*byte);
+        match parse_event(&sequence, index + 1 < bytes.len()) {
+            Ok(Some(event)) => {
+                reader.push(event);
+                sequence.clear();
+            }
+            Ok(None) => {}
+            Err(_) => {
+                dropped += sequence.len();
+                sequence.clear();
+            }
+        }
+    }
+    dropped + sequence.len()
+}
+
+/// Queue the events these console input records encode behind the events the reader already
+/// holds, so the next [`read`] hands them out in the order they were typed.
+///
+/// The Windows counterpart of the Unix `push_input`, for records another reader took off the
+/// console before the event reader saw them. Each record is the 20 bytes an `INPUT_RECORD` occupies
+/// in memory, and is turned into an event as the console reader turns the records it reads: a
+/// mouse record is read against the buttons the console reader last saw held, and the buttons it
+/// holds become what the console reader reads its next mouse record against. A record that is no
+/// event, such as the press of Shift alone, is passed over as that reader passes it over. Returns
+/// how many bytes were dropped: those of a record of a type the console does not report, and
+/// those after the last whole record.
+#[cfg(windows)]
+pub fn push_input(bytes: &[u8]) -> usize {
+    use crate::event::sys::windows::parse::{handle_key_event, handle_mouse_event, MouseButtonsPressed};
+    use crossterm_winapi::InputRecord;
+    use winapi::um::wincon::{
+        FOCUS_EVENT, INPUT_RECORD, KEY_EVENT, MENU_EVENT, MOUSE_EVENT, WINDOW_BUFFER_SIZE_EVENT,
+    };
+
+    const RECORD: usize = std::mem::size_of::<INPUT_RECORD>();
+    let mut reader = lock_internal_event_reader();
+    let mut surrogate_buffer = None;
+    let mut buttons = reader.mouse_buttons_pressed();
+    let mut dropped = 0;
+    let mut records = bytes.chunks_exact(RECORD);
+    for chunk in &mut records {
+        // SAFETY: `chunks_exact` makes `chunk` exactly `size_of::<INPUT_RECORD>()` bytes, all
+        // initialised, and `read_unaligned` needs no alignment. `INPUT_RECORD` is a struct of
+        // integers and unions of integers, so any 20 bytes are a valid value of it.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let record = unsafe { std::ptr::read_unaligned(chunk.as_ptr().cast::<INPUT_RECORD>()) };
+        // Only types `InputRecord::from` reads without asking the console anything, since it
+        // panics on any other. A menu event and a resize are passed over as typing nothing: the
+        // console reader passes the first over, and the first frame is drawn at the size the
+        // terminal has when it is drawn.
+        let event = match record.EventType {
+            KEY_EVENT | MOUSE_EVENT | FOCUS_EVENT => match InputRecord::from(record) {
+                InputRecord::KeyEvent(key) => handle_key_event(key, &mut surrogate_buffer),
+                InputRecord::MouseEvent(mouse) => {
+                    let event = handle_mouse_event(mouse, &buttons);
+                    buttons = MouseButtonsPressed {
+                        left: mouse.button_state.left_button(),
+                        right: mouse.button_state.right_button(),
+                        middle: mouse.button_state.middle_button(),
+                    };
+                    event
+                }
+                InputRecord::FocusEvent(focus) if focus.set_focus => Some(Event::FocusGained),
+                InputRecord::FocusEvent(_) => Some(Event::FocusLost),
+                _ => None,
+            },
+            MENU_EVENT | WINDOW_BUFFER_SIZE_EVENT => None,
+            _ => {
+                dropped += RECORD;
+                None
+            }
+        };
+        if let Some(event) = event {
+            reader.push(InternalEvent::Event(event));
+        }
+    }
+    reader.set_mouse_buttons_pressed(buttons);
+    dropped + records.remainder().len()
+}
+
 /// Polls to check if there are any `InternalEvent`s that can be read within the given duration.
 pub(crate) fn poll_internal<F>(timeout: Option<Duration>, filter: &F) -> std::io::Result<bool>
 where

@@ -10,6 +10,8 @@ governs:
   - crates/tui/src/app/keys.rs
   - crates/tui/src/hangup.rs
   - crates/tui/src/input.rs
+  - crates/tui/src/preview.rs
+  - crates/tui/src/theme.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/queue.rs
@@ -1147,12 +1149,13 @@ and readline from disagreeing about what was last taken.
   connection that has died. It costs a thread and a socket for that long, and it is the price of
   answering the person at once: the alternative is waiting for a read that cannot be interrupted.
   Nothing that thread does is visible, since it holds no policy, no workspace and no tool.
-- **Asking the terminal about itself at startup can eat what was typed into that moment.** The
-  question about the background is asked once, before the first frame, and the answer is read off
-  the tty directly. Anything typed or pasted in the window before the answer arrives is read by
-  that same call and discarded, and a terminal that answers with nothing keeps the window open for
-  its full 80 ms. It is bounded, it is once per session, and it is before there is a box to type
-  into, which is why it is a cost and not a clause.
+- **Asking the terminal about itself at startup delays the first frame.** What is typed meanwhile
+  is kept ([INPUT-52](#INPUT-52)), but it is not drawn until the questions are answered or given up
+  on: up to 80 ms for the background and 500 ms for the keys on a terminal that answers nothing,
+  once per session. On Windows the key question reads nothing and the background is not asked, so
+  the wait there is the graphics question's, which is also bounded at 500 ms. A terminal that
+  answered the key question after its 500 ms is sent no disambiguated keys for the session
+  (INPUT-33).
 - **Ctrl-S is the byte a terminal traditionally freezes its output with.** It reaches this process
   because raw mode turns that flow control off for as long as the session holds the terminal, which
   is what makes the chord bindable at all (INPUT-17). The cost is a person's muscle memory: somewhere
@@ -3295,3 +3298,37 @@ the machine slows with it. Sessions left behind this way add up, one core each.
 `verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
 `verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
 `verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`
+
+<a id="INPUT-52"></a>
+### INPUT-52: keys typed while the terminal is asked about itself at startup are kept, in order
+
+Before its first frame the interface that draws asks the terminal about its background, its keys
+and its graphics, and reads the answers off the tty. A byte read there that is not part of an
+answer is a key typed meanwhile. It is handed to the event reader ahead of anything still on the
+tty, so it reaches the session in the order it was typed. On Windows only the graphics question
+reads the console, and it reads input records instead of bytes; a record that is not part of an
+answer is handed to the event reader the same way. A byte that is part of no event, such
+as a sequence an answer cut short, is counted, and where any was the session says so in a note
+before the first prompt. Keys handed back in one read arrived together
+([INPUT-34](#INPUT-34)), so a `y` among them does not answer the question a session opens with;
+the row above that question's keys says they were refused, and they are carried to the box. A
+terminal that answered no question about its keys within 500 ms is not asked about its graphics,
+and the graphics question waits at most 500 ms for an answer.
+
+**Why.** Every key typed before the first `input::poll` was read by these questions and dropped
+(#3846). On a terminal that answers nothing, such as a pty with nobody behind it, a driver or a
+slow ssh link, that was 8.9 seconds, with nothing on the screen saying so.
+
+`verified-by: bravebot_tui::input::keys_a_startup_query_read_are_handed_to_the_event_reader_in_order`
+`verified-by: bravebot_tui::input::records_a_startup_query_read_are_handed_to_the_event_reader_in_order`
+`verified-by: bravebot_tui::app::tests::startup_input::a_session_that_lost_keys_typed_at_startup_says_so_on_the_screen`
+`verified-by: bravebot_tui::theme::keys_read_around_the_background_reply_are_kept_in_order`
+`verified-by: bravebot_tui::theme::keys_read_while_no_background_reply_comes_are_kept`
+`verified-by: bravebot_tui::preview::keys_read_around_the_picker_replies_are_kept_in_order`
+`verified-by: bravebot_tui::preview::keys_read_when_no_picker_reply_comes_are_all_kept`
+`verified-by: bravebot_tui::preview::console_records_read_around_the_picker_replies_are_kept_in_order`
+`verified-by: bravebot_tui::preview::console_records_read_when_no_picker_reply_comes_are_all_kept`
+`verified-by: bravebot_tui::preview::a_terminal_that_answered_nothing_is_not_asked_about_graphics`
+`verified-by: bravebot_tui::preview::the_graphics_query_waits_no_longer_than_the_keyboard_query`
+`verified-by: bravebot_tui::trust_prompt::the_loop_says_when_it_refused_keys_that_arrived_together`
+`verified-by: bravebot_cli::startup_queries::an_unanswered_keyboard_query_is_not_waited_on_for_two_seconds`

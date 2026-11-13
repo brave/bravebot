@@ -36,7 +36,7 @@
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent, KeyEventKind};
 use std::collections::VecDeque;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -77,6 +77,39 @@ fn alone() -> &'static AtomicBool {
 fn in_front() -> &'static AtomicBool {
     static IN_FRONT: AtomicBool = AtomicBool::new(true);
     &IN_FRONT
+}
+
+/// Bytes a start-up query read off the tty that were not part of what it was waiting for and could
+/// not be handed back as an event.
+fn lost_at_startup() -> &'static AtomicUsize {
+    static LOST: AtomicUsize = AtomicUsize::new(0);
+    &LOST
+}
+
+/// Hand back bytes a start-up query read off the tty that were not its reply.
+///
+/// They are keys typed while the query waited, and they go to the same queue the terminal's events
+/// do, in the order they were typed and ahead of anything still on the tty, so [`read`] delivers
+/// them as it would have had nothing else read the tty. They are read with whatever else is waiting
+/// and tagged as any such read is. A byte that is not part of any event is counted, so the session
+/// can say something typed at start-up was not kept ([`take_lost_at_startup`]). On Unix the bytes
+/// are what the tty gave. On Windows they are the console's input records, 20 bytes each, as the
+/// picker's query keeps them, and a record of a type the console does not report is counted.
+pub fn hand_back(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    #[cfg(any(unix, windows))]
+    let lost = event::push_input(bytes);
+    #[cfg(not(any(unix, windows)))]
+    let lost = bytes.len();
+    lost_at_startup().fetch_add(lost, Ordering::Relaxed);
+}
+
+/// How many bytes typed at start-up were read by a query and could not be handed back, since this
+/// was last asked. Zero after the first ask, so the note that says so is made once.
+pub fn take_lost_at_startup() -> usize {
+    lost_at_startup().swap(0, Ordering::Relaxed)
 }
 
 /// Whether the terminal is believed to be in front of the person.
@@ -661,6 +694,88 @@ mod tests {
                 "a read of {count} event(s) handed back a different number"
             );
         }
+    }
+
+    /// Bytes a start-up query read off the tty come out of the event reader as the events they
+    /// encode, in the order they were typed, and a sequence cut short is counted as lost rather
+    /// than dropped without a word. The counter and crossterm's reader are process globals and
+    /// nothing else in this crate's tests touches either; `event::read` is called exactly as many
+    /// times as there are events handed back, so it never reaches the terminal a test lacks.
+    #[cfg(unix)]
+    #[test]
+    fn keys_a_startup_query_read_are_handed_to_the_event_reader_in_order() {
+        hand_back(b"a\x1b[A\r");
+        let read: Vec<TermEvent> = (0..3)
+            .map(|_| event::read().expect("a handed-back event is queued"))
+            .collect();
+        assert_eq!(
+            read,
+            vec![
+                key(KeyCode::Char('a')),
+                key(KeyCode::Up),
+                key(KeyCode::Enter)
+            ]
+        );
+        assert_eq!(take_lost_at_startup(), 0, "nothing was lost");
+
+        hand_back(b"\x1b[");
+        assert_eq!(
+            take_lost_at_startup(),
+            2,
+            "a sequence cut short is said to be lost"
+        );
+        assert_eq!(take_lost_at_startup(), 0, "and said once");
+    }
+
+    /// The Windows form of the test above: what a start-up query read off the console comes
+    /// as the records it read, each its 20 bytes in memory, and they come out of the event reader
+    /// as the events they are, in order, a key's release included as the console reader reports it.
+    /// A record of a type the console does not report, or the bytes of part of one, is counted as
+    /// lost. The records are built by
+    /// hand because this crate forbids `unsafe`.
+    #[cfg(windows)]
+    #[test]
+    fn records_a_startup_query_read_are_handed_to_the_event_reader_in_order() {
+        fn record(down: bool, virtual_key: u16, unit: u16) -> Vec<u8> {
+            let mut bytes = vec![1, 0, 0, 0];
+            bytes.extend_from_slice(&i32::from(down).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes());
+            bytes.extend_from_slice(&virtual_key.to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            bytes.extend_from_slice(&unit.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes
+        }
+        let mut read_off = Vec::new();
+        read_off.extend(record(true, 0x41, u16::from(b'a')));
+        read_off.extend(record(false, 0x41, u16::from(b'a')));
+        read_off.extend(record(true, 0x26, 0));
+        read_off.extend(record(true, 0x0D, u16::from(b'\r')));
+        hand_back(&read_off);
+        let read: Vec<TermEvent> = (0..4)
+            .map(|_| event::read().expect("a handed-back event is queued"))
+            .collect();
+        assert_eq!(
+            read,
+            vec![
+                key(KeyCode::Char('a')),
+                released(KeyCode::Char('a')),
+                key(KeyCode::Up),
+                key(KeyCode::Enter)
+            ]
+        );
+        assert_eq!(take_lost_at_startup(), 0, "nothing was lost");
+
+        let mut unknown = record(true, 0x41, u16::from(b'a'));
+        unknown[0] = 0x7f;
+        unknown.extend_from_slice(&[1, 0, 0]);
+        hand_back(&unknown);
+        assert_eq!(
+            take_lost_at_startup(),
+            23,
+            "a record of no known type and part of one are said to be lost"
+        );
+        assert_eq!(take_lost_at_startup(), 0, "and said once");
     }
 
     /// The seam between the queue and the terminal: [`poll`] answers for what is buffered before

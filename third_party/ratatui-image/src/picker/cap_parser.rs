@@ -285,6 +285,12 @@ impl Parser {
         };
         vec![]
     }
+    /// Whether the parser holds nothing: no sequence started and no byte kept. What was pushed
+    /// since it last held something, and returned no response, was not part of a reply.
+    pub fn is_idle(&self) -> bool {
+        self.data.is_empty() && self.sequence == ResponseParseState::Unknown
+    }
+
     fn restart(&mut self) -> Vec<Response> {
         self.data = String::new();
         self.sequence = ResponseParseState::Unknown;

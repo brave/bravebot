@@ -16,7 +16,7 @@ use crate::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct MouseButtonsPressed {
     pub(crate) left: bool,
     pub(crate) right: bool,
