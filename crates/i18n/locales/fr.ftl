@@ -900,7 +900,7 @@ import-found-keys =
     Une clé d'API pour un service de modèle que bravebot peut utiliser est exportée dans l'environnement de ce processus.
 import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
 import-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
-import-ollama-window-small = Ollama abandonne les premiers tours au-delà de cette fenêtre, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Définissez OLLAMA_CONTEXT_LENGTH plus haut avant de démarrer Ollama pour en garder davantage.
+import-ollama-window-small = Chaque requête demande à Ollama la fenêtre avec laquelle le modèle a été entraîné, jusqu'à { $assumed } jetons, donc il recharge le modèle avec cette fenêtre plutôt que d'abandonner les premiers tours. Une fenêtre plus grande prend plus de mémoire : définissez contextWindow sur l'entrée ci-dessous pour en demander moins.
 import-lm-studio-window-small = Une conversation plus longue que cette fenêtre ne tient pas dans le modèle tel que LM Studio l'a chargé, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Chargez le modèle avec une longueur de contexte plus grande dans LM Studio pour en garder davantage.
 import-adds = L'import ajoute ceci à { $file } :
 import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }

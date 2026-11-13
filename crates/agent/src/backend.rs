@@ -15,6 +15,7 @@ use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
 use bravebot_aichat::call::Conceded;
 use bravebot_aichat::generate_content::GenerateContentClient;
+use bravebot_aichat::ollama_chat::OllamaChatClient;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::responses::ResponsesClient;
 use bravebot_aichat::{
@@ -1786,6 +1787,13 @@ fn gateway_client<'a>(
         Protocol::Responses => GatewayClient::Responses(
             ResponsesClient::new(egress, provider, wire_model, token).with_gateway_headers(headers),
         ),
+        Protocol::Ollama => GatewayClient::Ollama(
+            OllamaChatClient::new(egress, provider, wire_model, token)
+                .with_gateway_headers(headers)
+                .with_window(bravebot_config::provider::ollama_window_for(
+                    config.context_budget,
+                )),
+        ),
     })
 }
 
@@ -1843,6 +1851,7 @@ enum GatewayClient<'a> {
     Messages(AnthropicClient<'a>),
     GenerateContent(GenerateContentClient<'a>),
     Responses(ResponsesClient<'a>),
+    Ollama(OllamaChatClient<'a>),
 }
 
 impl GatewayClient<'_> {
@@ -1869,6 +1878,7 @@ impl GatewayClient<'_> {
             Self::Messages(client) => Self::Messages(client.with_cancel(stop)),
             Self::GenerateContent(client) => Self::GenerateContent(client.with_cancel(stop)),
             Self::Responses(client) => Self::Responses(client.with_cancel(stop)),
+            Self::Ollama(client) => Self::Ollama(client.with_cancel(stop)),
         }
     }
 
@@ -1882,6 +1892,7 @@ impl GatewayClient<'_> {
             Self::Messages(client) => counted!(client, client.complete(policy, request)),
             Self::GenerateContent(client) => counted!(client, client.complete(policy, request)),
             Self::Responses(client) => counted!(client, client.complete(policy, request)),
+            Self::Ollama(client) => counted!(client, client.complete(policy, request)),
         }
     }
 
@@ -1902,6 +1913,9 @@ impl GatewayClient<'_> {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Responses(client) => {
+                counted!(client, client.complete_streaming(policy, request, progress))
+            }
+            Self::Ollama(client) => {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
         }
@@ -4312,6 +4326,92 @@ mod tests {
             backend.complete(&mut policy, &request)
         };
         (outcome, received.recv().expect("the request arrived"))
+    }
+
+    /// BACKEND-72: an entry naming an Ollama SDK is sent Ollama's own `/api/chat`, whose
+    /// `options.num_ctx` is the window the session budgets for, so a server started with its own
+    /// smaller default allocates the window the conversation is kept within rather than dropping
+    /// its start. The regressions rejected are speaking chat completions to it, sending no window,
+    /// and sending a window other than the session's.
+    #[test]
+    fn an_ollama_entry_is_asked_for_a_window_a_quarter_over_the_sessions_budget() {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let (sender, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("request line");
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            reader.read_exact(&mut body).expect("body");
+            let _ = sender.send((line.trim().to_string(), body));
+            let reply = concat!(
+                r#"{"message":{"role":"assistant","content":"hi"},"done":false}"#,
+                "\n",
+                r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","#,
+                r#""prompt_eval_count":3,"eval_count":1}"#,
+                "\n"
+            );
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n{reply}"
+                )
+                .as_bytes(),
+            );
+        });
+        let mut config = with_providers(&format!(
+            r#"{{"provider": {{"ollama": {{"npm": "ollama-ai-provider-v2",
+                "options": {{"baseURL": "http://127.0.0.1:{port}/api"}},
+                "models": {{"qwen3:8b": {{}}}}
+            }}}}}}"#
+        ));
+        config.adopt_window(Some(32_768));
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new(
+            "ollama/qwen3:8b",
+            vec![bravebot_aichat::protocol::Message::user("hi")],
+        );
+
+        let completion = Backend::select(&config, &egress, "ollama/qwen3:8b")
+            .complete_streaming(&mut policy, &request, |_| {})
+            .expect("the reply was read");
+
+        let (line, body) = received.recv().expect("the request arrived");
+        assert_eq!(line, "POST /api/chat HTTP/1.1");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(body["model"], "qwen3:8b");
+        // A quarter over the budget, since compaction runs a round after a prompt has passed it.
+        assert_eq!(body["options"]["num_ctx"], 40_960);
+        assert_eq!(completion.usage.prompt_tokens, 3);
     }
 
     /// The value of the header `name` in what a server received.

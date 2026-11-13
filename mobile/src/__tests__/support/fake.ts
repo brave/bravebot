@@ -23,6 +23,7 @@ export interface ViewPatch {
   status?: Status
   pending?: Pending | null
   rows?: readonly Row[]
+  omitted?: number
 }
 
 export interface Call {
@@ -66,7 +67,7 @@ export class FakeSession implements AgentSession {
       status: initial.status ?? (options.trust ? 'awaiting_trust' : 'idle'),
       pending: initial.pending ?? null,
       rows: [...(initial.rows ?? [])],
-      omitted: 0,
+      omitted: initial.omitted ?? 0,
       resyncing: false,
       ended: null,
     }
@@ -103,7 +104,7 @@ export class FakeSession implements AgentSession {
       status: patch.status ?? this.current.status,
       pending: patch.pending === undefined ? this.current.pending : patch.pending,
       rows,
-      omitted: this.current.omitted,
+      omitted: patch.omitted ?? this.current.omitted,
       resyncing: this.current.resyncing,
       ended: this.current.ended,
     }

@@ -10124,6 +10124,45 @@ fn unconfined_way_out<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> &'s
     }
 }
 
+/// A redirection refused for leaving the workspace, as the planner is told of it, and what it is
+/// told it can do where no person can open the directory (CMDLINE-5, TRUST-10, CLI-1).
+///
+/// The remedy is the one the file tools give, chosen by [`crate::workspace::Workspace::confines`],
+/// so the refusal names `/add-dir` alone and not `request_path`, whose grant a redirection does not
+/// pass (PATHREQ-7). Where nobody can be asked in this run, opening a directory is not a route
+/// anyone can take, so a remedy that names one is said as none, with what the planner can do
+/// instead. Decided from the remedy and the session's settings, never from anything a file or a
+/// program holds.
+fn redirection_route(
+    tools: &Tools<'_>,
+    escape: crate::workspace::WorkspaceError,
+) -> (crate::workspace::WorkspaceError, &'static str) {
+    use crate::workspace::{Remedy, WorkspaceError};
+    let WorkspaceError::Escapes { path, remedy } = escape else {
+        return (escape, "");
+    };
+    let opens = matches!(
+        remedy,
+        Remedy::Open
+            | Remedy::OpenEndsCheckouts
+            | Remedy::OpenItself
+            | Remedy::OpenItselfEndsCheckouts
+    );
+    if opens && tools.permission_mode.nobody_to_ask() {
+        let escape = WorkspaceError::Escapes {
+            path,
+            remedy: Remedy::Nothing,
+        };
+        return (escape, REDIRECTION_NOBODY_TO_ASK);
+    }
+    (WorkspaceError::Escapes { path, remedy }, "")
+}
+
+/// Said after a refused redirection whose directory could be opened, where nobody can be asked in
+/// this run (CLI-1). Worded to follow [`crate::workspace::WorkspaceError::describe`].
+const REDIRECTION_NOBODY_TO_ASK: &str = ". Nobody can be asked in this run, so nothing this \
+     session accepts opens that directory: say in the reply which path the work needs and what for";
+
 /// Whether the redirection targets of a `run` line may leave the workspace (CMDLINE-5).
 ///
 /// The confinement of a target exists because this process opens the file and not the stage, so a
@@ -10335,6 +10374,7 @@ fn check_the_plan_before_asking<S: Sink>(
     for path in &plan.writes {
         if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
             let target = told(path);
+            let (escape, route) = redirection_route(tools, escape);
             let way_out = match escape {
                 crate::workspace::WorkspaceError::Escapes { .. } => {
                     unconfined_way_out(policy, tools)
@@ -10342,7 +10382,7 @@ fn check_the_plan_before_asking<S: Sink>(
                 _ => "",
             };
             return Err(Box::new(Produced::problem(format!(
-                "refused: {}{way_out}",
+                "refused: {}{route}{way_out}",
                 workspace_failure(policy, "run", "command", &escape, &target)
             ))));
         }
@@ -10548,8 +10588,12 @@ fn settle_the_confinement<S: Sink>(
         .map(|confinement| {
             confinement
                 .with_requested(requested)
-                .with_requests_offered(requests_accepted(policy, tools).is_ok())
+                .with_requests_offered(
+                    requests_accepted(policy, tools).is_ok()
+                        && tools.permission_mode.answers_requests(),
+                )
                 .with_request_path_listed(tools.beside.holds(Named::RequestPath))
+                .with_nobody_to_ask(tools.permission_mode.nobody_to_ask())
         });
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
         let cause = match confinement {
@@ -11902,7 +11946,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                         &plan.directory,
                         (!at_the_root).then_some(told_directory.as_str()),
                     );
-                    let detail = workspace_failure(policy, "run", "command", &escape, &target);
+                    let (escape, route) = redirection_route(tools, escape);
+                    let detail = format!(
+                        "{}{route}",
+                        workspace_failure(policy, "run", "command", &escape, &target)
+                    );
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
                         detail,
@@ -27150,6 +27198,15 @@ mod tests {
             name: &str,
             arguments: impl FnOnce(&std::path::Path) -> Value,
         ) -> (String, Vec<String>, bool) {
+            run_once_under(name, crate::LiveMode::default(), arguments)
+        }
+
+        /// [`run_once_in`] under this permission mode, which says whether anybody can be asked.
+        fn run_once_under(
+            name: &str,
+            mode: crate::LiveMode,
+            arguments: impl FnOnce(&std::path::Path) -> Value,
+        ) -> (String, Vec<String>, bool) {
             let scratch = Scratch::new(name);
             let workspace = Workspace::new(&scratch.path).expect("workspace");
             let arguments = arguments(workspace.root());
@@ -27165,6 +27222,7 @@ mod tests {
             .expect("policy");
 
             let produced = with_tools(&workspace, |tools| {
+                tools.permission_mode = mode;
                 run(
                     &mut policy,
                     tools,
@@ -27263,7 +27321,280 @@ mod tests {
                 "the refusal does not name the call and the file it would open: {}",
                 refused[0]
             );
+            // TRUST-10, CMDLINE-5: the redirection is given the remedy a file tool's write to the
+            // same path is given, and the trail records the remedy it was told.
+            assert!(
+                told.contains("/add-dir"),
+                "the refused redirection names no directory to open: {told}"
+            );
+            assert!(
+                refused[0].contains("remedy offered: open its directory"),
+                "the trail does not record the remedy the planner was told: {}",
+                refused[0]
+            );
+            assert!(
+                !told.contains("request_path"),
+                "a redirection is sent to request_path, whose grant it does not pass: {told}"
+            );
             assert!(!clean, "a turn whose run was refused would end as clean");
+        }
+
+        /// CLI-1, CMDLINE-5: where nobody can be asked, a refused redirection names no `/add-dir`
+        /// and tells the planner to say in its reply which path it needs.
+        ///
+        /// The regression it rejects: the remedy naming `/add-dir` to a run with nobody at the
+        /// terminal, and the planner told nothing it can do.
+        #[test]
+        fn a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path() {
+            let (told, refused, _) = run_once_under(
+                "run-redirect-escape-unattended",
+                crate::LiveMode::unattended(crate::PermissionMode::Ask),
+                |_| json!({"command": "echo hi > ../escaped.txt"}),
+            );
+
+            assert!(
+                told.starts_with("refused:") && told.contains("outside the workspace"),
+                "the call was not refused for leaving the workspace: {told}"
+            );
+            assert!(
+                !told.contains("/add-dir") && !told.contains("request_path"),
+                "a run nobody can be asked in is sent to a route nobody can take: {told}"
+            );
+            assert!(
+                told.contains("say in the reply which path"),
+                "the planner is not told to name the path in its reply: {told}"
+            );
+            assert_eq!(refused.len(), 1, "not recorded once: {refused:?}");
+            assert!(
+                refused[0].contains("remedy offered: none"),
+                "the trail records a remedy the planner was not told: {}",
+                refused[0]
+            );
+        }
+
+        /// A session directory, a home holding `.ssh`, and an ordinary directory beside them,
+        /// each canonical, with the workspace told of the home so a credential location is known.
+        #[cfg(unix)]
+        struct Outside {
+            _scratch: Scratch,
+            workspace: Workspace,
+            home: std::path::PathBuf,
+            beside: std::path::PathBuf,
+        }
+
+        #[cfg(unix)]
+        fn outside_fixture(name: &str) -> Outside {
+            let scratch = Scratch::new(name);
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            let beside = scratch.path.join("beside");
+            for made in [home.join(".ssh"), project.clone(), beside.clone()] {
+                std::fs::create_dir_all(made).expect("directory");
+            }
+            let home = home.canonicalize().expect("home");
+            let beside = beside.canonicalize().expect("beside");
+            std::fs::write(home.join(".ssh/config"), "Host *\n").expect("a credential file");
+            std::fs::write(beside.join("notes.txt"), "notes\n").expect("an outside file");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+            Outside {
+                _scratch: scratch,
+                workspace,
+                home,
+                beside,
+            }
+        }
+
+        /// A policy in a trusted workspace that lets both `run` and `read_file` be reached.
+        #[cfg(unix)]
+        fn run_and_read_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            trust.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command and read a file");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec, Capability::FileRead]),
+                sink,
+            )
+            .expect("policy")
+            .with_trust(trust)
+        }
+
+        /// What the planner was told for one `run` of `command` under the ask mode with every run
+        /// approved, and whether a program ran.
+        #[cfg(unix)]
+        fn run_approved(workspace: &Workspace, command: &str) -> (String, bool) {
+            let mut sink = RecordingSink::new();
+            let mut policy = run_and_read_policy(&mut sink);
+            let produced = with_tools(workspace, |tools| {
+                run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveRuns,
+                    &mut crate::report::IgnoreReports,
+                    &json!({ "command": command }),
+                )
+            });
+            (told(&mut policy, &produced.text), produced.ran_a_program)
+        }
+
+        /// What the planner was told for one `read_file` of the absolute `path`.
+        #[cfg(unix)]
+        fn read_outside(workspace: &Workspace, path: &std::path::Path) -> String {
+            let mut sink = RecordingSink::new();
+            let mut policy = run_and_read_policy(&mut sink);
+            let produced = with_tools(workspace, |tools| {
+                read_file(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({ "path": path.display().to_string() }),
+                )
+            });
+            told(&mut policy, &produced.text)
+        }
+
+        /// The sentence a refusal of `path` with `remedy` reads as.
+        #[cfg(unix)]
+        fn remedy_sentence(path: &std::path::Path, remedy: crate::workspace::Remedy) -> String {
+            crate::workspace::WorkspaceError::Escapes {
+                path: path.display().to_string(),
+                remedy,
+            }
+            .describe(&path.display().to_string())
+        }
+
+        /// The clause of the open remedy that names `/add-dir`, said to a read and a write alike.
+        #[cfg(unix)]
+        const OPEN_CLAUSE: &str = "The person can open the directory it is in, with /add-dir in \
+             the terminal or --add-dir when starting bravebot, after which this path reaches it";
+
+        /// The clause of the credential remedy, said to a read and a write alike.
+        #[cfg(unix)]
+        const CREDENTIAL_CLAUSE: &str = "in a place that holds credentials, which cannot be \
+             opened to the file tools; refusing to touch it";
+
+        /// CMDLINE-5, TRUST-10: through `run`, a redirection to a file in an ordinary directory
+        /// outside the workspace is given the open remedy, naming `/add-dir`, and one into the
+        /// home's `.ssh` is given the credential remedy, naming none; neither is given the bare
+        /// refusal the nothing remedy reads as. The regression it rejects: the remedy for a
+        /// redirection chosen as nothing for every outside path, which tells a planner with a
+        /// person to ask that no route exists, or as open for a credential location, which names
+        /// a directory that cannot be added.
+        #[cfg(unix)]
+        #[test]
+        fn a_redirection_outside_is_given_the_open_remedy_and_one_into_credentials_the_credential_remedy()
+         {
+            use crate::workspace::Remedy;
+            let place = outside_fixture("run-redirect-remedies");
+            let ordinary = place.beside.join("out.txt");
+            let credential = place.home.join(".ssh/config");
+
+            let (open, ran) = run_approved(
+                &place.workspace,
+                &format!("echo hi > {}", ordinary.display()),
+            );
+            assert!(!ran, "a refused redirection ran a program: {open}");
+            assert!(
+                open.contains(&remedy_sentence(&ordinary, Remedy::Open)),
+                "an ordinary outside directory was not given the open remedy: {open}"
+            );
+            assert_eq!(
+                open.matches(&remedy_sentence(&ordinary, Remedy::Nothing))
+                    .count(),
+                open.matches(&remedy_sentence(&ordinary, Remedy::Open))
+                    .count(),
+                "the bare refusal of the nothing remedy was said for an ordinary directory: {open}"
+            );
+
+            let (closed, ran) = run_approved(
+                &place.workspace,
+                &format!("echo hi >> {}", credential.display()),
+            );
+            assert!(!ran, "a refused redirection ran a program: {closed}");
+            assert!(
+                closed.contains(&remedy_sentence(&credential, Remedy::Credential)),
+                "a credential location was not given the credential remedy: {closed}"
+            );
+            assert!(
+                !closed.contains(&remedy_sentence(&credential, Remedy::Nothing))
+                    && !closed.contains("/add-dir"),
+                "a credential location was given the nothing or the open remedy: {closed}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&credential).unwrap(),
+                "Host *\n",
+                "the credential file was written"
+            );
+        }
+
+        /// CMDLINE-5, TRUST-10: the remedy is a route that works. Once the ordinary outside
+        /// directory is opened, as `/add-dir` opens it, the same redirected `run` line that was
+        /// refused writes the file there. The regression it rejects: a redirection confined to the
+        /// workspace root alone, so `/add-dir` is offered and does nothing for a `run` line.
+        #[cfg(unix)]
+        #[test]
+        fn a_refused_redirection_writes_its_file_once_the_directory_it_names_is_added() {
+            let mut place = outside_fixture("run-redirect-then-added");
+            let destination = place.beside.join("out.txt");
+            let line = format!("echo written > {}", destination.display());
+
+            let (before, ran) = run_approved(&place.workspace, &line);
+            assert!(
+                !ran && before.contains(OPEN_CLAUSE),
+                "the line was not refused with the open remedy first: {before}"
+            );
+            assert!(!destination.exists(), "a refused line wrote the file");
+
+            place
+                .workspace
+                .add_directory(place.beside.to_str().expect("a UTF-8 scratch path"))
+                .expect("directory added");
+            let (after, ran) = run_approved(&place.workspace, &line);
+            assert!(
+                ran,
+                "the line did not run once the directory was added: {after}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&destination).ok().as_deref(),
+                Some("written\n"),
+                "the redirection did not write the file in the added directory: {after}"
+            );
+        }
+
+        /// TRUST-10, CMDLINE-5: a `read_file` of an outside path and a `run` line redirecting to
+        /// the same path are offered the same remedy: the open clause naming `/add-dir` for
+        /// an ordinary directory, the credential clause for the home's `.ssh`. A read may add a
+        /// drop to it, which is the only difference. The regression it rejects: the file tools and
+        /// `run` choosing their remedies apart, so a planner refused by one is sent by the other to
+        /// a route that does not exist for the same file.
+        #[cfg(unix)]
+        #[test]
+        fn read_file_and_a_redirection_of_the_same_outside_path_are_offered_the_same_remedy() {
+            let place = outside_fixture("read-and-redirect-remedy");
+            for (path, clause) in [
+                (place.beside.join("notes.txt"), OPEN_CLAUSE),
+                (place.home.join(".ssh/config"), CREDENTIAL_CLAUSE),
+            ] {
+                let read = read_outside(&place.workspace, &path);
+                assert!(
+                    read.contains(clause),
+                    "{}: read_file was not offered {clause:?}: {read}",
+                    path.display()
+                );
+                let line = format!("echo hi >> {}", path.display());
+                let (said, ran) = run_approved(&place.workspace, &line);
+                assert!(!ran, "{line}: a refused redirection ran a program: {said}");
+                assert!(
+                    said.contains(clause),
+                    "{line}: the redirection was not offered what read_file was \
+                     ({clause:?}): {said}\nread_file: {read}"
+                );
+            }
         }
 
         /// The facts of a session that decide whether a `run` call may ask for reach past its profile.
@@ -27356,6 +27687,82 @@ mod tests {
                 .filter(|(gate, _)| *gate == "sandbox")
                 .map(|(_, reason)| reason.as_str())
                 .collect()
+        }
+
+        /// CMDLINE-5, SANDBOX-29: a redirection into a credential location is offered no
+        /// directory to open, and is still pointed at the `unconfined` line where the session
+        /// accepts it and the front end can ask, and only there. A sibling directory is the
+        /// control that names `/add-dir`. The regressions it rejects are the unconfined route
+        /// dropped for a credential location, the route said where the session or front end
+        /// refuses it, and `/add-dir` named for a directory that cannot be opened.
+        #[test]
+        fn a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted()
+        {
+            use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+            let scratch = Scratch::new("run-redirect-credential");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            let beside = scratch.path.join("beside");
+            for made in [home.join(".ssh"), project.clone(), beside.clone()] {
+                std::fs::create_dir_all(made).expect("directory");
+            }
+            let home = home.canonicalize().expect("home");
+            let beside = beside.canonicalize().expect("beside");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+            for (mode, asks, pointed) in [
+                (WorkspaceWrite, true, true),
+                (WorkspaceWrite, false, false),
+                (Strict, true, false),
+            ] {
+                for (destination, opens) in [
+                    (home.join(".ssh/config"), false),
+                    (beside.join("notes.txt"), true),
+                ] {
+                    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                    trust.trust(".");
+                    let mut routing = Routing::new();
+                    routing.insert_trusted("task", "run a command");
+                    let mut sink = RecordingSink::new();
+                    let mut policy = Policy::begin(
+                        routing,
+                        ReleasePlan::new(),
+                        CapabilitySet::from_iter([Capability::ShellExec]),
+                        &mut sink,
+                    )
+                    .expect("policy")
+                    .with_trust(trust);
+                    let arguments =
+                        json!({"command": format!("echo hi >> {}", destination.display())});
+                    let produced = with_tools(&workspace, |tools| {
+                        tools.confine_runs = true;
+                        tools.sandbox = mode;
+                        tools.profile = Some(std::path::Path::new("/profile"));
+                        tools.asks_about_unconfined = asks;
+                        run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::Unattended,
+                            &mut crate::report::IgnoreReports,
+                            &arguments,
+                        )
+                    });
+                    assert!(!produced.ran_a_program, "a refused call ran a program");
+                    let said = told(&mut policy, &produced.text);
+                    let shape = format!("{} (asks: {asks}) {}", mode.name(), destination.display());
+                    assert!(
+                        said.starts_with("refused:") && said.contains("outside the workspace"),
+                        "{shape}: {said}"
+                    );
+                    assert_eq!(said.contains("/add-dir"), opens, "{shape}: {said}");
+                    assert_eq!(
+                        said.contains("'unconfined': true"),
+                        pointed,
+                        "{shape}: {said}"
+                    );
+                }
+            }
         }
 
         /// TRACE-1, SANDBOX-29: a request to run one line with no sandbox that the session refuses
@@ -29279,6 +29686,7 @@ mod tests {
                 false,
                 bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 true,
+                false,
             );
             let mut confining = table();
             state_confinement(
@@ -29286,6 +29694,7 @@ mod tests {
                 true,
                 bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 true,
+                false,
             );
 
             let not_confining = described(&not_confining);
@@ -29375,11 +29784,11 @@ mod tests {
             ] {
                 let at = format!("confine={confine} {mode:?} accepted={accepted}");
                 let mut short = table(false);
-                state_confinement(&mut short, confine, mode, accepted);
+                state_confinement(&mut short, confine, mode, accepted, false);
                 let short = run_description(&short);
                 assert!(!short.contains("request_path"), "{at}: {short}");
                 let mut full = table(true);
-                state_confinement(&mut full, confine, mode, accepted);
+                state_confinement(&mut full, confine, mode, accepted, false);
                 let full = run_description(&full);
                 let unconfined = !confine || mode == Off;
                 assert_eq!(
@@ -29413,7 +29822,7 @@ mod tests {
                     .find(|tool| tool.function.name == "run")
                     .map(|tool| tool.function.description.clone())
                     .expect("run is offered");
-                state_confinement(&mut table, true, mode, true);
+                state_confinement(&mut table, true, mode, true, false);
                 let after = table
                     .iter()
                     .find(|tool| tool.function.name == "run")

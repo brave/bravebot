@@ -984,7 +984,12 @@ A policy can lift the refusal, as the profile of a `run` stage whose program is 
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
 reaches a `.git` and each other protected name as it does on Linux. Every other stage keeps the
 refusal, and so does a stage whose program is a file named `git` under a directory the plan may write
-to, the checkout holding a session directory among them ([SANDBOX-20](#SANDBOX-20)). On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+to, the checkout holding a session directory among them ([SANDBOX-20](#SANDBOX-20)).
+The lift reaches only paths a write row covers. In a linked worktree or a submodule, whose `.git`
+is a file naming a git directory elsewhere, a git step writes that directory and the repository's
+common `.git` only where a write row covers them, so `git commit` there is refused under the
+session directory's rows alone, and the sentence after the failed step says so
+([SANDBOX-19](#SANDBOX-19)). On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
 [mcp-servers.md](mcp-servers.md)'s known cost and a known cost of `run` ([SANDBOX-18](#SANDBOX-18)).
 The Windows backend withholds nothing of the kind, and no server is started there
@@ -1016,6 +1021,7 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
+`verified-by: bravebot_agent::confine::a_commit_in_a_linked_worktree_is_refused_named_and_let_through_by_a_write_grant_on_macos`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
@@ -1030,9 +1036,15 @@ versioned `python3.12` are each known, and a name that only resembles one, `pnpm
 `python3-config` or `cargo-deny`, is not. An install and a configuration file are read and never
 written. A cache is read and written, and is named as the directory or file it is rather than
 through the directory holding it, so no list reaches the file a tool keeps its token in, the home
-directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. Each write row says what it
+directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. gh's row is `~/.cache/gh` on
+Linux and macOS and `~/AppData/Local/GitHub CLI` on Windows, and is added for a stage whose
+program resolved to `gh`. Each write row says what it
 names, so a backend that cannot name an absent path has the cache created as the directory or file
-the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
+the toolchain expects there. On macOS, which names an absent path, nothing is created ahead of
+time ([SANDBOX-11](#SANDBOX-11)): a stage creates its cache itself where the directory holding it
+is there, and where it is not the stage cannot create it, since that directory is never written.
+A gh stage on an account with no `~/.cache` is refused its cache as a cargo stage with no
+`~/.cargo` is refused its registry. A list is added to the policy it is given and takes nothing from it.
 A cache row is judged again where its name leads each time a stage starts: a name with a link
 below the home directory is given at the place it leads to, and is given no row, with the stage
 still started, where that place is, holds or lies inside a credential or persistence location or the
@@ -1040,10 +1052,13 @@ state directory in force ([SANDBOX-12](#SANDBOX-12)), or
 where it is a file for a directory row or a directory for a file row ([SANDBOX-18](#SANDBOX-18)).
 What decides a row is the table, the platform and where its name leads: the environment is not
 read, so `CARGO_HOME`,
-`GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
+`GOCACHE` and `XDG_CACHE_HOME` move no row, whether the session's environment sets one or an
+assignment on the line does. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
-package managers, pip, go, mvn and gradle fetch, and `node`, `python3` and a program no list knows
-do not. `run` adds the list for each stage it starts where the machine is not read: on Windows
+package managers, pip, go, mvn and gradle fetch, and `node`, `python3`, `gh` and a program no list
+knows do not. Whether a `gh` stage reaches the network is decided by the remote scope its argv
+names ([SANDBOX-16](#SANDBOX-16)), and gh's list is only its cache, so the list lends no egress
+whether the stage resolved to `gh` or asked for it by name ([SANDBOX-26](#SANDBOX-26)). `run` adds the list for each stage it starts where the machine is not read: on Windows
 and under the mode `strict` ([SANDBOX-18](#SANDBOX-18), [SANDBOX-22](#SANDBOX-22)). Where the machine is read, which is the
 default on Linux and macOS, no stage brings a list, and every stage writes the caches of every
 toolchain instead ([SANDBOX-18](#SANDBOX-18)).
@@ -1081,6 +1096,13 @@ file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise mee
 `verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_the_other_kind_of_thing_is_given_no_row`
 `verified-by: bravebot_sandbox::toolchain::an_install_or_configuration_that_has_become_a_link_to_a_refused_place_is_given_no_row`
 `verified-by: bravebot_sandbox::macos::a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install`
+`verified-by: bravebot_sandbox::macos::a_gh_stage_writes_its_cache_and_not_its_login`
+`verified-by: bravebot_sandbox::macos::a_gh_stage_creates_its_cache_where_the_directory_holding_it_is_there_as_cargo_does`
+`verified-by: bravebot_sandbox::toolchain::no_list_names_a_directory_that_holds_other_programs_files`
+`verified-by: bravebot_sandbox::toolchain::ghs_list_lends_no_network`
+`verified-by: bravebot_sandbox::toolchain::ghs_list_reaches_no_gh_login_and_no_keychain`
+`verified-by: bravebot_agent::confine::where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache`
+`verified-by: bravebot_agent::confine::xdg_cache_home_moves_no_row_for_gh`
 
 <a id="SANDBOX-16"></a>
 ### SANDBOX-16: a credential scope follows the operation the argv names, and reaches no private key
@@ -1110,7 +1132,10 @@ No scope names a private key or `~/.ssh` as a directory. The remote scope reads 
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
 each `IdentityFile` line of `~/.ssh/config` names, `~/.gitconfig`, `~/.git-credentials`,
 `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes `~/.ssh/known_hosts` alone,
-as a file. A tool's directory is read and never written.
+as a file. A tool's directory is read and never written. A `gh` stage writes gh's cache because of
+gh's toolchain list ([SANDBOX-15](#SANDBOX-15)) or because every stage writes every cache
+([SANDBOX-18](#SANDBOX-18)), and not because of this scope, so a `git push` carrying it writes no
+gh cache where the lists are keyed.
 
 A line `IdentityFile <name>` in the user's own `~/.ssh/config` adds the file `<name>.pub`, and one
 whose name already ends in `.pub` adds that file. The keyword is matched without regard to case
@@ -1398,6 +1423,7 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
 `verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_is_refused_whatever_spells_it`
 `verified-by: bravebot_sandbox::scope::the_one_row_a_scope_writes_is_the_hosts_ssh_has_verified`
+`verified-by: bravebot_agent::confine::where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache`
 `verified-by: bravebot_sandbox::scope::the_remote_scope_reaches_both_transports`
 `verified-by: bravebot_sandbox::scope::a_scope_leaves_the_policy_it_is_added_to_as_it_was`
 `verified-by: bravebot_sandbox::scope::gh_reads_the_configuration_directory_its_environment_names`
@@ -1825,7 +1851,9 @@ Every cache is written by every stage on Linux and macOS in the mode `workspace-
 wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
 build it drives. The cost is that the separation between ecosystems that
 [SANDBOX-15](#SANDBOX-15) describes does not hold there: a stage that runs `npm ci` can write
-`~/.cargo/registry`, and a later `cargo build` reads what it left. The token files and the installs
+`~/.cargo/registry`, and a later `cargo build` reads what it left. gh's cache is one of these
+caches, so a stage that runs `npm ci` can also leave a cached API answer or a run log in
+`~/.cache/gh`, and a later `gh` that reads its cache takes that file as GitHub's answer. The token files and the installs
 stay out of the write rows, so the reach is to caches only. A person who wants each ecosystem held
 to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)). Under `read-only` no cache is
 written.
@@ -1875,6 +1903,7 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
 `verified-by: bravebot_agent::confine::a_stage_writes_only_the_session_the_temporary_directory_and_the_caches`
 `verified-by: bravebot_agent::confine::where_the_machine_is_read_every_stage_writes_every_toolchains_cache`
+`verified-by: bravebot_agent::confine::where_the_machine_is_read_every_stage_writes_ghs_cache_and_not_its_login`
 `verified-by: bravebot_agent::confine::a_session_with_no_home_is_not_granted_the_machine`
 `verified-by: bravebot_agent::confine::a_windows_program_keeps_its_list_and_scope_with_its_extension`
 `verified-by: bravebot_agent::confine::the_keyed_base_reads_the_developer_directory_the_session_resolved`
@@ -1949,7 +1978,8 @@ On a turn that confines `run` ([SANDBOX-17](#SANDBOX-17)) on Linux and macOS, th
 description says that the programs it starts may read the machine except the places that hold a
 credential, may write only the session's directories, the scratch directory, the temporary
 directory and the toolchain caches, and read a credential location only where the command's scope
-names it. The sentence after a failed step names the same, and the confirmation's heading names it, with the known-hosts sentence for the remote scope saying what it adds and not what
+names it. The toolchain caches are the caches of [SANDBOX-15](#SANDBOX-15)'s table, gh's among
+them. The sentence after a failed step names the same, and the confirmation's heading names it, with the known-hosts sentence for the remote scope saying what it adds and not what
 the stage already read. On Windows the description says that the programs it starts are confined:
 to the directories the session was opened on, the scratch
 directory and the temporary directory, the system and program directories and git's configuration
@@ -1960,7 +1990,43 @@ not permitted` or `Permission denied`, and that only the person widens the reach
 step also say that a step whose program is not git cannot write any `.git`, so a program that runs
 git to commit, check out or clone is refused that write and git is run as a step of its own
 ([SANDBOX-18](#SANDBOX-18)); under `read-only` they say so of the places that mode writes, such as a
-clone in the temporary directory, since a git step cannot write the session's `.git` either. On a platform with no base the description says programs are not confined. Under the mode `strict`
+clone in the temporary directory, since a git step cannot write the session's `.git` either. The
+sentence after a failed step leaves that out where every step of the line already is git.
+
+Under `workspace-write` and `strict`, on every platform, the sentence after a failed line with a
+git step opens by naming each `.git` that is a file, one for the checkout holding each session
+directory (the directory, or its nearest ancestor with a `.git`). It says that the checkout is a
+linked worktree or a submodule, that git keeps its index and refs and the repository's common
+`.git` in the directory the file names, outside the session directory, and that a git step is
+refused that write where no directory the run may write holds them. It names the `.git` file and
+never the directory the file names, since that line is the checkout's content. Whether a step is
+git is judged as the `.git` lift judges it ([SANDBOX-14](#SANDBOX-14)), and only the kind of the
+`.git` entry is read, never what it holds or what a program printed. It then names the routes the
+session accepts: a `request_path` call with write where a request would be accepted and the tool
+is in the list ([SANDBOX-28](#SANDBOX-28)), the `unconfined` argument where the session would
+accept it ([SANDBOX-29](#SANDBOX-29)), and where it accepts neither, that nothing it accepts lets
+a step write them. A run nobody can be asked in ([CLI-1](cli.md#CLI-1)) names the `request_path`
+route only under a mode that approves a request unasked, which bypass does; in any other such run
+the route is not named, since a request there is refused. The `request_path` route is the one
+the commit takes: a yes with write for the common `.git`, given through request_path's own
+acceptance, lets git's step write it, since the `.git` lift ([SANDBOX-14](#SANDBOX-14)) reaches
+what a write row covers. The sentence is not said under
+`read-only`, whose own sentence already says a git step writes no session directory, nor on a
+platform with no base.
+
+In every mode that produces it and on every platform, the sentence after a failed line with a step
+that runs a shell (`sh`, `bash`, `dash`, `zsh`, `ksh`, `csh`, `tcsh` or `fish`, judged by the file
+the step resolved to) and an argument the planner wrote that holds `>` also says that a redirection
+inside a shell's command string is opened by the sandboxed shell, which cannot write outside the
+directories it names, and to write the redirection on the `run` line itself, where the driver opens
+the file and a refusal names it ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). It names no path:
+the driver compiled no destination from the command string, and nothing the shell printed is read.
+An argument a filename pattern produced ([CMDLINE-4](tools/command-line.md#CMDLINE-4)) is not
+looked at.
+
+`verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
+
+On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. Under the mode `read-only` it says that programs cannot write the
 project, and that outside the paths the person's own write grants name, a build, a formatter or
@@ -1998,7 +2064,14 @@ accepts a request only in a workspace the person has trusted ([TRUST-7](trust-ma
 name neither the menu nor `request_path`, and on macOS do not tell the planner to ask for
 `loopback`. They say instead that `run` accepts no `scopes` argument
 and, where the list holds `request_path`, that `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
-add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. Under `off`, or
+add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. In a run
+nobody can be asked in ([CLI-1](cli.md#CLI-1)) the `run` description and the sentence after a
+failed step name neither route, nor `/add-dir` and `--add-dir` as the way the person widens what a
+step reaches, since nobody is there to take one, and say instead that nothing in the run widens what a
+step reaches; the sentence after a failed step adds that the reply should name the path or
+credential the command needs. A change of sandbox mode within such a run is told to the planner
+in the same words. That fact
+is the one the permission mode holds for the run, so it is read from no output. Under `off`, or
 on a turn that confines no run, an untrusted workspace gets the sentence above and nothing more, so the
 two never say different things. The description
 reads that fact as each turn starts and this sentence reads it when the result is composed. The
@@ -2086,6 +2159,28 @@ network open it could listen on them: without a host list a step connects withou
 with one every step is held to the proxy's port. On Linux and Windows the sentence says nothing of
 `loopback`.
 
+The sentence after a failed step opens with what the mode does with a toolchain's cache, before the
+account of the confinement, where a step's program resolved to a toolchain's. Under `read-only` it
+says that no toolchain cache is written and names each such toolchain
+([SANDBOX-22](#SANDBOX-22)). On macOS under `workspace-write` and `strict`, where a step resolved to
+`gh`, it says that the step could write `~/.cache/gh` only where `~/.cache` already exists and that
+the sandbox refuses gh creating it otherwise ([SANDBOX-15](#SANDBOX-15)). It then says that a gh
+step can keep its cache in the session's scratch directory instead, with the line
+`env XDG_CACHE_HOME='<scratch>' gh ...` and `scopes: ["remote"]`, where `<scratch>` is the
+scratch directory the session holds, written out, since gh keeps its cache in
+`$XDG_CACHE_HOME/gh` where that is set and every mode that writes gh's cache writes the scratch
+directory. The line starts gh through `env` because a stage with an assignment in front of its
+program carries no scope ([SANDBOX-26](#SANDBOX-26)), which would take gh's login and network away;
+a requested `remote` scope reaches the `env` stage and is planned for it. The line is named only
+where the session would accept a `scopes` argument; elsewhere the sentence says that only the person
+can create `~/.cache`. Where every gh step already sets `XDG_CACHE_HOME` on the line, nothing is said
+of gh's cache. A session with no scratch directory is never given the `env` line, and its sentence
+says that only the person can create `~/.cache`. Otherwise it adds nothing. It is chosen
+from the file each step resolved to, the environment the planner wrote on the line, the platform,
+the mode, whether requests are accepted and the scratch directory the session holds, and never
+from what a step printed
+or from the sandbox's log, so the same words follow every failure of such a line.
+
 On macOS, a failed result for a line with a step that runs `pgrep`, `pkill`, `killall`, `lsof` or
 `ps`, from a run or from a job left running, also says that the sandbox refuses listing processes,
 so those programs fail whether or not the program they look for is running, that such a failure is
@@ -2140,6 +2235,8 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
+`verified-by: bravebot_agent::confine::where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache`
+`verified-by: bravebot_agent::confine::where_the_machine_is_read_every_stage_writes_ghs_cache_and_not_its_login`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_every_mode_but_off`
 `verified-by: bravebot_agent::confine::the_description_says_request_path_is_refused_under_off_and_where_runs_are_not_confined`
 `verified-by: bravebot_agent::confine::the_description_says_nothing_of_the_refusal_where_requests_are_accepted`
@@ -2150,6 +2247,8 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::under_read_only_the_failure_sentence_claims_no_write_and_offers_no_remedy_that_cannot_write`
 `verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_after_a_failure`
 `verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description`
+`verified-by: bravebot_agent::confine::a_run_nobody_can_be_asked_in_is_offered_no_route_only_a_person_takes`
+`verified-by: bravebot_agent::confine::the_run_description_of_a_run_nobody_can_be_asked_in_names_no_route_only_a_person_takes`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
 `verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
@@ -2168,6 +2267,16 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_listening_needs_loopback`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_loopback_only_what_the_sandbox_does_on_its_platform`
 `verified-by: bravebot_agent::confine::a_failed_process_listing_step_on_macos_says_the_sandbox_refused_it_and_to_connect_to_the_port`
+`verified-by: bravebot_agent::confine::a_failed_toolchain_step_opens_with_what_the_mode_does_with_its_cache`
+`verified-by: bravebot_agent::confine::a_failed_line_with_no_such_toolchain_step_opens_with_the_confinement`
+`verified-by: bravebot_agent::confine::the_gh_cache_line_the_sentence_names_keeps_ghs_login`
+`verified-by: bravebot_agent::confine::a_session_with_no_scratch_directory_says_only_the_person_can_create_the_gh_cache`
+`verified-by: bravebot_agent::confine::a_failed_git_step_in_a_linked_worktree_is_told_its_git_directory_is_outside_the_session`
+`verified-by: bravebot_agent::confine::the_linked_worktree_sentence_is_said_under_strict_and_on_windows`
+`verified-by: bravebot_agent::turn::a_failed_git_step_in_a_linked_worktree_nobody_can_be_asked_in_names_no_persons_route`
+`verified-by: bravebot_agent::turn::an_unattended_run_names_requests_only_where_its_mode_answers_them`
+`verified-by: bravebot_agent::turn::a_write_grant_on_the_common_git_directory_lets_a_linked_worktree_commit`
+`verified-by: bravebot_agent::confine::a_commit_in_a_linked_worktree_is_refused_named_and_let_through_by_a_write_grant_on_macos`
 `verified-by: bravebot_agent::turn::a_real_pgrep_refused_by_the_macos_profile_is_told_to_be_the_sandbox_and_to_probe_the_port`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_is_the_same_words_for_any_exit_code`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_is_chosen_from_the_program_and_not_from_what_it_printed`
@@ -2587,7 +2696,8 @@ starts a stage with the reads of `workspace-write` and without its writes to the
 directories the session was opened on, the scratch directory and the toolchain caches can be read and
 cannot be written, and the temporary directory and the null device stay writable unless the person
 holds the temporary directory back, since compilers, test runners and shells write scratch files there. A toolchain a stage carries or asks for brings
-its list and writes no cache, and a request for a path to write ([SANDBOX-28](#SANDBOX-28)) is
+its list and writes no cache, gh's included, while under `strict` gh's cache is written only by a
+stage whose program resolved to `gh` or whose line asked for `gh`, and a request for a path to write ([SANDBOX-28](#SANDBOX-28)) is
 refused before anyone is asked, so the mode that answers every question cannot hand the session's
 directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and the write
 grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` also holds back
@@ -2801,6 +2911,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_sandbox::mode::a_looser_mode_reads_more_writes_more_or_both`
 `verified-by: bravebot_sandbox::mode::on_windows_read_only_is_no_looser_than_strict`
 `verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
+`verified-by: bravebot_agent::confine::where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache`
 `verified-by: bravebot_agent::confine::read_only_lends_no_network_and_no_remote_scope`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
@@ -3443,7 +3554,7 @@ because the path it names is the one the person was protecting.
 ### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
 
 `run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
-`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `loopback` and `ssh-key`. It is
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `gh`, `loopback` and `ssh-key`. It is
 for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script
 that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
 that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
@@ -3526,6 +3637,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
 `verified-by: bravebot_agent::confine::a_requested_scope_or_toolchain_keeps_a_closed_network_for_its_stage`
+`verified-by: bravebot_agent::confine::a_requested_gh_lends_its_cache_and_keeps_a_closed_network_closed`
 `verified-by: bravebot_agent::confine::a_requested_loopback_lends_loopback_and_no_network`
 `verified-by: bravebot_agent::confine::a_requested_loopback_sorts_last_and_the_prompt_names_its_stage`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_listening_needs_loopback`
@@ -3839,7 +3951,9 @@ none to add to.
   no profile to remove and so cannot accept this request.
 - **The planner is told, where the session accepts it.** A write the file tools refuse for leaving
   the workspace, a redirection refused for the same reason, and a `request_path` for writing that
-  is refused unasked each name this argument as the route, and say the person is asked. They name
+  is refused unasked each name this argument as the route, and say the person is asked. A refused
+  redirection names it after whatever remedy it is given, `/add-dir` or none, a credential
+  location's included ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). They name
   it only where the request would be accepted and the front end can ask about it, which the
   terminal interface and a session in lines can, and the desktop and a run with nobody to ask
   cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
@@ -3854,7 +3968,9 @@ none to add to.
   again with the argument, in the same sessions. It is also a sentence, said in the same sessions
   after a failed line with a step that runs `open` or `osascript`, that the default profile refuses
   LaunchServices and Apple Events, so launching an application, opening a URL in one or scripting
-  one needs the line run again with the argument.
+  one needs the line run again with the argument. On every platform it is also the sentence after a
+  failed git step in a linked worktree or a submodule, which says the git line can be run again
+  with the argument, in the same sessions ([SANDBOX-19](#SANDBOX-19)).
 - **Accepted after a failure.** The driver accepts the request only while a line has run with the
   sandbox in this turn and exited non-zero, or a line whose program the platform could not confine
   ([SANDBOX-17](#SANDBOX-17)) was refused, in the foreground or the background, and each such
@@ -3908,10 +4024,12 @@ refuse the path.
 `verified-by: bravebot_agent::confine::a_failed_step_on_macos_names_the_unconfined_line_for_git_only_where_it_is_accepted`
 `verified-by: bravebot_agent::confine::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::confine::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
+`verified-by: bravebot_agent::confine::a_failed_git_step_in_a_linked_worktree_is_told_its_git_directory_is_outside_the_session`
 `verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
+`verified-by: bravebot_agent::tools::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
@@ -4283,8 +4401,9 @@ file. A new spawn that looks a name up through
   persistence locations named in this clause as refused for writing. A person avoids it by opening
   sessions on a project directory and not on the home directory, and by not adding `~/.config` or
   `~/.local/share/applications` as a session directory. What `gio open` and `xdg-open` on Linux do
-  with `HOME` removed is taken from the GLib source and is not observed, and the opener's start
-  through Electron under a GNOME session is not observed either.
+  with `HOME` removed was observed for `gio open` (see the run under a GNOME session below) and
+  agrees with the GLib source, and the opener's start through Electron under a GNOME session with a
+  file manager on the bus is not observed.
   [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME` and
   [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
@@ -4639,7 +4758,7 @@ file. A new spawn that looks a name up through
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
   | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
-  | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds; whether the start needs it was not run |
+  | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds. The Windows CI runs removed it and `rundll32` exited with status 0; whether a page opened was not observed |
 
   That is 29 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
   application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
@@ -4795,11 +4914,16 @@ shown by running the program, or not entirely:
   runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
   The third,
   `ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
-  is of the same kind for `LD_ORIGIN_PATH` and `MUSL_LOCPATH`. It does not show what the loader
-  does with `LD_ORIGIN_PATH`, which glibc reads only when it cannot read `/proc/self/exe`
-  (see below). A separate run with a planted `LD_ORIGIN_PATH` loaded nothing from it while `/proc`
-  was readable. The run with no `/proc` could not be made, since `unshare -rm` is refused on that
-  host.
+  is of the same kind for `LD_ORIGIN_PATH` and `MUSL_LOCPATH`. It does not show what a loader
+  does with them. The fourth,
+  `ld_origin_path_runs_a_library_a_stage_wrote_in_a_process_with_no_proc_unless_the_start_removes_it`,
+  runs a program whose `RUNPATH` is `$ORIGIN/lib` in a process with an empty `/proc`
+  (`bwrap --tmpfs /proc`)
+  through a kept start, which must load the planted library, and then through a checked start,
+  which must not, and through a checked start with a directory outside every writable one, which
+  must. It prints `skipped` where `bwrap` cannot make that process or the control loads nothing.
+  With `LD_ORIGIN_PATH` out of the table it failed with `LD_ORIGIN_PATH loaded the planted library
+  through a checked start: ["planted"]`.
   The names come from ld.so(8) on man7.org, which was read. Its secure-execution section says that
   in that mode "the effects of some environment variables are voided or modified, and furthermore
   those environment variables are stripped from the environment", and lists `GCONV_PATH`,
@@ -4824,11 +4948,22 @@ shown by running the program, or not entirely:
   - `LD_LIBRARY_PATH` ran a planted `libneed.so` for a program whose `RUNPATH` names the real one,
     and ran nothing when it named the program's own library directory.
   - `LD_ORIGIN_PATH` ran nothing for a program whose `RUNPATH` is `$ORIGIN/lib` while `/proc` was
-    readable. The case with no `/proc` was not run.
+    readable. With an empty `/proc` (`bwrap --ro-bind / / --tmpfs /proc`, glibc 2.42, no
+    `LD_ORIGIN_PATH` set: the loader reported `libfoo.so: cannot open shared object file`) the same
+    program loaded the planted `lib/libfoo.so` from the directory the variable named and its
+    constructor ran. The variable selects code in a process with no `/proc`, so it stays in the
+    table.
   - `LOCPATH` made `setlocale` open locale files under the directory (13 opens, all succeeded) and
     start no program. `NLSPATH` made `catopen` open a catalog under the directory and start no
     program. `GLIBC_TUNABLES=glibc.cpu.name=/tmp/x` opened no file named `/tmp/x`.
-  - musl was not run. The musl names rest on the source reading.
+  - musl 1.2.5 (Ubuntu 25.10 `musl` and `musl-tools` 1.2.5-3, unpacked without root, a program
+    linked with `gcc -nostdlib` against its `libc.so` as the interpreter, `RUNPATH` naming a
+    directory with a stub `libfoo.so`) was run. `LD_PRELOAD` ran the planted library, and
+    `LD_LIBRARY_PATH` naming a directory with a planted `libfoo.so` ran it ahead of the `RUNPATH`
+    one. `LD_ORIGIN_PATH` ran nothing, with `/proc` readable and with it empty. `MUSL_LOCPATH`
+    made `setlocale` open `<dir>/xx_YY.UTF-8` (one `open`, none without the variable) and start
+    nothing. This matches the source reading: musl reads no other loader variable. A musl
+    distribution other than Debian's build and a statically linked program were not run.
   The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and `LD_PRELOAD`,
   which name a library, a module or a directory searched for libraries (glibc `elf/rtld.c`
   `process_envvars` lines 2565 to 2728, `elf/dl-load.c` line 833, `iconv/gconv_cache.c` line 56 with
@@ -4950,9 +5085,15 @@ shown by running the program, or not entirely:
 - `xclip` and `xsel` are given the generic table and no names of their own. `xclip` 0.13 was run
   under Xvfb on Ubuntu 25.10 (libX11 1.8.12). `XLOCALEDIR` and `XLOCALELIBDIR` each named a copy of
   `/usr/share/X11/locale` that holds a planted `xi18n.so`: `xclip` opened files there (6 opens, all
-  succeeded) and loaded no library, and that libX11 holds no `xi18n` string. `xsel` is not installed
-  on that host and was not run. Not covered: a libX11 built with `--enable-loadable-i18n` (the
-  fourth item of the not-settled bullet below), and `xsel`.
+  succeeded) and loaded no library, and that libX11 holds no `xi18n` string. `xsel` 1.2.1 (Ubuntu
+  25.10 `xsel` 1.2.1-1, unpacked without root) was run under Xvfb with `XAUTHORITY`, `XLOCALEDIR`,
+  `XCOMPOSEFILE`, `XENVIRONMENT` and `XDG_CACHE_HOME` naming planted paths. It opened the planted
+  `XAUTHORITY` file as the cookie, and opened nothing under the other four and started no program
+  (a full `strace -f` of `xsel -o -b`: 220 lines, one `execve`). A `getenv` logging shim loaded by
+  `LD_PRELOAD` listed what `xsel -o -b` and `xsel -i -b` read: `DISPLAY`, `HOME`, `XAUTHORITY`,
+  `XDG_CACHE_HOME` (`-i` only), `XKB_DEBUG`, `XKB_DISABLE`, `XLIBBUFFERSIZE`,
+  `XLIB_SKIP_ARGB_VISUALS` and `_XKB_OPTIONS_ENABLE`. None names a program or a library. Not covered:
+  a libX11 built with `--enable-loadable-i18n` (the fourth item of the not-settled bullet below).
   xclip 0.13 (`xclip.c`, `xclib.c`) has no `getenv`, `exec*`, `dlopen`, `popen` or `system(`, and
   xsel 1.2.1 (`xsel.c`) reads only `XDG_CACHE_HOME` and `HOME` (lines 354 and 355), to place a
   state directory it writes to. libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 were read for every
@@ -4964,11 +5105,10 @@ shown by running the program, or not entirely:
   The starts are in `crates/tui/src/clipboard.rs`.
 - `wl-copy` is given `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `QT_PLUGIN_PATH`, `PERL5LIB`,
   `PERLLIB` and `DBUS_SESSION_BUS_ADDRESS` (`Names::BusAddress`) (`WL_COPY_CODE_SELECTORS` in
-  `crates/tui/src/powershell.rs`). `wl-copy` is not installed on the host the run was made on, so
-  the programs it starts were run in its place on Ubuntu 25.10: `xdg-mime` 1.2.1, `gio info` and
-  the Perl `mimetype`. Not covered: `kmimetypefinder` and `qtxdg-mat` are not installed there, so
-  what KDE and LXQt run was not observed (the first item of the not-settled bullet below), and the
-  list can be short.
+  `crates/tui/src/powershell.rs`). `wl-copy` 2.2.1 (Ubuntu 25.10 `wl-clipboard` 2.2.1-2, unpacked
+  without root) was run under a headless `cage` compositor (`WLR_BACKENDS=headless`), so the chain
+  below was observed from `wl-copy`, and the programs it starts were also run directly on Ubuntu
+  25.10: `xdg-mime` 1.2.1, `gio info`, the Perl `mimetype`, `kmimetypefinder` and `qtxdg-mat`.
   The start passes no `--type`, so `wl-copy` runs `xdg-mime query filetype` on the content
   (wl-clipboard v2.2.1 `src/wl-copy.c` lines 266 to 267), and `xdg-mime` (xdg-utils v1.2.1
   `scripts/xdg-mime.in` lines 63 to 129 and 684 to 700) runs `gio info`, `kmimetypefinder`,
@@ -4993,17 +5133,41 @@ shown by running the program, or not entirely:
   `dbus-send` (`detectDE`, line 580 of the installed script) and then `mimetype`, and
   `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` made `dbus-send` run the helper. With
   `XDG_CURRENT_DESKTOP` set to `GNOME`, `KDE`, `XFCE` or `LXQt` the helper did not run, and `gio info`
-  run directly with the address did not run it either. `GNOME` and `XFCE` ran `gio`, `KDE` ran no
-  program of KDE and `LXQt` found no method, since `kmimetypefinder` and `qtxdg-mat` are not
-  installed. The address is a `Names::BusAddress`, so a `unix:path=` socket outside every directory a
+  run directly with the address did not run it either. `GNOME` and `XFCE` ran `gio`, `KDE` ran
+  `kmimetypefinder` and `LXQt` ran `qtxdg-mat mimetype` (kde-cli-tools 6.4.5 and qtxdg-tools 4.2.0,
+  unpacked without root). The address is a `Names::BusAddress`, so a `unix:path=` socket outside
+  every directory a
   stage may write is kept. The tests
   `a_unixexec_session_bus_address_runs_a_helper_through_the_xdg_mime_wl_copy_starts_unless_the_start_removes_it`
   and `the_directories_xdg_mime_would_load_code_from_are_removed_from_wl_copy_when_a_stage_may_write_them`
   cover the name; the first starts a stand-in `wl-copy` that runs the real `xdg-mime`.
+  The real `wl-copy` under `cage`, with `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` and no
+  desktop named, ran the helper, so the stand-in matches the program. With nothing set, `strace -f -e
+  trace=execve` showed `wl-copy` start `cat`, then `xdg-mime query filetype`, which started
+  `realpath`, `dbus-send`, `xprop`, `grep`, `uname` and `mimetype`, and nothing else: no program
+  other than those `xdg-mime` names.
+  `kmimetypefinder` and `qtxdg-mat mimetype` ran no helper for `DBUS_SESSION_BUS_ADDRESS=
+  unixexec:path=<helper>`, directly or through `xdg-mime` under `LXQt`. A full `strace -f` of each
+  with `QT_PLUGIN_PATH` naming a directory holding a planted plug-in showed no syscall naming the
+  directory, since neither program asks Qt for a plug-in, so `QT_PLUGIN_PATH` is kept as a
+  precaution and not shown to select code. With `LD_PRELOAD` a `getenv` shim listed what each
+  reads. `kmimetypefinder`: `HOME`, `LANG`, `LANGUAGE`, `LC_*`, `XDG_CONFIG_DIRS`,
+  `XDG_CONFIG_HOME`, `XDG_DATA_DIRS`, `XDG_DATA_HOME`, the `QT_*` logging and debugging names,
+  `QT_NO_MIME_CACHE`, `QDBUS_FORCE_SHUTDOWN`, `G_DEBUG`, `G_MESSAGES_PREFIXED` and the libgomp and
+  libstdc++ tuning names (`GOMP_*`, `OMP_*`, `ACC_*`, `GLIBCXX_TUNABLES`). `qtxdg-mat mimetype`
+  read the same and also `QTXDG_DBUSACTIVATE_TIMEOUT`, `QTXDG_START_DETACH_TRULY`, `GOBJECT_DEBUG`,
+  `LIBBLKID_DEBUG` and `__GL*`. `xprop` read `DISPLAY`, `HOME`, `XAUTHORITY`, `XKB_*`,
+  `XLIB*` and `XPROPFORMATS`. `dbus-send` read `DBUS_SESSION_BUS_ADDRESS`,
+  `DBUS_STARTER_ADDRESS`, `DBUS_SYSTEM_BUS_ADDRESS`, `DISPLAY` and `XDG_RUNTIME_DIR`: a
+  `unixexec:` address in `DBUS_STARTER_ADDRESS` (with `DBUS_STARTER_BUS_TYPE=session`) or in
+  `DBUS_SYSTEM_BUS_ADDRESS` ran no helper through `dbus-send` or `xdg-mime`, and the same address
+  in `DBUS_SESSION_BUS_ADDRESS` did. The `wl-copy` chain as a whole read, besides those, the Perl
+  names (`PERL5LIB`, `PERL5OPT`, `PERLLIB` and others that are flags or numbers), `NO_COLOR`,
+  `FORCE_COLOR`, `CLICOLOR_FORCE`, `WAYLAND_DEBUG`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and
+  `XDG_RUNTIME_DIR`. `DEB_GREP_ENABLE_STRAY_BACKSLASH_WARN` and `DPKG_RUNNING_VERSION` are read by
+  Debian's `grep` and `dpkg` wrappers and name no program. A program that reads `environ` directly
+  is not seen by that method.
 - Not settled for the five programs above. Each needs a host or a privilege the run did not have:
-  - `xdg-mime` under LXQt runs `qtxdg-mat mimetype` (`xdg-mime.in` lines 114 to 128), whose source
-    was not read. Run `XDG_CURRENT_DESKTOP=LXQt strace -f -e trace=execve,openat xdg-mime query
-    filetype /tmp/x 2>&1 | grep -E 'execve|\.so'`.
   - The `mimetype` of another distribution may run in taint mode, which ignores `PERL5LIB`. The one
     that was run (Debian's libfile-mimeinfo-perl 0.35) does not.
   - `systemctl --user enable --runtime` on the booted host did not touch the directory
@@ -5012,8 +5176,8 @@ shown by running the program, or not entirely:
     person's own session. The name stays in the list for the client-side case above.
   - Distribution builds of libX11 with `--enable-loadable-i18n` were not read. The libX11 1.8.12 of
     Ubuntu 25.10 holds no `xi18n` string and loaded nothing from `XLOCALEDIR`.
-  - `xsel`, `wl-copy`, a musl host and the no-`/proc` case of `LD_ORIGIN_PATH` were not run. The
-    first three are not installed on the host, and `unshare -rm` is refused there.
+  - A musl distribution other than Debian's, a statically linked program under musl, and a glibc
+    other than 2.42 were not run.
 - A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
   examined for the variables they read to choose code, by running each where it could be run, and
   the names are in the generic table or in the list of the start that runs the program (the AWS
@@ -5067,7 +5231,17 @@ shown by running the program, or not entirely:
     `GSETTINGS_BACKEND` and `GIO_USE_VFS` (which choose among modules already loaded). The session
     bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
     judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
-    not run or read.
+    not run or read. On Linux (Ubuntu 25.10, x86_64, `gio` 2.86.0, `xdg-open` 1.2.1) the installed
+    `xdg-open` was run with `XDG_CURRENT_DESKTOP=GNOME`, a scratch `HOME` and `XDG_DATA_DIRS` holding
+    one handler for the scheme `bravebot-test`, and `GIO_LAUNCH_DESKTOP` naming a wrapper script,
+    `GIO_EXTRA_MODULES` a directory holding a shared library with a constructor, and
+    `GIO_MODULE_DIR` the same: each ran its code, and each was not run once the opener had judged the
+    value, with the same name naming an installed path still honoured
+    (`a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome`).
+    That run is of the three names and does not show that no other variable `gio open` reads runs
+    code. The Homebrew and pip `aws` scripts, the asdf and pyenv shims and `kde-open` were not run
+    on Linux, and `osascript` is macOS only, so their lists are as the paragraphs above record them.
+    That is what remains of #3809.
   - **`kde-open`** cannot run to the point of a handler on macOS. On Linux (ubuntu-latest, under
     `dbus-run-session`, the `ci.yml` step `Run kde-open with each name set to a marker handler`)
     the installed `kde-open` started with the baseline environment of the test and exited with
@@ -5224,7 +5398,7 @@ shown by running the program, or not entirely:
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
   stand-in, so the opener's names are checked there against a started `kde-open`. The
   generic-mode `BROWSER` test through the installed `xdg-open` fails in those cases too on Linux
-  with `CI` set, and prints `skipped` elsewhere. On macOS with no `xdg-open` on `PATH` every opener test prints `skipped` even when `CI` is set. With the real `xdg-open` 1.2.1 and a `uname` that prints `Linux` first on `PATH`, the 28 `opener::` tests passed here, 25 with no skip line and 3 with one: the real-`gio` `HOME` test, the real-`gio` `XDG_` test (all four names) and the real-`kde-open` test (`no xdg-open and kde-open on this host`). No GNOME or KDE host was available, so `cargo test -p bravebot-tui opener` has not been run on one.
+  with `CI` set, and prints `skipped` elsewhere. On macOS with no `xdg-open` on `PATH` every opener test prints `skipped` even when `CI` is set. With the real `xdg-open` 1.2.1 and a `uname` that prints `Linux` first on `PATH`, the 28 `opener::` tests passed here, 25 with no skip line and 3 with one: the real-`gio` `HOME` test, the real-`gio` `XDG_` test (all four names) and the real-`kde-open` test (`no xdg-open and kde-open on this host`). No KDE host was available. `cargo test -p bravebot-tui opener` was run on a GNOME desktop (Ubuntu 25.10, Wayland, libglib2.0-bin 2.86.0, xdg-utils 1.2.1) with `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode` skipped on the command line: 37 tests passed, `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` printed `skipped: this account has handlers of its own under its home`, and the two `kde-open` tests printed `skipped: no kde-open on this host`. `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` ran all four names without skipping.
   With no `DISPLAY` or `WAYLAND_DISPLAY`, `xdg-open` 1.2.1 does not look up a scheme handler in
   generic mode, so the generic test sets `DISPLAY`. The generic-mode test failed on the CI runner
   with the installed handler not run; its run now prints `xdg-open`'s debug output when that
@@ -5296,6 +5470,15 @@ shown by running the program, or not entirely:
   `ELECTRON_SKIP_BINARY_DOWNLOAD`, and the `Front end` log of run 43104226342 (image
   `ubuntu-26.04`) lists both cases, with the sixteen names, as passed (✔, 5.01 s and 1.67 s) and
   not skipped, so Electron started there and `showItemInFolder` started `xdg-open`.
+
+  The same two cases were run on a Linux desktop (Ubuntu 25.10, Electron 44.9.3, `node --test
+  scripts/external-open-electron.test.mjs` in `ui/`) and neither skipped. With
+  `DBUS_SESSION_BUS_ADDRESS` naming a missing socket, `showItemInFolder` on Electron's own `shell`
+  started `xdg-open` once, with the argument `.` and all sixteen names set, and the same call
+  through `external-open.ts` started it once with none of them. The call against the session bus of
+  that desktop, which has the file manager registered, was not run, since the file manager would
+  open a window for the person running the test. What Electron starts in that case is read from
+  its source and not observed.
 
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
   the names in the opener's list, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
@@ -5425,8 +5608,8 @@ shown by running the program, or not entirely:
   started the planted handler through `gio open`.
   `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs that, and
   `a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk` runs the judgment on the
-  disk. With `HOME` removed by the opener, `gio open` was run twice on macOS (Homebrew `gio` 2.90.1, `env -i`): with `HOME` set to a directory holding a `mimeapps.list` and a `.desktop` entry for `bravebot-test`, and with `HOME` unset. Both exited 2 with `Operation not supported`, so on this host `gio` does not start a handler either way and what it falls back to when `HOME` is missing (the passwd entry, read in `glib/gutils.c` and not run) is blocked until a Linux host where `gio open` starts handlers. What the opener hands on was run: the real `xdg-open` 1.2.1 with `uname` stubbed and `XDG_CURRENT_DESKTOP=GNOME` started a stand-in `gio` with `open bravebot-test://example.invalid/` and `HOME` unset (the stand-in logged `HOME unset`), and `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome` shows the same through the opener for a planted `HOME`: `gio` is started with the address and without `HOME`. With the judging of `HOME` disabled in `withhold_code_selectors_with` that test failed with `HOME reached gio: ... SET HOME=.../opener-gio-home-planted-session/selected`, and it passes with it restored.
-  Source read for this list, on a macOS host with no Linux container, VM or `xdg-open`: xdg-utils
+  disk. With `HOME` removed by the opener, `gio open` was run twice on macOS (Homebrew `gio` 2.90.1, `env -i`): with `HOME` set to a directory holding a `mimeapps.list` and a `.desktop` entry for `bravebot-test`, and with `HOME` unset. Both exited 2 with `Operation not supported`, so on that host `gio` does not start a handler either way. What the opener hands on was run: the real `xdg-open` 1.2.1 with `uname` stubbed and `XDG_CURRENT_DESKTOP=GNOME` started a stand-in `gio` with `open bravebot-test://example.invalid/` and `HOME` unset (the stand-in logged `HOME unset`), and `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome` shows the same through the opener for a planted `HOME`: `gio` is started with the address and without `HOME`. With the judging of `HOME` disabled in `withhold_code_selectors_with` that test failed with `HOME reached gio: ... SET HOME=.../opener-gio-home-planted-session/selected`, and it passes with it restored.
+  Source read for this list, on a macOS host: xdg-utils
   1.2.1 (tag `v1.2.1`, commit `356c380ad6fecc9ce6bea1f6a77986ba67402c80`), GLib 2.86.0
   (`e33be08bda99f453e497064e9e021d6306bbeb7d`) and 2.88.4 (`802d1893cd5f4928991b5295263f1700311a3490`),
   kde-cli-tools 6.8.3, KDE Frameworks 6.29.0 and Qt 6.10.0. `xdg-open` and `xdg-mime` choose
@@ -5442,13 +5625,45 @@ shown by running the program, or not entirely:
   a `mimeapps.list` for `x-scheme-handler/https` and a `.desktop` entry, and `BROWSER` naming a
   fallback. In all four runs the handler from the named directory ran and the fallback did not.
   Those runs show that each of the four names selects the program the real scripts run. They were
-  not made on a Linux host and not through the opener, so the opener's removal of
+  made on macOS and not through the opener. On a Linux desktop the same four names were run
+  through the opener under GNOME, as recorded below. In generic mode the opener's removal of
   `XDG_CONFIG_DIRS` rests on the source (`xdg-mime` `defapp_generic`, which reads the variable
   without checking it) and on the stubbed run, and was not run on Linux. The removal of the other
   three names has the same standing in generic mode, except for the `BROWSER` test and the GNOME
   `gio open` cells marked run above. The Windows `rundll32` start was read and not run.
   Not read: `G_RESOURCE_OVERLAYS` is read and judged unreachable, the `QT_*` names not listed, and `LD_*` variables.
   These are unobserved.
+  `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` prints
+  `skipped` on a host whose account has handlers of its own under its home, so it does not run there.
+  `xdg-open` run with `XDG_CURRENT_DESKTOP=GNOME` and `HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
+  `XDG_CONFIG_DIRS` unset, on such a host (Ubuntu 25.10, libglib2.0-bin 2.86.0, xdg-utils 1.2.1),
+  started `gio open`, which opened `/etc/passwd` and then read
+  `~/.config/mimeapps.list` and `~/.local/share/applications/mimeapps.list` under the account's passwd
+  home (`strace -f -e trace=openat,execve`). That is the fallback this clause expects.
+  A logged-in GNOME session was run: Ubuntu 25.10 with `gnome-shell` on Wayland, the session bus at
+  `/run/user/1000/bus`, libglib2.0-bin 2.86.0 and xdg-utils 1.2.1.
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` ran all four
+  names without skipping. `strace -f -e trace=execve,openat` of it shows, for each of
+  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS`, `xdg-open` starting
+  `gio help open` and `gio open`; with the value naming a directory a stage may write, no read of
+  that directory's `mimeapps.list` or `.desktop` file and no start of its handler; and with the value
+  naming an installed directory, a read of its `mimeapps.list` and a start of its handler through
+  `gio-launch-desktop`. The shell that started the test held none of the session's variables, so the
+  opener was also run from the test binary with the variables of the session set
+  (`XDG_CURRENT_DESKTOP=ubuntu:GNOME`, `DESKTOP_SESSION`, `GNOME_DESKTOP_SESSION_ID`,
+  `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`, `XDG_RUNTIME_DIR` and the `DBUS_SESSION_BUS_ADDRESS` of the
+  real bus), once with each name set to a directory a stage may write and once to an installed
+  directory, against a direct `gio open` with the same environment. No test in the tree makes these
+  runs. For `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
+  `XDG_DATA_DIRS` the planted handler ran under the direct `gio open` and under none of the opener's
+  starts, the installed value was honoured in both, and the strace of the opener's start has no line
+  naming the planted directory. For `GIO_LAUNCH_DESKTOP` the planted wrapper ran under the direct
+  `gio open` and not under the opener, and the installed wrapper ran under the opener. For
+  `GIO_EXTRA_MODULES` and `GIO_MODULE_DIR` `gio open` opened the planted directory twice when run
+  directly and never through the opener, and opened an installed directory twice in both. With
+  `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH` and `KDESYCOCA` set, `gio open` under GNOME opened
+  neither the planted nor the installed value, so under GNOME those three change nothing and are
+  listed for `kde-open`.
   These were not run: a D-Bus service that answers `gio open` after the portal call it receives, so
   that what it can make `gio open` start is unobserved. The Windows `rundll32 url.dll,FileProtocolHandler` start's list was read from public source:
   Wine's `url.dll` hands the address to `ShellExecuteA`, Wine's `shlexec.c` expands
@@ -5456,8 +5671,17 @@ shown by running the program, or not entirely:
   searches `PATH` for the library, and Wine's `kernelbase` starts a batch file through `COMSPEC`;
   ReactOS's `shlexec.cpp` handles `SEE_MASK_DOENVSUBST` the same way; Microsoft's `ShellExecute`
   pages name no variable; Microsoft's `rundll32` page and the rest of the ReactOS tree were not
-  read, and no source read shows `PATHEXT` being read by this start. No Windows run of this start
-  is recorded here. No Wine or ReactOS version is recorded for the source named. The opener
+  read, and no source read shows `PATHEXT` being read by this start. No Wine or ReactOS
+  version is recorded for the source named. The `sandbox-windows` job ran the start on
+  `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in two
+  runs of `ci.yml` on main, 43115512926 and 43116736884. In both, the opener's start removed the
+  ten names listed below, the batch file did not run, and `rundll32` exited with status 0. A start
+  with only one of the ten names, or only `PSModulePath`, put back on the command did not run the
+  batch file either. That shows that setting a name to a directory a stage may write does not by
+  itself make this start run a file in it on that image. It does not show which names select the
+  program: the test registers no handler whose command expands a listed name, and sets `COMSPEC`
+  without starting a batch file. An exit status of 0 from `rundll32` does not show that a page
+  opened, so it does not show that the start works without `PATHEXT` and the other nine names. The opener
   removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
   `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
   `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
@@ -5472,12 +5696,14 @@ shown by running the program, or not entirely:
   test reads the records from the lines that begin with that prefix, so the check does not depend
   on where the test harness's own output on the same stream ends; it also asserts that every
   child printed its `start ended` record. The printed
-  record is not asserted. #3860 owns the Windows run; #3822 owns the rest of the opener list.
+  record is not asserted. Which names select the program on Windows is still unobserved. #3860
+  owns the run that shows it: a handler registered for the current user whose command expands a
+  listed name, started through the opener, with the helper reachable only through that name.
+  #3822 owns the rest of the opener list.
   These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
-  unobserved (the marker test and CI step are meant to observe it); a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
-  with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
+  unobserved (the marker test and CI step are meant to observe it); `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
   stand-in for `xdg-open` instead; that `kde-open` chooses its handler
@@ -5971,6 +6197,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::opener::a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk`
 `verified-by: bravebot_tui::opener::gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
+`verified-by: bravebot_tui::opener::a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::opener::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
@@ -6333,6 +6560,13 @@ that follows does not prevent it. The token files and the installs are in no wri
 | `go` | `~/.asdf` | `~/.cache/go-build`, which on macOS is `~/Library/Caches/go-build`, `~/go/pkg/mod` and `~/go/pkg/sumdb` |
 | `mvn` | `~/.asdf` | `~/.m2/repository` |
 | `gradle` | `~/.asdf` | `~/.gradle/caches`, `~/.gradle/wrapper`, `~/.gradle/native` |
+| `gh` | nothing | `~/.cache/gh` on Linux and macOS, `~/AppData/Local/GitHub CLI` on Windows |
+
+gh keeps its HTTP cache and the logs `gh run view --log` and `--log-failed` download in that
+directory, and keeps its login in `~/.config/gh/hosts.yml` or the system keychain, so the cache
+holds no credential and is named whole. gh reads `XDG_CACHE_HOME` to move it, and like every other
+row this one is not moved by it. The locations are those of `CacheDir` in
+[go-gh's `pkg/config/config.go`](https://github.com/cli/go-gh/blob/trunk/pkg/config/config.go).
 
 The first column is the name of the file a stage resolved to once its links are followed, which is
 why rustup's proxy and npm's own scripts are in it: a `cargo` rustup installed resolves to `rustup`,

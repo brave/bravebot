@@ -95,8 +95,9 @@ person can do; [#3904](https://github.com/brave/bravebot/issues/3904) is the iss
 [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other
 two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
 "What a checked start does not cover" in SANDBOX-30 records).
-`gio open` with `HOME` removed and the opener through Electron under a GNOME session have not been
-run.
+`gio open` with `HOME` removed was run under a GNOME session (Ubuntu 25.10, GLib 2.86.0) and read
+the account's passwd home. The opener through Electron under a GNOME session with a file manager on
+the bus has not been run.
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
 launcher it starts is a script that records which of the sixteen names it was started with. The
@@ -112,6 +113,11 @@ it calls `OpenParentFolderFallback`,
 which runs `xdg-open` on the folder, so the case sees at least one start and the start carries the
 environment of the main process. With a portal or file manager running, as in a desktop session, it
 sends the path over D-Bus and starts no `xdg-open`, so the deletion has nothing to do there.
+Both cases were also run on a Linux desktop (Ubuntu 25.10, Electron 44.9.3) and passed without
+skipping: with the missing socket, `showItemInFolder` on Electron's own `shell` started `xdg-open`
+once, with the argument `.` and all sixteen names set, and through `external-open.ts` it started it
+once with none. The call against that desktop's own session bus, which has the file manager
+registered, was not run, since the file manager would open a window for the person running it.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 

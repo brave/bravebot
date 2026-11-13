@@ -11657,7 +11657,8 @@ fn a_first_run_with_ollama_running_offers_to_import_it() {
     let before = &transcript[..question];
     for shown in [
         format!("Ollama is running at http://{ollama}, serving models bravebot can use."),
-        format!("provider.ollama, reached at http://{ollama}/v1"),
+        format!("provider.ollama, reached at http://{ollama}/api"),
+        r#""npm":"ollama-ai-provider-v2""#.to_string(),
         r#"model: "ollama/qwen3-coder:30b""#.to_string(),
     ] {
         assert!(

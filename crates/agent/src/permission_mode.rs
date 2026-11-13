@@ -293,6 +293,11 @@ impl LiveMode {
         }
     }
 
+    /// Whether nobody is there to ask in this run, a one-shot command or a pipeline (CLI-1).
+    pub fn nobody_to_ask(&self) -> bool {
+        self.nobody_to_ask
+    }
+
     /// The mode in force now. Read once per decision: two reads in one decision can disagree.
     pub fn get(&self) -> PermissionMode {
         match self.mode.load(std::sync::atomic::Ordering::Acquire) {
@@ -327,6 +332,14 @@ impl LiveMode {
     /// the bypass mode, where the confirmer answers for the person who typed it (CLI-1).
     pub fn writes_are_always_asked(&self) -> bool {
         self.nobody_to_ask && self.get() != PermissionMode::Bypass
+    }
+
+    /// Whether a `scopes` argument or a `request_path` call can be answered yes in this run: there
+    /// is somebody to ask, or the mode is the one that answers a run and a path request unasked.
+    /// Where nobody can be asked otherwise, the confirmer refuses every request (CLI-1, SANDBOX-26),
+    /// so a sentence that names one points the planner at a refusal.
+    pub fn answers_requests(&self) -> bool {
+        !self.nobody_to_ask || self.get().answers_a_run_unasked()
     }
 }
 

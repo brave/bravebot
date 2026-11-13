@@ -744,15 +744,19 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
 /// budgets a conversation against, that the server drops what does not fit.
 ///
 /// Said only where the server stated a figure: a model that is not loaded has none, and guessing
-/// one would be worse than saying nothing. Where it is below the assumed window the entry listed
-/// under it carries the figure as `options.contextWindow`, so it is the entry that is written.
+/// one would be worse than saying nothing. Where it is below the assumed window, LM Studio's entry
+/// carries the figure as `options.contextWindow`, and Ollama's asks for a larger one each request.
 fn window_lines(source: Source, window: Option<u64>) -> Vec<String> {
     let Some(window) = window else {
         return Vec::new();
     };
     let mut lines = vec![format!("  {}", t!(import_window, window = window as i64))];
-    if window < bravebot_config::provider::CONTEXT_WINDOW {
-        let assumed = bravebot_config::provider::CONTEXT_WINDOW as i64;
+    let assumed = match source {
+        Source::Ollama => bravebot_config::provider::OLLAMA_WINDOW,
+        _ => bravebot_config::provider::CONTEXT_WINDOW,
+    };
+    if window < assumed {
+        let assumed = assumed as i64;
         lines.push(format!(
             "  {}",
             match source {
@@ -1835,9 +1839,10 @@ mod tests {
         )
     }
 
-    /// IMPORT-5: the question for a server whose model is loaded below the window a conversation is
-    /// budgeted against shows the figure and says the server drops earlier turns; a window at or
-    /// above that, or none stated, shows no warning, and none stated shows no figure either.
+    /// IMPORT-5: the question for an Ollama whose model is loaded below the 65,536 tokens its entry
+    /// assumes shows the figure and says each request asks for the trained window, up to that, and
+    /// that `contextWindow` asks for less; a window at or above it, or none stated, shows no such
+    /// line, and none stated shows no figure either.
     #[test]
     fn a_window_below_the_assumed_one_is_shown_with_what_the_server_drops() {
         let scratch = Scratch::new("cli-import-ollama-window");
@@ -1854,23 +1859,41 @@ mod tests {
 
         let small = asked(Some(4096));
         assert!(small.contains("context window of 4096 tokens"), "{small}");
-        assert!(small.contains("drops the earliest turns"), "{small}");
-        assert!(small.contains("OLLAMA_CONTEXT_LENGTH"), "{small}");
+        assert!(small.contains("up to 65536 tokens"), "{small}");
+        assert!(small.contains("set contextWindow"), "{small}");
+        assert!(!small.contains("OLLAMA_CONTEXT_LENGTH"), "{small}");
 
-        let large = asked(Some(131_072));
-        assert!(large.contains("context window of 131072 tokens"), "{large}");
-        assert!(!large.contains("drops the earliest turns"), "{large}");
+        let between = asked(Some(40_960));
+        assert!(between.contains("up to 65536 tokens"), "{between}");
+
+        let large = asked(Some(65_536));
+        assert!(large.contains("context window of 65536 tokens"), "{large}");
+        assert!(!large.contains("up to 65536 tokens"), "{large}");
 
         let unstated = asked(None);
         assert!(!unstated.contains("context window"), "{unstated}");
         assert!(!unstated.contains("OLLAMA_CONTEXT_LENGTH"), "{unstated}");
     }
 
-    /// IMPORT-5: the answer that approves writes the window the server holds the model with, and a
+    /// IMPORT-5: the answer that approves writes the window LM Studio holds the model with, and a
     /// model with no figure writes none. The regression rejected is showing the figure and leaving
-    /// it out of the file, which keeps budgeting compaction against the assumed window.
+    /// it out of the file, which keeps budgeting compaction against the assumed window. Ollama's
+    /// figure is never written, since its requests ask for the window its roster states.
     #[test]
     fn approving_a_small_window_writes_it_into_the_file() {
+        let scratch = Scratch::new("cli-import-lm-studio-window-written");
+        let (said, offered) = asked_about(
+            &scratch,
+            vec![lm_studio_loaded_with(Some(4096))],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert_eq!(offered.imported, [Source::LmStudio], "{said}");
+        assert!(said.contains("contextWindow"), "{said}");
+        let file = written(&scratch);
+        assert!(file.contains(r#""contextWindow":4096"#), "{file}");
+
         let scratch = Scratch::new("cli-import-ollama-window-written");
         let (said, offered) = asked_about(
             &scratch,
@@ -1880,14 +1903,12 @@ mod tests {
             &|_| None,
         );
         assert_eq!(offered.imported, [Source::Ollama], "{said}");
-        assert!(said.contains("contextWindow"), "{said}");
-        let file = written(&scratch);
-        assert!(file.contains(r#""contextWindow":4096"#), "{file}");
+        assert!(!written(&scratch).contains("contextWindow"));
 
-        let scratch = Scratch::new("cli-import-ollama-window-unstated");
+        let scratch = Scratch::new("cli-import-lm-studio-window-unstated");
         asked_about(
             &scratch,
-            vec![ollama_loaded_with(None)],
+            vec![lm_studio_loaded_with(None)],
             "y\n",
             &Managed::default(),
             &|_| None,
@@ -1934,7 +1955,7 @@ mod tests {
         assert_eq!(offered.imported, [Source::Ollama], "{said}");
         let file = written(&scratch);
         assert!(
-            file.contains(r#""ollama":{"name":"Ollama(local)","options":{"baseURL":"http://localhost:11434/v1"}}"#),
+            file.contains(r#""ollama":{"name":"Ollama(local)","npm":"ollama-ai-provider-v2","options":{"baseURL":"http://localhost:11434/api"}}"#),
             "{file}"
         );
         assert!(

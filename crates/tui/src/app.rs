@@ -1983,7 +1983,7 @@ pub fn run(
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
     // alternate screen is worse than the original error.
-    end_the_run(&mut terminal)?;
+    end_the_run(&mut terminal, hand_back_terminal)?;
 
     result
 }
@@ -1992,9 +1992,15 @@ pub fn run(
 /// has left its herdr pane: a `/resume` stays inside the loop, and a process started on the way out
 /// reports for itself.
 ///
-/// Split from `run` so a test can reach it, since that function needs a real terminal.
-fn end_the_run<W: Write>(terminal: &mut Terminal<CrosstermBackend<W>>) -> io::Result<()> {
-    leave_for_good(terminal.backend_mut())?;
+/// Split from `run` so a test can reach it, since that function needs a real terminal, and told how
+/// to hand the terminal back so that a test does not ask the terminal the test binary runs in about
+/// its keyboard modes or take it out of raw mode. A process outside the terminal's foreground group
+/// is stopped by the terminal at either, and a test that is stopped never finishes.
+fn end_the_run<W: Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    hand_back: impl FnOnce(&mut CrosstermBackend<W>) -> io::Result<()>,
+) -> io::Result<()> {
+    leave(terminal.backend_mut(), hand_back)?;
     terminal.show_cursor()
 }
 
@@ -5735,6 +5741,20 @@ mod tests {
 
         assert_eq!(config.context_budget, 65_536);
         assert!(!config.budget_is_guessed());
+
+        // In Ollama's own protocol a fifth is kept for the reply (BACKEND-73), since each request
+        // asks the server for the window and a prompt past it is cut short rather than refused.
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"ollama": {"npm": "ollama-ai-provider-v2",
+                "options": {"baseURL": "http://localhost:11434/api", "contextWindow": 65536},
+                "models": {"tiny": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+
+        adopt_listing_for_model(&mut config, "ollama/tiny");
+
+        assert_eq!(config.context_budget, 52_429);
     }
 
     /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file

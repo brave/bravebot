@@ -7938,4 +7938,236 @@ mod tests {
 
         assert_eq!(left_at(&path, 1024), Some(format!("{declared}\u{FFFD}")));
     }
+
+    /// The remedy a redirection refused for leaving the workspace carries.
+    fn destination_remedy(workspace: &Workspace, path: &Path) -> Remedy {
+        match workspace.confines_writing(path) {
+            Err(WorkspaceError::Escapes { remedy, .. }) => remedy,
+            other => panic!("{} was not refused for leaving: {other:?}", path.display()),
+        }
+    }
+
+    /// TRUST-10, CMDLINE-5: a redirection outside every opened directory is refused with the
+    /// remedy the file tools give an absolute path, chosen from where it lands.
+    ///
+    /// The regression it rejects: `confines_as` refusing every destination with
+    /// [`Remedy::Nothing`], so the planner is never told the directory can be opened.
+    #[test]
+    fn a_redirection_outside_is_offered_the_directory_the_file_tools_offer() {
+        let (home, project) = home_and_project("redirect-remedy-open");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(
+            destination_remedy(&workspace, &beside.join("notes.txt")),
+            Remedy::Open
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &project.join("../beside/new.txt")),
+            Remedy::Open,
+            "a climb into a directory that is not open is offered it, as TRUST-10 says"
+        );
+        assert_eq!(destination_remedy(&workspace, &beside), Remedy::OpenItself);
+        assert!(
+            workspace
+                .confines_writing(&beside.join("notes.txt"))
+                .expect_err("refused")
+                .describe("x")
+                .contains("/add-dir"),
+            "the refusal does not name /add-dir"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10, CHECKOUT-7: a destination whose directory holds the working directory says what
+    /// opening it costs.
+    ///
+    /// The regression it rejects: the plain remedy for a directory that holds the root.
+    #[test]
+    fn a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts() {
+        let (home, project) = home_and_project("redirect-remedy-checkouts");
+        let base = home.parent().expect("base").to_path_buf();
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(
+            destination_remedy(&workspace, &base.join("notes.txt")),
+            Remedy::OpenEndsCheckouts
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &base),
+            Remedy::OpenItselfEndsCheckouts
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-10, SANDBOX-18: a destination in a credential location is offered no directory, and
+    /// one naming the location itself is offered nothing.
+    ///
+    /// The regression it rejects: `/add-dir` named for a directory it refuses to open.
+    #[test]
+    fn a_redirection_into_a_credential_location_is_offered_no_directory() {
+        let (home, project) = home_and_project("redirect-remedy-credential");
+        std::fs::create_dir_all(home.join(".ssh")).expect("ssh");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        assert_eq!(
+            destination_remedy(&workspace, &home.join(".ssh/config")),
+            Remedy::Credential
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &home.join(".ssh")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a refusal opening a directory cannot fix offers nothing: a link that carries the
+    /// destination out, and the stores.
+    ///
+    /// The regression it rejects: the remedy chosen from where a link leads, which names a
+    /// directory the line's path is not written in, and the stores offered as a directory to open.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing() {
+        let (home, project) = home_and_project("redirect-remedy-nothing");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        std::os::unix::fs::symlink(&beside, project.join("out")).expect("link");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_state(&state);
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+
+        assert_eq!(
+            destination_remedy(&workspace, &project.join("out/notes.txt")),
+            Remedy::Nothing
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &state.join("facts/x.md")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a redirection whose path climbs above the top of the file system offers nothing.
+    /// The kernel reads the extra `..` as `/`, so no directory the path is written in can be
+    /// opened to reach it.
+    ///
+    /// The regression it rejects: the remedy chosen from where the path lands, which names the top
+    /// of the file system as a directory to open.
+    #[test]
+    fn a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing() {
+        let (home, project) = home_and_project("redirect-remedy-off-the-top");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let climbs = "../".repeat(project.components().count() + 2);
+
+        assert_eq!(
+            destination_remedy(&workspace, &project.join(format!("{climbs}notes.txt"))),
+            Remedy::Nothing
+        );
+        assert_eq!(
+            destination_remedy(&workspace, Path::new("/../../notes.txt")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a redirection whose destination is a name that is not UTF-8 offers nothing, since
+    /// a sentence naming its directory would name a different one. Unix only: Windows names are
+    /// UTF-16 and macOS refuses such a name on APFS, so the directory is not made there.
+    ///
+    /// The lookalike `beside-\u{FFFD}`, which is valid UTF-8, is offered the directory to open as
+    /// any other name outside is.
+    ///
+    /// The regression it rejects: `/add-dir` offered with a lossy spelling of the directory, and
+    /// a check on the lossy spelling that also refuses the lookalike.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing() {
+        use std::os::unix::ffi::OsStrExt;
+        let (home, project) = home_and_project("redirect-remedy-not-utf8");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let beside = home
+            .parent()
+            .expect("base")
+            .join(std::ffi::OsStr::from_bytes(b"beside-\xff"));
+        let destination = beside.join("notes.txt");
+        if std::fs::create_dir_all(&beside).is_ok() {
+            assert_eq!(
+                destination_remedy(&workspace, &destination),
+                Remedy::Nothing
+            );
+        }
+        assert_eq!(
+            destination_remedy(&workspace, &destination),
+            Remedy::Nothing,
+            "a name nothing is at yet"
+        );
+        let lookalike = home.parent().expect("base").join("beside-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).expect("lookalike");
+        assert_eq!(
+            destination_remedy(&workspace, &lookalike.join("notes.txt")),
+            Remedy::Open,
+            "the valid UTF-8 lookalike"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// CMDLINE-5, TRUST-10: the destination a redirection was refused for is let through once the
+    /// directory its remedy names is opened, spelled from the top of the file system and with a
+    /// `..` out of the root.
+    ///
+    /// The regression it rejects: a remedy naming `/add-dir` for a destination that opening the
+    /// directory does not let through.
+    #[test]
+    fn a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened() {
+        let (home, project) = home_and_project("redirect-remedy-then-opened");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let absolute = beside.join("notes.txt");
+        let climbing = project.join("../beside/notes.txt");
+
+        assert_eq!(destination_remedy(&workspace, &absolute), Remedy::Open);
+        assert_eq!(destination_remedy(&workspace, &climbing), Remedy::Open);
+        workspace
+            .add_directory(beside.to_str().expect("utf-8"))
+            .expect("beside opened");
+        assert!(
+            workspace.confines_writing(&absolute).is_ok(),
+            "the absolute destination is still refused after its directory was opened"
+        );
+        assert!(
+            workspace.confines_writing(&climbing).is_ok(),
+            "the climbing destination is still refused after its directory was opened"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// PERM-16: where `readsStayInWorkspace` holds, a redirection outside is told so and offered
+    /// no directory.
+    ///
+    /// The regression it rejects: `/add-dir` named where opening a directory counts for nothing.
+    #[test]
+    fn a_redirection_outside_where_reads_stay_inside_is_offered_no_directory() {
+        let (home, project) = home_and_project("redirect-remedy-kept");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_reads_kept_inside(true);
+
+        assert_eq!(
+            destination_remedy(&workspace, &beside.join("notes.txt")),
+            Remedy::Kept
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
 }

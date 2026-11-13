@@ -25,6 +25,7 @@ pub mod llama_server;
 pub mod lm_studio;
 pub mod models;
 pub mod ollama;
+pub mod ollama_chat;
 pub mod protocol;
 pub mod responses;
 pub mod roster;

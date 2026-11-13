@@ -106,12 +106,12 @@ const SYSTEMD_INHIBIT_CODE_SELECTORS: [(&str, Names); 1] =
 ///   every directory a stage may write is kept. `gio info` ran no helper for the same address, since
 ///   GDBus has no `unixexec:` transport.
 ///
-/// The tools `xdg-mime` starts are not all run. `kmimetypefinder` and `qtxdg-mat` are not installed
-/// on the host the run was made on, so the list can be short. Passing `--type` would stop
-/// `xdg-mime` being run and is not done because it declares a type the content may not have.
-/// `WL_SEAT` is not read by `wl-copy`. `wl-copy` itself was not installed on that host, so the
-/// chain from `wl-copy` to `xdg-mime` is read from its source (SANDBOX-30, "What a checked start
-/// does not cover").
+/// The tools `xdg-mime` starts were each run (SANDBOX-30, "What a checked start does not cover"):
+/// `gio info`, the Perl `mimetype`, `kmimetypefinder` and `qtxdg-mat` on Linux, and `wl-copy`
+/// itself under a headless compositor. Neither KDE nor LXQt tool ran a helper for a `unixexec:`
+/// address, and neither loaded a plug-in from `QT_PLUGIN_PATH`, which is kept as a precaution.
+/// Passing `--type` would stop `xdg-mime` being run and is not done because it declares a type the
+/// content may not have. `WL_SEAT` is not read by `wl-copy`.
 const WL_COPY_CODE_SELECTORS: [(&str, Names); 6] = [
     selectors::GIO_EXTRA_MODULES,
     selectors::GIO_MODULE_DIR,
@@ -212,8 +212,8 @@ fn start_against(
             // variable of their own, and libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 read only
             // names that select a socket, a credential file or data (`DISPLAY`, `XAUTHORITY`,
             // `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). `pbcopy` and `clip` read none. Run
-            // on Linux for `xclip` 0.13 under Xvfb; `xsel` was not installed. The sources and the
-            // run are in the SANDBOX-30 bullet.
+            // on Linux for `xclip` 0.13 and `xsel` 1.2.1 under Xvfb. The sources and the runs are
+            // in the SANDBOX-30 bullet.
             CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,

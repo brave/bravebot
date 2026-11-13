@@ -192,7 +192,13 @@ fn the_end_of_a_run_tells_herdr_the_run_has_left_its_pane() {
         },
     )
     .unwrap();
-    end_the_run(&mut terminal).unwrap();
+    // `hand_back` is given the two things `hand_back_terminal` reads from the terminal the test binary
+    // runs in: whether it has enhanced keys, and how to leave raw mode. Either stops a process that
+    // is not in that terminal's foreground group, and a stopped test never finishes.
+    end_the_run(&mut terminal, |backend| {
+        hand_back(backend, false, || Ok(()))
+    })
+    .unwrap();
     assert_eq!(herdr.next(), "pane.release_agent");
 }
 
