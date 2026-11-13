@@ -221,11 +221,14 @@ fn put_back_kept(home: &Path, backup: &Backup, folds: bool) -> std::io::Result<(
     // The one file outside the stores a rule is appended to (RECALL-3). Exactly that name in the
     // state directory as it now resolves, or, where that name is a link, the file the backup was
     // taken of, while the link still lands on it. A link moved since, or any other file beside the
-    // name, is refused.
+    // name, is refused. The link is looked up by its exact entry name first: where the volume
+    // folds case, a link spelled `agents.md` also opens as `AGENTS.md`, and the preamble does not
+    // read it as the person's rules (INSTR-1).
     let agents = home.join(crate::preamble::AGENTS_FILE);
     let is_the_home_rules = crate::workspace::destination(home)
         .is_some_and(|state| target == state.join(crate::preamble::AGENTS_FILE))
         || (backup.path == target
+            && crate::preamble::lists_entry_named(home, crate::preamble::AGENTS_FILE)
             && std::fs::symlink_metadata(&agents).is_ok_and(|meta| meta.file_type().is_symlink())
             && crate::workspace::destination(&agents).is_some_and(|lands| lands == target));
     if !inside && !is_the_home_rules {
@@ -918,5 +921,54 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-5: a backup is put back through a linked home rules file only where the link is
+    /// spelled `AGENTS.md` in the state directory. Where the volume folds case, a link spelled
+    /// `agents.md` also opens as `AGENTS.md`, but the preamble does not read it as the person's
+    /// rules and no rule was appended through it, so undo must not write a backup's bytes to
+    /// where it lands. The fault this rejects is asking the volume whether `AGENTS.md` is a link,
+    /// which only a volume that folds case answers for `agents.md`. On a volume that does not, the
+    /// fault cannot be reached, so the test adds a link spelled `AGENTS.md` to another file and
+    /// checks that undo follows that link and still refuses the one spelled `agents.md`.
+    #[cfg(unix)]
+    #[test]
+    fn undo_does_not_write_through_a_link_spelled_agents_md_in_another_case() {
+        let home = crate::testutil::scratch_dir("undo-rule-lower-link-home");
+        let dotfiles = crate::testutil::scratch_dir("undo-rule-lower-link-dotfiles");
+        for dir in [&home, &dotfiles] {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let rules = dotfiles.join("rules.md");
+        std::fs::write(&rules, "- the person's own\n").unwrap();
+        std::os::unix::fs::symlink(&rules, home.join("agents.md")).unwrap();
+        let folds = home.join("AGENTS.md").exists();
+        let forged = |path: &Path| Backup {
+            path: crate::workspace::destination(path).unwrap(),
+            was: Before::Bytes(b"- forged\n".to_vec()),
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        if !folds {
+            let theirs = dotfiles.join("AGENTS.md");
+            std::fs::write(&theirs, "- the linked rules\n").unwrap();
+            std::os::unix::fs::symlink(&theirs, home.join("AGENTS.md")).unwrap();
+            let followed = put_back_kept(&home, &forged(&theirs), folds);
+            assert!(
+                followed.is_ok(),
+                "a backup was not put back through a link spelled AGENTS.md: {followed:?}"
+            );
+            assert_eq!(std::fs::read(&theirs).unwrap(), b"- forged\n");
+        }
+        let put_back = put_back_kept(&home, &forged(&rules), folds);
+        assert!(
+            put_back.is_err(),
+            "a backup was put back through a link spelled agents.md"
+        );
+        assert_eq!(std::fs::read(&rules).unwrap(), b"- the person's own\n");
+        for dir in [home, dotfiles] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 }

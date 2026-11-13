@@ -23845,6 +23845,68 @@ mod tests {
                 assert_eq!(lines[0], "- the person's own rule");
             }
 
+            /// Only `AGENTS.md` spelled exactly is read as the person's rules (INSTR-1), so a home
+            /// rule is never appended to a file the volume opens under that name and lists under
+            /// another, and the person is not asked to approve a write that cannot happen.
+            ///
+            /// Rejects: an append through the name `AGENTS.md` on a volume that folds case, which
+            /// lands in the person's `agents.md`; a refusal taken only after the question; and a
+            /// note that does not name the spelling held. Only a volume that folds case reaches
+            /// these faults. On one that does not, the test checks instead that `AGENTS.md` is made
+            /// beside `agents.md` and the rule written there.
+            #[test]
+            fn a_home_rule_is_not_appended_to_a_rules_file_spelled_in_another_case() {
+                let place = Place::new("rule-other-spelling");
+                let theirs = place.home.join("agents.md");
+                std::fs::write(&theirs, "- my own rule\n").unwrap();
+                let folds = place.agents().exists();
+                let mut person = watching(Answer::Chosen(vec![0]));
+                let (produced, written) =
+                    place.propose(&mut person, proposing("Use tabs.", "home"));
+                if folds {
+                    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "- my own rule\n");
+                    assert!(!crate::preamble::lists_entry_named(
+                        &place.home,
+                        "AGENTS.md"
+                    ));
+                    assert!(produced.failed, "{}", produced.note);
+                    assert!(written.is_none());
+                    assert!(person.seen.is_empty(), "the person was asked");
+                    let told = released(&produced.text);
+                    assert!(told.contains("wrote nothing"), "{told}");
+                    assert!(produced.note.contains("AGENTS.md"), "{}", produced.note);
+                    assert!(produced.note.contains("agents.md"), "{}", produced.note);
+                } else {
+                    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "- my own rule\n");
+                    assert!(!produced.failed, "{}", produced.note);
+                    let text = std::fs::read_to_string(place.agents()).unwrap();
+                    assert!(text.starts_with("- Use tabs. ("), "{text}");
+                }
+            }
+
+            /// A home rules file that is a link spelled `AGENTS.md`, as a dotfiles checkout keeps
+            /// one, still takes the rule where it lands, whatever the file it lands on is called
+            /// (RECALL-5).
+            ///
+            /// Rejects: a spelling check made on the file the link lands on rather than on the
+            /// entry in the state directory, and a refusal of every link.
+            #[cfg(unix)]
+            #[test]
+            fn a_home_rule_follows_a_link_spelled_agents_md() {
+                let place = Place::new("rule-linked");
+                let dotfiles = place.home.parent().unwrap().join("dotfiles");
+                std::fs::create_dir_all(&dotfiles).unwrap();
+                let lands = dotfiles.join("agents.md");
+                std::fs::write(&lands, "- mine\n").unwrap();
+                std::os::unix::fs::symlink(&lands, place.agents()).unwrap();
+                let (produced, written) =
+                    place.propose(&mut ChoosesFirst, proposing("Use tabs.", "home"));
+                assert!(!produced.failed, "{}", produced.note);
+                assert_eq!(written, Some(place.agents()));
+                let text = std::fs::read_to_string(&lands).unwrap();
+                assert!(text.starts_with("- mine\n- Use tabs. ("), "{text}");
+            }
+
             /// A rule is written only on the person's yes (RECALL-3), and a one-shot run has nobody
             /// to say it.
             #[test]
