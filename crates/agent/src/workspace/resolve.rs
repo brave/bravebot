@@ -404,6 +404,12 @@ impl Workspace {
         within_stores(&self.stores, resolved)
     }
 
+    /// The stores [`Self::in_the_stores`] asks about, for a mark of the tree taken after this
+    /// borrow of the workspace has ended (a background job's, GROUND-1).
+    pub(crate) fn stores(&self) -> &[std::path::PathBuf] {
+        &self.stores
+    }
+
     /// Stand in for the state directory, so a test does not depend on whose machine it runs on.
     #[cfg(test)]
     #[must_use]

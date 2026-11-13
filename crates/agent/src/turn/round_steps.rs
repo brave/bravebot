@@ -326,6 +326,8 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         policy,
         conversation,
         reporter,
+        &mut state.worked,
+        state.steps,
         &mut |policy, slots, reporter, slot| {
             let mut chat = crate::processor::Chat::new(config, egress, task.account_session())
                 .spending(state.subscription.as_mut())
@@ -1868,7 +1870,10 @@ pub(super) fn close_the_rounds<S: Sink, R: Reporter>(
     // Except where the session keeps them: those are left running for the next turn to find, and
     // are ended by the session ending (RUN-15).
     if !state.jobs.is_kept() {
-        state.jobs.stop_all(policy, reporter);
+        // What the stopped jobs left is counted, as each one's end would have been (GROUND-1).
+        for _ in 0..state.jobs.stop_all(policy, reporter) {
+            state.worked.count_job_write(state.steps);
+        }
     }
     *rounds_taken = state.steps;
     *worked_out = state.worked;
@@ -2099,12 +2104,18 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // gave it. Read at the end of the turn to say whether a change went out
     // unbuilt, and the round is the one the first change landed on, since before
     // that there was nothing to run.
-    state.worked.count(
-        state.steps,
-        output.changed_a_file,
-        output.ran_a_program,
-        output.command_failed,
-    );
+    // A `job_output` look is the one call with a look, and a write it reports is a job's, which a
+    // program made (TURN-4).
+    if output.look.is_some() && output.changed_a_file {
+        state.worked.count_job_write(state.steps);
+    } else {
+        state.worked.count(
+            state.steps,
+            output.changed_a_file,
+            output.ran_a_program,
+            output.command_failed,
+        );
+    }
     if (output.changed_a_file || output.started_a_program)
         && let Some(checkout) = workspace.checkout()
     {

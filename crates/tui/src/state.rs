@@ -4603,14 +4603,14 @@ fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
 /// The most characters of a value a file supplied that one note shows.
 const SHOWN_AT_MOST: usize = 120;
 
-/// A value read out of a file, as one safe line: control characters drawn as pictures and a long
-/// value cut short.
+/// A value read out of a file, as one safe line: control characters and characters that draw as
+/// nothing written out, and a value cut short where what is drawn runs past [`SHOWN_AT_MOST`].
+///
+/// Measured as drawn, since one character can be written out as several.
 fn shown(text: &str) -> String {
-    let mut out: String = crate::render::printable(text)
-        .chars()
-        .take(SHOWN_AT_MOST)
-        .collect();
-    if text.chars().count() > SHOWN_AT_MOST {
+    let drawn = crate::render::printable(text);
+    let mut out: String = drawn.chars().take(SHOWN_AT_MOST).collect();
+    if drawn.chars().count() > SHOWN_AT_MOST {
         out.push('\u{2026}');
     }
     out
@@ -4618,6 +4618,27 @@ fn shown(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A value a file supplied is cut by what is drawn of it, so a short value of characters that
+    /// draw as nothing, each written out as several, is cut with an ellipsis that says so. Rejects:
+    /// deciding the ellipsis by the raw text's length, which drops it for 40 characters written out
+    /// as 320 and cut at 120, so a cut value reads as whole.
+    #[test]
+    fn a_value_written_out_past_the_most_a_note_shows_is_cut_with_an_ellipsis() {
+        let value = "\u{202e}".repeat(40);
+        let drawn = shown(&value);
+        assert_eq!(drawn.chars().count(), SHOWN_AT_MOST + 1, "{drawn:?}");
+        assert!(drawn.ends_with('\u{2026}'), "{drawn:?}");
+        assert!(drawn.starts_with("\u{2039}U+202E\u{203a}"), "{drawn:?}");
+        assert!(
+            !drawn
+                .chars()
+                .any(bravebot_core::invisible::draws_as_nothing),
+            "{drawn:?}"
+        );
+        // A value whose drawing fits is shown whole, with no ellipsis.
+        assert_eq!(shown("a\u{200b}b"), "a\u{2039}U+200B\u{203a}b");
+    }
+
     /// INSTR-12. The project's styles are read once each time a line starts with `/style`, not on
     /// every pass and not while a turn runs, and the names stay held after the line goes.
     #[test]

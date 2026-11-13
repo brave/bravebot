@@ -1428,7 +1428,13 @@ run, the proposal is refused.
 
 The rule is appended as one line, `- <text> (<date>) why: <reason>`, to `~/.bravebot/AGENTS.md` for
 `home` or to the project's `rules.md` for `project`, after the file is backed up, so `/undo` takes it
-back. A call from a context that has met something untrusted is refused before you are asked. Where
+back. A home rule is written only to a file spelled exactly `AGENTS.md`. Where `~/.bravebot` holds
+the file under another spelling, such as `agents.md`, which bravebot does not read as your rules,
+`AGENTS.md` is made beside it and the rule written there, on a volume that tells upper and lower
+case apart. On a volume that does not, the proposal is refused before you are asked, nothing is
+written, and you are told to rename the file to `AGENTS.md`. A link spelled `AGENTS.md` is written
+through to the file it points at. A call from a
+context that has met something untrusted is refused before you are asked. Where
 the text or the reason came from private material, you are offered only refusing or typing the rule
 yourself, and what is written is your wording with `why: typed by the person`.
 

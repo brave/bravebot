@@ -21300,19 +21300,27 @@ fn the_record_of_a_turn_that_delivers_its_change_through_run_lines_counts_those_
     );
 }
 
-/// GROUND-1, Known costs: a `run` line started in the background is a command and no write, even
-/// when the program goes on to change a file. The tree is compared when a foreground line stops,
-/// and a background line has not stopped when its call returns, so its changes are not in the
-/// record. This pins that limit; a change that counts them removes the sentence from the known
-/// costs in the same commit.
+/// GROUND-1: a `run` line started in the background that changes a file counts one write when the
+/// turn learns the job has ended, and no second command, so no command ran after that write.
+///
+/// The job may end before the look between rounds or while `job_output` waits, and this test does
+/// not say which of those counts it: either is the turn learning of the end. The tests below pin
+/// each route on its own. Rejects a record that compares the tree only for a line that stopped in
+/// the foreground, which says `writes: 0` with a command after the last write, and one that counts
+/// the job's end as a second command.
 #[test]
-fn a_run_line_started_in_the_background_is_a_command_and_no_write() {
+fn a_run_line_started_in_the_background_counts_its_write_when_it_ends() {
     let scratch = Scratch::new("background-record");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
         tool_request(
             "run",
             &serde_json::json!({ "command": "touch made.txt", "background": true }).to_string(),
+        ),
+        tool_request(
+            "job_output",
+            &serde_json::json!({ "job": "job:1", "wait_seconds": 30, "until_exit": true })
+                .to_string(),
         ),
         reply_with("done"),
     ]);
@@ -21331,15 +21339,742 @@ fn a_run_line_started_in_the_background_is_a_command_and_no_write() {
         &bravebot_core::cancel::Cancel::new(),
     );
     assert!(completed.outcome.is_ok());
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the job never ran, so the record could not have seen its write"
+    );
     assert_eq!(
         completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "a background line that made a file is one command and one write, with the write last"
+    );
+}
+
+/// The work record a turn ends with, where it ran `replies` in order with every `run` approved.
+fn work_after(
+    workspace: &Workspace,
+    replies: Vec<String>,
+    reporter: &mut (impl bravebot_agent::report::Reporter + Send),
+) -> bravebot_agent::Work {
+    let (endpoint, _received) = serve_sequence(replies);
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok(), "the turn failed");
+    completed.work
+}
+
+/// A `job_output` call that waits for job:1 to exit.
+fn waiting_for_job_1() -> String {
+    tool_request(
+        "job_output",
+        &serde_json::json!({ "job": "job:1", "wait_seconds": 30, "until_exit": true }).to_string(),
+    )
+}
+
+/// GROUND-1: a foreground line the person moves to the background is compared from where it
+/// started, so a file it wrote before the move is counted when its end is learned.
+///
+/// The line writes at once and then only sleeps, and the file's modification time is checked to be
+/// before the move key was pressed, so all it wrote is from before the move. Rejects a moved line
+/// whose job carries no mark, or a mark taken at the move, which leave out what the line wrote
+/// while it was in the foreground.
+#[cfg(unix)]
+#[test]
+fn a_moved_line_counts_what_it_wrote_before_the_move() {
+    let scratch = Scratch::new("moved-record");
+    std::fs::write(scratch.path.join("build"), "touch made.txt\nsleep 1\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut reporter = MovesWhenOffered::default();
+    let work = work_after(
+        &workspace,
+        vec![
+            tool_request("run", r#"{"command":"sh ./build"}"#),
+            waiting_for_job_1(),
+            reply_with("done"),
+        ],
+        &mut reporter,
+    );
+    assert_eq!(reporter.offered, 1, "the line was not offered to be moved");
+    assert!(
+        reporter.jobs.iter().any(|event| matches!(
+            event,
+            bravebot_agent::report::JobEvent::Started {
+                moved_after: Some(_),
+                ..
+            }
+        )),
+        "the line was never moved, so nothing here was tested: {:?}",
+        reporter.jobs
+    );
+    let made_at = std::fs::metadata(scratch.path.join("made.txt"))
+        .expect("the line never ran")
+        .modified()
+        .unwrap();
+    let pressed = reporter.pressed.lock().unwrap().clone();
+    assert!(
+        pressed.first().is_some_and(|pressed| made_at < *pressed),
+        "the line wrote at {made_at:?}, not before the move key was pressed at {pressed:?}, so \
+         nothing here was tested"
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "a moved line that made a file is one command and one write"
+    );
+}
+
+/// GROUND-1: a foreground line the person moves to the background is compared when its end is
+/// learned, so a file it writes after the move is counted once.
+///
+/// The line waits for a gate outside the workspace that the planner stand-in opens only once the
+/// `run` call has come back moved, so the write cannot come before the move. Rejects a moved line
+/// whose job carries no mark, which leaves out everything the line writes as a job, and a mark
+/// compared without being dropped, which counts the write again at the turn's end.
+#[cfg(unix)]
+#[test]
+fn a_moved_line_counts_what_it_wrote_after_the_move() {
+    let scratch = Scratch::new("moved-record-after");
+    let gate = Scratch::new("moved-record-after-gate");
+    let opened = gate.path.join("open");
+    write_wait_for(&scratch.path);
+    std::fs::write(
+        scratch.path.join("slow"),
+        format!("./wait-for '{}' && touch made.txt\n", opened.display()),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut step = 0;
+    let (endpoint, _received) = serve_rounds(Vec::new(), false, move |_| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./slow"}"#),
+            2 => {
+                std::fs::write(&opened, "").unwrap();
+                waiting_for_job_1()
+            }
+            3 => reply_with("done"),
+            _ => return None,
+        }))
+    });
+    let mut reporter = MovesWhenOffered::default();
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok(), "the turn failed");
+    assert!(
+        reporter.jobs.iter().any(|event| matches!(
+            event,
+            bravebot_agent::report::JobEvent::Started {
+                moved_after: Some(_),
+                ..
+            }
+        )),
+        "the line was never moved, so nothing here was tested: {:?}",
+        reporter.jobs
+    );
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the job never wrote"
+    );
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "a moved line that made a file after the move is one command and one write"
+    );
+}
+
+/// GROUND-1, control: a background line that changes nothing is a command and no write, with the
+/// command after the last write.
+///
+/// Rejects counting every background line that ends as a write.
+#[test]
+fn a_background_line_that_changes_nothing_counts_no_write() {
+    let scratch = Scratch::new("background-record-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let work = work_after(
+        &workspace,
+        vec![
+            tool_request("run", r#"{"command":"sleep 1","background":true}"#),
+            waiting_for_job_1(),
+            reply_with("done"),
+        ],
+        &mut bravebot_agent::report::RecordingReporter::default(),
+    );
+    assert_eq!(
+        work,
         bravebot_agent::Work {
             writes: 0,
             commands: 1,
             ran_after_last_write: true,
             last_command_failed: false,
         },
-        "a background line is recorded as a command and no write"
+        "a background line that changed nothing was counted as a write"
+    );
+}
+
+/// GROUND-1: a job whose end `job_output` reports is counted there, once, and not again by
+/// a later look or by the end of the turn.
+///
+/// The job waits for a gate outside the workspace that the planner stand-in opens only as it
+/// answers the `job_output` request, so the job ends while that call waits and no look between
+/// rounds can report it first. A foreground `true` runs next, so the record has a command after
+/// the last write only where the write was counted at the `job_output` call: a count left to the
+/// turn's end comes after that command. Rejects a `job_output` that reports the end without
+/// comparing the tree, and a mark compared without being dropped, which the second `job_output`
+/// or the turn's end counts again.
+#[cfg(unix)]
+#[test]
+fn a_job_whose_end_job_output_reports_counts_its_write_once() {
+    let scratch = Scratch::new("background-record-job-output");
+    let gate = Scratch::new("background-record-job-output-gate");
+    let opened = gate.path.join("open");
+    write_wait_for(&scratch.path);
+    std::fs::write(
+        scratch.path.join("slow"),
+        format!("./wait-for '{}' && touch made.txt\n", opened.display()),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut step = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |_| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./slow","background":true}"#),
+            2 => {
+                std::fs::write(&opened, "").unwrap();
+                waiting_for_job_1()
+            }
+            3 => tool_request("run", r#"{"command":"true"}"#),
+            4 => waiting_for_job_1(),
+            5 => reply_with("done"),
+            _ => return None,
+        }))
+    });
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok(), "the turn failed");
+    assert!(scratch.path.join("made.txt").exists(), "the job never ran");
+    assert!(
+        !every_request(&received)
+            .iter()
+            .any(|body| body.contains(JOB_1_FINISHED)),
+        "the job's end was reported between rounds, so job_output did not report it"
+    );
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 2,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "a job reported by job_output was not counted exactly once, at that call"
+    );
+}
+
+/// GROUND-1: a job whose end is learned between rounds is counted once, there, and not again
+/// by a `job_output` on it afterwards or by the end of the turn.
+///
+/// The planner lists files until the turn says the job has finished, so no program of its own runs
+/// while the job does. Rejects a mark compared without being dropped, which counts the job again
+/// at the later look.
+#[cfg(unix)]
+#[test]
+fn a_job_whose_end_is_learned_between_rounds_counts_its_write_once() {
+    let scratch = Scratch::new("background-record-between-rounds");
+    std::fs::write(scratch.path.join("quick"), "touch made.txt\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut step = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./quick","background":true}"#),
+            _ if step > 1000 => reply_with("done"),
+            _ if step > 150 => return None,
+            _ if body.contains(JOB_1_FINISHED) => {
+                step = 1000;
+                waiting_for_job_1()
+            }
+            _ => tool_request(
+                "list_files",
+                if step % 2 == 0 {
+                    r#"{"directory":"."}"#
+                } else {
+                    r#"{"directory":"./"}"#
+                },
+            ),
+        }))
+    });
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok(), "the turn failed");
+    assert!(scratch.path.join("made.txt").exists(), "the job never ran");
+    assert!(
+        every_request(&received)
+            .iter()
+            .any(|body| body.contains(JOB_1_FINISHED)),
+        "the job's end was never reported between rounds, so nothing here was tested"
+    );
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "a job whose end was learned between rounds was not counted exactly once"
+    );
+}
+
+/// GROUND-1: a job's comparison covers the whole time it ran, so a file the planner's own
+/// write tool changed meanwhile is counted for the tool and again for the job.
+///
+/// The job only waits for the file the planner writes. Pins the cost the spec accepts, so a change
+/// to it is a decision and not an accident.
+#[cfg(unix)]
+#[test]
+fn a_job_running_across_a_write_tool_counts_that_write_again() {
+    let scratch = Scratch::new("background-record-across-a-write");
+    write_wait_for(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let work = work_after(
+        &workspace,
+        vec![
+            tool_request(
+                "run",
+                r#"{"command":"sh ./wait-for note.txt","background":true}"#,
+            ),
+            tool_request("write_file", r#"{"path":"note.txt","contents":"one"}"#),
+            waiting_for_job_1(),
+            reply_with("done"),
+        ],
+        &mut bravebot_agent::report::RecordingReporter::default(),
+    );
+    assert!(
+        scratch.path.join("note.txt").exists(),
+        "the write did not land"
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 2,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "the job's comparison did not cover the write made while it ran"
+    );
+}
+
+/// GROUND-1, RUN-15, TURN-4: a job the session keeps that writes after its turn ended is counted in
+/// the turn that learns of its end, and not in the turn that started it. That turn is not told that
+/// files changed with no command run, since a program made the change.
+///
+/// The job waits for a gate outside the workspace that the test opens once the first turn has
+/// ended, and the second turn lists files until it is told the job finished, so neither turn
+/// depends on how fast the machine is. Rejects leaving kept jobs out of the count, which loses
+/// every write such a job makes, and counting the write as a change no program made, which tells
+/// the person none of it was built or tested.
+#[cfg(unix)]
+#[test]
+fn a_kept_job_that_writes_after_its_turn_is_counted_in_the_turn_that_learns_of_it() {
+    let scratch = Scratch::new("background-record-kept");
+    let gate = Scratch::new("background-record-kept-gate");
+    let opened = gate.path.join("open");
+    write_wait_for(&scratch.path);
+    std::fs::write(
+        scratch.path.join("slow"),
+        format!("./wait-for '{}' && touch made.txt\n", opened.display()),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut step = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./slow","background":true}"#),
+            2 => reply_with("started"),
+            _ if step > 1000 => return None,
+            _ if body.contains(JOB_1_FINISHED) => {
+                step = 1000;
+                reply_with("done")
+            }
+            _ if step > 150 => return None,
+            _ => {
+                thread::sleep(std::time::Duration::from_millis(20));
+                tool_request(
+                    "list_files",
+                    if step % 2 == 0 {
+                        r#"{"directory":"."}"#
+                    } else {
+                        r#"{"directory":"./"}"#
+                    },
+                )
+            }
+        }))
+    });
+    let config = config_for(&endpoint);
+    let jobs = bravebot_agent::tools::SessionJobs::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut a_turn = |prompt: &str| {
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let completed = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new(prompt).keeping_jobs(jobs.clone()),
+            &mut conversation,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(completed.outcome.is_ok(), "the turn failed");
+        (completed.work, reporter.narration)
+    };
+
+    let (first, _) = a_turn("start it");
+    assert!(
+        !scratch.path.join("made.txt").exists(),
+        "the job wrote before its turn ended, so nothing here was tested"
+    );
+    std::fs::write(&opened, "").unwrap();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !scratch.path.join("made.txt").exists() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the kept job never wrote"
+        );
+        thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let (second, narrated) = a_turn("is it done");
+    assert!(
+        every_request(&received)
+            .iter()
+            .any(|body| body.contains(JOB_1_FINISHED)),
+        "the second turn was never told the job finished, so nothing here was tested"
+    );
+
+    assert_eq!(
+        first,
+        bravebot_agent::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "the turn that started the job counted a write it never saw"
+    );
+    assert_eq!(
+        second,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 0,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "the turn that learned of the kept job's end did not count its write"
+    );
+    assert!(
+        !narrated
+            .iter()
+            .any(|line| line.contains("no command was run")),
+        "the person was told no command was run, about a change a program made: {narrated:?}"
+    );
+}
+
+/// GROUND-1, RUN-15, TURN-4: a job the session keeps that writes after its turn ended is counted in
+/// the later turn whose `job_output` call reports its end. That turn is not told that files changed
+/// with no command run, since a program made the change.
+///
+/// The job waits for a gate outside the workspace that the planner stand-in opens only as it
+/// answers the second turn's `job_output` request, so the job writes after the first turn ended and
+/// ends while that call waits, and no look between rounds can report it first. Rejects counting the
+/// write at a `job_output` call as a change no program made, which tells the person none of it was
+/// built or tested.
+#[cfg(unix)]
+#[test]
+fn a_kept_job_whose_end_a_later_job_output_reports_is_counted_as_a_programs_write() {
+    let scratch = Scratch::new("background-record-kept-job-output");
+    let gate = Scratch::new("background-record-kept-job-output-gate");
+    let opened = gate.path.join("open");
+    write_wait_for(&scratch.path);
+    std::fs::write(
+        scratch.path.join("slow"),
+        format!("./wait-for '{}' && touch made.txt\n", opened.display()),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut step = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |_| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./slow","background":true}"#),
+            2 => reply_with("started"),
+            3 => {
+                std::fs::write(&opened, "").unwrap();
+                waiting_for_job_1()
+            }
+            4 => reply_with("done"),
+            _ => return None,
+        }))
+    });
+    let config = config_for(&endpoint);
+    let jobs = bravebot_agent::tools::SessionJobs::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut a_turn = |prompt: &str| {
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let completed = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new(prompt).keeping_jobs(jobs.clone()),
+            &mut conversation,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(completed.outcome.is_ok(), "the turn failed");
+        (completed.work, reporter.narration)
+    };
+
+    let (first, _) = a_turn("start it");
+    assert!(
+        !scratch.path.join("made.txt").exists(),
+        "the job wrote before its turn ended, so nothing here was tested"
+    );
+    let (second, narrated) = a_turn("is it done");
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the job never wrote"
+    );
+    assert!(
+        !every_request(&received)
+            .iter()
+            .any(|body| body.contains(JOB_1_FINISHED)),
+        "the job's end was reported between rounds, so job_output did not report it"
+    );
+
+    assert_eq!(
+        first,
+        bravebot_agent::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "the turn that started the job counted a write it never saw"
+    );
+    assert_eq!(
+        second,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 0,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "the turn whose job_output reported the kept job's end did not count its write once"
+    );
+    assert!(
+        !narrated
+            .iter()
+            .any(|line| line.contains("no command was run")),
+        "the person was told no command was run, about a change a program made: {narrated:?}"
+    );
+}
+
+/// GROUND-1: a job still running when the turn ends is stopped with it, and what it wrote
+/// before the stop is counted as one write.
+///
+/// The planner answers only once the job's file exists, and the job then sleeps, so the turn's end
+/// is what stops it. Rejects a turn end that stops its jobs without comparing their marks, which
+/// leaves the write out of the record.
+#[cfg(unix)]
+#[test]
+fn a_job_stopped_with_the_turn_counts_what_it_wrote_before_the_stop() {
+    let scratch = Scratch::new("background-record-stopped-with-the-turn");
+    std::fs::write(scratch.path.join("lingers"), "touch made.txt\nsleep 30\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let made = scratch.path.join("made.txt");
+    let mut step = 0;
+    let (endpoint, _received) = serve_rounds(Vec::new(), false, move |_| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./lingers","background":true}"#),
+            2 => {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !made.exists() && std::time::Instant::now() < until {
+                    thread::sleep(std::time::Duration::from_millis(20));
+                }
+                reply_with("done")
+            }
+            _ => return None,
+        }))
+    });
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok(), "the turn failed");
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the job never wrote"
+    );
+    assert!(
+        reporter
+            .jobs
+            .iter()
+            .any(|event| matches!(event, bravebot_agent::report::JobEvent::Dropped { .. })),
+        "the job was not stopped with the turn, so nothing here was tested: {:?}",
+        reporter.jobs
+    );
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "a job stopped with the turn did not count what it wrote"
+    );
+}
+
+/// GROUND-1, RUN-22, CHECK-16: a stop during the check on an ended job's account still counts what
+/// the job wrote, since the turn ends there and nothing compares the job again.
+///
+/// Rejects counting the finished jobs after the check, which a stop returns before.
+#[cfg(unix)]
+#[test]
+fn a_stop_during_the_check_on_an_ended_jobs_account_still_counts_its_write() {
+    let scratch = Scratch::new("background-record-stopped-check");
+    std::fs::write(
+        scratch.path.join("noisy"),
+        "touch made.txt\nsleep 1\necho SENTINEL-ENDED-STOPPED\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_until_job_1_finishes_answering_checks_after(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+            tool_request("job_output", r#"{"job":"job:1","read":true}"#),
+        ],
+    );
+    let mode = bravebot_agent::PermissionMode::Bypass;
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let ended = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("start it")
+            .with_permission_mode(mode)
+            .with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    );
+    let error = ended.outcome.unwrap_err();
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped, so nothing here was tested: {:?}",
+        error.ending()
+    );
+    assert_eq!(reporter.begun, 1, "no check was made");
+    assert!(scratch.path.join("made.txt").exists(), "the job never ran");
+    assert_eq!(
+        ended.work.writes, 1,
+        "the write of a job whose account check was stopped was not counted: {:?}",
+        ended.work
     );
 }
 
@@ -64644,6 +65379,9 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
 struct MovesWhenOffered {
     offered: usize,
     jobs: Vec<bravebot_agent::report::JobEvent>,
+    /// When the move key was pressed for each line, by the clock files are stamped with, so a test
+    /// can tell a write before the move from one after it.
+    pressed: Arc<std::sync::Mutex<Vec<std::time::SystemTime>>>,
 }
 
 impl bravebot_agent::report::Reporter for MovesWhenOffered {
@@ -64651,8 +65389,10 @@ impl bravebot_agent::report::Reporter for MovesWhenOffered {
 
     fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
         self.offered += 1;
+        let pressed = Arc::clone(&self.pressed);
         thread::spawn(move || {
             thread::sleep(std::time::Duration::from_millis(300));
+            pressed.lock().unwrap().push(std::time::SystemTime::now());
             handoff.request();
         });
     }

@@ -82,6 +82,17 @@ impl Store {
         }
     }
 
+    /// Whether the rules file for `scope` is one the volume opens under its name but the state
+    /// directory lists under another spelling, as a person's `agents.md` is where the volume folds
+    /// case. Only `AGENTS.md` spelled exactly is read as the person's rules (INSTR-1), so a rule is
+    /// not appended there. Asks only the directory's entry names and whether the path names
+    /// anything, never what a file holds. A project's `rules.md` is not asked about.
+    pub fn home_rules_spelled_otherwise(&self, scope: Scope) -> bool {
+        scope == Scope::Everywhere
+            && std::fs::symlink_metadata(self.rules_path(scope)).is_ok()
+            && !crate::preamble::lists_entry_named(&self.home, AGENTS_FILE)
+    }
+
     /// Every fact in both scopes, in key order. Makes no directory and fails on none: a file that
     /// cannot be read as a fact is named in `notices` and left out.
     pub fn load(&self) -> Loaded {
@@ -131,6 +142,12 @@ impl Store {
         }
         if scope == Scope::Project {
             self.make_project_directory()?;
+        }
+        if self.home_rules_spelled_otherwise(scope) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the state directory holds the rules file under a spelling other than AGENTS.md",
+            ));
         }
         let path = self.rules_path(scope);
         // A file the person edited by hand may end mid-line, and a rule appended to that line
@@ -278,6 +295,44 @@ mod tests {
         let loaded = store.load();
         assert_eq!(loaded.facts.len(), 2);
         assert!(loaded.notices.is_empty());
+    }
+
+    /// A home rule goes only to the file listed as `AGENTS.md` (INSTR-1). Where the state directory
+    /// holds the person's `agents.md` and no `AGENTS.md`, nothing is appended to either spelling.
+    /// Where it holds neither, `AGENTS.md` is made.
+    ///
+    /// Rejects: an append through the name `AGENTS.md` that a volume folding case opens as the
+    /// person's `agents.md`, and a check that refuses an empty state directory too. Only a volume
+    /// that folds case reaches the first fault. On one that does not, the test checks instead that
+    /// `AGENTS.md` is made beside `agents.md`.
+    #[test]
+    fn a_home_rule_is_appended_only_to_the_file_spelled_agents_md() {
+        let scratch = Scratch::new("recall-store-rule-spelling");
+        let theirs = scratch.0.join("agents.md");
+        std::fs::write(&theirs, "- my own rule\n").expect("theirs");
+        let folds = scratch.0.join(AGENTS_FILE).exists();
+        let appended = store(&scratch.0).append_rule(Scope::Everywhere, "- Use tabs.");
+        assert_eq!(
+            std::fs::read_to_string(&theirs).expect("read"),
+            "- my own rule\n"
+        );
+        if folds {
+            assert!(appended.is_err(), "{appended:?}");
+            assert!(!crate::preamble::lists_entry_named(&scratch.0, AGENTS_FILE));
+        } else {
+            assert_eq!(appended.expect("append"), scratch.0.join(AGENTS_FILE));
+        }
+
+        let empty = Scratch::new("recall-store-rule-empty");
+        let path = store(&empty.0)
+            .append_rule(Scope::Everywhere, "- Use tabs.")
+            .expect("append");
+        assert_eq!(path, empty.0.join(AGENTS_FILE));
+        assert!(crate::preamble::lists_entry_named(&empty.0, AGENTS_FILE));
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read"),
+            "- Use tabs.\n"
+        );
     }
 
     #[test]

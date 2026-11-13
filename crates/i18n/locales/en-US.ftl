@@ -5626,6 +5626,10 @@ agent-rule-approval-refuse = Don't keep it
 # that lists the choices and reads a line (RECALL-3). Comma-separated, matched ignoring case.
 agent-rule-approval-yes-words = y, yes, keep, keep it
 agent-rule-approval-no-words = n, no, refuse, don't, do not keep it
+# The state directory holds the person's home rules file spelled other than AGENTS.md, so no rule
+# was written or asked about (RECALL-3). $directory is that directory and $name the file's name.
+agent-rule-other-spelling = { $directory } holds { $name }, which is not read as your rules because only AGENTS.md is, so the proposed rule was not written. Rename it to AGENTS.md to keep rules there.
+agent-rule-other-spelling-unnamed = { $directory } holds your rules file under a spelling other than AGENTS.md, which is not read as your rules, so the proposed rule was not written. Rename it to AGENTS.md to keep rules there.
 
 ## What each catalog calls itself, in a list to choose it from
 
