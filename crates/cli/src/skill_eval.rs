@@ -316,9 +316,9 @@ pub(crate) fn command(args: &[String], bypass_flag: Option<&str>) -> ExitCode {
     };
     let (permissions, _rejected) = rules_for_a_one_shot_run(
         &settings,
+        bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         workspace.root(),
-        false,
     );
     let trust = unattended_trust(workspace.root(), request.trust_workspace);
     let home = bravebot_agent::home::directory();

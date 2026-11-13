@@ -1148,9 +1148,9 @@ fn prepare_the_run(
     // stderr below, beside the rest of what this run has to say about itself.
     let (permissions, rejected) = rules_for_a_one_shot_run(
         &settings,
+        bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         workspace.root(),
-        skip_permissions,
     );
 
     // Matched here, before any server is reached, so a name matching nothing sends nothing and the
@@ -5882,31 +5882,46 @@ mod tests {
         assert!(!said.contains("audit trail"), "got: {said}");
     }
 
-    /// Nobody is watching a one-shot run, so the list that answers a prompt in advance answers
-    /// nothing: there is no prompt for it to reach. Without the flag an allow rule decides no
-    /// more than a line nobody wrote, while the two lists that refuse and that force an ask carry
-    /// over, because those say something a run with nobody at it can still act on.
+    /// CLI-1: a one-shot run reads all three lists, as a session does. The reading this rejects
+    /// is the one that drops the allow list for want of anybody to ask, under which a write or a
+    /// program the person's rule covers is refused and only a mode flag lets it go ahead. The deny
+    /// rule over a path the allow rule also covers is what shows the order still holds (PERM-2).
     #[test]
-    fn an_allow_rule_decides_nothing_for_a_run_nobody_is_watching() {
+    fn an_allow_rule_decides_for_a_run_nobody_is_watching_as_it_does_in_a_session() {
         use bravebot_core::permissions::{Decision, Ruling, Subject};
 
         let settings = bravebot_config::Settings::parse(
             r#"{
               "permissions": {
-                "allow": ["Edit(**)"],
+                "allow": ["Edit(**)", "Bash(touch *)"],
                 "ask": ["Bash(git push *)"],
-                "deny": ["Read(./.env)"]
+                "deny": ["Read(./.env)", "Edit(secret.txt)"]
               }
             }"#,
         );
 
         let (permissions, rejected) =
-            rules_for_a_one_shot_run(&settings, None, Path::new("."), false);
-        assert!(rejected.is_empty());
+            rules_for_a_one_shot_run(&settings, None, None, Path::new("."));
+        assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
             permissions.for_path(Subject::Edit, "notes.md"),
+            Decision::Ruled(Ruling::Allow),
+            "an allow rule did not answer a write in a run nobody is watching"
+        );
+        assert_eq!(
+            permissions.for_command(&["touch", "made.txt"]),
+            Decision::Ruled(Ruling::Allow),
+            "an allow rule did not answer a program in a run nobody is watching"
+        );
+        assert_eq!(
+            permissions.for_command(&["rm", "made.txt"]),
             Decision::Unmatched,
-            "an allow rule answered a write prompt in a run with nobody to prompt"
+            "a rule for one program answered another"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "an allow rule outranked a deny rule"
         );
         assert_eq!(
             permissions.for_path(Subject::Read, ".env"),
@@ -5918,19 +5933,82 @@ mod tests {
         );
     }
 
-    /// With the flag the person answered every prompt themselves, so their file is read whole: the
-    /// list is theirs, and the run may act because they said so on the command line.
+    /// CLI-1, PERM-15: an `allow` rule a checkout's file proposed is in force in a one-shot run
+    /// only where the workspace's record holds the person's grant of it. Reading a checkout's allow
+    /// list whole would let a cloned repository approve its own effects in a run nobody is
+    /// watching; leaving the record unread would refuse what the person granted in a session.
     #[test]
-    fn the_flag_is_what_lets_an_allow_rule_decide_again() {
+    fn a_rule_a_checkout_proposed_decides_in_a_one_shot_run_only_once_it_was_granted() {
         use bravebot_core::permissions::{Decision, Ruling, Subject};
 
-        let settings =
-            bravebot_config::Settings::parse(r#"{"permissions": {"allow": ["Edit(**)"]}}"#);
+        let scratch = crate::test_support::Scratch::new("cli-one-shot-granted");
+        let home = scratch.directory("home");
+        let state = home.join(".bravebot");
+        let project = scratch.directory("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("a checkout's settings");
+        std::fs::write(
+            project.join(".bravebot/settings.json"),
+            r#"{"permissions": {"allow": ["Edit(**)"]}}"#,
+        )
+        .expect("a checkout's rule");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&project), None);
+        let edit = || {
+            rules_for_a_one_shot_run(&settings, Some(&state), Some(&home), &project)
+                .0
+                .for_path(Subject::Edit, "notes.md")
+        };
 
-        let (permissions, _) = rules_for_a_one_shot_run(&settings, None, Path::new("."), true);
         assert_eq!(
-            permissions.for_path(Subject::Edit, "notes.md"),
-            Decision::Ruled(Ruling::Allow)
+            edit(),
+            Decision::Unmatched,
+            "a rule a checkout wrote and nobody granted answered a write"
+        );
+        let proposed = bravebot_agent::permissions::proposed(&settings, Some(&home));
+        assert_eq!(
+            proposed.len(),
+            1,
+            "the checkout's rule was not proposed: {proposed:?}"
+        );
+        bravebot_agent::granted::Store::new(&state, &project).grant(&[&proposed[0]], "a-session");
+        assert_eq!(
+            edit(),
+            Decision::Ruled(Ruling::Allow),
+            "a rule the person granted did not answer in a run nobody is watching"
+        );
+    }
+
+    /// CLI-1: a settings file written for another agent names tools this program does not have
+    /// (`Glob`, `Grep`, `Agent`, `Task`, `WebSearch`). Each is reported as a line nothing can act on
+    /// (PERM-11), and the rules beside it stay in force, so one such file serves both agents.
+    #[test]
+    fn a_tool_this_program_does_not_have_leaves_the_rest_of_the_file_in_force() {
+        use bravebot_core::permissions::{Decision, Ruling, Subject};
+
+        let settings = bravebot_config::Settings::parse(
+            r#"{
+              "permissions": {
+                "allow": ["Glob", "Grep", "Agent", "Task", "Edit(//work/**)"],
+                "deny": ["WebFetch", "WebSearch"]
+              }
+            }"#,
+        );
+
+        let (permissions, rejected) =
+            rules_for_a_one_shot_run(&settings, None, None, Path::new("."));
+        let named: Vec<String> = rejected
+            .iter()
+            .map(bravebot_agent::permissions::describe)
+            .collect();
+        for unknown in ["Glob", "Grep", "Agent", "Task", "WebSearch"] {
+            assert!(
+                named.iter().any(|line| line.contains(unknown)),
+                "{unknown} was not reported: {named:?}"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/work/results.json"),
+            Decision::Ruled(Ruling::Allow),
+            "a rule beside an unknown name was dropped"
         );
     }
 

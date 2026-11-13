@@ -393,8 +393,9 @@ the two flags: writes go through unasked, and everything else is refused as in
 composes with `-p`, `--json` and `--settings`. It is refused together with
 `--dangerously-skip-permissions`, since a line holding both does not say which was meant, and it is
 refused where the line starts no one-shot run, since a session has the key. A `deny` rule still
-holds ([MODE-6](#MODE-6)) and an allow rule still decides nothing in a one-shot run. It is not
-bypassing, so `permissions.bypassUnreachable` does not refuse it.
+holds ([MODE-6](#MODE-6)), and an `allow` rule decides a run or a fetch here as it does in a
+one-shot run without the flag ([CLI-1](cli.md#CLI-1)). It is not bypassing, so
+`permissions.bypassUnreachable` does not refuse it.
 
 **Unless a layer made the mode unreachable.** Where a settings layer in force wrote
 `permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), the mode is not on the ladder and

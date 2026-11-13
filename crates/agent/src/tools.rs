@@ -5085,6 +5085,33 @@ pub(crate) fn write_needs_approval<S: Sink>(
         })
 }
 
+/// Whether a write to `path` is put to the confirmer in a run with nobody to ask, where
+/// [`write_needs_approval`] said it need not be.
+///
+/// The trust map such a run holds was written by its own command line, and what it vouches for is
+/// what the tree's files say, never a write the planner composed, so a write the map alone let
+/// through is still put (CLI-1). A rule the person wrote is what does decide a write there, so one
+/// that allows the write under every name it is asked about (the name given, the name it lands on
+/// and the other names of a file with a hard link, PERM-7) is not put. A file whose other names
+/// could not all be found is put, since a name that was not found may be one no rule allows.
+pub(crate) fn put_where_nobody_can_be_asked<S: Sink>(
+    policy: &Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+) -> bool {
+    use bravebot_core::permissions::{Decision, Ruling, Subject};
+    let allowed = |name: &str| {
+        policy.permissions().for_path(Subject::Edit, name) == Decision::Ruled(Ruling::Allow)
+    };
+    !(allowed(path)
+        && workspace
+            .landing(path)
+            .is_none_or(|landed| allowed(&landed))
+        && workspace
+            .hard_links(path)
+            .is_some_and(|names| names.iter().all(|name| allowed(name))))
+}
+
 /// Whether `path`, as named or as it lands after links are followed, is one a write asks about
 /// whatever the mode or a rule says (MODE-2, PERM-9). Read off the routing path alone, and the
 /// other names of a file with a hard link, which a link is not followed to. A file whose other
@@ -6285,7 +6312,8 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         // path, to the person.
         if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
             || always_ask
-            || tools.permission_mode.writes_are_always_asked()
+            || (tools.permission_mode.writes_are_always_asked()
+                && put_where_nobody_can_be_asked(policy, workspace, &proposed_path))
             || !to_approve.is_empty()
             || edited_by_person
         {
@@ -7406,7 +7434,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     );
 
     if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
-        || nobody_to_ask
+        || (nobody_to_ask && put_where_nobody_can_be_asked(policy, workspace, &proposed_path))
         || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch for the reason a whole-file write

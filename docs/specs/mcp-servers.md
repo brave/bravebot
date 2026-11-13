@@ -789,11 +789,10 @@ or `mcp-approved`, is left as it is rather than written over with the one answer
 
 The plain interface asks the question as a line answered yes or no, and its yes is answer 1: a line
 has room for one answer, and the one that stops asking outlives the session. A one-shot run has
-nobody to ask, so a call there that would ask is refused. An `allow` rule decides nothing there, as
-it decides nothing for any tool in a one-shot run, and answer 2 still does: it was given at this
-question and names one tool in one project, where an `allow` rule is a line of a file that can name
-every server. For a server declared to ask every call answer 2 decides nothing there either, and
-the call is refused ([SERVERS-21](#SERVERS-21)). A delegate's call is put to the person as the
+nobody to ask, so a call there that would ask is refused. An `allow` rule decides a call there as it
+does in a session, as it decides every tool in a one-shot run ([CLI-1](cli.md#CLI-1)), and answer 2
+still does too. For a server declared to ask every call neither decides anything there, and the call
+is refused ([SERVERS-21](#SERVERS-21)). A delegate's call is put to the person as the
 turn's own is, after the same rules and standing answers
 ([DELEGATE-10](delegation.md#DELEGATE-10)), except a call to a server declared to ask every call,
 which is refused with nobody asked, since a delegate's task came from a planner and not from the

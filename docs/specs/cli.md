@@ -57,45 +57,59 @@ it does not take.
 ## Clauses
 
 <a id="CLI-1"></a>
-### CLI-1: where nobody can be asked, nothing is approved
+### CLI-1: where nobody can be asked, what no rule allows is refused
 
-Effects are refused rather than applied unseen, and the planner's own questions are declined
-rather than answered on the user's behalf. A rule written in advance that refuses, or that forces
-an ask, holds here as it does in a session; one that allows does not, since what it answers is a
-prompt and there is nobody to prompt.
+Effects are refused rather than applied unseen unless a rule or a flag allows them, and the
+planner's own questions are declined rather than answered on the user's behalf. The rules a settings
+file wrote hold here as they hold in a session, read from the same layers
+([PERM-14](permissions.md#PERM-14)): a `deny` rule refuses, an `ask` rule puts a question nobody is
+there to answer, so the effect is refused, and an `allow` rule lets the effect go ahead unasked. An
+`allow` rule a checkout's file proposed is in force only where the workspace's record already holds
+the person's grant of it ([PERM-15](permissions.md#PERM-15)), since nobody is there to grant one. A
+rule answers only what a rule answers in a session, so a question
+[PERM-9](permissions.md#PERM-9) puts whatever the rules say is refused here. A write the trust map
+alone would let through is still put, and so refused: the map a run holds was written by its own
+command line, and it vouches for the tree's files and never for a write the planner composed. An
+`allow` rule lets a write go ahead only where a rule allows it under every name the write is judged
+under ([PERM-7](permissions.md#PERM-7)): the name given, the name it lands on once links are
+followed, and each other name of a file with a hard link. A write through a link to a name no rule
+allows, or to a file with another name no rule allows, is put, and so refused.
 
-`--dangerously-skip-permissions`, `--accept-edits` and `--auto` are the three ways a run nobody is
-watching may write, and each is the person's own instruction rather than a default: what they
-select, and what they cost, is [permission-modes.md](permission-modes.md) and
-[auto-mode.md](auto-mode.md). The first answers every question; the second answers the write prompt
-and no other, so a run, a fetch and a write the credential scan found a value in are still refused,
-because nobody can be asked. The third answers the write prompt the same way, and a run the sandbox
-confines and the first question about a URL when a classifier says to allow it, and refuses anything
-the classifier does not allow. The three are refused in pairs, and `--accept-edits` and `--auto` are
-refused where the line starts no one-shot run, since a session has the mode key for the same thing. The planner's questions are declined in both modes, because they are not
-permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
-which picks among the choices the planner offered, and on a channel the person vouched for may
-answer in words (CLI-36). With `--approve-input-lines` as well, that program is also put each
-write, run and fetch, and approves or declines that one call (CLI-36).
+`--dangerously-skip-permissions`, `--accept-edits` and `--auto` approve more than the rules do, and
+each is the person's own instruction rather than a default: what they select, and what they cost, is
+[permission-modes.md](permission-modes.md) and [auto-mode.md](auto-mode.md). The first answers every
+question; the second answers the write prompt and no other, so a run and a fetch no rule allows, and
+a write the credential scan found a value in, are still refused, because nobody can be asked. The
+third answers the write prompt the same way, and a run the sandbox confines and the first question
+about a URL when a classifier says to allow it, and refuses anything the classifier does not allow.
+The three are refused in pairs, and `--accept-edits` and `--auto` are refused where the line starts
+no one-shot run, since a session has the mode key for the same thing. The planner's questions are
+declined in both modes, because they are not permissions. A run given `--input-format lines` puts
+them to the program sending its lines instead, which picks among the choices the planner offered,
+and on a channel the person vouched for may answer in words (CLI-36). With `--approve-input-lines`
+as well, that program is also put each write, run and fetch no rule answered, and approves or
+declines that one call (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
-somebody typed is not a guess, which is what makes it the only kind of thing that may lift the first
-half of this and nothing that may lift the second.
+somebody typed is not a guess, and neither is a rule somebody wrote, which is what makes those the
+things that may lift the first half of this and nothing that may lift the second.
 
-An allow rule is not a guess either, and that is not what disqualifies it. It says which prompts to
-stop raising, which is a decision about a session somebody is sitting in front of; read here it
-would say which effects may happen unwatched, and one line in a file in the home directory would
-do what the flag is named and warned about for. A record of command lines somebody asked to be
-remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
-reason.
+A rule says what the person wants done with one kind of effect, and it is written before the effect
+comes up, so whether anybody is watching when it does changes nothing about what it means. A run
+that read only the rules that refuse could do nothing the person had written down as wanted without
+a mode flag, and each mode flag approves far more than one rule does. Reading all three lists keeps
+the narrowest statement of what the person allowed in force. A checkout's file stays out of it,
+because a rule it wrote is the checkout's words until the person grants it, and a run nobody is
+watching cannot ask. A record of command lines somebody asked to be remembered past a session is not
+read here, for the reason [RUN-19](tools/run.md#RUN-19) gives.
 
 A trust answer is not an allow rule, though both are kept in the home directory. It approves no
 effect: it says which files are the person's own, so the planner may read them, and it covers one
 directory the person answered about. A run therefore opens trusting its working directory when the
 person typed `--trust-workspace` or kept an answer that settles a session there
 ([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
-answer. Writing stays refused without one of the flags above.
+answer. Writing stays refused unless a rule or one of the flags above allows it.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
@@ -106,8 +120,17 @@ answer. Writing stays refused without one of the flags above.
 `verified-by: bravebot_cli::main::the_accept_edits_flag_is_taken_out_and_belongs_to_a_one_shot_run`
 `verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
 `verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
-`verified-by: bravebot_cli::main::an_allow_rule_decides_nothing_for_a_run_nobody_is_watching`
-`verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
+`verified-by: bravebot_cli::main::an_allow_rule_decides_for_a_run_nobody_is_watching_as_it_does_in_a_session`
+`verified-by: bravebot_cli::main::a_rule_a_checkout_proposed_decides_in_a_one_shot_run_only_once_it_was_granted`
+`verified-by: bravebot_cli::main::a_tool_this_program_does_not_have_leaves_the_rest_of_the_file_in_force`
+`verified-by: bravebot_cli::running::a_one_shot_run_writes_where_an_allow_rule_lets_it_and_nowhere_else`
+`verified-by: bravebot_cli::running::a_one_shot_run_writes_in_an_added_directory_an_absolute_rule_names`
+`verified-by: bravebot_cli::running::a_one_shot_run_applies_an_edit_an_allow_rule_covers_and_refuses_one_it_does_not`
+`verified-by: bravebot_cli::running::a_one_shot_run_refuses_a_protected_write_an_allow_rule_covers`
+`verified-by: bravebot_cli::running::a_one_shot_run_does_not_write_through_a_link_to_a_name_no_rule_allows`
+`verified-by: bravebot_cli::running::a_one_shot_run_does_not_write_a_file_whose_other_name_no_rule_allows`
+`verified-by: bravebot_cli::running::a_deny_rule_outranks_an_allow_rule_in_a_one_shot_run`
+`verified-by: bravebot_cli::running::a_one_shot_run_runs_a_program_an_allow_rule_names_and_refuses_another`
 `verified-by: bravebot_cli::running::a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`
 
 <a id="CLI-2"></a>

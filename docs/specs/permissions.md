@@ -992,10 +992,11 @@ are all places where no yes is taken; where a rule not shown yet is taller than 
 above the keys says it does not fit rather than pointing at the arrows. A page moves one row fewer
 than the box shows, so a rule of two rows split by the bottom edge is whole on the next page.
 
-The surface that asks is the interface. A run nobody is watching installs no `allow` rule at all
-([PERM-8](#PERM-8)'s reasoning, as `for_an_unattended_run` applies it), and a session in lines asks
-nothing here and so grants nothing: a grant is read where it can be asked for, and neither of those
-is a place that could have collected it. Both are the direction that asks.
+The surface that asks is the interface. A one-shot run asks nothing here and reads the grants the
+workspace's record already holds, so a rule granted in a session is in force in a run started there
+later and a rule nobody granted is not ([CLI-1](cli.md#CLI-1)). A background session installs no
+`allow` rule at all, as `for_an_unattended_run` applies it ([BG-8](background-sessions.md#BG-8)), and
+a session in lines asks nothing here and so grants nothing. Each is the direction that asks.
 
 One question for the list rather than one per rule. Nothing is asked where nothing is proposed, and
 nothing is asked again about a rule that workspace's own record already holds. A rule that cannot be
