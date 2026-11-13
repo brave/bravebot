@@ -75124,10 +75124,34 @@ mod usage {
             let after_read = request();
             let leaked = after_read.body.contains(SENTINEL);
             after_read.answer(&reply_with_usage("done", 1, 1));
-            let outcome = finished
-                .recv_timeout(WAIT)
-                .expect("parent completed")
-                .unwrap();
+            // A child whose last request was answered can end after the parent's collection, and
+            // is then taken back by a later wake that asks the planner again. Each such ask is
+            // answered until the turn ends, at most one for each of the three children.
+            let deadline = std::time::Instant::now() + WAIT;
+            let mut late_asks = 0;
+            let outcome = loop {
+                if let Ok(late) = pending.try_recv() {
+                    late_asks += 1;
+                    assert!(
+                        late_asks <= 3,
+                        "the parent was asked {late_asks} times after its last answer"
+                    );
+                    assert!(
+                        !late.body.contains(SENTINEL),
+                        "untrusted replacement reached the parent's planner in a later wake"
+                    );
+                    late.answer(&reply_with_usage("done", 1, 1));
+                    continue;
+                }
+                if let Ok(result) = finished.try_recv() {
+                    break result.unwrap();
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "parent neither asked again nor completed"
+                );
+                thread::sleep(Duration::from_millis(1));
+            };
             worker.join().unwrap();
             assert_eq!(
                 outcome.trust.is_trusted("shared.txt"),
