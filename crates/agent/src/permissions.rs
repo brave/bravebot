@@ -161,6 +161,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::Unanchored => t!(permission_rule_unanchored),
         Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
+        Unreadable::NotAHost => t!(permission_rule_not_a_host),
         Unreadable::NotAToolRule => t!(permission_rule_not_a_tool_rule),
         Unreadable::NotAList => t!(permission_rule_not_a_list),
     }
@@ -657,6 +658,31 @@ mod tests {
         assert!(describe(&rejected[0]).contains("Nonsense"));
     }
 
+    /// PERM-11 for a `WebFetch` domain that names no host: a session reports it with its own words
+    /// and in the spelling the file used, and keeps the rule beside it. The failure this rejects is
+    /// a domain with a port or a scheme read as a name, which no fetched host is spelled as, so the
+    /// rule would sit in the file covering nothing and nobody would be told.
+    #[test]
+    fn a_domain_rule_that_names_no_host_is_reported_in_a_session() {
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["WebFetch(domain:example.com:443)", "WebFetch(domain:example.org)"]}}"#,
+        );
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        assert_eq!(permissions.len(), 1);
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        let said = describe(&rejected[0]);
+        assert!(said.contains("WebFetch(domain:example.com:443)"), "{said}");
+        assert!(said.contains(problem(Unreadable::NotAHost)), "{said}");
+        assert_eq!(
+            permissions.for_host("example.org"),
+            Decision::Ruled(Ruling::Deny)
+        );
+    }
+
     /// A run with nobody at it keeps the two lists it can act on and loses the one that answers a
     /// prompt, because there is no prompt for that one to answer.
     #[test]
@@ -878,6 +904,7 @@ mod tests {
             Unreadable::Unanchored,
             Unreadable::NotADomainRule,
             Unreadable::NoDomainNamed,
+            Unreadable::NotAHost,
             Unreadable::NotAToolRule,
             Unreadable::NotAList,
         ]
@@ -1205,6 +1232,88 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "the checkout's own rule stopped holding"
         );
+    }
+
+    /// PERM-19 and FETCH-4 for a host rule an administrator wrote in another spelling: a managed
+    /// `deny` written with the root's trailing dot holds over the person's bare `WebFetch` allow,
+    /// for the host as a URL spells it and as an IPv6 literal carrying it, and at the egress gate
+    /// for a redirect hop. The failure this rejects is a deny compared as spelled, which matches
+    /// no fetched host and leaves the person's allow to decide.
+    #[test]
+    fn a_managed_deny_in_another_spelling_of_a_host_holds_against_the_persons_allow() {
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+
+        let dir = crate::testutil::scratch_dir("bravebot-managed-host-deny");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"deny": ["WebFetch(domain:127.0.0.1.)"]}}"#,
+        )
+        .expect("managed file");
+        let settings = layered_settings(
+            "managed-host-deny",
+            None,
+            Some(r#"{"permissions": {"allow": ["WebFetch"]}}"#),
+        )
+        .under(&bravebot_config::Managed::at(&file));
+        let (permissions, rejected) = from_settings(&settings, None, Path::new("/nonexistent"));
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        for url in [
+            "http://127.0.0.1:8080/m",
+            "http://[::ffff:127.0.0.1]:8080/m",
+        ] {
+            let host = bravebot_core::url::host_of(url).expect("a host");
+            assert_eq!(
+                permissions.for_host(&host),
+                Decision::Ruled(Ruling::Deny),
+                "the managed deny did not cover {url}"
+            );
+        }
+        assert_eq!(
+            permissions.for_host("127.0.0.2"),
+            Decision::Ruled(Ruling::Allow),
+            "the person's allow stopped holding"
+        );
+
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "fetch a page");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_permissions(permissions);
+        let start = "https://example.com/start";
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the fetch was allowed");
+        assert!(policy.before_network(start).is_ok());
+        assert!(
+            policy.before_network("http://127.0.0.2:8080/m").is_ok(),
+            "the allow did not let a redirect through, so a refusal below proves nothing"
+        );
+        for hop in [
+            "http://127.0.0.1:8080/m",
+            "http://[::ffff:127.0.0.1]:8080/m",
+        ] {
+            let denial = policy
+                .before_network(hop)
+                .expect_err("a redirect reached a host the managed rule denies");
+            assert!(
+                denial
+                    .message
+                    .contains("a rule in the settings file denies"),
+                "refused, but not for the rule: {}",
+                denial.message
+            );
+        }
     }
 
     /// A single leading slash is anchored at the settings file's own directory, which is the

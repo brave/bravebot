@@ -61774,6 +61774,51 @@ fn a_redirect_to_a_denied_host_is_refused_without_asking() {
     );
 }
 
+/// FETCH-4 and PERM-1 for a hop in another spelling of a denied host: a redirect to
+/// `[::ffff:127.0.0.2]` is refused by the rule on `127.0.0.2` before anyone is asked, as a redirect
+/// to `127.0.0.2` is. Nothing has to listen there, because the refusal comes before a connection.
+/// The failure this rejects is a hop host compared with the rule as spelled, which would put the
+/// hop to the person as a host nobody wrote a rule for.
+#[test]
+fn a_redirect_to_another_spelling_of_a_denied_host_is_refused_without_asking() {
+    let scratch = Scratch::new("fetch-hop-denied-respelled");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, _requests) = serve_pages(vec![moved_to("http://[::ffff:127.0.0.2]:9/landed")]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+    let task = Task::new("read the start page").with_permissions(rules(
+        &["WebFetch(domain:127.0.0.2)"],
+        &[],
+        &[],
+    ));
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(confirmer.hops.is_empty(), "{:?}", confirmer.hops);
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("a rule in the settings file denies") && !second.contains("127.0.0.2"),
+        "{second}"
+    );
+}
+
 /// The case the record exists to get right: a page from the web lands in a directory a person
 /// vouched for, so the file it lands in stops being trusted and nothing else does. Marking the
 /// directory instead would quarantine every file beside it, which is a project the next turn can
@@ -90514,6 +90559,53 @@ fn a_download_from_a_denied_host_is_refused_without_asking() {
     .expect("turn runs");
 
     assert!(confirmer.asked.is_empty() && confirmer.writes.is_empty());
+    assert_eq!(count.load(Ordering::SeqCst), 0, "a denied host was reached");
+    assert!(!scratch.path.join("data.bin").exists());
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(second.contains("deny rule"), "{second}");
+}
+
+/// DOWNLOAD-2 and PERM-1: a download from `[::ffff:127.0.0.1]` is refused by the rule on
+/// `127.0.0.1` without a question and without a request, as a download from `127.0.0.1` is. The
+/// failure this rejects is the URL's host compared with the rule as spelled, which would put the
+/// host to the person and send the request.
+#[test]
+fn a_download_from_another_spelling_of_a_denied_host_is_refused_without_asking() {
+    let scratch = Scratch::new("download-denied-respelled");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"never"));
+    let port = site.rsplit(':').next().expect("a port");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"http://[::ffff:127.0.0.1]:{port}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+    let task =
+        Task::new("save it").with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        confirmer.asked.is_empty() && confirmer.writes.is_empty(),
+        "{:?}",
+        confirmer.asked
+    );
     assert_eq!(count.load(Ordering::SeqCst), 0, "a denied host was reached");
     assert!(!scratch.path.join("data.bin").exists());
     let _first = received.recv().expect("first request");

@@ -83,9 +83,24 @@ call's arguments, never anything else a turn observed.
 
 `WebFetch` takes `domain:` and nothing else, so `WebFetch(domain:example.com)` covers that host and
 its subdomains. A URL prefix would read as covering a path, and the boundary is a label boundary: a
-rule about `example.com` never covers `notexample.com`. A host written with a trailing dot, as in
-`example.com.`, is the same host, so the dot is dropped before a rule is compared. What a matching rule decides for a fetch,
-and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
+rule about `example.com` never covers `notexample.com`. The rule's domain is put in the same form
+as the fetched host before the two are compared: lowercased, with one pair of brackets and one
+trailing dot dropped, so `example.com.`, `[::1]` and `EXAMPLE.com` name the hosts they spell. A
+domain that is an address is read by value, in every spelling a resolver reads (`2130706433`,
+`0x7f000001`, `127.1`), with an IPv4 address inside IPv6 (`::ffff:a.b.c.d`, `64:ff9b::/96`) read
+as that IPv4 address, and it covers that address and no other: an address has no subdomains, so
+`WebFetch(domain:0.0.1)` covers `0.0.0.1` and not `127.0.0.1`. A name never covers an address,
+and an address never covers a name. A domain that is neither an address nor a name of letters,
+digits, `-` and `_` in non-empty labels, as one holding a port, a scheme, a path, a space or a
+second trailing dot, is unreadable ([PERM-11](#PERM-11)): no fetched host is spelled that way. A
+letter or digit outside ASCII is part of a name. The fetched host is read with no IDNA conversion,
+so a URL may hold such a name as written or in its ASCII form, and a rule on it covers both: the
+name as written after ASCII lowercasing, and the name with each label outside ASCII written as
+`xn--` and its Punycode (RFC 3492). A deny on `bücher.example` refuses `https://bücher.example/`,
+`https://xn--bcher-kva.example/` and the subdomains of each. Any other character outside ASCII,
+such as a no-break space, `。` (U+3002), `：` (U+FF1A) or a zero-width space, makes the domain
+unreadable ([PERM-11](#PERM-11)) as a port or a path does. What a matching
+rule decides for a fetch, and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
 
 `Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
 `Mcp(weather:get_forecast)` covers one of them. Both names are matched whole, so `Mcp(weather)` does
@@ -118,6 +133,13 @@ explain.
 `verified-by: bravebot_core::permissions::a_domain_rule_ignores_case`
 `verified-by: bravebot_core::permissions::a_domain_rule_matches_the_trailing_dot_spelling`
 `verified-by: bravebot_core::permissions::for_host_strips_the_trailing_dot_and_ignores_case`
+`verified-by: bravebot_core::permissions::a_domain_rule_and_a_fetched_host_are_compared_in_one_form`
+`verified-by: bravebot_core::permissions::a_deny_in_another_spelling_of_the_host_holds_over_a_bare_allow`
+`verified-by: bravebot_core::permissions::a_deny_on_an_international_name_refuses_a_url_spelling_it`
+`verified-by: bravebot_core::permissions::a_domain_rule_in_ascii_form_covers_the_international_name_it_spells`
+`verified-by: bravebot_core::permissions::a_rule_on_an_international_name_covers_its_ascii_form`
+`verified-by: bravebot_core::punycode::a_label_encodes_to_its_known_punycode`
+`verified-by: bravebot_core::permissions::a_domain_that_names_no_host_is_reported_as_not_a_host`
 `verified-by: bravebot_core::permissions::a_bare_web_fetch_deny_still_covers_a_host_of_only_a_dot`
 `verified-by: bravebot_core::permissions::a_bare_web_fetch_rule_covers_every_host`
 `verified-by: bravebot_core::permissions::a_web_fetch_rule_decides_nothing_about_other_families`
@@ -841,6 +863,8 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
 `verified-by: bravebot_config::settings::an_object_entry_with_no_rule_is_carried_out_to_be_reported`
+`verified-by: bravebot_core::permissions::a_domain_that_names_no_host_is_reported_as_not_a_host`
+`verified-by: bravebot_agent::permissions::a_domain_rule_that_names_no_host_is_reported_in_a_session`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
@@ -1246,6 +1270,7 @@ it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as writ
 `verified-by: bravebot_config::settings::a_managed_slash_rule_starts_at_the_managed_directory`
 `verified-by: bravebot_config::settings::a_machine_with_only_pinned_rules_has_no_settings_of_its_own`
 `verified-by: bravebot_agent::permissions::a_managed_deny_holds_against_the_persons_allow_and_a_checkouts_layer`
+`verified-by: bravebot_agent::permissions::a_managed_deny_in_another_spelling_of_a_host_holds_against_the_persons_allow`
 
 <a id="PERM-20"></a>
 ### PERM-20: a deny or ask rule also covers the program under a wrapper

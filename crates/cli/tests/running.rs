@@ -20811,6 +20811,58 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
     }
 }
 
+/// CLI-30 and PERM-1: the report reads a host in every spelling a fetch reads it in. A rule written
+/// with a trailing dot or in brackets, and a URL carrying an address inside IPv6 or as one number,
+/// are decided by the rule that names the same host, so the report says `deny` where a session
+/// refuses. The failure this rejects is a host compared with the rule as spelled.
+#[test]
+fn permissions_check_decides_a_host_in_any_spelling_as_a_session_does() {
+    let scratch = Scratch::new("cli-running-permissions-check-host-spellings").with_settings(
+        r#"{"permissions": {"deny": [
+            "WebFetch(domain:127.0.0.1)",
+            "WebFetch(domain:example.org.)",
+            "WebFetch(domain:[::1])"
+        ]}}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
+    let home = scratch.settings().display().to_string();
+
+    for (url, rule) in [
+        (
+            "http://[::ffff:127.0.0.1]:8080/m",
+            "WebFetch(domain:127.0.0.1)",
+        ),
+        ("http://[::ffff:7f00:1]/m", "WebFetch(domain:127.0.0.1)"),
+        ("http://2130706433/m", "WebFetch(domain:127.0.0.1)"),
+        ("http://127.0.0.1./m", "WebFetch(domain:127.0.0.1)"),
+        ("https://example.org/", "WebFetch(domain:example.org.)"),
+        (
+            "https://Docs.EXAMPLE.org./x",
+            "WebFetch(domain:example.org.)",
+        ),
+        ("http://[::1]:8080/", "WebFetch(domain:[::1])"),
+        ("http://[0:0:0:0:0:0:0:1]/", "WebFetch(domain:[::1])"),
+    ] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, &["WebFetch", url]),
+            [
+                "decision: deny".to_string(),
+                format!("rule: {rule}"),
+                format!("file: {home}"),
+            ],
+            "{url}"
+        );
+    }
+    for unmatched in ["http://127.0.0.2/", "https://notexample.org/"] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, &["WebFetch", unmatched]),
+            ["decision: no rule matches, so the ordinary gates decide"],
+            "{unmatched}"
+        );
+    }
+}
+
 /// CLI-30, PERM-5 and PERM-20: the report agrees with what a session does with a respelled program.
 /// A `deny` or `ask` rule is read without regard to case and without the trailing dots, `::$DATA`
 /// suffix and `.exe`, `.com`, `.cmd` or `.bat` on the program word and the wrapper names, so the

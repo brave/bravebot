@@ -836,6 +836,7 @@ permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la 
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
+permission-rule-not-a-host = a un port, un schéma, un chemin ou un autre texte qui n'est pas un hôte après 'domain:' ; écrivez un nom d'hôte ou une adresse seul, comme WebFetch(domain:example.com) ou WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = a besoin d'un serveur, ou d'un serveur et de l'un de ses outils ; écrivez Mcp(weather) ou Mcp(weather:get_forecast)
 # Un bloc permissions, ou sa liste deny, ask ou allow, écrit autrement qu'en liste. Les règles
 # qu'un autre fichier de réglages a écrites restent en vigueur, d'où « n'en retire aucune ».

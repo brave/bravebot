@@ -178,6 +178,8 @@ knows because it set it, and which no reply can influence.
 `verified-by: bravebot_agent::turn::a_redirect_off_the_approved_host_is_put_to_the_person_and_followed_on_a_yes`
 `verified-by: bravebot_agent::turn::a_redirect_off_the_approved_host_that_is_declined_sends_nothing_to_it`
 `verified-by: bravebot_agent::turn::a_redirect_to_a_denied_host_is_refused_without_asking`
+`verified-by: bravebot_agent::turn::a_redirect_to_another_spelling_of_a_denied_host_is_refused_without_asking`
+`verified-by: bravebot_agent::permissions::a_managed_deny_in_another_spelling_of_a_host_holds_against_the_persons_allow`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_a_fetch_but_not_a_redirect`
 `verified-by: bravebot_approval::lib::the_fetch_lines_say_where_a_redirect_was_approved_for`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for`
@@ -330,6 +332,8 @@ connects, and what it is allowed to reach is its own configuration's.
 `verified-by: bravebot_net::egress::an_approved_address_literal_on_this_machine_is_fetched`
 `verified-by: bravebot_core::policy::a_fetch_is_in_flight_from_its_approval_until_it_finishes`
 `verified-by: bravebot_agent::turn::a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it`
+`verified-by: bravebot_core::permissions::a_domain_rule_and_a_fetched_host_are_compared_in_one_form`
+`verified-by: bravebot_core::permissions::a_rule_and_the_metadata_warning_read_a_host_the_same_way`
 
 <a id="FETCH-9"></a>
 ### FETCH-9: a fetch may ask for its body in the same result, and gets it where the mode or a check answers

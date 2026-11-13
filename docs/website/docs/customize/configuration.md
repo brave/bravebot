@@ -1302,7 +1302,12 @@ step's program and arguments.
 its subdomains, and never `notexample.com`: the boundary is a label boundary. There is no URL-prefix
 form, since a rule matching a path would be answering a different question on every call. What a
 matching rule decides for a fetch, and what it does not, is
-[`fetch_url`](../reference/tools.md#fetch_url).
+[`fetch_url`](../reference/tools.md#fetch_url). A domain rule naming an address covers that address
+however it is spelled, so `WebFetch(domain:127.0.0.1)` covers `[::ffff:127.0.0.1]` and
+`2130706433`. A rule on a name with a letter outside ASCII also covers its ASCII form, so
+`WebFetch(domain:bücher.example)` covers `xn--bcher-kva.example`. A domain that is not a host, such
+as `example.com:443` or one holding a character outside ASCII that is not a letter or a digit, is
+reported as unreadable.
 
 **`deny`, then `ask`, then `allow`, and the first match decides.** Specificity does not enter into
 it: a broad deny beats a narrow allow, and a matching `ask` rule prompts even where a more specific
