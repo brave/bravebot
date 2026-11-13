@@ -150,7 +150,7 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 <a id="HOST-9"></a>
 ### HOST-9: a program the host starts holds no part of the channel
 
-The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A process that a hook or an approved command leaves running after it has exited, given the host's and the client's process ids and the waiting question, holds no socket of the channel, reaches neither end through a descriptor path or a connection, and does not change what the client reads; the waiting write lands only when the client approves it. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
+The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook or an MCP server that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A process that a hook or an approved command leaves running after it has exited, given the host's and the client's process ids and the waiting question, holds no socket of the channel, reaches neither end through a descriptor path or a connection, and does not change what the client reads; the waiting write lands only when the client approves it. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
 
 `verified-by: bravebot_ui_bridge::host_process::an_unconfined_hook_the_host_runs_holds_no_socket`
 `verified-by: bravebot_ui_bridge::control_boundary::a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel`
@@ -158,6 +158,7 @@ The host holds the near end of its client's channel while it runs the person's h
 `verified-by: bravebot_ui_bridge::host_process::a_program_handed_a_socket_lists_it`
 `verified-by: bravebot_ui_bridge::host_process::a_listing_of_either_system_shows_its_sockets`
 `verified-by: bravebot_ui_bridge::control_boundary::programs_a_host_starts_hold_no_end_of_the_channels_it_created`
+`verified-by: bravebot_ui_bridge::control_boundary::an_mcp_server_a_host_starts_holds_no_end_of_the_channels_it_created`
 
 <a id="HOST-10"></a>
 ### HOST-10: a question is put only to a client that can answer it
