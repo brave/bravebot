@@ -28,6 +28,7 @@ guards:
       - crates/aichat/src/generate_content.rs: 5
       - crates/aichat/src/responses.rs: 4
       - crates/aichat/src/lib.rs: 7
+      - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
       - crates/core/src/policy.rs: 141
@@ -56,7 +57,7 @@ guards:
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
       - crates/agent/tests/workspace.rs: 71
-      - crates/aichat/tests/client.rs: 12
+      - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 70
@@ -238,6 +239,7 @@ guards:
       - crates/aichat/src/lib.rs: 3
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
+      - crates/aichat/src/ollama_chat.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1

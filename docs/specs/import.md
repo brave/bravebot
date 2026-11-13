@@ -181,7 +181,7 @@ A proxy the environment names carries this request as it carries every other
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
 | Environment | `OPENROUTER_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` exported and not blank, with none of that service's host variables exported ([IMPORT-2](#IMPORT-2)) | `provider.<id>`, at the endpoint compiled in: `{"env": ["<variable>"]}` |
-| Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
+| Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "npm": "ollama-ai-provider-v2", "options": {"baseURL": "<address>/api"}}`, reached in Ollama's own protocol ([BACKEND-72](backends.md#BACKEND-72)), and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
 | LM Studio | a server answering [IMPORT-12](#IMPORT-12)'s request with a language model trained for tool use | `provider.lmstudio`: `{"name": "LM Studio (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "lmstudio/<key>"` for the model [IMPORT-12](#IMPORT-12) chooses |
 | llama-server | a server answering [IMPORT-12](#IMPORT-12)'s request with a listing it owns | `provider.llama-server`: `{"name": "llama-server (local)", "options": {"baseURL": "<address>/v1"}}`, and `model: "llama-server/<id>"` for the entry [IMPORT-12](#IMPORT-12) chooses |
 
@@ -281,7 +281,9 @@ where the person writes that name down.
 **A running Ollama is written as the configuration guide's block.** It has no `env`, no `apiKey`
 and no `models`, so bravebot reads it as needing no credential and asks it for its roster
 ([backends.md](backends.md)). A model pulled after the import is then offered with nothing written
-again. A running LM Studio or llama-server is written the same way, under its own id.
+again. Its `npm` names Ollama's own SDK, so its requests state the window the server allocates and its
+roster reads each model's ([BACKEND-72](backends.md#BACKEND-72), [BACKEND-73](backends.md#BACKEND-73)).
+A running LM Studio or llama-server is written the same way, under its own id and with no `npm`.
 
 **Bedrock needs a region.** It is offered only where a region is named somewhere bravebot will read
 it, the settings file or the process environment. Without one, bravebot treats Bedrock as not
@@ -429,17 +431,21 @@ the end of input.
 **The window a running server holds.** Under the model line of an Ollama or LM Studio question,
 where [IMPORT-10](#IMPORT-10) or [IMPORT-12](#IMPORT-12) read a figure for that model, the question
 gives the context window the server has it loaded with. Where the figure is below the window a
-conversation is otherwise budgeted against (131,072 tokens), an Ollama question also says the
-server drops the earliest turns beyond it and names `OLLAMA_CONTEXT_LENGTH`, and an LM Studio
+conversation is otherwise budgeted against (65,536 tokens for Ollama, 131,072 for LM Studio), an
+Ollama question also says each
+request asks for the window the model was trained with, up to that figure, that a larger window takes
+more memory, and that `contextWindow` on the entry asks for less; an LM Studio
 question says a longer conversation does not fit and that the model can be loaded with a longer
 context length in LM Studio. A model with no figure has no line, and no figure is guessed.
 
-**Where the window is kept.** A figure below that window is written as `options.contextWindow` of
-the entry, shown in the entry the question lists, and a session budgets the entry's models against
+**Where the window is kept.** For LM Studio, a figure below that window is written as
+`options.contextWindow` of the entry, shown in the entry the question lists, and a session budgets the entry's models against
 it ([backends.md](backends.md)). It is a field of the provider because the entry lists no models to
 hold a `limit`, and a block that lists models is taken at its word. A figure at or above the window
 is not written, since the window a conversation is otherwise budgeted against is the safe
-assumption and a model reloaded larger would stay held down by a stale figure.
+assumption and a model reloaded larger would stay held down by a stale figure. Ollama's figure is
+never written: it is the window the model happens to be loaded with now, and the next request reloads
+the model at the one its roster row states.
 
 **Names already set.** A name already set in the file, including one the first answer just wrote,
 is shown as left as it is ([IMPORT-7](#IMPORT-7)). A source left with nothing to add is not asked
