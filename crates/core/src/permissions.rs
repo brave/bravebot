@@ -1825,10 +1825,12 @@ fn covers_place(c: char, place: &Place, restricting: bool) -> bool {
 /// Whether a character of a restricting rule meets a character of the program word.
 ///
 /// The letters meet when [`fold_simple`](crate::trust::fold_simple) takes them to the same letter:
-/// upper case first and then lower case, one letter to one letter. That is how NTFS compares names,
-/// and it joins `\u{17f}` with `s` and `\u{131}` with `i`, which lowercasing leaves apart. The
-/// Kelvin sign lowercases to `k`, so lowercasing joins it too. Every pair that lowercases to the
-/// same letter is joined by the fold as well, which
+/// upper case first and then lower case, one letter to one letter. That joins `\u{17f}` with `s` and
+/// `\u{131}` with `i`, which lowercasing leaves apart. NTFS opens none of `\u{17f}`, `\u{131}` and
+/// the Kelvin sign as an ASCII letter (`program_word_fold` on Windows), so on Windows the rule
+/// covers three spellings the volume does not start as the program, which is the direction PERM-4
+/// allows. The Kelvin sign lowercases to `k`, so lowercasing joins it too. Every pair that
+/// lowercases to the same letter is joined by the fold as well, which
 /// `lowercasing_joins_no_letters_that_the_simple_fold_keeps_apart` checks over every code point.
 /// ASCII letters are compared directly.
 fn program_letters_meet(c: char, found: char) -> bool {
