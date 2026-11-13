@@ -118,10 +118,11 @@ pub enum Named {
     VetContent,
     RequestPath,
     Search,
+    SpawnAgent,
 }
 
 impl Named {
-    const ALL: [Named; 11] = [
+    const ALL: [Named; 12] = [
         Named::Run,
         Named::ReadOutput,
         Named::ReadFile,
@@ -133,6 +134,7 @@ impl Named {
         Named::VetContent,
         Named::RequestPath,
         Named::Search,
+        Named::SpawnAgent,
     ];
 
     /// The name the tool is offered under. `run` is read as [`Running::on`] reads it, so it has
@@ -150,6 +152,7 @@ impl Named {
             Named::VetContent => Some("vet_content"),
             Named::RequestPath => Some("request_path"),
             Named::Search => Some("search"),
+            Named::SpawnAgent => Some("spawn_agent"),
         }
     }
 
@@ -324,6 +327,28 @@ fn spawn_agent_lacks(beside: &dyn Fn(&str) -> bool) -> String {
     format!(
         " A delegate cannot call {named}, so do work that needs {needs} yourself, before you \
          delegate or instead of delegating.{whole}"
+    )
+}
+
+/// What `spawn_agent` says about output the planner may not read: a delegate is quarantined as the
+/// planner is (DELEGATE-1), so delegating a run whose output the planner may not read does not make
+/// it readable. It names `spawn_processor` only where `beside` says it is on the list, and points to
+/// vouching for the command, which names no tool. It starts with a space, to sit after the sentence
+/// before it.
+///
+/// Without it the description's build example reads as a way round the quarantine, and a planner
+/// holding a reference to a run's output started a delegate to run the command again, which got the
+/// same reference and could not read it either.
+fn spawn_agent_quarantined(beside: &dyn Fn(&str) -> bool) -> String {
+    let instead = if beside("spawn_processor") {
+        " Give its reference to spawn_processor for a bounded question about it instead, or have \
+         a person vouch for the command."
+    } else {
+        " Have a person vouch for the command instead."
+    };
+    format!(
+        " A delegate is quarantined exactly as you are, so delegating a run whose output you may \
+         not read does not make that output readable.{instead}"
     )
 }
 
@@ -676,11 +701,16 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             "fetch_url" => state_fetch_url_beside(tool, &beside),
             "job_output" => tool.function.description = job_output_description(&beside),
             "spawn_agent" => {
-                tool.function.description = tool.function.description.replacen(
-                    &spawn_agent_lacks(&|_| true),
-                    &spawn_agent_lacks(&beside),
-                    1,
-                );
+                for (full, narrowed) in [
+                    (spawn_agent_lacks(&|_| true), spawn_agent_lacks(&beside)),
+                    (
+                        spawn_agent_quarantined(&|_| true),
+                        spawn_agent_quarantined(&beside),
+                    ),
+                ] {
+                    tool.function.description =
+                        tool.function.description.replacen(&full, &narrowed, 1);
+                }
             }
             "run" => state_run_beside(tool, &beside),
             "read_file" => {
@@ -1917,7 +1947,8 @@ fn table(
                 "Hand a whole sub-task to a second agent and get back one report. It has its own \
                  context, so everything it reads stays with it and only what it says at the end \
                  reaches you. That is what this is for: running a build reads the whole log, and \
-                 asking a delegate to run the build tells you what failed. Use it when finding \
+                 asking a delegate to run a build whose output you may read tells you what \
+                 failed.{quarantined} Use it when finding \
                  something out would cost you more context than the answer is worth, or when a \
                  sub-task is separable enough to describe in a paragraph. It cannot ask the user \
                  anything, so give it everything it needs in the task. It may hand parts of that \
@@ -1927,7 +1958,8 @@ fn table(
                  user for approval, so this saves you context and never an approval.\
                  {lacks} Do not use it for something one read would answer: it is a whole second \
                  agent and costs like one.",
-                lacks = spawn_agent_lacks(&|_| true)
+                lacks = spawn_agent_lacks(&|_| true),
+                quarantined = spawn_agent_quarantined(&|_| true)
             ),
             json!({
                 "type": "object",
@@ -2010,6 +2042,11 @@ fn table(
                                         each. It can only lower the \
                                         bound the delegate's definition sets. Leave it out to \
                                         set none."
+                    },
+                    "wake_after": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": wake_after_description(true)
                     }
                 },
                 "required": ["kind", "task"]
@@ -2330,8 +2367,35 @@ pub fn for_delegate(
         // The kinds this delegate's own capabilities reach, so a checker is not offered a worker
         // it could only start narrowed to what it holds itself (DELEGATE-32).
         offer_kinds(&mut tools, &delegates.offered_to(capabilities));
+        // A typed line never ends a delegate's wait (DELEGATE-17), so its `wake_after` does not
+        // say one does.
+        if let Some(wake_after) = tools
+            .iter_mut()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .and_then(|spawn| spawn.function.parameters.get_mut("properties"))
+            .and_then(|properties| properties.get_mut("wake_after"))
+        {
+            wake_after["description"] = json!(wake_after_description(false));
+        }
     }
     tools
+}
+
+/// What `spawn_agent`'s `wake_after` is told (DELEGATE-17). `typed_lines_wake` is false for a
+/// delegate's list, whose wait no typed line ends.
+fn wake_after_description(typed_lines_wake: bool) -> String {
+    let also = match typed_lines_wake {
+        true => " A line from the user still wakes you, and so does another call's count.",
+        false => " Another call's count still wakes you.",
+    };
+    format!(
+        "Optional. How many of this call's delegates have to end before you are asked again, \
+         once you end a round with them working. Left out it is 1: you are asked again as each \
+         one reports. A figure at or above the number of delegates the call starts means all of \
+         them. Use it when you need the reports together, such as a batch whose results you \
+         compare or merge, so the turn does not ask you once per report to name what is still \
+         outstanding.{also}"
+    )
 }
 
 /// The tools a turn offers its planner, with the kinds of delegate this turn resolved.

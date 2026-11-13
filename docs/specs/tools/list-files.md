@@ -59,16 +59,36 @@ still a reference the planner can name. Which entries are files and which are di
 where the entry sits in the listing, never from its name. The header names only the tools the run is
 offered, as the description of a single reference does.
 
+What a reference to a file is for depends on the entry's label, which comes from the trust map when
+the entry is reserved and which the entry's line already shows. The header has one sentence for each
+label class among the listing's files, never one per entry. For files labelled untrusted it says
+that read_file has nothing to add, because the reference already is the file. For files labelled
+trusted it says that the label lets the planner read them, which is not always a person's vouch,
+and that read_file shows the file when the entry's reference is named as `path_ref`,
+and that a picture or a PDF still comes back as a reference ([READ-5](read-file.md#READ-5)), as
+does a file that is no longer trusted when it is read ([READ-1](read-file.md#READ-1)). That
+sentence names read_file only where the run is offered it. The driver does not work out which
+entries are pictures, because that would mean reading the names. Where no file is labelled
+trusted, one sentence covers every file and names no label.
+
 **Why.** One reference for the whole listing would leave the planner holding an address it cannot
 use, and it would guess globs to see which came back empty. Describing every entry in full repeats
 the same sentence for each one, and the result is sent again every round: at 110 entries that is
 about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
+
+**Why the label.** A single sentence telling the planner read_file has nothing to add for every file
+leaves it unable to read a trusted file, since it holds a reference and no name, so it guesses names
+until a read works.
 
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
 `verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`
 `verified-by: bravebot_core::reference::directories_with_different_labels_are_not_counted_together`
 `verified-by: bravebot_core::reference::the_header_of_a_listing_names_only_the_moves_the_run_is_offered`
 `verified-by: bravebot_core::reference::a_listing_of_one_directory_is_one_line_and_names_no_file_move`
+`verified-by: bravebot_core::reference::a_mixed_listing_says_once_per_label_what_a_file_reference_is_for`
+`verified-by: bravebot_core::reference::a_listing_of_one_label_says_only_that_labels_sentence`
+`verified-by: bravebot_core::reference::a_trusted_entry_names_read_file_only_where_the_run_is_offered_it`
+`verified-by: bravebot_agent::turn::a_trusted_entry_of_a_mixed_listing_is_read_through_its_reference`
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`

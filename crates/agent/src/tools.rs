@@ -341,6 +341,9 @@ pub struct Output {
     /// seeded on its own, so what the turn starts is the same thing whether the planner asked
     /// for them one call at a time or all at once.
     pub delegate: Vec<(crate::report::DelegateId, crate::delegate::Seeded)>,
+    /// How many of `delegate` have to end before the planner is asked again: the call's own
+    /// `wake_after`, or 1 where it named none (DELEGATE-17).
+    pub wake_after: usize,
     /// The skill the planner loaded and how its file asks the rounds after it to run.
     ///
     /// Travels back for the reason a wakeup does: what it changes is the next request rather than
@@ -1686,6 +1689,8 @@ struct Produced {
     ///
     /// A list because one call may fan a task out over several.
     delegate: Vec<(crate::report::DelegateId, crate::delegate::Seeded)>,
+    /// How many of `delegate` have to end before the planner is asked again (DELEGATE-17).
+    wake_after: usize,
     /// The skill the planner loaded and how its file asks the rounds after it to run.
     ///
     /// Settled by the turn rather than here, because what it changes is the next request rather
@@ -1754,6 +1759,7 @@ impl Produced {
             watch: None,
             link: None,
             delegate: Vec::new(),
+            wake_after: 1,
             loaded: None,
             skill: None,
             message_sent: None,
@@ -3236,6 +3242,7 @@ fn output_of(
         watch: produced.watch,
         link: produced.link,
         delegate: produced.delegate,
+        wake_after: produced.wake_after,
         loaded: produced.loaded,
         skill: produced.skill,
         message_sent: produced.message_sent,
@@ -12949,8 +12956,11 @@ fn job_output<S: Sink, R: Reporter>(
                 "error: '{name}' is a delegate, not a background job, so job_output neither reads \
                  it nor stops it. How it ended reaches you on its own, in a message saying {name} \
                  has finished or did not finish. When a delegate is all that is left, end the round \
-                 with one line naming what is outstanding: the turn asks you again when the \
-                 first report is in, while any others keep working."
+                 with one line naming what is outstanding. The turn asks you again no later than \
+                 when as many of the delegates of the spawn_agent call that started {name} have \
+                 reported as its wake_after asked for: one where it gave no count, and all of \
+                 them where it asked for more than it started. Delegates still working keep \
+                 working."
             ));
         }
         return Produced::problem(format!(
@@ -13543,6 +13553,10 @@ fn spawn_agent<S: Sink, R: Reporter>(
         Ok(budget) => budget,
         Err(refusal) => return Produced::problem(refusal),
     };
+    let wake_after = match wake_after_asked(arguments) {
+        Ok(wake_after) => wake_after,
+        Err(refusal) => return Produced::problem(refusal),
+    };
     // What the run has left is shared by the delegates of one call, so a fan-out divides it
     // rather than giving each the whole of it (DELEGATE-29). Fewer tokens than delegates leaves a
     // share of zero, which the kernel refuses like a run with nothing left, so the delegates
@@ -13556,6 +13570,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         String::new(),
         String::new(),
     );
+    produced.wake_after = wake_after;
     let mut started = Vec::new();
     // Each checkout's number, the commit it holds and what was carried into it, in the order they
     // were made.
@@ -13720,20 +13735,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
     // meantime the planner has its round back: a turn that had to sit still until a delegate
     // answered could only ever have one working.
     let named = started.join(", ");
+    let asked_again = when_asked_again(started.len(), produced.wake_after, !tools.delegated);
     let body = if started.len() == 1 {
         format!(
             "the {kind_name} delegate {named} has started. Its report will reach you when it is \
              ready, and you do not have to wait for it: carry on, or spawn another. When it is all \
-             that is left, end the round with one line naming what is outstanding: the turn \
-             asks you again when the report is in."
+             that is left, end the round with one line naming what is outstanding: {asked_again}"
         )
     } else {
         format!(
             "{} {kind_name} delegates have started: {named}. Each reports on its own and you do \
              not have to wait for any of them: carry on, or spawn another. When they are \
-             all that is left, end the round with one line naming what is outstanding: the turn \
-             asks you again when the first report is in, while the others keep working, and \
-             again as each of the rest reports.",
+             all that is left, end the round with one line naming what is outstanding: \
+             {asked_again}",
             started.len()
         )
     };
@@ -14037,6 +14051,58 @@ fn servers_kept(arguments: &Value) -> Result<Option<Labelled<Vec<String>>>, Stri
 fn budget_asked(arguments: &Value) -> Result<Option<Labelled<u64>>, String> {
     Ok(budget_figure(arguments)?
         .map(|figure| Labelled::new(figure, bravebot_core::label::Label::untrusted_public())))
+}
+
+/// When the planner is asked again about a call that started `started` delegates and asked to be
+/// woken after `wake_after` of them (DELEGATE-17), as the call's result says it.
+///
+/// A figure at or above `started` is all of them, as the turn counts it. One delegate is asked
+/// about when its report is in whatever the figure. `typed_lines_wake` is false for a delegate's
+/// own call, whose wait no typed line ends, so its result does not say one does.
+fn when_asked_again(started: usize, wake_after: usize, typed_lines_wake: bool) -> String {
+    if started <= 1 {
+        "the turn asks you again when the report is in.".to_string()
+    } else if wake_after >= started {
+        let sooner = match typed_lines_wake {
+            true => "a line from the user arrives or another call's delegates wake it",
+            false => "another call's delegates wake it",
+        };
+        format!(
+            "the turn asks you again when all {started} have reported, and not before unless \
+             {sooner}."
+        )
+    } else if wake_after > 1 {
+        format!(
+            "the turn asks you again when {wake_after} of them have reported, while the others \
+             keep working, and again as each of the rest reports."
+        )
+    } else {
+        "the turn asks you again when the first report is in, while the others keep working, and \
+         again as each of the rest reports."
+            .to_string()
+    }
+}
+
+/// How many of a `spawn_agent` call's delegates have to end before the planner is asked again
+/// (DELEGATE-17): the call's `wake_after`, or 1 where it names none.
+///
+/// A whole number above zero. A figure at or above the number of delegates the call starts asks
+/// for all of them, which the turn settles when it counts, so it is not compared with that number
+/// here. The figure is the planner's own argument and selects no destination, so nobody is asked
+/// about it.
+fn wake_after_asked(arguments: &Value) -> Result<usize, String> {
+    let figure = match arguments.get("wake_after") {
+        None | Some(Value::Null) => return Ok(1),
+        Some(Value::Number(number)) => number.as_u64().filter(|figure| *figure > 0),
+        Some(_) => None,
+    };
+    figure
+        .map(|figure| usize::try_from(figure).unwrap_or(usize::MAX))
+        .ok_or_else(|| {
+            "error: 'wake_after' must be a whole number of delegates above zero, such as 3; leave \
+             it out to be asked again as soon as one of this call's delegates has ended"
+                .to_string()
+        })
 }
 
 /// The figure a call's `budget` field names, where it names one.
@@ -17976,6 +18042,45 @@ mod tests {
         assert_eq!(lacks(&delegate), "");
     }
 
+    /// brave/bravebot#3986. A delegate is quarantined exactly as the planner is (DELEGATE-1), so
+    /// the description of `spawn_agent` promises a build's failures only for output the planner
+    /// may read, says that delegating a run whose output it may not read does not make that output
+    /// readable, and points to `spawn_processor` and to vouching for the command instead. It names
+    /// `spawn_processor` only where the turn's list holds it (TOOL-6).
+    ///
+    /// Rejects: the build example promising what failed whatever the label, so a planner holding a
+    /// reference delegates the run again and its delegate gets the same reference; a description
+    /// that names the rule and no way on; and one that names `spawn_processor` to a list without it.
+    #[test]
+    fn the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either() {
+        let everything = description_of(&the_table_without(&[]), "spawn_agent");
+        assert!(
+            everything.contains(
+                "That is what this is for: running a build reads the whole log, and asking a \
+                 delegate to run a build whose output you may read tells you what failed. A \
+                 delegate is quarantined exactly as you are, so delegating a run whose output \
+                 you may not read does not make that output readable. Give its reference to \
+                 spawn_processor for a bounded question about it instead, or have a person vouch \
+                 for the command. Use it when finding"
+            ),
+            "{everything}"
+        );
+        assert!(
+            !everything.contains("run the build tells you"),
+            "{everything}"
+        );
+
+        let without = description_of(&the_table_without(&["spawn_processor"]), "spawn_agent");
+        assert!(
+            without.contains(
+                "does not make that output readable. Have a person vouch for the command \
+                 instead. Use it when finding"
+            ),
+            "{without}"
+        );
+        assert!(!names_the_tool(&without, "spawn_processor"), "{without}");
+    }
+
     /// Being shown private content does not close the processor, so no description tells the
     /// planner it does: not the tools that show output, not `spawn_agent`, and not the kind text
     /// that says what a reader does.
@@ -19420,6 +19525,122 @@ mod tests {
                 .err()
                 .unwrap_or_else(|| panic!("{malformed} was taken for a list of names"));
             assert!(refused.contains("must be an array"), "{refused}");
+        }
+    }
+
+    /// DELEGATE-17 and AGENT-3. The result of a call says when the planner is asked again from the
+    /// call's own count, so a planner that asked to be woken after all of a batch is not told it
+    /// will be asked as each report arrives.
+    #[test]
+    fn the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count() {
+        let first = "the turn asks you again when the first report is in, while the others keep \
+                     working, and again as each of the rest reports.";
+        assert_eq!(when_asked_again(3, 1, true), first);
+        assert_eq!(
+            when_asked_again(3, 2, true),
+            "the turn asks you again when 2 of them have reported, while the others keep \
+             working, and again as each of the rest reports."
+        );
+        let all = "the turn asks you again when all 3 have reported, and not before unless a line \
+                   from the user arrives or another call's delegates wake it.";
+        assert_eq!(when_asked_again(3, 3, true), all);
+        assert_eq!(when_asked_again(3, 40, true), all);
+        // A delegate's own call: no typed line ends its wait, so none is said to.
+        assert_eq!(
+            when_asked_again(3, 3, false),
+            "the turn asks you again when all 3 have reported, and not before unless another \
+             call's delegates wake it."
+        );
+        assert_eq!(when_asked_again(3, 1, false), first);
+        for wake_after in [1, 5] {
+            for typed_lines_wake in [true, false] {
+                assert_eq!(
+                    when_asked_again(1, wake_after, typed_lines_wake),
+                    "the turn asks you again when the report is in."
+                );
+            }
+        }
+    }
+
+    /// DELEGATE-17 and AGENT-3. The planner is offered `wake_after` as a whole number of at least
+    /// one, with a description saying what it does and when to use it. A field the turn reads and
+    /// the schema leaves out is one no planner writes.
+    #[test]
+    fn the_planner_is_offered_a_count_of_delegates_to_wake_after() {
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &bravebot_core::delegate::Definitions::default(),
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let wake_after = &spawn.function.parameters["properties"]["wake_after"];
+        assert_eq!(wake_after["type"], json!("integer"));
+        assert_eq!(wake_after["minimum"], json!(1));
+        let described = wake_after["description"].as_str().expect("a description");
+        for said in [
+            "How many of this call's delegates have to end before you are asked again",
+            "Left out it is 1",
+            "at or above the number of delegates the call starts means all of them",
+            "Use it when you need the reports together",
+            "A line from the user still wakes you, and so does another call's count.",
+        ] {
+            assert!(described.contains(said), "{said:?} is not in {described}");
+        }
+        let required = spawn.function.parameters["required"]
+            .as_array()
+            .expect("a list");
+        assert!(
+            !required.contains(&json!("wake_after")),
+            "wake_after is required"
+        );
+
+        // A delegate that may delegate: a typed line never ends its wait, so its description
+        // says only what does.
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let held = for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&bravebot_core::delegate::Definitions::default()),
+                Deadlines::BUILT_IN,
+            );
+            let spawn = held
+                .iter()
+                .find(|tool| tool.function.name == "spawn_agent")
+                .unwrap_or_else(|| panic!("a {name} above the bottom is offered spawn_agent"));
+            let described = spawn.function.parameters["properties"]["wake_after"]["description"]
+                .as_str()
+                .expect("a description");
+            assert!(
+                described.contains("Use it when you need the reports together")
+                    && described.ends_with(" Another call's count still wakes you."),
+                "{name}: {described}"
+            );
+            assert!(
+                !described.contains("line from the user"),
+                "{name}: {described}"
+            );
+        }
+    }
+
+    /// DELEGATE-17 and AGENT-3. `wake_after` left out is 1, a whole number above zero is kept as
+    /// written, and 0, a negative or fractional number or anything but a number is refused with a
+    /// sentence naming the field, so a malformed count never reaches the turn as the default.
+    #[test]
+    fn a_wake_after_that_is_not_a_count_of_delegates_is_refused() {
+        assert_eq!(wake_after_asked(&json!({"task": "t"})), Ok(1));
+        assert_eq!(wake_after_asked(&json!({"wake_after": null})), Ok(1));
+        assert_eq!(wake_after_asked(&json!({"wake_after": 1})), Ok(1));
+        assert_eq!(wake_after_asked(&json!({"wake_after": 7})), Ok(7));
+        for malformed in [json!(0), json!(-2), json!(1.5), json!("3"), json!([2])] {
+            let refused = wake_after_asked(&json!({ "wake_after": malformed }))
+                .expect_err(&format!("{malformed} was taken for a count"));
+            assert!(refused.contains("'wake_after'"), "{refused}");
         }
     }
 

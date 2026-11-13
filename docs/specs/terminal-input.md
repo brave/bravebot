@@ -524,9 +524,10 @@ are watching rather than going to the delegate. A delegate does not ask for one 
 shared and asking is taking, so a delegate that asked and then declined what it was handed would
 throw the line away, leaving the turn it was aimed at to find nothing waiting. A round a turn spends
 waiting for a delegate is a round of that turn, and the boundary it reaches when a delegate is back,
-or when the person's line is waiting, asks like any other. The turn waits for the first delegate to
-end or for a line, whichever comes first ([DELEGATE-17](delegation.md#DELEGATE-17)), so a line
-typed during the wait is read at that wake, while the other delegates still work, and not after
+or when the person's line is waiting, asks like any other. The turn waits for a `spawn_agent` call
+to have as many of its delegates end as its `wake_after` asked for, 1 where it named none, or for a
+line, whichever comes first ([DELEGATE-17](delegation.md#DELEGATE-17)), so a line
+typed during the wait is read at that wake, while the delegates still work, and not after
 the last of them has ended. A turn that answered with nothing in order to wait and then went
 straight on to its next request would put the delegate's report to the planner and nothing of what
 the person made of it.

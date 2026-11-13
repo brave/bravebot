@@ -30,7 +30,7 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 140
+      - crates/core/src/policy.rs: 141
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -78,7 +78,7 @@ guards:
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 26
-      - crates/agent/src/turn.rs: 8
+      - crates/agent/src/turn.rs: 10
       - crates/agent/src/workspace.rs: 17
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1

@@ -199,9 +199,18 @@ A listing of a directory nobody vouched for is quarantined, because a filename i
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
 process it and write it back without ever being told what it is called. The directories a bounded
 walk stopped at are entries too. The result says once what a reference to a file and a reference to a
-directory are for, gives each file a line with its reference, and gives the directories as a count
-with the first and last reference. There is nothing behind a directory to read, and the way to what
-is inside it is another listing with a greater depth.
+directory are for, gives each file a line with its reference and label, and gives the directories as
+a count with the first and last reference. There is nothing behind a directory to read, and the way
+to what is inside it is another listing with a greater depth.
+
+What a reference to a file is for depends on the label its line shows, and the result says it once
+for each label among the files. A file labelled untrusted is one nobody vouched
+for, and its reference already is the file, so `read_file` has nothing to add. A file labelled
+trusted is one its label lets the planner read, which is usually a file you vouched for, and
+`read_file` shows its lines when the planner names its reference
+as `path_ref`. A picture or a PDF still comes back as a reference, as
+[above](#read_file), and so does a file that is no longer trusted when it is read. A run that is
+not offered `read_file` is not told to use it.
 
 A walk does not enter a fixed list of directories, at any depth, and its result does not say that it
 left them out: version control (`.git`, `.hg`, `.svn`), build output and caches (`target`, `dist`,
@@ -694,8 +703,11 @@ marked as such.
 
 A `job` naming a [delegate](#spawn_agent) rather than a job is answered as that: `job_output` neither
 reads nor stops a delegate, and its report reaches the planner on its own when it finishes. The refusal
-tells the planner to end the round with one line saying what is outstanding, and the turn asks it again
-when the first report is in, while any others keep working. Only a name that is neither is reported as
+tells the planner to end the round with one line saying what is outstanding, and that the turn asks it
+again no later than when as many of the delegates of the `spawn_agent` call that started that delegate
+have reported as its `wake_after` asked for, while the others keep working: one where the call gave no
+count, and all of them where it asked for more than it started. Only a name
+that is neither is reported as
 no job.
 
 **A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
@@ -932,6 +944,7 @@ of capabilities, and gets back one report.
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry. One call starts at most eight; a further call with the same `task` starts more |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
 | `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. Every request counts the whole conversation so far, so a figure buys a few dozen requests, not a few dozen thousand tokens of reading: `2m` is about thirty requests at 70k tokens each. It can only lower the budget a [definition](../customize/agents.md) sets |
+| `wake_after` | optional; how many of this call's delegates have to end before the planner is asked again, 1 unless given. A figure at or above the number of delegates the call starts means all of them |
 | `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in, and `checkout_with_changes` also copies into it the changes your working tree has now |
 
 | Kind | Holds | For |
@@ -945,12 +958,21 @@ the work goes on behind it, and what the delegate says arrives on its own later.
 can be going at once, each numbered in the order the turn started them, and every report says whose
 work it describes.
 
-When the planner ends a round with delegates still working, the turn asks it again as soon as the first
-one ends, or as soon as you send a line, and puts the reports that have come in in front of it. The
+When the planner ends a round with delegates still working, by default the turn asks it again as soon
+as the first one ends, or as soon as you send a line, and puts the reports that have come in in front of it. The
 other delegates keep working. If the planner has nothing to do with a report it ends its round again
 naming what is outstanding, and the turn waits for the next delegate to end. The turn does not end
-until the last delegate has. The call has no argument to wait for a whole batch before the planner is
-asked again.
+until the last delegate has.
+
+The optional `wake_after` argument is a whole number of the call's delegates that have to end before
+the planner is asked again. Left out it is 1, as above. A figure at or above the number of delegates
+the call starts waits for all of them, so a batch whose reports are needed together costs one
+request during the wait instead of one per report. A line you send still wakes the turn, and so
+does another call reaching its own count. The result of the call says which of these the planner
+is waiting for. A delegate that starts delegates of its own is not woken by a line you send, so
+its description and result leave that out. The figure decides only when the planner is asked again, so you are not asked about
+it. Delegates that end close together are not joined into one wake unless they end within one
+20 ms check, which is left as a cost of the default.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
@@ -1035,6 +1057,12 @@ with its own single-use endorsement, so you see the path and the diff whoever pr
 call a worker makes to a server's tool is put to you as the turn's own is. What you
 vouched for inside one comes back to the session, because that answer was about your machine rather
 than about the run that happened to be going.
+
+Delegation does not lift a quarantine either. A delegate is quarantined exactly as the planner is,
+so a run whose output the planner may not read gives the delegate the same reference. The
+`spawn_agent` description says so and points to [`spawn_processor`](#spawn_processor) for a bounded
+question about the output, or to you vouching for the command. A quarantined run result says so too,
+and so does the account the turn gives of a background job that has ended.
 
 Nothing but the report crosses back: the exchange, the tool results and the quarantine end with the
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of

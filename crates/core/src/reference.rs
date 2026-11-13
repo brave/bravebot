@@ -95,6 +95,10 @@ pub struct Reference {
     /// kept whole past a cap is read. Only a reference to such output names it. Set by the policy
     /// that made the reference.
     pub reading_offered: bool,
+    /// Whether the run this reference is made for is offered `read_file`, which is how an entry of
+    /// a listing labelled trusted is read through its reference. Set by the policy that made the
+    /// reference.
+    pub read_file_offered: bool,
 }
 
 impl Reference {
@@ -117,6 +121,7 @@ impl Reference {
             spawning_offered: true,
             writing_offered: true,
             reading_offered: true,
+            read_file_offered: true,
         }
     }
 
@@ -141,6 +146,12 @@ impl Reference {
     /// Say that the run this reference is made for is not offered `read_output`.
     pub fn without_reading(mut self) -> Self {
         self.reading_offered = false;
+        self
+    }
+
+    /// Say that the run this reference is made for is not offered `read_file`.
+    pub fn without_read_file(mut self) -> Self {
+        self.read_file_offered = false;
         self
     }
 
@@ -199,6 +210,7 @@ impl Reference {
             spawning_offered: true,
             writing_offered: true,
             reading_offered: true,
+            read_file_offered: true,
         }
     }
 
@@ -343,6 +355,15 @@ impl Reference {
 /// the listing. A run is cut where the label changes, and a label is the policy's, not a fact read
 /// off a name. Nothing here is a name.
 ///
+/// A file's label decides which sentence covers it, one sentence for each class present and never
+/// one per entry. The label came from the trust map when the entry was reserved, so it is a fact
+/// the planner is already shown on the entry's line. A file labelled untrusted already is its
+/// reference, and read_file has nothing to add. A file labelled trusted is one the label lets the
+/// planner read, which read_file shows through its reference. Which entries are pictures would have
+/// to be read off the names, so the sentence says a picture still comes back as a reference instead
+/// of telling them apart. Where no file is labelled trusted, one sentence covers every file and
+/// names no label.
+///
 /// Empty for no references.
 pub fn describe_listing(references: &[Reference]) -> String {
     let Some(first) = references.first() else {
@@ -353,13 +374,38 @@ pub fn describe_listing(references: &[Reference]) -> String {
         "Each is {}. The lines below give each its reference, what it stands for and its label.",
         first.origin
     )];
-    if references.iter().any(|r| r.kind == Kind::File) {
+    let untrusted_files = references
+        .iter()
+        .any(|r| r.kind == Kind::File && !r.label.is_trusted());
+    let trusted_files = references
+        .iter()
+        .any(|r| r.kind == Kind::File && r.label.is_trusted());
+    if untrusted_files {
+        let lead = match trusted_files {
+            true => "A file labelled (U,...)",
+            false => "A file",
+        };
         notes.push(format!(
-            "A file: you will not be shown what it holds, and read_file has nothing to add: its \
+            "{lead}: you will not be shown what it holds, and read_file has nothing to add: its \
              reference already is the file.{}{}",
             first.file_moves(),
             first.vet_move()
         ));
+    }
+    if trusted_files {
+        notes.push(match first.read_file_offered {
+            true => {
+                "A file labelled (T,...): its label lets you read it, so read_file shows you what \
+                     it holds when you name its reference as path_ref. A picture or a PDF still \
+                     comes back as a reference, and so does a file that is no longer trusted when \
+                     it is read."
+                    .to_string()
+            }
+            false => format!(
+                "A file labelled (T,...): its label lets you read it.{}",
+                first.file_moves()
+            ),
+        });
     }
     if references.iter().any(|r| r.kind == Kind::Directory) {
         notes.push(
@@ -970,5 +1016,108 @@ mod tests {
     #[test]
     fn no_references_are_described_as_nothing() {
         assert_eq!(describe_listing(&[]), "");
+    }
+
+    /// A listing whose files carry different labels says what a file reference is for once per
+    /// label present. A file labelled untrusted already is its reference, so read_file has nothing
+    /// to add. A file labelled trusted is read with read_file through its reference. One sentence
+    /// for every file would tell the planner it cannot read the files a person vouched for, and it
+    /// guessed names until one read worked.
+    #[test]
+    fn a_mixed_listing_says_once_per_label_what_a_file_reference_is_for() {
+        let mut entries = listing(4, 2);
+        entries[0].label = Label::trusted_private();
+        entries[2].label = Label::trusted_private();
+        let described = describe_listing(&entries);
+        let header = described.split("\n\n").next().unwrap_or_default();
+        assert_eq!(
+            header.matches("read_file has nothing to add").count(),
+            1,
+            "{described}"
+        );
+        assert!(
+            header.contains(
+                "A file labelled (U,...): you will not be shown what it holds, and read_file has \
+                 nothing to add"
+            ),
+            "the untrusted sentence does not say which files it covers: {described}"
+        );
+        assert_eq!(
+            header
+                .matches(
+                    "read_file shows you what it holds when you name its reference as path_ref"
+                )
+                .count(),
+            1,
+            "{described}"
+        );
+        assert!(header.contains("A file labelled (T,...)"), "{described}");
+        // A trusted label is not always a person's vouch: the sentence says what the label allows.
+        assert!(
+            header.contains("A file labelled (T,...): its label lets you read it, so read_file"),
+            "{described}"
+        );
+        assert!(!header.contains("vouch"), "{described}");
+        assert!(header.contains("A picture or a PDF still"), "{described}");
+        assert!(described.contains("[ref:1] file (T,priv)"), "{described}");
+        assert!(described.contains("[ref:2] file (U,priv)"), "{described}");
+        assert!(
+            described.contains("[ref:5] to [ref:6]: 2 directories (U,priv)"),
+            "{described}"
+        );
+    }
+
+    /// A listing whose files are all labelled trusted says nothing about read_file having nothing
+    /// to add, and one whose files are all labelled untrusted has one file sentence naming no label.
+    #[test]
+    fn a_listing_of_one_label_says_only_that_labels_sentence() {
+        let mut trusted = listing(2, 1);
+        for entry in &mut trusted {
+            entry.label = Label::trusted_private();
+        }
+        let described = describe_listing(&trusted);
+        assert!(
+            !described.contains("read_file has nothing to add"),
+            "{described}"
+        );
+        assert!(
+            described.contains("name its reference as path_ref"),
+            "{described}"
+        );
+
+        assert_eq!(
+            describe_listing(&listing(1, 1)),
+            "Each is an entry in \".\". The lines below give each its reference, what it stands \
+             for and its label. A file: you will not be shown what it holds, and read_file has \
+             nothing to add: its reference already is the file. Give it to spawn_processor to \
+             work on, and name it as write_file's path_ref to put the result back. Where you have \
+             to read it yourself, vet_content is how to ask for it. A directory: this listing \
+             stopped at it rather than at a file in it, so there is nothing behind its reference \
+             to read, process or write. List the directory you named again with a greater depth \
+             to reach what is inside it. A range of references covers every reference from its \
+             first to its last.\n\n[ref:1] file (U,priv)\n[ref:2] directory (U,priv)"
+        );
+    }
+
+    /// A run that is not offered read_file is not sent to it for a trusted entry, and the moves it
+    /// is offered stay.
+    #[test]
+    fn a_trusted_entry_names_read_file_only_where_the_run_is_offered_it() {
+        let mut entries = listing(1, 0);
+        entries[0].label = Label::trusted_private();
+        let offered = describe_listing(&entries);
+        assert!(offered.contains("read_file shows you"), "{offered}");
+        let entries: Vec<Reference> = entries
+            .into_iter()
+            .map(Reference::without_read_file)
+            .collect();
+        let described = describe_listing(&entries);
+        assert!(!described.contains("read_file"), "{described}");
+        assert!(
+            described.contains("A file labelled (T,...): its label lets you read it. Give it"),
+            "{described}"
+        );
+        assert!(!described.contains("vouch"), "{described}");
+        assert!(described.contains("spawn_processor"), "{described}");
     }
 }
