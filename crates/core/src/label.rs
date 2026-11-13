@@ -20,8 +20,12 @@
 
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// Integrity axis. `U` is bottom: untrusted values cannot become trusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Integrity {
     /// Trusted, meaning derived only from trusted input.
     Trusted,
@@ -31,6 +35,10 @@ pub enum Integrity {
 
 impl Integrity {
     /// Lattice meet (⊓). `U` is bottom, so `meet(T, U) == U`.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::meet(self, other),
+    ))]
     pub fn meet(self, other: Self) -> Self {
         if self == Self::Untrusted || other == Self::Untrusted {
             Self::Untrusted
@@ -43,6 +51,7 @@ impl Integrity {
 /// Confidentiality axis. `priv` is top: private values cannot become public
 /// without an explicit, audited declassification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Confidentiality {
     /// Public, so safe to release.
     Public,
@@ -52,6 +61,10 @@ pub enum Confidentiality {
 
 impl Confidentiality {
     /// Lattice join (⊔). `priv` is top, so `join(pub, priv) == priv`.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::join(self, other),
+    ))]
     pub fn join(self, other: Self) -> Self {
         if self == Self::Private || other == Self::Private {
             Self::Private
@@ -71,6 +84,7 @@ impl Confidentiality {
 /// let _ = Label::trusted_public() < Label::untrusted_private();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub struct Label {
     pub integrity: Integrity,
     pub confidentiality: Confidentiality,
@@ -107,6 +121,10 @@ impl Label {
     /// untrusted, confidentiality may go public → private, never the reverse. A check
     /// that let integrity move toward trusted would let a relabel launder untrusted
     /// content into trusted.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::degrades(self, other),
+    ))]
     pub fn degrades_to(self, other: Self) -> bool {
         other.integrity == self.integrity.meet(other.integrity)
             && other.confidentiality == self.confidentiality.join(other.confidentiality)
@@ -127,13 +145,31 @@ impl Label {
         .find(|label| label.to_string() == word)
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self.integrity == Integrity::Trusted),
+    ))]
     pub fn is_trusted(self) -> bool {
         self.integrity == Integrity::Trusted
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self.confidentiality == Confidentiality::Public),
+    ))]
     pub fn is_public(self) -> bool {
         self.confidentiality == Confidentiality::Public
     }
+}
+
+// `format!` asks Verus whether `{label}` may be written. Writing a label reads only the label.
+#[cfg(verus_keep_ghost)]
+verus! {
+impl vstd::std_specs::fmt::DisplaySpecImpl for Label {
+    open spec fn fmt_req(&self, f: &fmt::Formatter<'_>) -> bool {
+        true
+    }
+}
 }
 
 impl fmt::Display for Label {

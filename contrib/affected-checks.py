@@ -137,12 +137,14 @@ PACKAGE_FILES = (
     "package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
 )
 
-# Read by nothing heavier than the checks that always run.
+# Read by nothing heavier than the checks that always run. verify/ is read by `check-scripts`,
+# which compares the contracts in crates/ with verify/contracts.txt, and by `make check-verus`,
+# which is run by name.
 QUIET = (
     "LICENSE", ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
-QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
+QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/", "verify/")
 
 # The crates the desktop app spawns, which it builds, with everything they name, before it runs.
 DESKTOP = ("ui-bridge", "ui-files")

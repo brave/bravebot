@@ -1,0 +1,50 @@
+# Defects the Verus contracts in crates/ exist to refuse, one per mutation.
+#
+# contrib/check-verus.py applies each to a copy of its crate and requires Verus to reject the
+# result, so a contract that a broken body also meets fails `make check-verus`. A mutation names
+# one line of the file exactly, without its indentation, and what it becomes. A new contract ships
+# with at least one mutation here (docs/development/verification.md).
+
+mutation: Integrity::meet keeps the result trusted when either input is trusted
+file: crates/core/src/label.rs
+replace: if self == Self::Untrusted || other == Self::Untrusted { => if self == Self::Untrusted && other == Self::Untrusted {
+
+mutation: Confidentiality::join keeps the result public when either input is public
+file: crates/core/src/label.rs
+replace: if self == Self::Private || other == Self::Private { => if self == Self::Private && other == Self::Private {
+
+mutation: Label::degrades_to lets integrity move from untrusted to trusted
+file: crates/core/src/label.rs
+replace: other.integrity == self.integrity.meet(other.integrity) => self.integrity == self.integrity.meet(other.integrity)
+
+mutation: Label::is_trusted calls every label trusted
+file: crates/core/src/label.rs
+replace: self.integrity == Integrity::Trusted => true
+
+mutation: Label::is_public calls every label public
+file: crates/core/src/label.rs
+replace: self.confidentiality == Confidentiality::Public => true
+
+mutation: Labelled::label reports untrusted content as trusted
+file: crates/core/src/value.rs
+replace: self.label => Label { integrity: crate::label::Integrity::Trusted, confidentiality: self.label.confidentiality }
+
+mutation: Labelled::declassify hands back something other than the value it holds
+file: crates/core/src/value.rs
+replace: self.value => panic!("not the value")
+
+mutation: Labelled::into_trusted releases a trusted private value without a witness
+file: crates/core/src/value.rs
+replace: if self.label.is_trusted() && self.label.is_public() { => if self.label.is_trusted() {
+
+mutation: Labelled::relabel accepts any label
+file: crates/core/src/value.rs
+replace: if self.label.degrades_to(to) { => if true {
+
+mutation: Policy::refuse_untrusted lets untrusted content through
+file: crates/core/src/policy.rs
+replace: if label.is_trusted() { => if true {
+
+mutation: Policy::read_trusted_content hands over content without asking whether it is trusted
+file: crates/core/src/policy.rs
+replace: self.refuse_untrusted("trusted-read", tool, value.label())?; => let _ = self.refuse_untrusted("trusted-read", tool, value.label());

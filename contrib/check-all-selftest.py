@@ -75,7 +75,8 @@ class CheckTargets(unittest.TestCase):
           ' check-rebase-selftest'
           ' check-affected-selftest check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest'
           ' check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest'
-          ' check-implement-issues-selftest check-review-ready-selftest check-clean-branches-selftest:\n\t@true\n')
+          ' check-implement-issues-selftest check-review-ready-selftest check-clean-branches-selftest'
+          ' check-verus-contracts-selftest check-verus-contracts-ledger:\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
                 with self.subTest(target=target, failing=failing):
@@ -101,7 +102,9 @@ class CheckTargets(unittest.TestCase):
                     "python3 contrib/check-lint-increase.py --selftest",
                     "python3 agents/skills/implement-issues/selftest.py",
                     "python3 contrib/review-ready-selftest.py",
-                    "python3 agents/skills/clean-branches-and-worktrees/selftest.py"]
+                    "python3 agents/skills/clean-branches-and-worktrees/selftest.py",
+                    "python3 contrib/check-verus-contracts.py --selftest",
+                    "python3 contrib/check-verus-contracts.py"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("-k", "check-scripts", FAIL_COMMAND=failing)

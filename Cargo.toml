@@ -13,6 +13,11 @@ rust-version = "1.90"
 license = "MPL-2.0"
 repository = "https://github.com/brave/bravebot"
 
+[workspace.lints.rust]
+# Verus sets `verus_keep_ghost` when it reads a crate, and nothing else does, so a contract behind it
+# is compiled by Verus alone (docs/development/verification.md).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(verus_keep_ghost)"] }
+
 [workspace.lints.clippy]
 # Lints this tree has no violation of in code that ships, held at zero. They are `deny` rather than
 # `warn` so a plain `cargo clippy` and an editor refuse them too, not only the `-D warnings` that

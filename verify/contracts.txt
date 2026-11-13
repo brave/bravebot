@@ -1,0 +1,18 @@
+# The Verus contracts on the code in crates/, one per line, as `path::function: clauses`.
+#
+# contrib/check-verus-contracts.py fails when a contract in the tree differs from this file, so a
+# contract that is removed, added or weakened shows in a diff. After changing one, run
+# `python3 contrib/check-verus-contracts.py --write` and say in the pull request why the contract
+# changed. docs/development/verification.md says how a contract is written and run.
+
+crates/core/src/label.rs::meet: r => ensures r == crate::spec::meet(self, other),
+crates/core/src/label.rs::join: r => ensures r == crate::spec::join(self, other),
+crates/core/src/label.rs::degrades_to: r => ensures r == crate::spec::degrades(self, other),
+crates/core/src/label.rs::is_trusted: r => ensures r == (self.integrity == Integrity::Trusted),
+crates/core/src/label.rs::is_public: r => ensures r == (self.confidentiality == Confidentiality::Public),
+crates/core/src/policy.rs::refuse_untrusted: r => ensures r is Ok <==> label.integrity == Integrity::Trusted,
+crates/core/src/policy.rs::read_trusted_content: r => ensures r is Ok <==> crate::value::spec_label_of(value).integrity == Integrity::Trusted,
+crates/core/src/value.rs::label: r => ensures r == spec_label_of(&self),
+crates/core/src/value.rs::declassify: r => ensures r == spec_value_of(&self),
+crates/core/src/value.rs::into_trusted: r => ensures r is Ok <==> spec_label_of(&self) == crate::spec::trusted_public(), r is Ok ==> r->Ok_0 == spec_value_of(&self), r is Err ==> r->Err_0 == self,
+crates/core/src/value.rs::relabel: r => ensures r is Some <==> crate::spec::degrades(spec_label_of(&self), to), r is Some ==> spec_value_of(&r->Some_0) == spec_value_of(&self), r is Some ==> spec_label_of(&r->Some_0) == to,
