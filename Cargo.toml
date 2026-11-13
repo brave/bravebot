@@ -5,7 +5,7 @@ members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedroc
 exclude = ["third_party/crossterm", "third_party/ratatui-image"]
 
 [workspace.package]
-version = "0.21.0"
+version = "0.22.0"
 edition = "2024"
 # Matches the pinned cross-build container, so `cargo build` fails on a feature the
 # release build could not compile rather than deferring that to CI.
