@@ -3117,8 +3117,12 @@ the profile allows that one port, and the proxy decides on the name.
 A list is an allowed set and a denied set. An entry is a host name or `*.` and a domain, which
 covers every name below the domain and not the domain itself. Names are compared in lower case
 without a trailing dot. An entry that is anything else, `*` alone and `a.*.com` included, is not a
-rule and is returned to the caller to report. A denied entry wins over an allowed one in either
-order, and a name no allowed entry covers is refused, so an empty list refuses every host. No list
+rule and is returned to the caller to report. A host that is an IP address, in brackets or not, is
+compared in one form, an IPv4 address inside an IPv6 one (IPv4-mapped, `::ffff:0:0/96`, or NAT64,
+`64:ff9b::/96`) as that IPv4 address, so a denied `93.184.216.34` also refuses
+`[::ffff:93.184.216.34]` and `[64:ff9b::5db8:d822]`. The deprecated IPv4-compatible form
+`::a.b.c.d` is an IPv6 address. A denied entry wins over an allowed one in either order, and a
+name no allowed entry covers is refused, so an empty list refuses every host. No list
 means no proxy and no filtering. The defaults a caller adds to a list are code: `github.com`,
 `api.github.com` and `*.githubusercontent.com` for a stage carrying the remote scope, and for a
 toolchain its registry hosts (`crates.io`, `static.crates.io` and `index.crates.io` for cargo,
@@ -3134,14 +3138,18 @@ A name the list allows is resolved once, and the tunnel is opened to an address 
 and to no other, so an answer that differs the next time is never connected to. If any address in
 the answer is not public, in the classes [FETCH-8](tools/fetch-url.md#FETCH-8) names, with an IPv4
 address inside an IPv6 one classified as the IPv4 address, the request is refused unless an exact
-entry of the allowed list is that address, an IPv4-mapped one compared as its IPv4 address, and no
-denied entry covers it. A wildcard names no address, so a server under `*.github.io` cannot answer
-with loopback, a private network or the metadata address and be tunnelled to, and `*.0.0.1` does
-not list `127.0.0.1`. A request that names an address that is not public, read as the list reads a
-name so a trailing dot changes nothing, and that no entry covers, is refused as not public rather
-than as not listed. An address written another way, such as `2130706433`, is a name to that check;
-a yes to it reaches nothing that is not public, since what it resolves to is checked like any
-answer.
+entry of the allowed list is that address, an IPv4 address inside an IPv6 one compared as that IPv4
+address, and no denied entry covers it. A wildcard allowed entry names no address, so a server
+under `*.github.io` cannot answer with loopback, a private network or the metadata address and be
+tunnelled to, `*.0.0.1` does not list `127.0.0.1`, and `*.216.34` does not list a request for
+`1.2.216.34`. A wildcard denied entry still covers an IPv4 address whose text ends in its domain.
+An answer holding an address a denied entry covers, compared as the list compares an address,
+refuses the request as denied, so a name the resolver reads as an address, such as
+`0x5d.0xb8.216.34`, gets the verdict `93.184.216.34` gets. A request that names an address that is
+not public, read as the list reads a name so a trailing dot changes nothing, and that no entry
+covers, is refused as not public rather than as not listed. An address written another way, such
+as `2130706433`, is a name to that check; a yes to it reaches nothing that is not public, since
+what it resolves to is checked like any answer.
 
 A refused request is answered with the same bytes for
 every host and every reason, which name neither the host the program asked for nor the rule, so the
@@ -3186,7 +3194,8 @@ A local MCP server is held to the same list ([SERVERS-10](mcp-servers.md#SERVERS
 with those variables, its policy reaches the proxy's port alone, the registry hosts of its program's
 toolchain are added to the list, and a platform that cannot hold it to the proxy does not start it.
 A server whose declaration lists `allowed_hosts` is held to that list, narrowed to what the
-session's allowed list covers.
+session's allowed list covers, and an entry naming an address is kept only where the session's list
+has that exact entry.
 
 A stage with egress under a set list is started with those variables, and a stage with no egress
 is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its
@@ -3236,7 +3245,10 @@ After a foreground `run` has stopped, the trail records what the list decided fo
 programs asked each proxy for, under `hosts`: the host, `allowed` or `refused`, the entry that
 decided it or `not listed`, `port not carried` or `not public`, and the stages that proxy serves
 in that line.
-Repeats are counted. A program chooses the name it asks for, so the record carries a name only
+Repeats are counted. The host is the one the request line names, normalised as the list reads a
+name, and not the address the list compared it as or the one the resolver answered, so a request
+for `0x5d.0xb8.216.34` or `[::ffff:93.184.216.34]` is recorded with that spelling beside the entry
+that decided it. A program chooses the name it asks for, so the record carries a name only
 where it is a host name or an IP address, and a request for anything else is recorded as a name
 that is not a host name, with none of its bytes. A proxy keeps at most 256 decisions until they are
 taken and counts the rest, which the record states. A proxy is shared by every stage with the same
@@ -3335,6 +3347,14 @@ says nothing about them.
 `verified-by: bravebot_sandbox::proxy::a_request_naming_an_address_that_is_not_public_is_refused_as_not_public`
 `verified-by: bravebot_sandbox::proxy::the_tunnel_is_opened_to_the_address_that_was_checked`
 `verified-by: bravebot_sandbox::hosts::an_address_is_named_only_by_an_exact_entry_no_denied_one_covers`
+`verified-by: bravebot_sandbox::hosts::an_address_is_decided_in_its_ipv4_form_and_named_only_by_an_exact_allowed_entry`
+`verified-by: bravebot_sandbox::proxy::a_denied_address_is_refused_however_the_request_spells_it`
+`verified-by: bravebot_sandbox::proxy::a_public_address_is_listed_by_an_exact_entry_and_not_by_a_wildcard`
+`verified-by: bravebot_sandbox::proxy::a_name_that_resolves_to_a_denied_address_is_refused_as_denied`
+`verified-by: bravebot_sandbox::hosts::a_wildcard_allows_no_address_a_narrower_list_names`
+`verified-by: bravebot_sandbox::hosts::an_ipv4_address_inside_a_nat64_one_is_decided_as_the_ipv4_address`
+`verified-by: bravebot_sandbox::address::the_ipv4_form_unwraps_a_mapped_and_a_nat64_address_and_nothing_else`
+`verified-by: bravebot_sandbox::proxy::the_trail_records_the_host_as_the_request_spelled_it`
 `verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
 `verified-by: bravebot_sandbox::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
 `verified-by: bravebot_agent::confine::the_trail_names_the_hosts_asked_for_and_what_the_list_decided`

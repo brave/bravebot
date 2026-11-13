@@ -35,6 +35,7 @@ pub mod policy;
 pub mod processor;
 pub mod programs;
 pub mod protected;
+mod punycode;
 pub mod pure;
 pub mod reference;
 pub mod remembered;

@@ -1009,6 +1009,7 @@ permission-rule-whitespace-at-an-end = has whitespace at the start or end of its
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
+permission-rule-not-a-host = has a port, scheme, path or other text that is not a host after 'domain:'; write a host name or an address alone, as WebFetch(domain:example.com) or WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
 # A permissions block, or its deny, ask or allow list, written as something other than a list.
 # The rules another settings file wrote still apply, which is what "removes none" says.
