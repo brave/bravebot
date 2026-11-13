@@ -104,6 +104,17 @@ same binary started again, and each fails for a reason that is not in the code u
 `crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
 marked `// shared-temp-name: <why>` on its line or the line above.
 
+Run the tests from a checkout outside the system temporary directory (`std::env::temp_dir()`,
+which is `$TMPDIR` or `/tmp`). The search for programs always leaves that directory out
+([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), and many tests plant a program under
+`target/test-scratch` and expect it to be found, so from a clone under `$TMPDIR` they fail with
+the planted program not found. `crates/ui-bridge/tests/language_server.rs` and
+`crates/cli/tests/running.rs` give the programs they start a `TMPDIR` of their own and pass from
+either. The tests that call the search in their own process, such as
+`crates/sandbox/tests/checkout_in_search.rs` and the unit tests of `bravebot-sandbox` and
+`bravebot-agent`, read the test process's own temporary directory and still fail from a clone under
+`$TMPDIR` (#4130).
+
 ## Before pushing
 
 Choose how much to run:
