@@ -537,6 +537,59 @@ fn marks_itself_first(text: &str) -> bool {
         .is_some_and(|code| code.contains("refuse_same_user_inspection("))
 }
 
+/// A descriptor the process that started a binary left open would reach every hook and tool the
+/// binary starts, so each marks those descriptors close-on-exec before it does anything but the two
+/// protections above (RPCVIEW-8). `bravebot-rpc`'s is shown by a test that starts it holding one.
+#[test]
+fn every_binary_here_withholds_inherited_descriptors_at_startup() {
+    let binaries = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin");
+    let mut seen = 0;
+    let mut late = Vec::new();
+    visit(&binaries, &mut |path, text| {
+        seen += 1;
+        if !withholds_early(text) {
+            late.push(path.display().to_string());
+        }
+    });
+    assert!(seen > 0, "no binaries found under {binaries:?}");
+    assert!(
+        late.is_empty(),
+        "these binaries do not withhold inherited descriptors at the start of main:\n{}",
+        late.join("\n")
+    );
+}
+
+/// Whether, in `main`, the call to `withhold_inherited_descriptors` comes before any code other
+/// than the non-dumpable mark, the core-dump switch and what they say on failure.
+fn withholds_early(text: &str) -> bool {
+    let mut lines = text.lines();
+    if !lines.any(|line| line.trim_start().starts_with("fn main()")) {
+        return false;
+    }
+    lines
+        .map(|line| line.split("//").next().unwrap_or("").trim())
+        .filter(|code| !code.is_empty())
+        .find(|code| {
+            ![
+                "refuse_same_user_inspection(",
+                "disable_core_dumps(",
+                "eprintln!(",
+                "}",
+            ]
+            .iter()
+            .any(|allowed| code.contains(allowed))
+        })
+        .is_some_and(|code| code.contains("withhold_inherited_descriptors("))
+}
+
+#[test]
+fn withholding_after_other_work_is_too_late() {
+    let early = "fn main() {\n    let outcome = refuse_same_user_inspection();\n    let _ = disable_core_dumps();\n    if let Err(e) = withhold_inherited_descriptors() {\n        eprintln!(\"{e}\");\n    }\n    serve();\n}\n";
+    assert!(withholds_early(early));
+    let late = "fn main() {\n    let _ = disable_core_dumps();\n    serve();\n    let _ = withhold_inherited_descriptors();\n}\n";
+    assert!(!withholds_early(late));
+}
+
 #[test]
 fn a_comment_that_names_the_call_does_not_mark_the_process() {
     assert!(!marks_itself_first(

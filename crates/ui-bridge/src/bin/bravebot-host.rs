@@ -21,6 +21,14 @@ fn main() {
     // First of all, as in `bravebot-rpc`: nothing else runs before the protection is requested.
     let outcome = bravebot_sandbox::inspection::refuse_same_user_inspection();
     let _ = bravebot_agent::crash::disable_core_dumps();
+    // A descriptor whoever started this process left open would reach every hook and tool it
+    // starts, so each one above standard error is marked close-on-exec before any thread exists.
+    // See RPCVIEW-8.
+    if let Err(error) = bravebot_sandbox::process::withhold_inherited_descriptors() {
+        eprintln!(
+            "bravebot-host: the descriptors this process was started with could not be kept from the programs it starts: {error}"
+        );
+    }
 
     let Some(start) = Start::from_arguments(std::env::args_os().skip(1)) else {
         std::process::exit(2);

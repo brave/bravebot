@@ -27,6 +27,14 @@ fn main() {
     // And for the reason the terminal entry point does it early: a credential is in this process's
     // memory from the first turn, and a crash after this writes no image of it. See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
+    // A descriptor whoever started this process left open would reach every hook and tool it
+    // starts, so each one above standard error is marked close-on-exec before any thread exists.
+    // See RPCVIEW-8.
+    if let Err(error) = bravebot_sandbox::process::withhold_inherited_descriptors() {
+        eprintln!(
+            "bravebot-rpc: the descriptors this process was started with could not be kept from the programs it starts: {error}"
+        );
+    }
 
     // The desktop window is in English only, so the notes this process builds for it are too,
     // whatever the machine's language: a French note in an English window reads as a fault. The

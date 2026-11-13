@@ -72,6 +72,47 @@ pub fn creating_a_channel<T>(create: impl FnOnce() -> T) -> T {
     create()
 }
 
+/// Marks every descriptor above standard error close-on-exec, so a descriptor this process was
+/// started with and not told to keep reaches none of the programs it starts. The process keeps
+/// using any it holds.
+///
+/// Call it at the start of `main`, before any thread exists: a descriptor another thread is
+/// creating could otherwise be read as open or closed at the wrong moment. The descriptors are
+/// read from `/dev/fd`, and an error is returned where it cannot be read.
+#[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "`fcntl` reads and sets the flags of a descriptor by its number"
+)]
+pub fn withhold_inherited_descriptors() -> io::Result<()> {
+    let open: Vec<i32> = std::fs::read_dir("/dev/fd")?
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .filter(|fd| *fd > 2)
+        .collect();
+    for fd in open {
+        // SAFETY: `F_GETFD` takes and returns integers and touches no memory. A number that is no
+        // longer open, such as the one the listing above was read through, fails with `EBADF`.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 || flags & libc::FD_CLOEXEC != 0 {
+            continue;
+        }
+        // SAFETY: `F_SETFD` takes integers and touches no memory, and only the descriptor's own
+        // close-on-exec flag changes.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// See the Unix implementation. Windows is not covered.
+#[cfg(not(unix))]
+pub fn withhold_inherited_descriptors() -> io::Result<()> {
+    Ok(())
+}
+
 /// The threads that have asked for the gate and are waiting for it, so a test can see that a start
 /// has reached the gate and is held there, which a timeout cannot tell from a start that is slow.
 static WAITING: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());

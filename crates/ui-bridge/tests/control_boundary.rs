@@ -612,7 +612,13 @@ struct FrontEnd {
 
 impl FrontEnd {
     fn start(scratch: &Scratch, endpoint: &str) -> Self {
+        Self::start_with(scratch, endpoint, |_| {})
+    }
+
+    /// As [`FrontEnd::start`], with `prepare` applied to the command before the bridge starts.
+    fn start_with(scratch: &Scratch, endpoint: &str, prepare: impl FnOnce(&mut Command)) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"));
+        prepare(&mut command);
         command
             .env_clear()
             .env("HOME", scratch.home())
@@ -1327,12 +1333,7 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
     use bravebot_core::{Pipeline, Stage};
 
     let scratch = Scratch::new("control-boundary-host");
-    let mut clients: Vec<Linked> = (0..3)
-        .map(|_| control_link::launch(cat()).expect("a client launches"))
-        .collect();
-    for client in &mut clients {
-        assert_eq!(round_trip(&mut client.channel, "up"), "up");
-    }
+    let clients = clients_over_channels();
     let hooks = Hooks::parse(
         &json!({"hooks": [{"on": "turn-started",
             "run": ["/bin/sh", "-c", format!("{} > hook-fds.txt", list_sockets_command())]}]})
@@ -1370,8 +1371,182 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
         ran.stdout
     );
 
+    stop(clients);
+}
+
+/// Three clients this process launched and holds the near end of the channel to, as a host does.
+fn clients_over_channels() -> Vec<Linked> {
+    let mut clients: Vec<Linked> = (0..3)
+        .map(|_| control_link::launch(cat()).expect("a client launches"))
+        .collect();
+    for client in &mut clients {
+        assert_eq!(round_trip(&mut client.channel, "up"), "up");
+    }
+    clients
+}
+
+fn stop(clients: Vec<Linked>) {
     for mut client in clients {
         let _ = client.child.kill();
         let _ = client.child.wait();
+    }
+}
+
+/// As [`programs_a_host_starts_hold_no_end_of_the_channels_it_created`], for an MCP server started
+/// through `StdioServer::launch` under the platform's confinement, as a session starts one.
+#[test]
+fn an_mcp_server_a_host_starts_holds_no_end_of_the_channels_it_created() {
+    use bravebot_sandbox::policy::SandboxPolicy;
+    use bravebot_sandbox::{Stream, Variables};
+
+    let sandbox = match bravebot_sandbox::for_current_platform() {
+        Ok(sandbox) => sandbox,
+        Err(error) => {
+            eprintln!("SKIPPED (no confinement backend): {error}");
+            return;
+        }
+    };
+    let scratch = Scratch::new("control-boundary-mcp");
+    let clients = clients_over_channels();
+    let exe = std::env::current_exe().expect("the test binary");
+    let policy = [
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/System",
+        "/private/var/folders",
+        "/tmp",
+    ]
+    .into_iter()
+    .filter(|path| Path::new(path).exists())
+    .fold(
+        SandboxPolicy::strict().allow_subprocesses(),
+        SandboxPolicy::allow_read,
+    )
+    .allow_read(exe.parent().expect("the test binary's directory"))
+    .allow_write(scratch.project());
+    let listing = scratch.project().join("mcp-fds.txt");
+    let script = format!(
+        "{} > '{tmp}' && /bin/mv '{tmp}' '{done}'",
+        list_sockets_command(),
+        tmp = scratch.project().join("mcp-fds.tmp").display(),
+        done = listing.display(),
+    );
+    let server = bravebot_mcp::StdioServer::launch(
+        "lister",
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Variables::new(),
+        sandbox.as_ref(),
+        &policy,
+        Stream::Null,
+    )
+    .expect("the server starts");
+    let deadline = Instant::now() + PATIENCE;
+    let listed = loop {
+        if let Ok(listed) = std::fs::read_to_string(&listing) {
+            break listed;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the server never listed its descriptors"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    drop(server);
+    let (open, channels) = read_listing(&listed);
+    assert!(
+        open >= 3 && channels.is_empty(),
+        "an MCP server holds a control channel: {listed}"
+    );
+    stop(clients);
+}
+
+/// The descriptor a socket the bridge was started with sits at in its process.
+const LEAKED: i32 = 200;
+
+/// A launcher can start the bridge holding a socket it did not mean to pass on, as a CI runner
+/// leaves some open. The bridge keeps it from the programs it starts: a hook and an approved command
+/// find no such descriptor, and nothing reaches the socket's other end.
+#[test]
+fn a_socket_the_bridge_was_started_with_reaches_none_of_the_programs_it_starts() {
+    use std::os::unix::process::CommandExt;
+
+    let scratch = Scratch::new("control-boundary-leaked");
+    let reach = |name: &str| {
+        format!(
+            "if echo {name} 2>/dev/null >&{LEAKED}; then echo held; else echo absent; fi > '{}'",
+            scratch.project().join(format!("{name}.txt")).display()
+        )
+    };
+    let hooks = json!({"hooks": [{"on": "turn-started", "run": ["/bin/sh", "-c", reach("hook")]}]});
+    std::fs::write(
+        scratch.home().join(".bravebot/hooks.json"),
+        hooks.to_string(),
+    )
+    .unwrap();
+    let run = json!({"command": format!("/bin/sh -c \"{}\"", reach("run"))});
+    let endpoint = a_planner(move |this_turn| (this_turn == 0).then(|| ("run", run.clone())));
+
+    let (held, given) =
+        bravebot_sandbox::process::creating_a_channel(|| UnixStream::pair().expect("a pair"));
+    let given_fd = given.as_raw_fd();
+    let mut front = FrontEnd::start_with(&scratch, &endpoint, |command| {
+        // SAFETY: `dup2` is async-signal-safe and allocates nothing. The copy it makes is not
+        // close-on-exec, so the bridge starts holding the socket at `LEAKED`.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(given_fd, LEAKED) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    });
+    drop(given);
+
+    let session = front.open_session(&scratch.project());
+    front.send(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
+    );
+    let question = front.question();
+    assert_eq!(question["event"], "run.request", "{question}");
+    front.call(
+        "run.reply",
+        json!({"session": session, "request": question["data"]["request"], "decision": "approve"}),
+    );
+    let ended = front.question();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+
+    assert_eq!(
+        scratch.written("hook.txt").as_deref(),
+        Some("absent\n"),
+        "a hook was handed the socket the bridge was started with"
+    );
+    assert_eq!(
+        scratch.written("run.txt").as_deref(),
+        Some("absent\n"),
+        "an approved command was handed the socket the bridge was started with"
+    );
+    // The bridge still holds the far end, so a read waits rather than seeing the end of the
+    // stream: the bridge was started holding it, and nothing wrote into it.
+    held.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut buffer = [0u8; 64];
+    match (&held).read(&mut buffer) {
+        Ok(0) => panic!("the bridge was not started holding the socket"),
+        Ok(n) => panic!(
+            "a program wrote into the socket: {:?}",
+            String::from_utf8_lossy(&buffer[..n])
+        ),
+        Err(error) => assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ),
+            "{error}"
+        ),
     }
 }
