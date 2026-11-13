@@ -730,12 +730,47 @@ mod tests {
     /// The Windows form of the test above: what a start-up query read off the console comes
     /// as the records it read, each its 20 bytes in memory, and they come out of the event reader
     /// as the events they are, in order, a key's release included as the console reader reports it.
-    /// A record of a type the console does not report, or the bytes of part of one, is counted as
-    /// lost. The records are built by
-    /// hand because this crate forbids `unsafe`.
+    /// Mouse records handed back in separate calls are read against the buttons the call before
+    /// left held, as the console reader reads its next record, so a release handed back after its
+    /// press is a release and a press after that release is a press, and within one call a release
+    /// is read against the press before it. A hand-back that kept no button state would read the
+    /// release as nothing and lose it. Focus records come out as the
+    /// focus changes they are. A record of a type the console does not report, or the bytes of part
+    /// of one, is counted as lost. The records are built by hand because this crate forbids
+    /// `unsafe`. The mouse half needs a console, as the console reader does: a mouse record's row is
+    /// read against the console window, so only its kind and column are compared.
     #[cfg(windows)]
     #[test]
     fn records_a_startup_query_read_are_handed_to_the_event_reader_in_order() {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+
+        /// `FROM_LEFT_1ST_BUTTON_PRESSED` in a mouse record's button state.
+        const LEFT: u32 = 0x0001;
+
+        /// A `MOUSE_EVENT` record of a press or a release: position, buttons held, no control
+        /// keys, and event flags 0.
+        fn mouse(buttons: u32, column: i16) -> Vec<u8> {
+            let mut bytes = vec![2, 0, 0, 0];
+            bytes.extend_from_slice(&column.to_le_bytes());
+            bytes.extend_from_slice(&0i16.to_le_bytes());
+            bytes.extend_from_slice(&buttons.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes
+        }
+        /// A `FOCUS_EVENT` record: `bSetFocus` and the padding of the union after it.
+        fn focus(gained: bool) -> Vec<u8> {
+            let mut bytes = vec![0x10, 0, 0, 0];
+            bytes.extend_from_slice(&i32::from(gained).to_le_bytes());
+            bytes.extend_from_slice(&[0; 12]);
+            bytes
+        }
+        fn pointer_of(event: TermEvent) -> Option<(MouseEventKind, u16)> {
+            match event {
+                TermEvent::Mouse(mouse) => Some((mouse.kind, mouse.column)),
+                _ => None,
+            }
+        }
         fn record(down: bool, virtual_key: u16, unit: u16) -> Vec<u8> {
             let mut bytes = vec![1, 0, 0, 0];
             bytes.extend_from_slice(&i32::from(down).to_le_bytes());
@@ -765,6 +800,52 @@ mod tests {
             ]
         );
         assert_eq!(take_lost_at_startup(), 0, "nothing was lost");
+
+        // Each hand-back is one call, so the second and third are read against the buttons the
+        // call before left in the reader, and the third's release against its own press. The
+        // second and third end in a focus record, so a mouse record in them read as nothing fails
+        // on the event behind it rather than sending `read` to the console.
+        hand_back(&mouse(LEFT, 4));
+        assert_eq!(
+            pointer_of(event::read().expect("a handed-back event is queued")),
+            Some((MouseEventKind::Down(MouseButton::Left), 4)),
+            "a press of the left button"
+        );
+        let mut released_then_gained = mouse(0, 6);
+        released_then_gained.extend(focus(true));
+        hand_back(&released_then_gained);
+        assert_eq!(
+            pointer_of(event::read().expect("a handed-back event is queued")),
+            Some((MouseEventKind::Up(MouseButton::Left), 6)),
+            "a release read against the press the call before left held"
+        );
+        assert_eq!(
+            event::read().expect("a handed-back event is queued"),
+            TermEvent::FocusGained
+        );
+        let mut clicked_then_lost = mouse(LEFT, 8);
+        clicked_then_lost.extend(mouse(0, 9));
+        clicked_then_lost.extend(focus(false));
+        hand_back(&clicked_then_lost);
+        assert_eq!(
+            pointer_of(event::read().expect("a handed-back event is queued")),
+            Some((MouseEventKind::Down(MouseButton::Left), 8)),
+            "a press read against the release the call before left"
+        );
+        assert_eq!(
+            pointer_of(event::read().expect("a handed-back event is queued")),
+            Some((MouseEventKind::Up(MouseButton::Left), 9)),
+            "a release read against the press before it in the same call"
+        );
+        assert_eq!(
+            event::read().expect("a handed-back event is queued"),
+            TermEvent::FocusLost
+        );
+        assert_eq!(
+            take_lost_at_startup(),
+            0,
+            "no mouse or focus record was lost"
+        );
 
         let mut unknown = record(true, 0x41, u16::from(b'a'));
         unknown[0] = 0x7f;
