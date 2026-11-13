@@ -83,6 +83,139 @@ fn indented(text: &str) -> Line<'_> {
     Line::from(vec![Span::raw(" ".repeat(MARKER_WIDTH)), Span::raw(text)])
 }
 
+/// Fewest rows a question cut to fit the box keeps, the row saying how much is hidden among them.
+///
+/// Enough to read a line or two and page on. Fewer than this and the options are what gives way,
+/// and they scroll.
+const QUESTION_ROWS: usize = 3;
+
+/// The key the hints name for scrolling the question. PgUp is named on the row saying how much of
+/// the question is hidden, since both in the hints would wrap them on a terminal of 72 columns.
+const SCROLL_KEYS: &str = "PgDn";
+
+/// How the rows of the box are shared between the question and the options.
+struct Fit {
+    /// Rows the question is drawn in, the row saying it is cut among them where it is.
+    question: usize,
+    /// Whether the question is taller than its rows and scrolls.
+    cut: bool,
+    /// Rows left for the options, as [`Picker::fitting`] counts them.
+    budget: usize,
+}
+
+/// The question as it is drawn: a line of the box for each line it was written in, each styled as
+/// markdown, the way the transcript styles a reply.
+///
+/// A question of one line is bold, as every question was. One of several lines is a plan or a
+/// document, and drawn bold whole it would hide its own headings and emphasis.
+///
+/// Styling only, and narrower than the transcript's ([`question_line`]): every character is drawn
+/// in the order it was written except the heading, emphasis and code markers at the edge of a run
+/// of characters with no blank in it. A fenced block, its fences among it, is drawn as written,
+/// since what is inside one is code and a `*` there is not emphasis.
+fn question_lines(question: &str) -> Vec<Line<'static>> {
+    let source: Vec<&str> = question.lines().collect();
+    let base = if source.len() > 1 {
+        Style::default()
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+    let fenced = crate::markdown::fences(&source);
+    let in_a_block = |at: usize| {
+        fenced
+            .iter()
+            .any(|block| (block.open..block.end(source.len())).contains(&at))
+    };
+    let mut lines: Vec<Line<'static>> = source
+        .iter()
+        .enumerate()
+        .map(|(at, line)| {
+            if in_a_block(at) {
+                Line::from(Span::styled(line.to_string(), base))
+            } else {
+                Line::from(question_line(line, base))
+            }
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::raw(""));
+    }
+    lines
+}
+
+/// Whether a run of a question with no blank in it holds an emphasis or code marker inside it, and
+/// so is drawn as written.
+///
+/// Inside means past the brackets, quotation marks and markers that open the run and before the
+/// punctuation and markers that close it. A link's target, an address and a path can hold `_`, `*`
+/// or a backtick there, and styling them would drop characters of the place the person is reading,
+/// as `https://example.test/_v2_/guide` drawn as `https://example.test/v2/guide`. A run that is one
+/// code span whole is styled, since the matcher keeps what is inside one as written.
+fn as_written(run: &str) -> bool {
+    let opening = |c: char| matches!(c, '(' | '[' | '{' | '"' | '\'' | '<');
+    let closing = |c: char| {
+        matches!(
+            c,
+            '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '>'
+        )
+    };
+    let marker = |c: char| matches!(c, '*' | '_' | '`');
+    let quoted = run.trim_start_matches(opening).trim_end_matches(closing);
+    let one_code_span = quoted
+        .strip_prefix('`')
+        .and_then(|inner| inner.strip_suffix('`'))
+        .is_some_and(|inner| !inner.is_empty() && !inner.contains('`'));
+    let inside = run
+        .trim_start_matches(|c| opening(c) || marker(c))
+        .trim_end_matches(|c| closing(c) || marker(c));
+    !one_code_span && inside.contains(marker)
+}
+
+/// One line of a question outside a fenced block, styled as markdown except for each run
+/// [`as_written`] keeps as it is.
+///
+/// The stretches between those runs go to [`crate::markdown::spans_with`] marking nothing, since
+/// nothing scans the cells of the box. A run drawn as written splits the line, so emphasis that
+/// opens before one and closes after it is drawn with its markers, which shows more of the question
+/// and never less. A heading is bold whole, as the matcher draws one.
+#[expect(
+    clippy::string_slice,
+    reason = "every index is the line's length, or comes from trim_start or find(char::is_whitespace), so it is a char boundary"
+)]
+fn question_line(line: &str, base: Style) -> Vec<Span<'static>> {
+    let marks = crate::text_links::Marks::default();
+    let rest = if crate::markdown::heading(line).is_some() {
+        base.add_modifier(Modifier::BOLD)
+    } else {
+        base
+    };
+    let mut out = Vec::new();
+    // Where the stretch not yet drawn begins. Only the first one can begin with the heading's
+    // hashes, so only the first is given the line's own style and the rest are given `rest`.
+    let mut from = 0;
+    let mut at = 0;
+    while at < line.len() {
+        at = line.len() - line[at..].trim_start().len();
+        let end = line[at..]
+            .find(char::is_whitespace)
+            .map_or(line.len(), |offset| at + offset);
+        if at < end && as_written(&line[at..end]) {
+            if from < at {
+                let style = if from == 0 { base } else { rest };
+                out.extend(crate::markdown::spans_with(&line[from..at], style, marks));
+            }
+            out.push(Span::styled(line[at..end].to_string(), rest));
+            from = end;
+        }
+        at = end;
+    }
+    if from < line.len() {
+        let style = if from == 0 { base } else { rest };
+        out.extend(crate::markdown::spans_with(&line[from..], style, marks));
+    }
+    out
+}
+
 /// Widest a tag is drawn, in characters.
 ///
 /// Capped here rather than in the kernel because it is a fact about the box, not about the
@@ -243,6 +376,9 @@ struct State {
     typed: Option<String>,
     /// First option drawn, so a long list scrolls rather than hiding the cursor.
     offset: usize,
+    /// First row of the question drawn, so a question taller than its room scrolls rather than
+    /// being cut off.
+    scrolled: usize,
 }
 
 impl State {
@@ -254,6 +390,7 @@ impl State {
             // field opens itself rather than presenting an empty list to navigate.
             typed: prompt.rows.is_empty().then(String::new),
             offset: 0,
+            scrolled: 0,
         }
     }
 }
@@ -277,6 +414,8 @@ struct Picker<'a> {
     /// Set while a question is reopened from the review, so settling it goes back to the review
     /// rather than on through the questions after it.
     returning: bool,
+    /// How many rows of the question the last frame drew, which is how far a page key scrolls it.
+    page: usize,
 }
 
 impl<'a> Picker<'a> {
@@ -289,6 +428,7 @@ impl<'a> Picker<'a> {
             named: None,
             reviewing: false,
             returning: false,
+            page: 1,
         }
     }
 
@@ -395,6 +535,19 @@ impl<'a> Picker<'a> {
     fn press(&mut self, key: KeyCode) -> Step {
         if self.reviewing {
             return self.press_review(key);
+        }
+        // The question scrolls by page whether or not the field is open, since neither the list
+        // nor the field takes these keys. The draw holds the offset to the question's last page.
+        match key {
+            KeyCode::PageDown => {
+                self.here.scrolled = self.here.scrolled.saturating_add(self.page);
+                return Step::Waiting;
+            }
+            KeyCode::PageUp => {
+                self.here.scrolled = self.here.scrolled.saturating_sub(self.page);
+                return Step::Waiting;
+            }
+            _ => {}
         }
         match &mut self.here.typed {
             Some(text) => match key {
@@ -515,18 +668,14 @@ impl<'a> Picker<'a> {
         if self.reviewing {
             return self.draw_review(frame);
         }
-        let area = centred(frame.area());
-        frame.render_widget(Clear, area);
+        let screen = frame.area();
+        let mut area = centred(screen);
+        let inside = area.width.saturating_sub(2).max(1);
 
-        let mut lines = Vec::new();
-        if let Some(chip) = chip(&self.prompt().header) {
-            lines.push(Line::from(chip));
-        }
-        lines.push(Line::from(Span::styled(
-            self.prompt().question.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::raw(""));
+        let chip = chip(&self.prompt().header).map(Line::from);
+        let chip_rows = chip.as_ref().map_or(0, |chip| drawn_rows(chip, inside));
+        let asked = question_lines(&self.prompt().question);
+        let wanted: usize = asked.iter().map(|line| drawn_rows(line, inside)).sum();
 
         // An option costs a line for its label and another for its detail. Where any option has
         // one, the list is spaced out as well, since two unspaced options each carrying a second
@@ -541,23 +690,17 @@ impl<'a> Picker<'a> {
         // Every one of these is measured in the rows the box will draw it as rather than in the
         // lines it was written as. The hints wrap on a narrow box, and so does the question
         // sentence; a line counted as a row is a line whose second row lands on something else.
-        let inside = area.width.saturating_sub(2).max(1);
-        let tail = match &self.here.typed {
+        // `scrolls` is whether the hints name the key that scrolls the question, which they do
+        // only where the question is cut, so a short question keeps the line it always had.
+        let tail = |scrolls: bool| match &self.here.typed {
             // The field is one line and, past a sentence or so, several rows. Counted as one, a
             // person typing pushes their own way out of the field off the bottom of the box.
             Some(text) => {
                 drawn_rows(&Line::from(typed_line(text)), inside)
-                    + drawn_rows(&Line::from(self.field_keys()), inside)
+                    + drawn_rows(&Line::from(self.field_keys(scrolls)), inside)
             }
-            None => drawn_rows(&Line::from(self.keys()), inside) + 1 + gap,
+            None => drawn_rows(&Line::from(self.keys(scrolls)), inside) + 1 + gap,
         };
-        let reserved = lines
-            .iter()
-            .map(|line| drawn_rows(line, inside))
-            .sum::<usize>()
-            + 3
-            + tail;
-        let budget = (area.height as usize).saturating_sub(reserved).max(1);
         // An option costs the rows its label wraps onto, not one. Costed at one apiece, a list of
         // ordinary sentences fits twice over and the half that does not fit is drawn past the
         // bottom border: neither on screen, nor counted in `hidden`, nor reachable by scrolling.
@@ -569,6 +712,78 @@ impl<'a> Picker<'a> {
                     .map_or(0, |detail| drawn_rows(&indented(detail), inside))
                 + if first { 0 } else { gap }
         };
+        let options: usize = self
+            .prompt()
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(nth, row)| height(row, nth == 0))
+            .sum();
+        // The chip, the two borders, the blank row under the question and the one above the keys.
+        let chrome = chip_rows + 4;
+
+        // The options and the keys are given their rows before the question is, so a question of
+        // any length leaves every choice and the way out on screen (MODE-14, ASK-6). A question
+        // that does not fit what is left keeps a few rows and scrolls in them, one of which says
+        // how much of it is out of sight.
+        let fit = |box_rows: usize| {
+            let room = |scrolls: bool| box_rows.saturating_sub(chrome + tail(scrolls));
+            let kept = |room: usize| room.saturating_sub(options).max(wanted.min(QUESTION_ROWS));
+            let whole = room(false);
+            if wanted <= kept(whole) {
+                return Fit {
+                    question: wanted,
+                    cut: false,
+                    budget: whole.saturating_sub(wanted).max(1),
+                };
+            }
+            let room = room(true);
+            let question = kept(room);
+            Fit {
+                question,
+                cut: true,
+                budget: room.saturating_sub(question).max(1),
+            }
+        };
+        let mut fitted = fit(area.height as usize);
+        // A question that is cut has the box grow to the height of the terminal, as far as it
+        // needs to, since the rows the box leaves above and below it are what the question lacks.
+        if fitted.cut {
+            let whole = chrome + tail(true) + options + wanted;
+            let tall = u16::try_from(whole)
+                .unwrap_or(u16::MAX)
+                .clamp(area.height, screen.height);
+            area.y = screen.y + (screen.height - tall) / 2;
+            area.height = tall;
+            fitted = fit(tall as usize);
+        }
+        let budget = fitted.budget;
+        let text_rows = if fitted.cut {
+            fitted.question - 1
+        } else {
+            wanted
+        };
+        let hidden_rows = wanted - text_rows;
+        self.here.scrolled = self.here.scrolled.min(hidden_rows);
+        self.page = text_rows.max(1);
+
+        let mut lines = Vec::new();
+        // A question cut short must say so, as a list cut short does, or the end of a plan nobody
+        // scrolled to reads as the end of the plan. It counts what is below the rows on screen at
+        // the current scroll, and once the end is on screen it says so and how much is above.
+        if fitted.cut {
+            let below = hidden_rows - self.here.scrolled;
+            let more = if below > 0 {
+                t!(ask_more_question, count = below).to_string()
+            } else {
+                t!(ask_question_end, count = self.here.scrolled).to_string()
+            };
+            lines.push(Line::from(Span::styled(
+                more,
+                Style::default().fg(theme::muted()),
+            )));
+        }
+        lines.push(Line::raw(""));
 
         self.scroll_to_cursor(budget, height);
 
@@ -674,23 +889,39 @@ impl<'a> Picker<'a> {
                 // The field needs its own keys. Drawing none, as this did, leaves a person who
                 // opened it with no way out that they can see, and the way out is the hint they
                 // most need.
-                lines.push(Line::from(self.field_keys()));
+                lines.push(Line::from(self.field_keys(fitted.cut)));
             }
-            None => lines.push(Line::from(self.keys())),
+            None => lines.push(Line::from(self.keys(fitted.cut))),
         }
 
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme::brand_primary()))
+            .title(self.title());
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        // The question in rows of its own, so it scrolls by the rows it wraps onto and the chip
+        // above it and the options below it stay where they are.
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(u16::try_from(chip_rows).unwrap_or(u16::MAX)),
+                Constraint::Length(u16::try_from(text_rows).unwrap_or(u16::MAX)),
+                Constraint::Min(0),
+            ])
+            .split(inner);
+        if let Some(chip) = chip {
+            frame.render_widget(Paragraph::new(chip).wrap(Wrap { trim: false }), parts[0]);
+        }
         frame.render_widget(
-            Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme::brand_primary()))
-                        .title(self.title()),
-                )
-                .wrap(Wrap { trim: false }),
-            area,
+            Paragraph::new(asked)
+                .wrap(Wrap { trim: false })
+                .scroll((u16::try_from(self.here.scrolled).unwrap_or(u16::MAX), 0)),
+            parts[1],
         );
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[2]);
     }
 
     /// The review: every question beside what the person did with it, and the keys to send or to
@@ -799,7 +1030,8 @@ impl<'a> Picker<'a> {
         format!(" {said} ")
     }
 
-    fn keys(&self) -> Vec<Span<'static>> {
+    /// `scrolls` adds the key that scrolls the question, for a question cut to fit the box.
+    fn keys(&self, scrolls: bool) -> Vec<Span<'static>> {
         let bold = Style::default()
             .fg(theme::brand_primary())
             .add_modifier(Modifier::BOLD);
@@ -820,6 +1052,10 @@ impl<'a> Picker<'a> {
         )));
         spans.push(Span::styled("enter", bold));
         spans.push(Span::raw(format!(" {}   ", t!(ask_key_answer))));
+        if scrolls {
+            spans.push(Span::styled(SCROLL_KEYS, bold));
+            spans.push(Span::raw(format!(" {}   ", t!(ask_key_scroll))));
+        }
         // Only where there is a question to go back to, so the first question's line is the one
         // it always was.
         if self.at > 0 {
@@ -839,13 +1075,19 @@ impl<'a> Picker<'a> {
     }
 
     /// Keys for the free-text field, which are not the keys for the list.
-    fn field_keys(&self) -> Vec<Span<'static>> {
+    fn field_keys(&self, scrolls: bool) -> Vec<Span<'static>> {
         let bold = Style::default()
             .fg(theme::brand_primary())
             .add_modifier(Modifier::BOLD);
-        vec![
+        let mut spans = vec![
             Span::styled("  enter", bold),
             Span::raw(format!(" {}   ", t!(ask_key_answer))),
+        ];
+        if scrolls {
+            spans.push(Span::styled(SCROLL_KEYS, bold));
+            spans.push(Span::raw(format!(" {}   ", t!(ask_key_scroll))));
+        }
+        spans.extend([
             Span::styled(
                 "esc",
                 Style::default()
@@ -861,7 +1103,8 @@ impl<'a> Picker<'a> {
                     t!(ask_key_back_to_options)
                 }
             )),
-        ]
+        ]);
+        spans
     }
 
     /// How many options fit in this many lines, counting from the first one drawn.
@@ -2338,6 +2581,247 @@ mod tests {
             "the list was cut short without saying so"
         );
     }
+    /// A plan of `steps` numbered lines under a heading, written the way a planner writes one.
+    fn long_plan(steps: usize) -> Prompt {
+        let mut plan = String::from("Add a cache layer.\n## Steps\n");
+        for i in 0..steps {
+            plan.push_str(&format!(
+                "- step {i:02}. edit `src/cache.rs` and **test** it\n"
+            ));
+        }
+        bravebot_core::ask::prompt(&bravebot_agent::plan_approval::question(&plan))
+    }
+
+    /// Every choice of the plan prompt and the keys stay on screen however long the plan is
+    /// (MODE-14). The regression it rejects is the question being given its rows before the
+    /// options, which pushes "keep planning", the free-text row and the way out past the bottom
+    /// border of the box.
+    #[test]
+    fn a_long_plan_leaves_every_choice_and_the_keys_on_screen() {
+        let rows = screen_rows(&long_plan(60), 80, 24);
+        let screen = rows.join("\n");
+        for label in [
+            t!(agent_plan_approval_accept_edits),
+            t!(agent_plan_approval_ask),
+            t!(agent_plan_approval_keep_planning),
+        ] {
+            assert!(screen.contains(label), "{label} is off the box:\n{screen}");
+        }
+        assert!(
+            screen.contains("esc"),
+            "the way out is off the box:\n{screen}"
+        );
+        // The hints name the scroll key and still fit one line, and the way out survives a narrow
+        // terminal, with a plan as long as this one.
+        let rows = screen_rows(&long_plan(60), 72, 20);
+        let keys = row_holding(&rows, "esc");
+        assert!(
+            rows[keys].contains("skip") && rows[keys].contains("PgDn"),
+            "the hints do not name the scroll key on one line:\n{}",
+            rows.join("\n")
+        );
+        // A terminal too short for the options themselves scrolls them, as any list does, and
+        // says so: the way out and the count of hidden choices stay on screen.
+        let narrow = screen_rows(&long_plan(60), 48, 20).join("\n");
+        assert!(
+            narrow.contains("esc") && narrow.contains("more, use the arrow keys"),
+            "a narrow terminal loses the way out or hides choices without saying so:\n{narrow}"
+        );
+    }
+
+    /// The question keeps the lines it was written in, and its markdown is drawn as styling. The
+    /// regression it rejects is the whole question drawn as one line, which runs a heading on from
+    /// the sentence before it and shows the `##`, `**` and backticks as written.
+    #[test]
+    fn a_plan_keeps_its_line_breaks_and_draws_its_markdown() {
+        let rows = screen_rows(&long_plan(2), 80, 40);
+        let screen = rows.join("\n");
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("## ") || row.contains("**")),
+            "markdown markers are drawn as written:\n{screen}"
+        );
+        let first = row_holding(&rows, "Add a cache layer.");
+        assert!(
+            !rows[first].contains("Steps"),
+            "the heading runs on from the line before it:\n{screen}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Steps") && !row.contains("cache")),
+            "the heading is not on a row of its own:\n{screen}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("- step 01. edit src/cache.rs and test it")),
+            "a list item is not on a row of its own with its markers styled:\n{screen}"
+        );
+    }
+
+    /// A question taller than the box scrolls with PgDn and PgUp, and says how much of it is
+    /// hidden. The regressions it rejects are a body that never scrolls, so the end of the plan
+    /// cannot be read before approving it, and a cut with nothing on screen saying so.
+    #[test]
+    fn page_keys_scroll_a_long_question_to_its_last_line_and_back() {
+        let asking = one(&long_plan(60));
+        let start = rows_after(&asking, &[], 80, 24).join("\n");
+        assert!(
+            !start.contains("step 59."),
+            "the whole plan fitted:\n{start}"
+        );
+        assert!(
+            start.contains("more lines"),
+            "nothing says the plan is cut:\n{start}"
+        );
+        let end = rows_after(&asking, &[KeyCode::PageDown; 80], 80, 24).join("\n");
+        assert!(
+            end.contains("step 59."),
+            "the last line of the plan cannot be reached:\n{end}"
+        );
+        assert!(
+            end.contains(t!(agent_plan_approval_keep_planning)),
+            "scrolling the plan took a choice off the box:\n{end}"
+        );
+        let mut keys = vec![KeyCode::PageDown; 80];
+        keys.extend([KeyCode::PageUp; 80]);
+        let back = rows_after(&asking, &keys, 80, 24).join("\n");
+        assert!(
+            back.contains("Add a cache layer."),
+            "PgUp does not return to the start of the plan:\n{back}"
+        );
+    }
+
+    /// The count after `prefix` on the row that holds `needle`, as the cut question's indicator
+    /// draws it.
+    fn count_in(screen: &str, needle: &str, prefix: &str) -> Option<usize> {
+        let row = screen.lines().find(|row| row.contains(needle))?;
+        let rest = &row[row.find(prefix)? + prefix.len()..];
+        rest.split_whitespace().next()?.parse().ok()
+    }
+
+    /// The line saying how much of a cut question is hidden counts what is below the rows on
+    /// screen at the current scroll, and once the end is on screen it stops saying more is below.
+    /// The regression it rejects is a count fixed at what the top of the plan hides, which still
+    /// says that many more lines after the person has scrolled to the end.
+    #[test]
+    fn the_cut_question_says_how_much_is_below_where_it_is_scrolled() {
+        let asking = one(&long_plan(60));
+        let top = rows_after(&asking, &[], 80, 24).join("\n");
+        let below_top = count_in(&top, "more lines below", "… ")
+            .unwrap_or_else(|| panic!("the top of the plan does not say what is below:\n{top}"));
+        let part = rows_after(&asking, &[KeyCode::PageDown], 80, 24).join("\n");
+        let below_part = count_in(&part, "more lines below", "… ")
+            .unwrap_or_else(|| panic!("part-way through says nothing is below:\n{part}"));
+        assert!(
+            below_part > 0 && below_part < below_top,
+            "one page down still counts {below_part} of {below_top} rows below:\n{part}"
+        );
+        let end = rows_after(&asking, &[KeyCode::PageDown; 80], 80, 24).join("\n");
+        assert!(
+            !end.contains("below"),
+            "the end of the plan is on screen and something is still said to be below:\n{end}"
+        );
+        assert_eq!(
+            count_in(&end, "lines above", "end, "),
+            Some(below_top),
+            "the end does not count the rows above it as the top counted them below:\n{end}"
+        );
+    }
+
+    /// A fenced block in a question is code, and its lines are drawn as written. The regression it
+    /// rejects is inline markdown applied inside the block, which drops the `*` and `**` of the
+    /// code and shows the person something other than what the planner wrote there.
+    #[test]
+    fn a_fenced_block_in_a_question_is_drawn_as_written() {
+        let plan = "Run this:\n```\nlet area = w*h*2; // **not bold**\n```\nThen **test** it.";
+        let rows = screen_rows(
+            &bravebot_core::ask::prompt(&bravebot_agent::plan_approval::question(plan)),
+            80,
+            24,
+        );
+        let screen = rows.join("\n");
+        assert!(
+            screen.contains("let area = w*h*2; // **not bold**"),
+            "a line of the fenced block was styled as markdown:\n{screen}"
+        );
+        assert!(
+            screen.contains("Then test it.") && !screen.contains("**test**"),
+            "the line after the block was not styled:\n{screen}"
+        );
+    }
+
+    /// Every character of a question is on screen but the emphasis, heading and code markers it
+    /// styles (ASK-1), including where a marker sits inside a link's target, an address, a path or a
+    /// word. The regression it rejects is the question styled by the transcript's matcher alone,
+    /// which takes the `_` and `*` out of `https://example.test/_v2_/a*b*c` and draws the person a
+    /// place other than the one the gate checked.
+    #[test]
+    fn every_character_of_a_question_is_drawn_but_the_markers_it_styles() {
+        let written = [
+            "[guide](https://example.test/_v2_/a*b*c)",
+            "<https://example.test/__x__>",
+            "https://example.test/`q`/a",
+            "src/__init__.py",
+            "foo**bar**baz",
+            r"\*not emphasis\*",
+            "#123",
+            "<b>raw</b>",
+            "~~struck~~",
+            "**unbalanced",
+            "`one",
+        ];
+        let mut plan = String::from("## Check these\n");
+        for line in written {
+            plan.push_str(&format!("- {line} ok\n"));
+        }
+        plan.push_str("Then **test** it.\n");
+        let rows = screen_rows(
+            &bravebot_core::ask::prompt(&bravebot_agent::plan_approval::question(&plan)),
+            100,
+            40,
+        );
+        let screen = rows.join("\n");
+        for line in written {
+            assert!(
+                screen.contains(&format!("- {line} ok")),
+                "{line:?} is not drawn as written:\n{screen}"
+            );
+        }
+        assert!(
+            screen.contains("Check these")
+                && !screen.contains("## ")
+                && screen.contains("Then test it."),
+            "the heading or the emphasis is not styled:\n{screen}"
+        );
+    }
+
+    /// A question too tall for the box still shows where it stands in the series and how to skip
+    /// it, and the skip moves on to the next question (ASK-6). The regression it rejects is the
+    /// question taking the rows the keys need, so the way out of a long question is off the box.
+    #[test]
+    fn a_long_question_in_a_series_keeps_its_place_and_its_way_out() {
+        let asking = Asking {
+            prompts: vec![long_plan(60), platforms()],
+            ..Default::default()
+        };
+        let rows = rows_after(&asking, &[], 80, 24);
+        let screen = rows.join("\n");
+        assert!(
+            screen.contains("(1 of 2)"),
+            "the position is off the box:\n{screen}"
+        );
+        assert!(
+            screen.contains("esc skip"),
+            "the way out is off the box:\n{screen}"
+        );
+        let later = rows_after(&asking, &[KeyCode::Esc], 80, 24).join("\n");
+        assert!(
+            later.contains("(2 of 2)") && later.contains("Which platforms?"),
+            "skipping the long question did not move on:\n{later}"
+        );
+    }
+
     /// The hint line must fit the box it is drawn in. Wrapped onto a second line it reads as two
     /// half-hints, and the keys are what a person scans when they do not know what to press.
     #[test]

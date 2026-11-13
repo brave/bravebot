@@ -31,14 +31,22 @@ only one with no effect at all.
 ### ASK-1: the questions are routing, approved by being read
 
 `ask_user` still has a destination, the user's screen, and the questions and their options decide
-what the user is shown and therefore what they can answer. What is drawn is exactly the bytes the
-gate checked; nothing re-parses them afterwards, and there is no effect to endorse beyond the
-display.
+what the user is shown and therefore what they can answer. What is drawn is the bytes the gate
+checked, and there is no effect to endorse beyond the display. The terminal draws a question a line
+of the box for each line it was written in and styles its inline markdown. The only characters it
+leaves off the screen are the `#` markers of a heading and the `*`, `_` and backtick markers of the
+emphasis and code it styles, and those only at the start or end of a run of characters with no
+blank in it. A run with such a marker inside it, as a link's target, an address, a path or
+`foo**bar**` can have, is drawn as written, and so is a fenced block. Every other character is drawn
+in the order it was written, links, `#123`, escapes and HTML included, since nothing else is parsed.
 
 `verified-by: bravebot_core::ask::a_shaped_question_carries_the_tag_it_is_shown_under`
 `verified-by: bravebot_core::ask::a_question_with_no_options_is_still_a_question`
 `verified-by: bravebot_tui::ask::options_whose_labels_wrap_are_fitted_by_the_rows_they_draw`
 `verified-by: bravebot_tui::ask::a_wrapping_list_scrolls_to_the_option_under_the_cursor`
+`verified-by: bravebot_tui::ask::a_plan_keeps_its_line_breaks_and_draws_its_markdown`
+`verified-by: bravebot_tui::ask::a_fenced_block_in_a_question_is_drawn_as_written`
+`verified-by: bravebot_tui::ask::every_character_of_a_question_is_drawn_but_the_markers_it_styles`
 
 <a id="ASK-2"></a>
 ### ASK-2: one to four questions, refused whole rather than trimmed
@@ -132,6 +140,7 @@ only which question it is on, its drafts and its focus. What the planner is told
 
 `verified-by: bravebot_tui::ask::the_position_in_the_series_is_shown`
 `verified-by: bravebot_tui::ask::a_lone_question_is_not_labelled_one_of_one`
+`verified-by: bravebot_tui::ask::a_long_question_in_a_series_keeps_its_place_and_its_way_out`
 `verified-by: bravebot_i18n::ask::a_question_is_placed_among_those_put_and_a_lone_one_is_not`
 `verified-by: bravebot_i18n::ask_in_french::the_position_of_a_question_is_said_in_the_chosen_catalog`
 `verified-by: bravebot_core::ask::a_series_ends_at_its_last_question_and_not_before`

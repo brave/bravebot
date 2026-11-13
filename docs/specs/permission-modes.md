@@ -699,6 +699,8 @@ invented (MODE-7), so no mode answers it for the person.
 `verified-by: bravebot_agent::tools::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
 `verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
 `verified-by: bravebot_agent::plan_approval::no_answer_selects_bypassing_or_leaves_plan_mode_without_a_choice`
+`verified-by: bravebot_tui::ask::a_long_plan_leaves_every_choice_and_the_keys_on_screen`
+`verified-by: bravebot_tui::ask::page_keys_scroll_a_long_question_to_its_last_line_and_back`
 
 ## Known costs
 
