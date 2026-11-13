@@ -1097,6 +1097,7 @@ impl Session {
             at: self.asides.len() + place,
             listing: false,
             on_session: false,
+            from_list: false,
         });
         true
     }

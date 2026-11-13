@@ -1658,6 +1658,36 @@ mod tests {
             assert!(footer.starts_with("aside  ·  kept  ·  1 of 3"), "{footer}");
         }
 
+        /// The footer names what `q` does from the row on the screen. An answer opens the view by
+        /// itself with no list behind it, so `q` closes there, and it goes back only from a row
+        /// opened from the list. A footer that said `goes back` over both would describe a key
+        /// that does something else.
+        #[test]
+        fn the_footer_says_q_closes_a_row_the_list_did_not_open() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "checker", "run the build");
+            asked(&mut session, "why recursive?", "because of nesting", true);
+            let footer = |session: &Session| {
+                rows_at(session, 90, 24)
+                    .last()
+                    .expect("a footer")
+                    .trim_start()
+                    .to_string()
+            };
+
+            let answered = footer(&session);
+            assert!(answered.contains("1 of 2"), "{answered}");
+            assert!(answered.contains("q closes"), "{answered}");
+            assert!(!answered.contains("q goes back"), "{answered}");
+
+            session.stop_watching();
+            session.watch();
+            session.open_watched();
+            let opened = footer(&session);
+            assert!(opened.contains("q goes back"), "{opened}");
+            assert!(!opened.contains("q closes"), "{opened}");
+        }
+
         /// Marked the way every other block the planner was kept from is marked, and marked
         /// structurally: the bar is in the margin on every row, so content saying the block ends
         /// cannot end it.

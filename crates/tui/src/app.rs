@@ -7666,6 +7666,79 @@ mod tests {
             );
         }
 
+        /// An answer opens the view by itself on its own row (WATCH-19), and a recap of a session
+        /// the person came back to is one. They never saw the list, so the way back leaves the
+        /// mode for the conversation they were reading, however many rows the list has. Going to
+        /// the list first puts them two steps from where they were.
+        #[test]
+        fn the_way_back_from_an_answer_the_view_opened_by_itself_closes_it() {
+            for leaving in [key(KeyCode::Esc), key(KeyCode::Char('q'))] {
+                let mut session = Session::new("kernel-enforced");
+                spawn(&mut session, "reader", "find the parser");
+                session.reporting_for(None);
+                session.begin_aside();
+                // Read back during the wait, which answers keys.
+                session.scroll = 7;
+                aside_answered(
+                    &mut session,
+                    crate::command_table::RECAP_LABEL.to_string(),
+                    bravebot_agent::aside::Answered {
+                        shown: "the parser was being rewritten".to_string(),
+                        kept: None,
+                        usage: Default::default(),
+                    },
+                );
+                assert!(
+                    session.watched_aside().is_some(),
+                    "the answer did not open the view"
+                );
+                assert_eq!(session.watchable().len(), 2, "there is no list to skip");
+
+                handle_key(&mut session, leaving);
+
+                assert!(
+                    session.watching().is_none(),
+                    "{leaving:?} did not close the view: listing {}",
+                    session.listing_delegates()
+                );
+                assert_eq!(
+                    session.scroll, 7,
+                    "{leaving:?} lost the conversation's place"
+                );
+            }
+        }
+
+        /// An answer that lands while a row opened from the list is on the screen replaces that
+        /// row with one the list did not open. The way back is the answer's, which closes, and not
+        /// the replaced row's.
+        #[test]
+        fn an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.reporting_for(None);
+            handle_key(&mut session, ctrl('l'));
+            session.open_watched();
+            session.begin_aside();
+            aside_answered(
+                &mut session,
+                crate::command_table::RECAP_LABEL.to_string(),
+                bravebot_agent::aside::Answered {
+                    shown: "the parser was being rewritten".to_string(),
+                    kept: None,
+                    usage: Default::default(),
+                },
+            );
+            assert!(session.watched_aside().is_some(), "the answer did not open");
+
+            handle_key(&mut session, key(KeyCode::Esc));
+
+            assert!(
+                session.watching().is_none(),
+                "escape went back to the list the replaced row came from"
+            );
+        }
+
         /// A person stops the nearest thing. Somebody who went to look at what a delegate was
         /// doing is not asking for the turn to end when they come back out.
         #[test]
@@ -10517,6 +10590,38 @@ mod tests {
         assert!(session.selection.is_none());
         assert!(session.stop_watching());
         assert!(session.scrolling());
+    }
+
+    /// MOUSE-10 and MOUSE-23: a click opens a delegate's view without the list, so Escape from it
+    /// goes back to where the click was, the scroller or the conversation, and not to a list of the
+    /// delegates the person never opened.
+    #[test]
+    fn escape_from_a_clicked_delegate_returns_to_where_the_click_was() {
+        let mut scrolling = scroller_over_two_delegates();
+        let (row, column) = find_on_text(&scrolling, "write the docs");
+        click(&mut scrolling, row, column);
+        assert!(scrolling.watching_a_delegate(), "the click opened no view");
+
+        handle_key(&mut scrolling, key(KeyCode::Esc));
+        assert!(
+            scrolling.watching().is_none(),
+            "escape did not close the view: listing {}",
+            scrolling.listing_delegates()
+        );
+        assert!(scrolling.scrolling(), "escape left the scroller");
+
+        let (mut resting, buffer) = at_rest_over_two_delegates();
+        let (row, column) = find_on(&buffer, "write the docs");
+        click(&mut resting, row, column);
+        assert!(resting.watching_a_delegate(), "the click opened no view");
+
+        handle_key(&mut resting, key(KeyCode::Esc));
+        assert!(
+            resting.watching().is_none(),
+            "escape did not close the view: listing {}",
+            resting.listing_delegates()
+        );
+        assert!(!resting.scrolling());
     }
 
     /// MOUSE-10 and WATCH-7: the watch key opens from the scroller the view the click opens, the
