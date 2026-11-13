@@ -4640,7 +4640,7 @@ file. A new spawn that looks a name up through
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
   | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
-  | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds; whether the start needs it was not run |
+  | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds. The Windows CI runs removed it and `rundll32` exited with status 0; whether a page opened was not observed |
 
   That is 29 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
   application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
@@ -5498,8 +5498,17 @@ shown by running the program, or not entirely:
   searches `PATH` for the library, and Wine's `kernelbase` starts a batch file through `COMSPEC`;
   ReactOS's `shlexec.cpp` handles `SEE_MASK_DOENVSUBST` the same way; Microsoft's `ShellExecute`
   pages name no variable; Microsoft's `rundll32` page and the rest of the ReactOS tree were not
-  read, and no source read shows `PATHEXT` being read by this start. No Windows run of this start
-  is recorded here. No Wine or ReactOS version is recorded for the source named. The opener
+  read, and no source read shows `PATHEXT` being read by this start. No Wine or ReactOS
+  version is recorded for the source named. The `sandbox-windows` job ran the start on
+  `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in two
+  runs of `ci.yml` on main, 43115512926 and 43116736884. In both, the opener's start removed the
+  ten names listed below, the batch file did not run, and `rundll32` exited with status 0. A start
+  with only one of the ten names, or only `PSModulePath`, put back on the command did not run the
+  batch file either. That shows that setting a name to a directory a stage may write does not by
+  itself make this start run a file in it on that image. It does not show which names select the
+  program: the test registers no handler whose command expands a listed name, and sets `COMSPEC`
+  without starting a batch file. An exit status of 0 from `rundll32` does not show that a page
+  opened, so it does not show that the start works without `PATHEXT` and the other nine names. The opener
   removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
   `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
   `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
@@ -5514,7 +5523,10 @@ shown by running the program, or not entirely:
   test reads the records from the lines that begin with that prefix, so the check does not depend
   on where the test harness's own output on the same stream ends; it also asserts that every
   child printed its `start ended` record. The printed
-  record is not asserted. #3860 owns the Windows run; #3822 owns the rest of the opener list.
+  record is not asserted. Which names select the program on Windows is still unobserved. #3860
+  owns the run that shows it: a handler registered for the current user whose command expands a
+  listed name, started through the opener, with the helper reachable only through that name.
+  #3822 owns the rest of the opener list.
   These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
