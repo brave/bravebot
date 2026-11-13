@@ -23,6 +23,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [delegation.md](delegation.md) | `DELEGATE` | 33 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 14 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
+| [bots.md](bots.md) | `BOT` | 18 | how the terminal gets the bots the GUI has: one set of rows both read and write, one module that holds the code, the writes a window cannot reach, where a turn runs, the memory view, and a second layout for bots (proposed, not built) |
 | [recall.md](recall.md) | `RECALL` | 11 | what a person's sessions remember across projects: rules loaded in full every turn, facts ranked and recalled, and how neither lets untrusted content in (proposed: built, thresholds not yet measured on a bravebot store) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
