@@ -90,14 +90,12 @@ pub(super) fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
 /// Leave the interface for good: hand the terminal back, then tell herdr the run has left its pane
 /// ([HERDR-12](../../../../docs/specs/herdr.md#HERDR-12)).
 ///
-/// Only the end of `run` comes here. An editor, a viewer and a stop hand the terminal back with
-/// [`hand_back_terminal`] and take it again, and the run is still in the pane through all of them.
-pub(super) fn leave_for_good<W: Write>(out: &mut W) -> io::Result<()> {
-    leave(out, hand_back_terminal)
-}
-
-/// [`leave_for_good`], told how to hand the terminal back, so that a test can leave without a tty.
-/// herdr is told whether or not the terminal could be handed back, since the run is leaving anyway.
+/// Only the end of `run` comes here, through `end_the_run`. An editor, a viewer and a stop hand the
+/// terminal back with [`hand_back_terminal`] and take it again, and the run is still in the pane
+/// through all of them.
+///
+/// Told how to hand the terminal back, so that a test can leave without a tty. herdr is told whether
+/// or not the terminal could be handed back, since the run is leaving anyway.
 pub(super) fn leave<W: Write>(
     out: &mut W,
     hand_back: impl FnOnce(&mut W) -> io::Result<()>,
