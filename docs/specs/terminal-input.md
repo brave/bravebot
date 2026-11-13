@@ -3315,9 +3315,9 @@ the row above that question's keys says they were refused, and they are carried 
 terminal that answered no question about its keys within 500 ms is not asked about its graphics,
 and the graphics question waits at most 500 ms for an answer.
 
-**Why.** Every key typed before the first `input::poll` was read by these questions and dropped
-(#3846). On a terminal that answers nothing, such as a pty with nobody behind it, a driver or a
-slow ssh link, that was 8.9 seconds, with nothing on the screen saying so.
+**Why.** A key read by these questions and not handed back is lost without a word, and on a
+terminal that answers nothing, such as a pty with nobody behind it, a driver or a slow ssh link,
+the questions hold the first frame for as long as they wait.
 
 `verified-by: bravebot_tui::input::keys_a_startup_query_read_are_handed_to_the_event_reader_in_order`
 `verified-by: bravebot_tui::input::records_a_startup_query_read_are_handed_to_the_event_reader_in_order`
