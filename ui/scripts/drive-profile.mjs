@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON, TRUST_APPROVE, approveTrust, trustQuestion } from './drive-support.mjs'
+import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON, BOT_GREETING, TRUST_APPROVE, approveTrust, trustQuestion } from './drive-support.mjs'
 
 /**
  * Where the app keeps what it remembers, asked of the app rather than composed here: `userData`
@@ -97,7 +97,7 @@ export async function openBot(page, { name, row, purpose, check }) {
   const mine = page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: row }) })
   check((await mine.count()) === 1, 'the bot is in the list')
   await mine.locator(BOT_OPEN_BUTTON).click()
-  await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator(BOT_GREETING).waitFor()
   if (await page.locator(TRUST_APPROVE).isVisible().catch(() => false)) await approveTrust(trustQuestion(page))
   await page.waitForTimeout(400)
   return made?.home

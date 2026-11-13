@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appState, forgetCheckoutSessions, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { BOT_GREETING } from './drive-support.mjs'
 
 const temp = () => mkdtempSync(join(tmpdir(), 'drive-profile-test-'))
 
@@ -165,8 +166,8 @@ test('openBot writes the bot, finds its row, opens its conversation and answers 
   const order = (name) => calls.findIndex((call) => call.startsWith(name))
   assert.ok(order('writeBot Custodian: keep it') < order('reload'))
   assert.ok(order('reload') < order('click .sidebar-tabs [role="option"] #1'))
-  assert.ok(order('click .bot-open-button') < order('waitFor [data-test="bot-greeting"]'))
-  assert.ok(order('waitFor [data-test="bot-greeting"]') < order('click [data-test="trust-approve"]'))
+  assert.ok(order('click .bot-open-button') < order(`waitFor ${BOT_GREETING}`))
+  assert.ok(order(`waitFor ${BOT_GREETING}`) < order('click [data-test="trust-approve"]'))
 })
 
 test('openBot records a failed check when the bot is not in the list exactly once', async () => {

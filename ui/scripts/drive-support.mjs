@@ -21,6 +21,8 @@ export const COMPOSER_NAME = 'Message the agent'
 export const ASSISTANT_BUBBLE = '.bubble.assistant'
 /** The button on a bot's row that opens its page. */
 export const BOT_OPEN_BUTTON = '.bot-open-button'
+/** The greeting a bot's page shows before its first turn. */
+export const BOT_GREETING = '[data-test="bot-greeting"]'
 /** The yes on a trust question. */
 export const TRUST_APPROVE = '[data-test="trust-approve"]'
 /**

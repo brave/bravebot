@@ -25,7 +25,7 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, approveTrust, trustQuestion } from '../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, BOT_GREETING, COMPOSER_SEND, approveTrust, trustQuestion } from '../drive-support.mjs'
 import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -240,7 +240,7 @@ async function ensureResidents(world) {
         // Opening the bot opens its conversation in its home folder, which asks the trust question
         // a new folder asks.
         await row.locator(BOT_OPEN_BUTTON).click()
-        await page.locator('[data-test="bot-greeting"]').waitFor()
+        await page.locator(BOT_GREETING).waitFor()
         if (await page.locator('.trust').isVisible().catch(() => false)) {
           await approveTrust(trustQuestion(page))
           await page.waitForTimeout(800)

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
-import { COMPOSER_INPUT, BOT_OPEN_BUTTON, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_INPUT, BOT_OPEN_BUTTON, BOT_GREETING, COMPOSER_SEND } from './drive-support.mjs'
 
 // What `models.list` says of a service whose models could not be listed: a sentence, and the command
 // it names beside it, which the picker draws as code (CHATGPT-9).
@@ -423,7 +423,7 @@ try {
   await page.mouse.up()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
-  await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator(BOT_GREETING).waitFor()
   // The details in the conversation's right column edit the face with the same editor, drawn over the column rather than cut off by it.
   // The window is back at its own size, where the details are a column rather than an overlay.
   await page.setViewportSize(normal)
@@ -458,7 +458,7 @@ try {
   await detailsEditor.getByRole('button', { name: 'Block', exact: true }).click()
   await detailsEditor.getByRole('button', { name: 'Chartreuse to teal', exact: true }).click()
   await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.avatar === 'v4:block/chartreuse-teal')
-  await page.locator('[data-test="bot-greeting"]').click()
+  await page.locator(BOT_GREETING).click()
   await detailsEditor.waitFor({ state: 'hidden' })
   await botRow.locator('[data-avatar^="pixel-chartreuse-teal-"][data-avatar*="-block-"]').waitFor()
   const botTrigger = page.locator('.composer .model-trigger')
@@ -479,7 +479,7 @@ try {
   await botRow.locator(BOT_OPEN_BUTTON).click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
-  await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator(BOT_GREETING).waitFor()
   await page.waitForFunction(() => /haiku/i.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await page.locator(COMPOSER_INPUT).fill('Use the saved bot model')
   await page.locator(COMPOSER_SEND).click()

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
+import { ASSISTANT_BUBBLE, BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
 
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
@@ -229,11 +229,11 @@ try {
   // same one rather than asking about its folder a second time.
   await approveTrust(trust)
   await trust.waitFor({ state: 'hidden' })
-  await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator(BOT_GREETING).waitFor()
   await page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: /^Scribe$/ }) }).locator(BOT_OPEN_BUTTON).click()
   await page.waitForTimeout(500)
   assert.equal(await trust.count(), 0, 'no second home conversation asks the question again')
-  await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator(BOT_GREETING).waitFor()
   await field.click()
   await page.keyboard.type('Read @notes.txt')
   await list.waitFor()
