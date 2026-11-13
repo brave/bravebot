@@ -4914,11 +4914,16 @@ shown by running the program, or not entirely:
   runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
   The third,
   `ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
-  is of the same kind for `LD_ORIGIN_PATH` and `MUSL_LOCPATH`. It does not show what the loader
-  does with `LD_ORIGIN_PATH`, which glibc reads only when it cannot read `/proc/self/exe`
-  (see below). A separate run with a planted `LD_ORIGIN_PATH` loaded nothing from it while `/proc`
-  was readable. The run with no `/proc` could not be made, since `unshare -rm` is refused on that
-  host.
+  is of the same kind for `LD_ORIGIN_PATH` and `MUSL_LOCPATH`. It does not show what a loader
+  does with them. The fourth,
+  `ld_origin_path_runs_a_library_a_stage_wrote_in_a_process_with_no_proc_unless_the_start_removes_it`,
+  runs a program whose `RUNPATH` is `$ORIGIN/lib` in a process with an empty `/proc`
+  (`bwrap --tmpfs /proc`)
+  through a kept start, which must load the planted library, and then through a checked start,
+  which must not, and through a checked start with a directory outside every writable one, which
+  must. It prints `skipped` where `bwrap` cannot make that process or the control loads nothing.
+  With `LD_ORIGIN_PATH` out of the table it failed with `LD_ORIGIN_PATH loaded the planted library
+  through a checked start: ["planted"]`.
   The names come from ld.so(8) on man7.org, which was read. Its secure-execution section says that
   in that mode "the effects of some environment variables are voided or modified, and furthermore
   those environment variables are stripped from the environment", and lists `GCONV_PATH`,
@@ -4943,11 +4948,22 @@ shown by running the program, or not entirely:
   - `LD_LIBRARY_PATH` ran a planted `libneed.so` for a program whose `RUNPATH` names the real one,
     and ran nothing when it named the program's own library directory.
   - `LD_ORIGIN_PATH` ran nothing for a program whose `RUNPATH` is `$ORIGIN/lib` while `/proc` was
-    readable. The case with no `/proc` was not run.
+    readable. With an empty `/proc` (`bwrap --ro-bind / / --tmpfs /proc`, glibc 2.42, no
+    `LD_ORIGIN_PATH` set: the loader reported `libfoo.so: cannot open shared object file`) the same
+    program loaded the planted `lib/libfoo.so` from the directory the variable named and its
+    constructor ran. The variable selects code in a process with no `/proc`, so it stays in the
+    table.
   - `LOCPATH` made `setlocale` open locale files under the directory (13 opens, all succeeded) and
     start no program. `NLSPATH` made `catopen` open a catalog under the directory and start no
     program. `GLIBC_TUNABLES=glibc.cpu.name=/tmp/x` opened no file named `/tmp/x`.
-  - musl was not run. The musl names rest on the source reading.
+  - musl 1.2.5 (Ubuntu 25.10 `musl` and `musl-tools` 1.2.5-3, unpacked without root, a program
+    linked with `gcc -nostdlib` against its `libc.so` as the interpreter, `RUNPATH` naming a
+    directory with a stub `libfoo.so`) was run. `LD_PRELOAD` ran the planted library, and
+    `LD_LIBRARY_PATH` naming a directory with a planted `libfoo.so` ran it ahead of the `RUNPATH`
+    one. `LD_ORIGIN_PATH` ran nothing, with `/proc` readable and with it empty. `MUSL_LOCPATH`
+    made `setlocale` open `<dir>/xx_YY.UTF-8` (one `open`, none without the variable) and start
+    nothing. This matches the source reading: musl reads no other loader variable. A musl
+    distribution other than Debian's build and a statically linked program were not run.
   The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and `LD_PRELOAD`,
   which name a library, a module or a directory searched for libraries (glibc `elf/rtld.c`
   `process_envvars` lines 2565 to 2728, `elf/dl-load.c` line 833, `iconv/gconv_cache.c` line 56 with
@@ -5069,9 +5085,15 @@ shown by running the program, or not entirely:
 - `xclip` and `xsel` are given the generic table and no names of their own. `xclip` 0.13 was run
   under Xvfb on Ubuntu 25.10 (libX11 1.8.12). `XLOCALEDIR` and `XLOCALELIBDIR` each named a copy of
   `/usr/share/X11/locale` that holds a planted `xi18n.so`: `xclip` opened files there (6 opens, all
-  succeeded) and loaded no library, and that libX11 holds no `xi18n` string. `xsel` is not installed
-  on that host and was not run. Not covered: a libX11 built with `--enable-loadable-i18n` (the
-  fourth item of the not-settled bullet below), and `xsel`.
+  succeeded) and loaded no library, and that libX11 holds no `xi18n` string. `xsel` 1.2.1 (Ubuntu
+  25.10 `xsel` 1.2.1-1, unpacked without root) was run under Xvfb with `XAUTHORITY`, `XLOCALEDIR`,
+  `XCOMPOSEFILE`, `XENVIRONMENT` and `XDG_CACHE_HOME` naming planted paths. It opened the planted
+  `XAUTHORITY` file as the cookie, and opened nothing under the other four and started no program
+  (a full `strace -f` of `xsel -o -b`: 220 lines, one `execve`). A `getenv` logging shim loaded by
+  `LD_PRELOAD` listed what `xsel -o -b` and `xsel -i -b` read: `DISPLAY`, `HOME`, `XAUTHORITY`,
+  `XDG_CACHE_HOME` (`-i` only), `XKB_DEBUG`, `XKB_DISABLE`, `XLIBBUFFERSIZE`,
+  `XLIB_SKIP_ARGB_VISUALS` and `_XKB_OPTIONS_ENABLE`. None names a program or a library. Not covered:
+  a libX11 built with `--enable-loadable-i18n` (the fourth item of the not-settled bullet below).
   xclip 0.13 (`xclip.c`, `xclib.c`) has no `getenv`, `exec*`, `dlopen`, `popen` or `system(`, and
   xsel 1.2.1 (`xsel.c`) reads only `XDG_CACHE_HOME` and `HOME` (lines 354 and 355), to place a
   state directory it writes to. libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 were read for every
@@ -5083,11 +5105,10 @@ shown by running the program, or not entirely:
   The starts are in `crates/tui/src/clipboard.rs`.
 - `wl-copy` is given `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `QT_PLUGIN_PATH`, `PERL5LIB`,
   `PERLLIB` and `DBUS_SESSION_BUS_ADDRESS` (`Names::BusAddress`) (`WL_COPY_CODE_SELECTORS` in
-  `crates/tui/src/powershell.rs`). `wl-copy` is not installed on the host the run was made on, so
-  the programs it starts were run in its place on Ubuntu 25.10: `xdg-mime` 1.2.1, `gio info` and
-  the Perl `mimetype`. Not covered: `kmimetypefinder` and `qtxdg-mat` are not installed there, so
-  what KDE and LXQt run was not observed (the first item of the not-settled bullet below), and the
-  list can be short.
+  `crates/tui/src/powershell.rs`). `wl-copy` 2.2.1 (Ubuntu 25.10 `wl-clipboard` 2.2.1-2, unpacked
+  without root) was run under a headless `cage` compositor (`WLR_BACKENDS=headless`), so the chain
+  below was observed from `wl-copy`, and the programs it starts were also run directly on Ubuntu
+  25.10: `xdg-mime` 1.2.1, `gio info`, the Perl `mimetype`, `kmimetypefinder` and `qtxdg-mat`.
   The start passes no `--type`, so `wl-copy` runs `xdg-mime query filetype` on the content
   (wl-clipboard v2.2.1 `src/wl-copy.c` lines 266 to 267), and `xdg-mime` (xdg-utils v1.2.1
   `scripts/xdg-mime.in` lines 63 to 129 and 684 to 700) runs `gio info`, `kmimetypefinder`,
@@ -5112,17 +5133,41 @@ shown by running the program, or not entirely:
   `dbus-send` (`detectDE`, line 580 of the installed script) and then `mimetype`, and
   `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` made `dbus-send` run the helper. With
   `XDG_CURRENT_DESKTOP` set to `GNOME`, `KDE`, `XFCE` or `LXQt` the helper did not run, and `gio info`
-  run directly with the address did not run it either. `GNOME` and `XFCE` ran `gio`, `KDE` ran no
-  program of KDE and `LXQt` found no method, since `kmimetypefinder` and `qtxdg-mat` are not
-  installed. The address is a `Names::BusAddress`, so a `unix:path=` socket outside every directory a
+  run directly with the address did not run it either. `GNOME` and `XFCE` ran `gio`, `KDE` ran
+  `kmimetypefinder` and `LXQt` ran `qtxdg-mat mimetype` (kde-cli-tools 6.4.5 and qtxdg-tools 4.2.0,
+  unpacked without root). The address is a `Names::BusAddress`, so a `unix:path=` socket outside
+  every directory a
   stage may write is kept. The tests
   `a_unixexec_session_bus_address_runs_a_helper_through_the_xdg_mime_wl_copy_starts_unless_the_start_removes_it`
   and `the_directories_xdg_mime_would_load_code_from_are_removed_from_wl_copy_when_a_stage_may_write_them`
   cover the name; the first starts a stand-in `wl-copy` that runs the real `xdg-mime`.
+  The real `wl-copy` under `cage`, with `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` and no
+  desktop named, ran the helper, so the stand-in matches the program. With nothing set, `strace -f -e
+  trace=execve` showed `wl-copy` start `cat`, then `xdg-mime query filetype`, which started
+  `realpath`, `dbus-send`, `xprop`, `grep`, `uname` and `mimetype`, and nothing else: no program
+  other than those `xdg-mime` names.
+  `kmimetypefinder` and `qtxdg-mat mimetype` ran no helper for `DBUS_SESSION_BUS_ADDRESS=
+  unixexec:path=<helper>`, directly or through `xdg-mime` under `LXQt`. A full `strace -f` of each
+  with `QT_PLUGIN_PATH` naming a directory holding a planted plug-in showed no syscall naming the
+  directory, since neither program asks Qt for a plug-in, so `QT_PLUGIN_PATH` is kept as a
+  precaution and not shown to select code. With `LD_PRELOAD` a `getenv` shim listed what each
+  reads. `kmimetypefinder`: `HOME`, `LANG`, `LANGUAGE`, `LC_*`, `XDG_CONFIG_DIRS`,
+  `XDG_CONFIG_HOME`, `XDG_DATA_DIRS`, `XDG_DATA_HOME`, the `QT_*` logging and debugging names,
+  `QT_NO_MIME_CACHE`, `QDBUS_FORCE_SHUTDOWN`, `G_DEBUG`, `G_MESSAGES_PREFIXED` and the libgomp and
+  libstdc++ tuning names (`GOMP_*`, `OMP_*`, `ACC_*`, `GLIBCXX_TUNABLES`). `qtxdg-mat mimetype`
+  read the same and also `QTXDG_DBUSACTIVATE_TIMEOUT`, `QTXDG_START_DETACH_TRULY`, `GOBJECT_DEBUG`,
+  `LIBBLKID_DEBUG` and `__GL*`. `xprop` read `DISPLAY`, `HOME`, `XAUTHORITY`, `XKB_*`,
+  `XLIB*` and `XPROPFORMATS`. `dbus-send` read `DBUS_SESSION_BUS_ADDRESS`,
+  `DBUS_STARTER_ADDRESS`, `DBUS_SYSTEM_BUS_ADDRESS`, `DISPLAY` and `XDG_RUNTIME_DIR`: a
+  `unixexec:` address in `DBUS_STARTER_ADDRESS` (with `DBUS_STARTER_BUS_TYPE=session`) or in
+  `DBUS_SYSTEM_BUS_ADDRESS` ran no helper through `dbus-send` or `xdg-mime`, and the same address
+  in `DBUS_SESSION_BUS_ADDRESS` did. The `wl-copy` chain as a whole read, besides those, the Perl
+  names (`PERL5LIB`, `PERL5OPT`, `PERLLIB` and others that are flags or numbers), `NO_COLOR`,
+  `FORCE_COLOR`, `CLICOLOR_FORCE`, `WAYLAND_DEBUG`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and
+  `XDG_RUNTIME_DIR`. `DEB_GREP_ENABLE_STRAY_BACKSLASH_WARN` and `DPKG_RUNNING_VERSION` are read by
+  Debian's `grep` and `dpkg` wrappers and name no program. A program that reads `environ` directly
+  is not seen by that method.
 - Not settled for the five programs above. Each needs a host or a privilege the run did not have:
-  - `xdg-mime` under LXQt runs `qtxdg-mat mimetype` (`xdg-mime.in` lines 114 to 128), whose source
-    was not read. Run `XDG_CURRENT_DESKTOP=LXQt strace -f -e trace=execve,openat xdg-mime query
-    filetype /tmp/x 2>&1 | grep -E 'execve|\.so'`.
   - The `mimetype` of another distribution may run in taint mode, which ignores `PERL5LIB`. The one
     that was run (Debian's libfile-mimeinfo-perl 0.35) does not.
   - `systemctl --user enable --runtime` on the booted host did not touch the directory
@@ -5131,8 +5176,8 @@ shown by running the program, or not entirely:
     person's own session. The name stays in the list for the client-side case above.
   - Distribution builds of libX11 with `--enable-loadable-i18n` were not read. The libX11 1.8.12 of
     Ubuntu 25.10 holds no `xi18n` string and loaded nothing from `XLOCALEDIR`.
-  - `xsel`, `wl-copy`, a musl host and the no-`/proc` case of `LD_ORIGIN_PATH` were not run. The
-    first three are not installed on the host, and `unshare -rm` is refused there.
+  - A musl distribution other than Debian's, a statically linked program under musl, and a glibc
+    other than 2.42 were not run.
 - A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
   examined for the variables they read to choose code, by running each where it could be run, and
   the names are in the generic table or in the list of the start that runs the program (the AWS
