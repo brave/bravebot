@@ -104,6 +104,17 @@ same binary started again, and each fails for a reason that is not in the code u
 `crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
 marked `// shared-temp-name: <why>` on its line or the line above.
 
+Run the tests from a checkout outside the system temporary directory (`std::env::temp_dir()`,
+which is `$TMPDIR` or `/tmp`). The search for programs always leaves that directory out
+([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), and many tests plant a program under
+`target/test-scratch` and expect it to be found, so from a clone under `$TMPDIR` they fail with
+the planted program not found. `crates/ui-bridge/tests/language_server.rs` and
+`crates/cli/tests/running.rs` give the programs they start a `TMPDIR` of their own and pass from
+either. The tests that call the search in their own process, such as
+`crates/sandbox/tests/checkout_in_search.rs` and the unit tests of `bravebot-sandbox` and
+`bravebot-agent`, read the test process's own temporary directory and still fail from a clone under
+`$TMPDIR` (#4130).
+
 ## Before pushing
 
 Choose how much to run:
@@ -460,7 +471,18 @@ on its own ([fuzzing.md](fuzzing.md#the-lockfile)). It also fails an exception i
 [../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
 cargo-deny is built. CI runs this same target on a pull request that touches a manifest, the
 lockfile or `.config/deny.toml`, on main, and once a day, since an advisory arrives without a commit.
-`make check-reviewdog` is the [security scan](security-scan.md).
+`make check-reviewdog` is the [security scan](security-scan.md). It does not count findings in a
+file under `third_party/`, in either mode, and prints how many it left out. Those crates are
+upstream code kept close to the published release ([third_party/README.md](../../third_party/README.md)),
+so a finding in them is not a change the branch can make without diverging from upstream, and
+counting them failed `check-reviewdog`, and with it `check-affected` and `check-all-local`, on every
+branch whose diff touched one. Opengrep scans the whole checkout whatever file list it is given, so
+the script drops the findings by path after the runners return. A finding anywhere else, including
+a directory named `third_party` deeper in the tree, still fails the scan. A change that alters a
+vendored crate's source is read for security by its reviewer. The exclusion is in
+`contrib/check-reviewdog.sh` only. The organization's required `security` check runs
+brave/security-action, which nothing in this tree configures, so it scans `third_party/` as
+before; on #3865, which added `third_party/crossterm`, that check passed.
 
 `make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
 of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the

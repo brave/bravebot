@@ -17,6 +17,9 @@ fr:agent-rule-approval-why
 fr:agent-rule-approval-yes-words
 fr:agent-rule-other-spelling
 fr:agent-rule-other-spelling-unnamed
+fr:ask-key-scroll
+fr:ask-more-question
+fr:ask-question-end
 fr:btw-no-files-beside-a-turn
 fr:btw-nothing-sent-yet
 fr:btw-one-at-a-time

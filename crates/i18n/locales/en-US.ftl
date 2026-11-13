@@ -3091,7 +3091,16 @@ ask-title = the agent is asking
 ask-title-numbered = the agent is asking ({ $at } of { $total })
 ask-own-words = Answer in my own words
 ask-more-options = … { $count } more, use the arrow keys
+ask-more-question = { $count ->
+    [one] … { $count } more line below, use PgUp/PgDn
+   *[other] … { $count } more lines below, use PgUp/PgDn
+    }
+ask-question-end = { $count ->
+    [one] … end, { $count } line above, use PgUp
+   *[other] … end, { $count } lines above, use PgUp
+    }
 ask-key-move = move
+ask-key-scroll = more
 ask-key-pick-any = pick any
 ask-key-pick-one = pick
 ask-key-answer = answer

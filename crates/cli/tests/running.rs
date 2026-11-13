@@ -137,6 +137,22 @@ fn a_checkout_of_its_own_under(home: &Path) -> PathBuf {
     here
 }
 
+/// The temporary directory a run is given: a sibling of `home`, so it holds none of the stand-ins a
+/// test plants and is not part of the home a test inspects.
+///
+/// The search for programs always leaves out the system temporary directory (SANDBOX-30). From a
+/// checkout under it, as a clone into `$TMPDIR` is, every stand-in under `target/test-scratch`
+/// would be left out with it and not found.
+fn a_temporary_directory_beside(home: &Path) -> PathBuf {
+    let name = home
+        .file_name()
+        .expect("a home with a name")
+        .to_string_lossy();
+    let temporary = home.with_file_name(format!("{name}-tmp"));
+    std::fs::create_dir_all(&temporary).expect("create a temporary directory");
+    temporary
+}
+
 /// The same, started in a directory of the test's choosing.
 ///
 /// The working directory is where a checkout's `.bravebot` is found, and [`bravebot`] leaves it
@@ -184,6 +200,7 @@ fn prepared(
     command
         .env_clear()
         .env("HOME", home)
+        .env("TMPDIR", a_temporary_directory_beside(home))
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
         .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
@@ -6141,6 +6158,7 @@ fn in_a_terminal_command(
     terminal
         .env_clear()
         .env("HOME", home)
+        .env("TMPDIR", a_temporary_directory_beside(home))
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
         .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
@@ -15966,6 +15984,11 @@ impl Drop for ShortHome {
     fn drop(&mut self) {
         let _ = bravebot(&self.0, &[], &["sessions", "stop", "3f2a9c1e"]);
         let _ = std::fs::remove_dir_all(&self.0);
+        // The siblings `a_checkout_of_its_own_under` and `a_temporary_directory_beside` make.
+        let name = self.0.file_name().unwrap_or_default().to_string_lossy();
+        for sibling in [format!("{name}-run-here"), format!("{name}-tmp")] {
+            let _ = std::fs::remove_dir_all(self.0.with_file_name(sibling));
+        }
     }
 }
 

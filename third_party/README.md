@@ -3,6 +3,8 @@
 Crates kept in the tree because bravebot changes them or must control what they start. Each is
 listed in `[patch.crates-io]` in the root `Cargo.toml` and excluded from `[workspace] members`, so
 the workspace lints, `cargo fmt --all` and `cargo clippy --workspace` do not apply to it.
+`make check-reviewdog` does not count findings in these crates either; the organization's required
+`security` check still scans them ([checks.md](../docs/development/checks.md)).
 
 ## crossterm
 

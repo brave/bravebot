@@ -309,6 +309,9 @@ write-untranslated:
 # bot would post, so the full scan reports plenty that predates any given branch --
 # check-reviewdog is the one to run before pushing.
 #
+# Neither target counts a finding in a file under third_party/, which is vendored upstream code;
+# docs/development/checks.md gives the reason and what the organization's check does instead.
+#
 # No model is involved, so both are deterministic.
 .PHONY: check-reviewdog
 check-reviewdog: check-reviewdog-selftest

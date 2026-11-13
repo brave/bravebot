@@ -189,7 +189,7 @@ pub fn spans_with(text: &str, base: Style, marks: Marks) -> Vec<Span<'static>> {
 ///
 /// Up to six hashes and then a space, matching the usual rule: `#foo` is a word beginning with a
 /// hash, not a heading.
-fn heading(text: &str) -> Option<&str> {
+pub(crate) fn heading(text: &str) -> Option<&str> {
     let hashes = text.len() - text.trim_start_matches('#').len();
     if (1..=6).contains(&hashes) {
         text[hashes..].strip_prefix(' ')
