@@ -2003,11 +2003,13 @@ the file would still say they had vouched for it.
 ## Trusting the directory of a run nobody is watching
 
 <a id="TRUST-26"></a>
-### TRUST-26: `--trust-workspace` gives a one-shot run the map a yes to the startup question writes
+### TRUST-26: `--trust-workspace` gives a one-shot run the map a yes to the startup question writes, with the directories `--add-dir` opens
 
 `--trust-workspace` on the command line of a one-shot run starts it from the rule a yes writes
-([TRUST-7](#TRUST-7)): the working directory and everything beneath it, and nothing else. The
-directories `--add-dir` opens stay vouched for by nothing ([CLI-11](cli.md#CLI-11)), and nothing is
+([TRUST-7](#TRUST-7)): the working directory and everything beneath it. Each directory `--add-dir`
+opens is trusted with it, by the rule `/add-dir` records ([TRUST-9](#TRUST-9)), as in any one-shot
+run whose map trusts its working directory, a run a kept answer trusts ([TRUST-23](#TRUST-23))
+included ([CLI-11](cli.md#CLI-11)). Nothing else is trusted, and nothing is
 written: no line is added under `~/.bravebot/trusted`. A run carrying on an earlier session
 ([CLI-25](cli.md#CLI-25)) keeps the map that session recorded and adds the rule to it. Given twice
 it is given once.
@@ -2029,6 +2031,8 @@ an answer in their place: it is the answer, given before the run and for the one
 `verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record`
 `verified-by: bravebot_cli::running::a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted`
 `verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_project_file_quarantined`
+`verified-by: bravebot_cli::main::a_trusted_run_trusts_the_directories_the_command_line_opened_and_nothing_beside_them`
+`verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted`
 
 ## What a killed session leaves
 
