@@ -2953,7 +2953,8 @@ where
             task.confine_runs,
             sandbox_at_start,
             tools::workspace_is_trusted(policy, workspace),
-        ),
+        ) && task.permission_mode.answers_requests(),
+        task.permission_mode.nobody_to_ask(),
     );
     tools::state_withheld_variables(&mut offered);
 

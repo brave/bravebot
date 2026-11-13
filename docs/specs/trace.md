@@ -30,7 +30,9 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise. A path inside the workspace that is refused for not being named
+reference, the path otherwise. A `run` line's redirection refused for leaving the workspace is
+recorded the same way, with the remedy the planner was told, which is none where nobody can be asked
+in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A path inside the workspace that is refused for not being named
 relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
 relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
 write call the permission mode refuses before the tool runs
@@ -148,6 +150,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::tools::a_directory_inside_the_workspace_is_refused_as_inside_it`
 `verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
 `verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
 `verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
 `verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::manifest::a_plan_refused_by_plan_mode_is_recorded_as_a_refusal`
