@@ -1922,22 +1922,19 @@ pub fn run(
         }
     };
 
-    // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it has
-    // begun, so leaving the screen is an ordinary session rather than nothing.
-    let start = Some(start);
-
     let result = match start {
-        // The picker refuses Enter on one of these, and `--resume` refuses it too. If a record
-        // still arrives here, loading its empty conversation as a turn would continue a run
+        // The Sessions screen refuses Enter on one of these, and `--resume` refuses it too. If a
+        // record still arrives here, loading its empty conversation as a turn would continue a run
         // that cannot be continued.
-        Some(Start::Resuming(record)) if record.manifest.is_some() => Ok(Ended::Left(None)),
-        Some(start) => {
+        Start::Resuming(record) if record.manifest.is_some() => Ok(Ended::Left(None)),
+        // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it
+        // has begun, so leaving the screen is an ordinary session rather than nothing.
+        mut start => {
             // A `/resume` ends the loop with the record it chose, and the next one begins from it
             // exactly as a session started with `--resume` does, so what comes back is what that
             // flag restores and nothing a second path decided. The servers outlive the switch:
             // they were started for this process, not for one conversation.
             let mut workspace = workspace.clone();
-            let mut start = start;
             // Only the first session is the one the command line named a definition for. A
             // session `/resume` switches to works under the definition its own record names.
             let mut named = agent;
@@ -1976,9 +1973,6 @@ pub fn run(
                 }
             }
         }
-        // Leaving at the picker resumed nothing and started nothing, so there is nothing to say
-        // about picking anything up.
-        None => Ok(Ended::Left(None)),
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
@@ -2581,7 +2575,8 @@ fn begin_session(
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
-        // Already answered before the loop was entered: the picker runs once, in `run`.
+        // These five begin a new record. `Choose` and `ChooseFromPr` open the Sessions screen over
+        // it, in `apply_the_command_line`.
         Start::Fresh
         | Start::Sending(..)
         | Start::Prefilling(..)
