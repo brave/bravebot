@@ -85,11 +85,34 @@ impl Row {
 }
 
 fn number(value: f64) -> Value {
-    if value.fract() == 0.0 && value.abs() <= MAX_SAFE_INTEGER {
-        Value::from(value as i64)
+    if let Some(whole) = signed_whole(value) {
+        Value::from(whole)
     } else {
         Number::from_f64(value).map_or(Value::Null, Value::Number)
     }
+}
+
+fn signed_whole(value: f64) -> Option<i64> {
+    if value.fract() != 0.0 || value.abs() > MAX_SAFE_INTEGER {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a whole number inside the JSON safe integer range"
+    )]
+    Some(value as i64)
+}
+
+fn counted_whole(value: f64) -> Option<u64> {
+    if value.fract() != 0.0 || !(0.0..=MAX_SAFE_INTEGER).contains(&value) {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a non-negative whole number inside the JSON safe integer range"
+    )]
+    Some(value as u64)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,7 +320,7 @@ pub fn is_absolute_path(value: &str) -> bool {
         && bytes[1] == b':'
         && matches!(bytes[2], b'\\' | b'/');
     let share = is_share(value);
-    (drive || share) && !value[2..].contains(':')
+    (drive || share) && value.get(2..).is_some_and(|rest| !rest.contains(':'))
 }
 
 fn is_share(value: &str) -> bool {
@@ -465,10 +488,8 @@ fn read_entry(entry: &Value, reading: &Reading, seen: &HashSet<String>) -> Resul
         archived: fields
             .get("archived")
             .and_then(Value::as_f64)
-            .filter(|archived| {
-                archived.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(archived)
-            })
-            .map_or(0, |archived| archived as u64),
+            .and_then(counted_whole)
+            .unwrap_or(0),
         retired: fields
             .get("retired")
             .and_then(Value::as_f64)
@@ -502,10 +523,10 @@ fn read_last_home(value: Option<&Value>) -> Option<LastHome> {
     let prompt = fields
         .get("prompt")
         .and_then(Value::as_f64)
-        .filter(|prompt| prompt.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(prompt))?;
+        .and_then(counted_whole)?;
     Some(LastHome {
         id: id.to_string(),
-        prompt: prompt as u64,
+        prompt,
     })
 }
 
@@ -663,7 +684,8 @@ pub fn replace_in(
         Err(error) => return Err(Refused::Unreadable(Problem::new(&path, error))),
     }
     rows.sort_by(|a, b| a.slug.cmp(&b.slug));
-    write_entries(&path, rows.iter().map(Row::to_value).collect())?;
+    let entries: Vec<Value> = rows.iter().map(Row::to_value).collect();
+    write_entries(&path, &entries)?;
     Ok(rows)
 }
 
@@ -671,7 +693,7 @@ fn make_state_directory(home: &Path) -> Result<(), Refused> {
     crate::home::create_directory(home).map_err(|error| Refused::Io(Problem::new(home, error)))
 }
 
-fn write_entries(path: &Path, entries: Vec<Value>) -> Result<(), Refused> {
+fn write_entries(path: &Path, entries: &[Value]) -> Result<(), Refused> {
     let mut text = serde_json::to_string_pretty(&json!({ "bots": entries }))
         .map_err(|error| Refused::Io(Problem::new(path, error)))?;
     text.push('\n');
@@ -774,7 +796,7 @@ fn move_with(
         OldRows::Unconvertible(problem) => Err(Refused::OldFile(problem)),
         OldRows::Entries(entries) => {
             let moved = entries.len();
-            write_entries(&target, entries)?;
+            write_entries(&target, &entries)?;
             Ok(Moved::Entries(moved))
         }
     }

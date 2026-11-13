@@ -305,7 +305,10 @@ fn a_machine_that_names_no_state_directory_lists_no_bots_and_refuses_to_write_an
 
 #[test]
 fn a_machine_that_names_no_state_directory_says_whether_old_rows_are_waiting() {
-    let data_folder = std::env::temp_dir().join("bravebot-agent-home-no-state-old-rows");
+    let data_folder = std::env::temp_dir().join(format!(
+        "bravebot-agent-home-no-state-old-rows-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&data_folder);
     std::fs::create_dir_all(&data_folder).expect("a data folder");
     let old_file = data_folder.join("bravebot-ui.json");
