@@ -494,6 +494,9 @@ fn parse_address(host: &str) -> Option<IpAddr> {
 /// `64:ff9b::/96`, which a resolver on a NAT64 network answers with for an IPv4-only name.
 ///
 /// Not the deprecated IPv4-compatible form `::a.b.c.d`, which would read `::1` as `0.0.0.1`.
+///
+/// `ipv4_form` in `bravebot_sandbox::address` computes the same form; neither crate may depend on
+/// the other, so a change here is made there too.
 fn carried_ipv4(address: Ipv6Addr) -> Option<Ipv4Addr> {
     if let Some(v4) = address.to_ipv4_mapped() {
         return Some(v4);

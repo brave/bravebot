@@ -12,9 +12,26 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 /// Whether a connection to `address` leaves for the public internet, as opposed to ending on this
 /// machine or on a network the machine sits inside.
 pub fn is_public(address: IpAddr) -> bool {
-    match address.to_canonical() {
+    match ipv4_form(address) {
         IpAddr::V4(v4) => public_v4(v4),
         IpAddr::V6(v6) => public_v6(v6),
+    }
+}
+
+/// `address` as it is classified and as the host list compares it: an IPv4 address inside an IPv6
+/// one, IPv4-mapped (`::ffff:0:0/96`) or NAT64 (`64:ff9b::/96`), as that IPv4 address, and any
+/// other address as it is. `64:ff9b::/96` is what a resolver on a NAT64 network answers with for an
+/// IPv4-only name. The deprecated IPv4-compatible form `::a.b.c.d` stays an IPv6 address.
+///
+/// `carried_ipv4` in `bravebot_core::ambient` computes the same form; neither crate may depend on
+/// the other, so a change here is made there too.
+pub(crate) fn ipv4_form(address: IpAddr) -> IpAddr {
+    match address.to_canonical() {
+        IpAddr::V6(v6) if v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] => {
+            let [.., a, b, c, d] = v6.octets();
+            IpAddr::V4(Ipv4Addr::new(a, b, c, d))
+        }
+        address => address,
     }
 }
 
@@ -38,12 +55,6 @@ fn public_v4(address: Ipv4Addr) -> bool {
 
 fn public_v6(address: Ipv6Addr) -> bool {
     let first = address.segments()[0];
-    // 64:ff9b::/96 carries an IPv4 address in its last 32 bits, and is what a resolver on a NAT64
-    // network answers with for an IPv4-only name, so the address it carries is the one classified.
-    if address.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-        let [.., a, b, c, d] = address.octets();
-        return public_v4(Ipv4Addr::new(a, b, c, d));
-    }
     !(address.is_unspecified()
         || address.is_loopback()
         || address.is_multicast()
@@ -120,5 +131,29 @@ mod tests {
             assert!(!is_public(address(text)), "{text} is not public");
         }
         assert!(is_public(address("::ffff:8.8.8.8")));
+    }
+
+    /// The IPv4 form of an address is the IPv4 address an IPv4-mapped or a NAT64 one carries, and
+    /// any other address unchanged, the deprecated IPv4-compatible `::a.b.c.d` and an address in
+    /// another NAT64 prefix or off the prefix's six leading segments included. This is the form
+    /// `carried_ipv4` in `bravebot_core::ambient` gives for an IPv6 address. The two crates read
+    /// other spellings differently, since the core reads `2130706433` and `127.1` as addresses and
+    /// the host list reads them as names. The regressions it rejects: NAT64 left as IPv6, which
+    /// lets the host list compare `64:ff9b::5db8:d822` as spelled, the compatible form read as
+    /// IPv4, and a prefix check on fewer than six segments.
+    #[test]
+    fn the_ipv4_form_unwraps_a_mapped_and_a_nat64_address_and_nothing_else() {
+        for (text, form) in [
+            ("::ffff:93.184.216.34", "93.184.216.34"),
+            ("64:ff9b::5db8:d822", "93.184.216.34"),
+            ("64:ff9b::7f00:1", "127.0.0.1"),
+            ("93.184.216.34", "93.184.216.34"),
+            ("::93.184.216.34", "::93.184.216.34"),
+            ("64:ff9b:1::5db8:d822", "64:ff9b:1::5db8:d822"),
+            ("64:ff9b::1:0:5db8:d822", "64:ff9b::1:0:5db8:d822"),
+            ("2606:4700:4700::1111", "2606:4700:4700::1111"),
+        ] {
+            assert_eq!(ipv4_form(address(text)), address(form), "{text}");
+        }
     }
 }

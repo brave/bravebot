@@ -8822,6 +8822,15 @@ done
 
         let nothing = crate::confine::hosts_for_a_server(None, Some(&[]));
         assert_eq!(allowed(&nothing), Some(Vec::new()));
+
+        // A wildcard names no address (SANDBOX-24), so an address the declaration lists under a
+        // session's wildcard is dropped and a name under it is kept.
+        let wildcard = listing(Some(&["*.216.34"]), &[]);
+        let under = crate::confine::hosts_for_a_server(
+            Some(&wildcard),
+            Some(&words(&["1.2.216.34", "a.216.34"])),
+        );
+        assert_eq!(allowed(&under), Some(words(&["a.216.34"])));
     }
 
     /// SERVERS-10: a server whose declaration lists hosts is held to the proxy though the session
