@@ -8247,6 +8247,7 @@ for line in sys.stdin:
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
 

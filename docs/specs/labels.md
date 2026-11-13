@@ -31,7 +31,7 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 144
+      - crates/core/src/policy.rs: 145
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
