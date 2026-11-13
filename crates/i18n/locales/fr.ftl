@@ -1580,6 +1580,7 @@ mcp-tools-withheld =
         [one] un outil a été retenu par la liste d'autorisation ou d'exclusion du serveur
        *[other] { $count } outils ont été retenus par la liste d'autorisation ou d'exclusion du serveur
     }
+mcp-tools-read-only = en lecture seule, d'après le serveur
 mcp-tools-argument-list-of = { $kind } de { $items }
 mcp-tools-argument-required = requis
 mcp-tools-yes = Oui, les proposer

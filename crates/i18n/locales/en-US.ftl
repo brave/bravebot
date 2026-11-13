@@ -1879,6 +1879,8 @@ mcp-tools-withheld =
         [one] one tool was withheld by the server's allow or deny list
        *[other] { $count } tools were withheld by the server's allow or deny list
     }
+# Under a tool its server marks read-only. The server's word, not something bravebot checked.
+mcp-tools-read-only = read-only, as the server says
 # How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
 # the server's JSON Schema words and stay as it wrote them.
 mcp-tools-argument-list-of = { $kind } of { $items }

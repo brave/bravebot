@@ -555,7 +555,10 @@ words, and the person is shown the element those words led to before anything is
 ([BROWSER-33](#BROWSER-33)); their routing fields are `brave-input:<tool>` and
 `brave-input-trusted:<tool>`. A tool is listed with a name, a description and an input schema
 and nothing of its result, which is untrusted and private whichever tool made it
-([MCP-1](mcp.md#MCP-1)) and which the planner never reads. The
+([MCP-1](mcp.md#MCP-1)) and which the planner never reads. A tool of `platform`, `tabs-read`,
+`history-read`, `bookmarks-read` or `page-read`, the groups whose tools only read, is also listed
+with MCP's `readOnlyHint` annotation set to true, and no other tool is, so a plan may read with it
+([MANIFEST-15](manifest.md#MANIFEST-15)). The
 [design](../design/browser-extension.md#tool-surface) gives the routing field and the arguments of
 each tool and what the question shows for each argument.
 
@@ -606,6 +609,7 @@ read [ROUTE-7](routing.md#ROUTE-7) and can say what the question shows for it.
 `verified-by: bravebot_browser::tool_surface::every_argument_of_every_tool_is_one_a_person_can_judge_in_the_question`
 `verified-by: bravebot_browser::tool_surface::a_schema_names_its_arguments_in_properties_and_each_is_a_word_a_number_a_choice_or_a_list_of_words`
 `verified-by: bravebot_browser::tool_surface::a_tool_is_listed_with_a_name_a_description_and_an_input_schema_and_no_result_shape`
+`verified-by: bravebot_browser::tools::only_the_tools_of_a_group_that_reads_are_listed_read_only`
 `verified-by: bravebot_browser::extension::the_design_document_states_the_routing_field_and_the_arguments_of_every_tool`
 `verified-by: bravebot_browser::extension::the_input_tools_offer_the_lists_of_words_the_extension_accepts`
 `verified-by: bravebot_browser::tools::the_input_tools_are_offered_by_the_server_of_input_alone`

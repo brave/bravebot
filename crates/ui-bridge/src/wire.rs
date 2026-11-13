@@ -969,6 +969,7 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
                 "name": tool.name,
                 "arguments": tool.arguments,
                 "description": tool.description,
+                "read_only": tool.read_only,
             })
         })
         .collect();

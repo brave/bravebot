@@ -33,11 +33,17 @@ pub struct Tool {
 impl Tool {
     /// The tool as `tools/list` describes it.
     pub fn listed(&self) -> Value {
-        json!({
+        let mut listed = json!({
             "name": self.name,
             "description": self.description,
             "inputSchema": (self.schema)(),
-        })
+        });
+        // Said only of a tool whose group holds reads alone, in MCP's own words, so a client can
+        // let a plan read with it. The table decides it, and no byte of a result.
+        if reads_only(self.group) {
+            listed["annotations"] = json!({"readOnlyHint": true});
+        }
+        listed
     }
 
     /// Whether the tool returns a picture, which the server sends on as an MCP `image` part where
@@ -81,6 +87,9 @@ pub struct Group {
     /// does and the declaration bounds a call above that wait. It is set only for a group that is
     /// also asked about every call.
     pub asks_in_browser: bool,
+    /// Whether every tool of the group reads and changes nothing in the browser, which its tools'
+    /// listing says as MCP's `readOnlyHint`.
+    pub reads_only: bool,
 }
 
 impl Group {
@@ -89,6 +98,14 @@ impl Group {
             id,
             ask_every_call: false,
             asks_in_browser: false,
+            reads_only: false,
+        }
+    }
+
+    const fn reads(id: &'static str) -> Self {
+        Self {
+            reads_only: true,
+            ..Self::new(id)
         }
     }
 
@@ -97,6 +114,7 @@ impl Group {
             id,
             ask_every_call: true,
             asks_in_browser: false,
+            reads_only: false,
         }
     }
 
@@ -105,6 +123,7 @@ impl Group {
             id,
             ask_every_call: true,
             asks_in_browser: true,
+            reads_only: false,
         }
     }
 }
@@ -112,11 +131,11 @@ impl Group {
 /// The groups a server can be started for, in the order the extension lists them. A tool is in
 /// exactly one. A group none of the tools is in has no tool yet and offers an empty list.
 pub const GROUPS: &[Group] = &[
-    Group::new("platform"),
-    Group::new("tabs-read"),
-    Group::new("history-read"),
-    Group::new("bookmarks-read"),
-    Group::new("page-read"),
+    Group::reads("platform"),
+    Group::reads("tabs-read"),
+    Group::reads("history-read"),
+    Group::reads("bookmarks-read"),
+    Group::reads("page-read"),
     Group::new("tabs-manage"),
     Group::new("bookmarks-write"),
     Group::new("navigate"),
@@ -1692,6 +1711,13 @@ pub fn asks_every_call(id: &str) -> bool {
         .any(|group| group.id == id && group.ask_every_call)
 }
 
+/// Whether every tool of the group of this id only reads. False for an id that is not a group.
+pub fn reads_only(id: &str) -> bool {
+    GROUPS
+        .iter()
+        .any(|group| group.id == id && group.reads_only)
+}
+
 /// The tools a server started for no group offers: these seven. A person who accepted that list
 /// accepted those tools, so a tool outside it is offered by the server of its group alone.
 const UNGROUPED: &[&str] = &[
@@ -2677,6 +2703,39 @@ mod tests {
                 .filter(|tool| !PICTURES.contains(&tool.name))
                 .all(|tool| !tool.returns_a_picture())
         );
+    }
+
+    /// The tools of the five groups that only read are listed as read-only, and no tool that can
+    /// change something in the browser is: a client lets a plan read with a tool so marked.
+    #[test]
+    fn only_the_tools_of_a_group_that_reads_are_listed_read_only() {
+        let reads = [
+            "platform",
+            "tabs-read",
+            "history-read",
+            "bookmarks-read",
+            "page-read",
+        ];
+        for tool in TOOLS {
+            let marked = tool.listed()["annotations"]["readOnlyHint"] == json!(true);
+            assert_eq!(marked, reads.contains(&tool.group), "{}", tool.name);
+        }
+        for name in ["list_recent_bookmarks", "search_bookmarks", "list_tabs"] {
+            assert!(TOOLS.iter().any(|tool| tool.name == name
+                && tool.listed()["annotations"]["readOnlyHint"] == json!(true)));
+        }
+        for name in [
+            "create_bookmark",
+            "close_tab",
+            "keep_awake",
+            "list_requests",
+        ] {
+            assert!(
+                TOOLS
+                    .iter()
+                    .any(|tool| tool.name == name && tool.listed().get("annotations").is_none())
+            );
+        }
     }
 
     /// What a person reads when they accept the server of `screen`: that the picker is the
