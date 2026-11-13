@@ -2669,18 +2669,9 @@ impl Container {
     }
 }
 
-/// What the planner is told about the programs `run` starts, for a turn that asks for them to be
-/// confined, or `None` for one that does not.
-///
-/// A turn that does not confine returns `None`, so a planner is never told of a boundary its
-/// programs do not have. Where the platform has no base to confine on, it is told the opposite.
-///
-/// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
-/// state. [`stated_in_the_description`] adds the one sentence those two cases do carry.
-///
-/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
-/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
-/// `loopback`, and says which routes the person has instead (SANDBOX-19).
+/// [`stated_to_the_planner_for`] for a turn whose list holds `request_path` and where somebody can
+/// be asked.
+#[cfg(test)]
 pub fn stated_to_the_planner(
     confine_runs: bool,
     mode: SandboxMode,
@@ -2695,10 +2686,23 @@ pub fn stated_to_the_planner(
     )
 }
 
-/// [`stated_to_the_planner`] for a turn whose list holds `request_path` (`request_path_listed`) or
-/// does not. Where it does not, no sentence names the tool and each says what the person can do
-/// instead, or nothing (TOOL-6). `askable` says whether anybody can be asked in this run (CLI-1),
-/// and where nobody can, no sentence names a route only a person takes (SANDBOX-19).
+/// What the planner is told about the programs `run` starts, for a turn that asks for them to be
+/// confined, or `None` for one that does not.
+///
+/// A turn that does not confine returns `None`, so a planner is never told of a boundary its
+/// programs do not have. Where the platform has no base to confine on, it is told the opposite.
+///
+/// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
+/// state. [`stated_in_the_description_for`] adds the one sentence those two cases do carry.
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
+/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
+/// `loopback`, and says which routes the person has instead (SANDBOX-19).
+///
+/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, no sentence
+/// names the tool and each says what the person can do instead, or nothing (TOOL-6). `askable` says
+/// whether anybody can be asked in this run (CLI-1), and where nobody can, no sentence names a
+/// route only a person takes (SANDBOX-19).
 pub fn stated_to_the_planner_for(
     confine_runs: bool,
     mode: SandboxMode,
