@@ -440,6 +440,269 @@ fn a_rows_dependency_list_is_what_the_manifest_asks_for() {
     }
 }
 
+/// What a member declares, split the way cargo compiles it: the edges its own targets link, the
+/// ones only its tests, examples and benchmarks link, and the ones only its build script links.
+///
+/// Each part is the manifest's lines under the tables of that kind, so [`dependencies`] reads it
+/// with every spelling it already understands. A platform's table counts as the kind it names.
+fn dependencies_by_kind(manifest: &str) -> [BTreeSet<String>; 3] {
+    let mut parts = [String::new(), String::new(), String::new()];
+    let mut kind = 0;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            let path = trimmed.trim_matches(|c| c == '[' || c == ']');
+            let names: Vec<&str> = path
+                .split('.')
+                .map(|part| part.trim().trim_matches(|c| c == '"' || c == '\''))
+                .collect();
+            kind = if names.contains(&"dev-dependencies") {
+                1
+            } else if names.contains(&"build-dependencies") {
+                2
+            } else {
+                0
+            };
+        }
+        parts[kind].push_str(line);
+        parts[kind].push('\n');
+    }
+    parts.map(|part| workspace_dependencies(&part))
+}
+
+/// Source text with its comments taken out: what follows `//` to the end of its line, and each
+/// `/* ... */` block, nested ones included, over as many lines as it spans. A block leaves its line
+/// breaks and one space, so the code either side of it stays on its own lines and separate words.
+/// String, raw string and character literals are kept whole and read for no comment, so a `/*` in
+/// a glob such as `"src/*.rs"` does not open a block that would hide the code after it.
+///
+/// `shipped::code_of` is not reused here because it also removes the items marked `#[cfg(test)]`,
+/// which would hide a dev-dependency's use in a test module under `src`.
+fn without_comments(source: &str) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
+    let mut code = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let word_before = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+        if c == '/' && at(i + 1) == Some('/') {
+            while at(i).is_some_and(|n| n != '\n') {
+                i += 1;
+            }
+        } else if c == '/' && at(i + 1) == Some('*') {
+            let mut depth = 0usize;
+            while i < chars.len() {
+                if chars[i] == '/' && at(i + 1) == Some('*') {
+                    depth += 1;
+                    i += 2;
+                } else if chars[i] == '*' && at(i + 1) == Some('/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    if chars[i] == '\n' {
+                        code.push('\n');
+                    }
+                    i += 1;
+                }
+            }
+            code.push(' ');
+        } else if c == 'r' && !word_before && matches!(at(i + 1), Some('"' | '#')) {
+            let mut hashes = 0;
+            while at(i + 1 + hashes) == Some('#') {
+                hashes += 1;
+            }
+            if at(i + 1 + hashes) != Some('"') {
+                code.push(c);
+                i += 1;
+                continue;
+            }
+            let start = i;
+            i += 2 + hashes;
+            while i < chars.len()
+                && !(chars[i] == '"' && (1..=hashes).all(|h| at(i + h) == Some('#')))
+            {
+                i += 1;
+            }
+            i = (i + 1 + hashes).min(chars.len());
+            code.extend(&chars[start..i]);
+        } else if c == '"' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && chars[i] != '"' {
+                i += if chars[i] == '\\' { 2 } else { 1 };
+            }
+            i = (i + 1).min(chars.len());
+            code.extend(&chars[start..i]);
+        } else if c == '\'' && at(i + 1) == Some('\\') {
+            let start = i;
+            i += 2;
+            while i < chars.len() && chars[i] != '\'' {
+                i += 1;
+            }
+            i = (i + 1).min(chars.len());
+            code.extend(&chars[start..i]);
+        } else if c == '\'' && at(i + 2) == Some('\'') {
+            code.extend(&chars[i..i + 3]);
+            i += 3;
+        } else {
+            code.push(c);
+            i += 1;
+        }
+    }
+    code
+}
+
+/// Whether `code` names the crate `package` as a Rust path does, `bravebot_core` for
+/// `bravebot-core`, as a whole word, so `bravebot_ui_files` is not a use of a crate called
+/// `bravebot-ui`.
+fn names_crate(code: &str, package: &str) -> bool {
+    let ident = package.replace('-', "_");
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    code.match_indices(&ident).any(|(at, _)| {
+        let before = code[..at].chars().next_back();
+        let after = code[at + ident.len()..].chars().next();
+        !before.is_some_and(word) && !after.is_some_and(word)
+    })
+}
+
+/// The workspace edges of a member that none of the code able to use them names, each with the
+/// kind of table it is declared in.
+///
+/// `library` is the source its `[dependencies]` reach, `tests` the source its `[dev-dependencies]`
+/// reach in addition, and `build` its build script, each read without its comments. A dependency
+/// renamed with `package` is named in code by its new name, so it is reported here: none is renamed
+/// today, and a failure is the safe side of that.
+fn unnamed_dependencies(manifest: &str, library: &str, tests: &str, build: &str) -> Vec<String> {
+    let [normal, dev, build_only] = dependencies_by_kind(manifest);
+    let (library, tests, build) = (
+        &without_comments(library),
+        &without_comments(tests),
+        &without_comments(build),
+    );
+    let mut unnamed = Vec::new();
+    for dependency in &normal {
+        if !names_crate(library, dependency) {
+            unnamed.push(format!("{dependency} in [dependencies]"));
+        }
+    }
+    for dependency in &dev {
+        if !names_crate(library, dependency) && !names_crate(tests, dependency) {
+            unnamed.push(format!("{dependency} in [dev-dependencies]"));
+        }
+    }
+    for dependency in &build_only {
+        if !names_crate(build, dependency) {
+            unnamed.push(format!("{dependency} in [build-dependencies]"));
+        }
+    }
+    unnamed
+}
+
+/// The Rust files under the named directories of a crate, joined.
+fn code_under(krate: &std::path::Path, directories: &[&str]) -> String {
+    let mut code = String::new();
+    for directory in directories {
+        let path = krate.join(directory);
+        let files = if path.is_dir() {
+            rust_files(&path)
+        } else if path.is_file() {
+            vec![path]
+        } else {
+            continue;
+        };
+        for file in files {
+            code.push_str(&std::fs::read_to_string(&file).expect("a source file"));
+            code.push('\n');
+        }
+    }
+    code
+}
+
+/// LAYER-1's dependency column is held to the manifests by the test above, so an edge the code
+/// stopped using stays granted in the table for as long as it stays in the manifest, and nothing
+/// about a build says so: the crate links it and compiles. That edge is reach the spec grants and
+/// no code needs, which a later change can start using without the table changing. This reads each
+/// member's code, comments left out, for the crate name of every workspace dependency it declares.
+#[test]
+fn every_workspace_dependency_a_crate_declares_is_named_by_its_code() {
+    let (_, manifests) = table_and_manifests();
+    let workspace = workspace();
+    let mut checked = 0;
+    let mut found = Vec::new();
+    for (member, manifest) in &manifests {
+        let krate = workspace.join(member);
+        let library = code_under(&krate, &["src"]);
+        let tests = code_under(&krate, &["tests", "test-support", "examples", "benches"]);
+        let build = code_under(&krate, &["build.rs"]);
+        let directory = member.rsplit('/').next().expect("a member path");
+        for unnamed in unnamed_dependencies(manifest, &library, &tests, &build) {
+            found.push(format!("{PREFIX}{directory} declares {unnamed}"));
+        }
+        checked += workspace_dependencies(manifest).len();
+    }
+    assert!(
+        found.is_empty(),
+        "{found:?}, and no code that could use them names the crate. Remove each edge from the \
+         manifest and from the crate's row in LAYER-1, or use it"
+    );
+    assert!(
+        checked > 20,
+        "{checked} workspace edges were read out of the manifests, so this test would pass by \
+         checking almost nothing"
+    );
+}
+
+/// The scan above has to tell a use from a mention: a dependency named only in a comment, a line
+/// comment or a block comment over several lines, or as part of a longer crate name is unused, a
+/// dev-dependency named in a test file is used, and a dependency of the library named only in a test
+/// file is not a use of the library's edge.
+#[test]
+fn the_dependency_scan_skips_comments_and_reads_each_table_against_its_own_code() {
+    let manifest = "\
+[package]
+name = \"bravebot-x\"
+
+[dependencies]
+bravebot-core = { path = \"../core\" }
+bravebot-ui = { path = \"../ui\" }
+
+[target.'cfg(unix)'.dependencies]
+bravebot-sandbox = { path = \"../sandbox\" }
+
+[dev-dependencies]
+bravebot-session = { path = \"../session\" }
+
+[build-dependencies]
+bravebot-stamp = { path = \"../stamp\" }
+";
+    let library = "use bravebot_core::Label;\n// bravebot_ui draws nothing here\nuse bravebot_ui_files::open; // bravebot_ui\n/* bravebot_ui\n   is not used */ fn f() { bravebot_sandbox::spawn(); }\n/** bravebot_ui */";
+    let library_after_a_glob = "const GLOB: &str = \"src/*.rs\";\nconst SLASH: char = '/';\nfn g() { bravebot_core::f(); bravebot_sandbox::g(); bravebot_ui::h(); }";
+    let tests = "use bravebot_session::Record;";
+    let build = "fn main() { bravebot_stamp::write(); }";
+    assert_eq!(
+        unnamed_dependencies(manifest, library, tests, build),
+        vec!["bravebot-ui in [dependencies]".to_string()]
+    );
+    assert_eq!(
+        unnamed_dependencies(manifest, "", "use bravebot_core::Label;", ""),
+        vec![
+            "bravebot-core in [dependencies]".to_string(),
+            "bravebot-sandbox in [dependencies]".to_string(),
+            "bravebot-ui in [dependencies]".to_string(),
+            "bravebot-session in [dev-dependencies]".to_string(),
+            "bravebot-stamp in [build-dependencies]".to_string(),
+        ]
+    );
+    assert_eq!(
+        unnamed_dependencies(manifest, library_after_a_glob, tests, build),
+        Vec::<String>::new()
+    );
+}
+
 /// A surface that shows released content to a person is the one place quarantined bytes are put in
 /// front of somebody on purpose, and the rule that makes it safe is that the surface marks them:
 /// the margin is drawn by the renderer and the control characters are replaced, so the content

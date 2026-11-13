@@ -55,6 +55,11 @@ source file under `crates/` as text, so a missing reason fails `make check` on a
 the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
 the same rule.
 
+`crates/cli/tests/layering.rs` compares each member's manifest with its row in the
+[LAYER-1](../specs/layering.md#LAYER-1) table, and fails a member that declares a `bravebot-*`
+dependency its code never names, so an edge a change stops using is removed with it. Third-party
+dependencies are not checked.
+
 Clippy is run for one target per operating system the project ships for: the Linux job, the macOS job
 and `cargo clippy --target x86_64-pc-windows-gnu`. Those cover the other shipped architectures
 (`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-pc-windows-gnullvm`) as long as no
