@@ -128,7 +128,9 @@ enum ReadOutputIs {
     /// behind its reference with nobody asked.
     ByACheck,
     /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
-    /// the output and decides.
+    /// the output and decides. A turn not offered `read_output` is told this whatever the mode, so
+    /// what its results say of vouching is decided by whether the mode asks a person about runs,
+    /// and where it does not, they say the output cannot be shown in this turn instead (RUN-14).
     Asked,
 }
 
@@ -183,6 +185,11 @@ impl ReadOutputIs {
 /// is left out where a record already stops the asking for that exact line (RUN-14).
 const STOP_BEING_ASKED: &str = "To stop being asked, a person vouching for every stage of the \
      exact command makes what it prints visible from then on.";
+
+/// What a turn not offered `read_output` is told in place of [`STOP_BEING_ASKED`] where the mode
+/// answers runs: no prompt is drawn and a run the mode approved vouches for nothing, so nothing
+/// will make the output visible in this turn. It names no mode (RUN-14, MODE-3).
+const NOT_SHOWN_THIS_TURN: &str = "What it printed cannot be shown to you in this turn.";
 
 /// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
 fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
@@ -609,6 +616,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             keeping_links: false,
             delegated: false,
             confined_to: None,
+            offered: None,
             servers: None,
             mcp: None,
             jobs: &mut jobs,
@@ -1833,9 +1841,14 @@ const LIVE_LINES: usize = 200;
 /// Nothing here reads what a job printed. The handle and the status are the driver's own structure,
 /// worked out from a name it minted and the exit codes it collected, and the output goes through
 /// the same gate as any other result: a job nobody vouched for hands the planner a reference.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the jobs, the cap, the mode's answer, who answers a read and the list's tools are separate inputs"
+)]
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
     output_cap: usize,
+    runs_asked: bool,
     read_output_is: ReadOutputIs,
     beside: tools::Beside,
     policy: &mut Policy<'_, S>,
@@ -1974,11 +1987,18 @@ fn collect_jobs<S: Sink, R: Reporter>(
                 // decided it (RUN-14). Where somebody is asked, the account says how to stop being
                 // asked, as a run's result does (RUN-14), unless a record already stops the asking
                 // for this exact line: no prompt will return there for a person to answer, and
-                // read_output is then the whole of what is said.
-                let then = match (read_output_is, ended.covered_by_record) {
-                    (ReadOutputIs::Asked, false) => format!(" {STOP_BEING_ASKED}"),
-                    _ => String::new(),
-                };
+                // read_output is then the whole of what is said. A list without `read_output` is
+                // told `Asked` whatever the mode, so there the mode decides: where it answers runs,
+                // no vouch stops an asking that does not happen, and the account says the output
+                // cannot be shown in this turn instead.
+                let then = sentences::vouching(
+                    runs_asked,
+                    read_output_is,
+                    beside,
+                    ended.covered_by_record,
+                )
+                .map(|sentence| format!(" {sentence}"))
+                .unwrap_or_default();
                 // Each tool named is one the turn's list holds (TOOL-6). A list without
                 // `read_output` has nothing to call for a look at it, so the sentence says only
                 // whose answer the quarantine is about.
@@ -2062,12 +2082,13 @@ fn reads_that_run_together(
     calls: &[ToolCall],
     repeats: &crate::repeated_call::Repeats,
     confined_to: Option<&[String]>,
+    offered: Option<&[bravebot_aichat::protocol::Tool]>,
     hooks: &bravebot_config::hooks::Hooks,
 ) -> usize {
     let mut counting = repeats.clone();
     let mut together = 0;
     for call in calls {
-        if !tools::can_read_ahead(call, confined_to)
+        if !tools::can_read_ahead(call, confined_to, offered)
             || hooks
                 .firing(
                     bravebot_config::hooks::Moment::ToolFinished,
@@ -2897,6 +2918,9 @@ where
     }
     if !offered_names(&offered, "run") {
         policy.without_running();
+    }
+    if !offered_names(&offered, "read_file") {
+        policy.without_reading_files();
     }
     if !offers_read_output {
         policy.without_reading();
@@ -3955,6 +3979,7 @@ where
                     &completion.calls[index..],
                     &state.repeats,
                     addressed.as_ref().map(|addressed| addressed.tools()),
+                    Some(&state.offered),
                     hooks,
                 );
                 examined = index + reads.max(1);
@@ -4216,12 +4241,16 @@ where
                 // and the planner is not being given the body: it gets the references, and a
                 // capped sample of a tree read as the whole of it is how a planner concludes a
                 // file it cannot find does not exist.
-                let capped = if output.incomplete {
-                    " The listing stopped at that many entries and is incomplete: list a \
-             subdirectory to see the rest."
-                } else {
-                    ""
-                };
+                // The directories the per-directory cap cut are the last references, so each is
+                // paired with its count by position and never by a name.
+                let cut: Vec<(String, usize)> = ids
+                    [ids.len().saturating_sub(entries.left_out.len())..]
+                    .iter()
+                    .map(ToString::to_string)
+                    .zip(entries.left_out.iter().copied())
+                    .collect();
+                let capped =
+                    sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
                 // The pattern's own sentence, which the tool wrote from the pattern the planner
@@ -4813,6 +4842,7 @@ where
                             sentences::run_advice(
                                 output.printed_by.is_some(),
                                 output.covered_by_record,
+                                !task.permission_mode.get().answers_a_run_unasked(),
                                 read_output_is(),
                                 beside,
                                 &output.tool,
@@ -6411,6 +6441,7 @@ mod tests {
             collect_jobs(
                 &mut jobs,
                 tools::OUTPUT_CAP,
+                true,
                 ReadOutputIs::Asked,
                 tools::Beside::every(),
                 &mut policy,
@@ -9778,6 +9809,51 @@ mod tests {
             let _ = std::fs::remove_dir_all(scratch);
         }
 
+        /// The regression it rejects: a call refused for an argument its schema does not declare
+        /// being read ahead, so the disk is read for a call that is then refused (TOOL-3). The
+        /// first listing names `path`, which `list_files` does not declare, and is refused; the
+        /// two after it still run together. The hook records every directory a walk reads.
+        #[test]
+        fn a_call_with_an_undeclared_argument_is_not_read_ahead() {
+            let (scratch, workspace) = workspace("together-undeclared");
+            let walked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let seen = walked.clone();
+            workspace.hold_reads(move |directory| {
+                seen.lock().unwrap().push(directory.to_string());
+            });
+
+            let round = take(
+                &workspace,
+                &[
+                    ("list_files", r#"{"directory":"a","path":"a"}"#),
+                    ("search", &search("b")),
+                    ("search", &search("c")),
+                ],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().expect("the turn ended");
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 3, "{told:?}");
+            assert!(
+                told[0].contains("list_files takes no argument 'path'"),
+                "{}",
+                told[0]
+            );
+            let walked = walked.lock().unwrap().clone();
+            assert!(
+                !walked.iter().any(|directory| directory == "a"),
+                "the refused call was read ahead: {walked:?}"
+            );
+            assert!(
+                walked.iter().any(|directory| directory == "b")
+                    && walked.iter().any(|directory| directory == "c"),
+                "the reads after it did not run: {walked:?}"
+            );
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
         /// One call per name, each with arguments of its own so that no two are a repeat.
         fn calls(names: &[&str]) -> Vec<ToolCall> {
             names
@@ -9804,7 +9880,7 @@ mod tests {
             let none = bravebot_config::hooks::Hooks::default();
             let repeats = crate::repeated_call::Repeats::default();
             let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
-                reads_that_run_together(&calls(names), &repeats, None, hooks)
+                reads_that_run_together(&calls(names), &repeats, None, None, hooks)
             };
 
             assert_eq!(run(&["search", "list_files", "search"], &none), 3);
@@ -9835,12 +9911,15 @@ mod tests {
                     })
                     .collect()
             };
-            assert_eq!(reads_that_run_together(&same(4), &repeats, None, &none), 2);
+            assert_eq!(
+                reads_that_run_together(&same(4), &repeats, None, None, &none),
+                2
+            );
             let mut after_two = crate::repeated_call::Repeats::default();
             after_two.is_held(&same(1)[0]);
             after_two.is_held(&same(1)[0]);
             assert_eq!(
-                reads_that_run_together(&same(3), &after_two, None, &none),
+                reads_that_run_together(&same(3), &after_two, None, None, &none),
                 0
             );
         }

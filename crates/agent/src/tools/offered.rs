@@ -975,14 +975,17 @@ fn table(
                     },
                     "depth": {
                         "type": "integer",
-                        "description": "Optional number of directory levels to descend. 1 \
-                                        lists this directory and no deeper, naming each \
-                                        subdirectory it stopped at so you can see where the \
-                                        tree continues: with a trailing / where you are shown \
-                                        the names, and as a reference that says it is a \
-                                        directory where they are quarantined. Omit it to walk \
-                                        the whole tree, which in a large project is thousands \
-                                        of paths.",
+                        "description": format!(
+                            "Optional number of directory levels to descend. 1 lists this \
+                             directory and no deeper, naming each subdirectory it stopped at so \
+                             you can see where the tree continues: with a trailing / where you \
+                             are shown the names, and as a reference that says it is a \
+                             directory where they are quarantined. A directory with more than \
+                             {per} files gives {per} of them and says how many it left out; list \
+                             it with no depth to see the rest. Omit it to walk the whole tree, \
+                             which in a large project is thousands of paths.",
+                            per = crate::workspace::MAX_FILES_PER_DIRECTORY
+                        ),
                         "minimum": 1
                     }
                 },

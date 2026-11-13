@@ -3173,6 +3173,114 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     );
 }
 
+/// SCHED-4, SCHED-6, TOOL-3. A turn arranging a look is offered no `stop`, and one it sends is not
+/// read: the call with a wait is kept as an ordinary wait, and the call without one is refused for
+/// the missing wait, as any other call is. The turn's offered list is set, so the check of
+/// undeclared arguments is in force.
+///
+/// The regression it rejects: the generic refusal of an undeclared argument answering `stop` first,
+/// so that a call SCHED-4 keeps is refused and the turn arranges no look.
+#[test]
+fn stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn() {
+    let scratch = Scratch::new(&format!("schedule-next-stop-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("schedule_next", r#"{"noop": true, "stop": true}"#),
+        tool_request(
+            "schedule_next",
+            r#"{"delay_seconds": 900, "noop": true, "stop": true}"#,
+        ),
+        reply_with("looking again in fifteen minutes"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when a.txt changes").looking_again(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("schedule_next"),
+        "the turn was not offered the tool, so nothing here was tested: {first}"
+    );
+    let refused = tool_results(&received.recv().expect("second request"));
+    assert!(
+        refused.contains("'delay_seconds' is required"),
+        "a call without a wait was not refused for the wait: {refused}"
+    );
+    assert!(
+        !refused.contains("takes no argument"),
+        "stop was refused as undeclared: {refused}"
+    );
+    let kept = tool_results(&received.recv().expect("third request"));
+    assert!(
+        !kept.contains("takes no argument"),
+        "stop was refused as undeclared: {kept}"
+    );
+    let wakeup = outcome.wakeup.expect("the wait was kept");
+    assert_eq!(wakeup.after, std::time::Duration::from_secs(900));
+    assert!(!wakeup.stop, "stop was read in a turn arranging a look");
+}
+
+/// SPAWN-5, TOOL-3. A processor call that sends `read` in place of `reads` is told that the
+/// argument is `reads`, in a whole turn whose offered list is set, so the check of undeclared
+/// arguments is in force.
+///
+/// The regression it rejects: the generic refusal of an undeclared argument answering `read` first,
+/// which names no `reads` and loses the sentence SPAWN-5 pins.
+#[test]
+fn a_processor_call_sending_read_is_told_the_argument_is_reads_in_a_whole_turn() {
+    let scratch = Scratch::new(&format!("processor-read-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "spawn_processor",
+            r#"{"instruction":"redo it","read":["ref:0"]}"#,
+        ),
+        reply_with("done"),
+    ]);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("redo it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("spawn_processor"),
+        "the turn was not offered a processor, so nothing here was tested: {first}"
+    );
+    let told = tool_results(&received.recv().expect("second request"));
+    assert!(
+        told.contains("the argument is 'reads', not 'read'"),
+        "the call was not told the argument is reads: {told}"
+    );
+    assert!(
+        !told.contains("takes no argument"),
+        "read was refused as undeclared: {told}"
+    );
+}
+
 /// SETLINK-1 through a whole turn: the lines the person typed reach `set_link` outside the auto mode,
 /// and the address it accepted leaves the turn in `links`.
 ///
@@ -3623,6 +3731,279 @@ fn a_shell_the_planner_names_is_not_dispatched() {
         "a shell call was answered as something other than an unknown name: {second}"
     );
     assert!(!marker.exists(), "the line the planner proposed ran");
+}
+
+/// A `run` call naming an argument its schema does not declare is refused before anything runs,
+/// with the name it gave, the names it takes, and how a variable is set instead.
+///
+/// The regression it rejects: a driver that reads only the names it knows and drops the rest, so
+/// the line runs without the variable the planner meant to set. The marker is what says nothing
+/// ran, under a confirmer that would have approved the line. The `$VAR` form is absent because
+/// only bypass mode accepts it (CMDLINE-17).
+#[test]
+fn an_undeclared_run_argument_is_refused_and_names_the_prefix() {
+    let scratch = Scratch::new(&format!("undeclared-run-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            &format!(
+                r#"{{"command": "touch {}", "env": {{"CARGO_TARGET_DIR": "/tmp/x"}}}}"#,
+                marker.display()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("run takes no argument 'env'"),
+        "the refusal did not name the argument: {second}"
+    );
+    assert!(
+        second.contains("command, ") && second.contains("stdin_ref"),
+        "the refusal did not list the arguments run takes: {second}"
+    );
+    assert!(
+        second.contains("NAME=value"),
+        "the refusal did not say how a variable is set: {second}"
+    );
+    assert!(
+        !second.contains("NAME=$VAR"),
+        "a session outside bypass mode was offered the $VAR form: {second}"
+    );
+    assert!(
+        !marker.exists(),
+        "the line ran despite the undeclared argument"
+    );
+}
+
+/// In bypass mode the same refusal also gives the `NAME=$VAR` form, which only that mode compiles
+/// (CMDLINE-17).
+///
+/// The regression it rejects: a hint that never mentions the form, or one that mentions it in
+/// every mode; the test above holds the other half.
+#[test]
+fn an_undeclared_run_argument_in_bypass_mode_names_the_variable_form() {
+    let scratch = Scratch::new(&format!("undeclared-run-bypass-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            &format!(
+                r#"{{"command": "touch {}", "env": {{"A": "b"}}}}"#,
+                marker.display()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut unattended = bravebot_agent::Unattended;
+    let mut confirmer = bravebot_agent::Confining::new(
+        &mut unattended,
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+    );
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("run takes no argument 'env'") && second.contains("NAME=value"),
+        "the refusal was not given: {second}"
+    );
+    assert!(
+        second.contains("NAME=$VAR"),
+        "a bypass session was not told the $VAR form: {second}"
+    );
+    assert!(
+        !marker.exists(),
+        "the line ran despite the undeclared argument"
+    );
+}
+
+/// Every built-in tool refuses an argument its schema does not declare, a write included, and the
+/// write does not happen.
+///
+/// The regression it rejects: a check made only for `run`, or one that lets the tool act and
+/// complains afterwards. `null` is read as absent, as the driver reads it for a declared argument,
+/// so a call padded with one is not refused for it.
+#[test]
+fn an_undeclared_argument_is_refused_by_any_built_in_tool() {
+    let scratch = Scratch::new(&format!("undeclared-write-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"out.txt","contents":"body","mode":"append","encoding":null}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write out.txt"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("write_file takes no argument 'mode'"),
+        "the refusal did not name the argument: {second}"
+    );
+    assert!(
+        !second.contains("'encoding'"),
+        "an argument given as null was refused: {second}"
+    );
+    assert!(
+        second.contains("contents_ref") && !second.contains("NAME=value"),
+        "the refusal did not list write_file's own arguments: {second}"
+    );
+    assert!(
+        confirmer.seen.is_empty(),
+        "the person was asked about the write"
+    );
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the write happened despite the undeclared argument"
+    );
+}
+
+/// `why`, which no built-in schema writes for itself, is not refused as undeclared: every offered
+/// schema declares it (TOOL-5), and the call runs.
+///
+/// The regression it rejects: a check made against the schemas before `why` is added to them, which
+/// would refuse every call a planner makes as TOOL-5 asks it to.
+#[test]
+fn a_call_giving_why_is_not_refused_as_undeclared() {
+    let scratch = Scratch::new(&format!("undeclared-why-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"out.txt","contents":"body","why":"to keep the result"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write out.txt"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !second.contains("takes no argument"),
+        "a call giving why was refused: {second}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt"))
+            .ok()
+            .as_deref(),
+        Some("body"),
+        "the write did not happen: {second}"
+    );
+}
+
+/// A declared `run` argument of the wrong shape is still refused with its own sentence rather than
+/// the undeclared one.
+///
+/// The regression it rejects: a check that refuses a declared argument it cannot read, or a `run`
+/// schema that lost `stdin_ref`, either of which replaces the sentence that says what the value
+/// has to be.
+#[test]
+fn a_stdin_ref_that_is_not_a_string_keeps_its_own_refusal() {
+    let scratch = Scratch::new(&format!("undeclared-stdin-{}", std::process::id()));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let marker = scratch.path.join("the-line-ran");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            &format!(
+                r#"{{"command": "touch {}", "stdin_ref": 5}}"#,
+                marker.display()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = tool_results(&received.recv().expect("second request"));
+    assert!(
+        second.contains("'stdin_ref' must be a string naming a reference"),
+        "the shape refusal was not given: {second}"
+    );
+    assert!(
+        !second.contains("takes no argument"),
+        "a declared argument was refused as undeclared: {second}"
+    );
+    assert!(!marker.exists(), "the line ran");
 }
 
 fn tool_request_2(tool: &str, arguments: &str) -> String {
@@ -11670,6 +12051,125 @@ fn a_quarantined_listing_tells_the_model_it_was_capped() {
     );
 }
 
+/// LIST-5 for a listing the planner may not read: a directory the per-directory cap cut is handed
+/// over as a reference, and how many of its files were left out travels beside the references,
+/// paired with that reference, since a sentence in the body reaches nobody. The regressions it
+/// rejects: the count dropped, so the planner reads 200 files as the whole directory; the
+/// whole-walk wording for a listing that stopped at no such cap; and the directory's name in the
+/// sentence.
+#[test]
+fn a_quarantined_listing_says_how_many_files_each_cut_directory_left_out() {
+    let scratch = Scratch::new("list-cut-quarantined");
+    std::fs::write(scratch.path.join("file-tango.txt"), "x").unwrap();
+    std::fs::create_dir(scratch.path.join("dir-crowded")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("dir-crowded/f{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for name in ["file-tango", "dir-crowded", "f000.txt"] {
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        second.contains("Its 202 entries are quarantined"),
+        "the cut directory was not counted among the entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files from any one directory")
+            && second.contains("Not listed: 1 file of [ref:202]."),
+        "the count of files left out did not reach the planner beside the reference: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a per-directory cut was worded as the cap over the whole walk: {second}"
+    );
+    assert!(
+        second.contains("the files left out are in it")
+            && second.contains("list it by its name with no depth"),
+        "the sentence did not point at the cut directory as the one to list: {second}"
+    );
+}
+
+/// LIST-4 and LIST-5 for a listing the planner may not read, cut per directory and holding exactly
+/// the whole-walk cap's number of entries without passing it. The walk left nothing out at that
+/// cap, so only the per-directory cut is said. The regression it rejects: deciding the whole-walk
+/// cap from `count >= MAX_ENTRIES` when the walk itself reports it by `>`.
+#[test]
+fn a_quarantined_listing_of_exactly_the_cap_cut_per_directory_says_only_the_cut() {
+    let scratch = Scratch::new("list-cut-exactly-cap-quarantined");
+    // Nine directories of 201 files give 1800 files and nine cut directories; 191 files beside
+    // them make 2000 entries, which is the cap and not past it.
+    for d in 0..9 {
+        let dir = scratch.path.join(format!("d{d}"));
+        std::fs::create_dir(&dir).unwrap();
+        for n in 0..201 {
+            std::fs::write(dir.join(format!("f{n:03}.txt")), "x").unwrap();
+        }
+    }
+    for n in 0..191 {
+        std::fs::write(scratch.path.join(format!("r{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("Its 2000 entries are quarantined"),
+        "the fixture does not hold exactly the cap's number of entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files from any one directory"),
+        "the per-directory cut was not said: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a listing that did not pass the whole-walk cap was told it stopped at it: {second}"
+    );
+}
+
 /// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
 /// as a number and with no name. The regression it rejects: a count kept only in the body, which
 /// reaches nobody when the entries are handed over as references, so a directory made of links
@@ -12810,14 +13310,184 @@ fn editing_an_untrusted_file_is_refused() {
     );
     assert!(
         second.contains(
-            "Write the whole file with write_file, edit it through run, or ask the person to \
-             vouch for the path"
+            "Write the whole file with write_file, edit it through run, or read it with \
+             read_file, which asks the person to vouch for the path, and edit it with edit_file \
+             once they have"
         ),
         "the model was not told what is open: {second}"
     );
     assert!(
         !second.contains("Use a reference"),
         "the model was sent to a reference that edit_file cannot take: {second}"
+    );
+}
+
+/// EDIT-2, TRUST-8, MODE-4. Under bypass a read of an unvouched file is vouched for by the mode,
+/// so the refusal to edit it names that read and does not send the planner to a person nobody
+/// will ask. Without it a bypass session scripted its edits through `run`.
+#[test]
+fn under_bypass_the_refusal_to_edit_an_unread_file_names_the_read_that_vouches_for_it() {
+    let scratch = Scratch::new("edit-unread-bypass");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("edit a.txt").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [_first, second] = requests.as_slice() else {
+        panic!("two requests, for two rounds: {requests:?}");
+    };
+    assert!(
+        second.contains(
+            "or read it with read_file, which in this mode vouches for the path without asking \
+             anybody, and then edit it with edit_file"
+        ),
+        "the model was not sent to the read that vouches for the file: {second}"
+    );
+    assert!(
+        !second.contains("ask the person"),
+        "the model was sent to a person bypass mode does not ask: {second}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "keep\nold\n",
+        "the file was edited"
+    );
+}
+
+/// EDIT-2, TRUST-8, MODE-4. The read the bypass refusal names is the whole route: one `read_file`
+/// of an unvouched file under bypass vouches for it without asking anybody, and the `edit_file`
+/// after it is applied. Without it a bypass session edited through scripts it wrote and ran.
+#[test]
+fn under_bypass_one_read_makes_an_unread_file_editable_without_asking() {
+    let scratch = Scratch::new("edit-after-read-bypass");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("edit a.txt").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert!(
+        offered.lock().unwrap().is_empty(),
+        "a person was asked to vouch under bypass"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "keep\nnew\n",
+        "the edit after the read was not applied"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.contains("closed to edit_file")),
+        "the edit after the read was refused: {requests:?}"
+    );
+}
+
+/// TRUST-8, EDIT-2. A path the person was already asked about this turn is not put to them again
+/// by a read, so the refusal to edit it after they said no does not send the planner to that read.
+#[test]
+fn the_refusal_to_edit_a_file_already_asked_about_does_not_name_the_read() {
+    let scratch = Scratch::new("edit-already-asked");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let mut person = VouchesForFiles::new(false);
+    let offered = person.offered.clone();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("edit a.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert_eq!(
+        offered.lock().unwrap().len(),
+        1,
+        "the read did not put the vouch question once"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    // The vouch check is a request to the same server, so the refusal is in the last request.
+    let Some(third) = requests.last() else {
+        panic!("no requests: {requests:?}");
+    };
+    assert!(
+        third.contains(
+            "and an edit has to compare its text. Write the whole file with write_file, edit it \
+             through run, or ask the person to vouch for the path"
+        ),
+        "the refusal after a declined vouch is not the person's route: {third}"
+    );
+    assert!(
+        !third.contains("read it with read_file"),
+        "the model was sent to a read that asks nothing this turn: {third}"
     );
 }
 
@@ -12882,32 +13552,63 @@ fn editing_a_file_a_program_wrote_is_refused() {
         ),
         "the model was not told why the file is closed to edit_file: {third}"
     );
+    // A read of a file a program wrote puts the vouch question as for an unread one, so the
+    // refusal names that read in the same words.
+    assert!(
+        third.contains(
+            "or read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have"
+        ),
+        "the model was not sent to the read that asks about a file a program wrote: {third}"
+    );
     assert!(
         !third.contains("Use a reference"),
         "the model was sent to a reference that edit_file cannot take: {third}"
     );
 }
 
-/// TOOL-6. The refusal of an untrusted file names `write_file` and `run` only where the turn is
-/// offered them, and says that only the person can open the file where it is offered neither.
+/// TOOL-6. The refusal of an untrusted file names `write_file`, `run` and `read_file` only where
+/// the turn is offered them, and says that only the person can open the file where it is offered
+/// none of the three.
 #[test]
 fn the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered() {
     let cases = [
         (
             "kind: worker\ntools: read_file, edit_file, write_file, run\n",
+            "Write the whole file with write_file, edit it through run, or read it with \
+             read_file, which asks the person to vouch for the path, and edit it with edit_file \
+             once they have",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, write_file\n",
+            "Write the whole file with write_file, or read it with read_file, which asks the \
+             person to vouch for the path, and edit it with edit_file once they have",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, run\n",
+            "Edit it through run, or read it with read_file, which asks the person to vouch for \
+             the path, and edit it with edit_file once they have",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file\n",
+            "Read it with read_file, which asks the person to vouch for the path, and edit it \
+             with edit_file once they have",
+        ),
+        (
+            "kind: worker\ntools: edit_file, write_file, run\n",
             "Write the whole file with write_file, edit it through run, or ask the person to \
              vouch for the path",
         ),
         (
-            "kind: worker\ntools: read_file, edit_file, write_file\n",
+            "kind: worker\ntools: edit_file, write_file\n",
             "Write the whole file with write_file, or ask the person to vouch for the path",
         ),
         (
-            "kind: worker\ntools: read_file, edit_file, run\n",
+            "kind: worker\ntools: edit_file, run\n",
             "Edit it through run, or ask the person to vouch for the path",
         ),
         (
-            "kind: worker\ntools: read_file, edit_file\n",
+            "kind: worker\ntools: edit_file\n",
             "Only the person can open it, by vouching for the path",
         ),
     ];
@@ -18182,6 +18883,71 @@ fn a_watch_with_a_blank_path_reference_arms_and_a_real_reference_is_refused() {
     assert!(
         last.contains("watch_file takes 'path' and no reference"),
         "a real reference was not refused: {last}"
+    );
+}
+
+/// TOOL-3: `download_url` reads `path_ref` though its schema does not declare it, so a real
+/// reference gets the tool's own refusal, which says to name the file, and a blank one is let by
+/// to the destination question.
+///
+/// The destination is declined, so nothing is fetched, and the count at the stand-in host shows it.
+#[test]
+fn a_download_given_a_path_reference_gets_its_own_refusal_and_a_blank_one_none() {
+    let scratch = Scratch::new("download-path-reference");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"body"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin","path_ref":""}}"#),
+        ),
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path_ref":"ref:1"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut confirmer = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        ..Default::default()
+    };
+
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("save the data"),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "the turn made {} rounds", bodies.len());
+    let blank = newest_tool_result(bodies[1].clone());
+    assert!(
+        !blank.contains("path_ref") && !blank.contains("no reference"),
+        "a blank reference was refused: {blank}"
+    );
+    assert!(
+        blank.contains("did not approve"),
+        "the blank reference did not reach the destination question: {blank}"
+    );
+    let real = newest_tool_result(bodies[2].clone());
+    assert!(
+        real.contains("download_url takes 'path' and no reference"),
+        "a real reference did not get the tool's own refusal: {real}"
+    );
+    assert!(
+        !real.contains("takes no argument"),
+        "a real reference was refused as undeclared: {real}"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a declined download was fetched"
     );
 }
 
@@ -31035,6 +31801,150 @@ fn a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers() 
     assert!(
         !told.contains("kept back"),
         "a turn with no read_output was told what read_output returns: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage of the exact command"),
+        "a screened bypass was told a vouch would stop an asking that does not happen: {told}"
+    );
+    assert!(
+        told.contains("What it printed cannot be shown to you in this turn."),
+        "a screened bypass was not told the output cannot be shown in this turn: {told}"
+    );
+}
+
+/// RUN-14, MODE-4 (brave/bravebot#3982): the account of an ended job whose output is quarantined,
+/// in a turn left without `read_output` where permissions are bypassed, is not told that a vouch
+/// would stop the asking, as a run's result is not. The mode draws no prompt and a job it approved
+/// vouches for nothing.
+#[test]
+fn what_an_ended_job_printed_is_not_told_of_vouching_where_permissions_are_bypassed() {
+    let scratch = Scratch::new("background-finish-bypassed");
+    let home = Scratch::new("background-finish-bypassed-home");
+    define(&home, "runner", "kind: worker\ntools: run\n", "RUN-IT");
+    std::fs::write(scratch.path.join("notes.txt"), "SENTINEL-BYPASSED-JOB\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &addressed("start it", &home, "runner")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let first = sent.first().expect("the request that asked to run");
+    assert!(
+        !first.contains(r#""name":"read_output""#),
+        "the definition was offered read_output, so this says nothing: {first}"
+    );
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains("What it printed could not be shown to you"),
+        "the job's output was not quarantined, so this says nothing: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage of the exact command"),
+        "a bypassed turn was told a vouch would stop an asking that does not happen: {told}"
+    );
+    assert!(
+        told.contains("What it printed cannot be shown to you in this turn."),
+        "a bypassed turn was not told the output cannot be shown in this turn: {told}"
+    );
+    assert!(
+        !told.contains("SENTINEL-BYPASSED-JOB"),
+        "what the job printed reached the planner: {told}"
+    );
+}
+
+/// RUN-14, MODE-4 (brave/bravebot#3982): a turn left without `read_output` in a bypass with no
+/// screening is not told that a vouch would stop the asking. The mode draws no prompt and a run it
+/// approved vouches for nothing, so the result says the output cannot be shown in this turn.
+#[test]
+fn a_turn_left_without_read_output_is_not_told_of_vouching_where_permissions_are_bypassed() {
+    let scratch = Scratch::new("run-advice-confined-bypassed");
+    let home = Scratch::new("run-advice-confined-bypassed-home");
+    define(&home, "runner", "kind: worker\ntools: run\n", "RUN-IT");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-BYPASSED\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &addressed("find out", &home, "runner")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let asked_to_run = sent.first().expect("the request that asked to run");
+    assert!(
+        !asked_to_run.contains(r#""name":"read_output""#),
+        "the definition was offered read_output, so this says nothing: {asked_to_run}"
+    );
+    let told = message_from(
+        sent.last().expect("the round after the run"),
+        "Result of run could not be shown to you",
+    );
+    assert!(
+        told.contains("This is about the command rather than about what it printed."),
+        "the result no longer says whose answer the quarantine is about: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage of the exact command"),
+        "a bypassed turn was told a vouch would stop an asking that does not happen: {told}"
+    );
+    assert!(
+        told.contains("What it printed cannot be shown to you in this turn."),
+        "a bypassed turn was not told the output cannot be shown in this turn: {told}"
+    );
+    assert!(
+        !told.contains("SENTINEL-BYPASSED"),
+        "what the run printed reached the planner: {told}"
     );
 }
 
@@ -67455,6 +68365,215 @@ fn a_delegate_runs_under_the_deadlines_of_the_turn_that_spawned_it() {
     );
 }
 
+/// What the planner was told about each `run` of a turn in `workspace`, trusted and with every
+/// run approved, after the calls in `calls`: the body of the request after the last call.
+fn told_after_runs(workspace: &Workspace, calls: Vec<String>) -> String {
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut sequence: Vec<_> = calls
+        .iter()
+        .map(|arguments| tool_request("run", arguments))
+        .collect();
+    sequence.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(sequence);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("run the tool"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+    std::iter::from_fn(|| received.try_recv().ok())
+        .last()
+        .expect("the round after the last call")
+}
+
+/// CMDLINE-12: a program named by a relative path that is not there is refused naming the
+/// directory it was looked for in, and saying when that directory was carried from an earlier
+/// call. The three cases are a carried `sub`, a named `sub`, and the workspace root, with the file
+/// at the root each time, which is where a planner that forgot the carried directory expects it.
+///
+/// The regressions it rejects: a refusal naming no directory (the planner retries at random); one
+/// saying carried for a directory this call named, or never saying it; and one at the root that
+/// prints an empty name instead of saying the workspace root.
+#[test]
+fn a_program_named_by_a_relative_path_that_is_not_found_says_where_it_was_looked_for() {
+    let scratch = Scratch::new("cmdline-12-not-found-relative");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("scripts")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let refused = "`./scripts/tool.sh` at offset 0: is not a program that could be found";
+
+    let carried = told_after_runs(
+        &workspace,
+        vec![
+            r#"{"command":"cargo --version","directory":"sub"}"#.to_string(),
+            r#"{"command":"./scripts/tool.sh"}"#.to_string(),
+        ],
+    );
+    assert!(
+        carried.contains(refused)
+            && carried.contains(
+                "It was looked for in 'sub', carried from the last run that named a directory; \
+                 pass `directory` to change it"
+            ),
+        "the refusal did not say the carried directory it looked in: {carried}"
+    );
+
+    let named = told_after_runs(
+        &workspace,
+        vec![r#"{"command":"./scripts/tool.sh","directory":"sub"}"#.to_string()],
+    );
+    assert!(
+        named.contains(refused) && named.contains("It was looked for in 'sub'"),
+        "the refusal did not say the named directory it looked in: {named}"
+    );
+    assert!(
+        !named.contains("carried from"),
+        "a directory this call named was told as carried: {named}"
+    );
+
+    let root = told_after_runs(
+        &workspace,
+        vec![r#"{"command":"./scripts/missing.sh"}"#.to_string()],
+    );
+    assert!(
+        root.contains("It was looked for at the workspace root"),
+        "the refusal at the root did not say the workspace root: {root}"
+    );
+    assert!(
+        !root.contains("looked for in ''") && !root.contains("carried from"),
+        "the refusal at the root named an empty or carried directory: {root}"
+    );
+}
+
+/// CMDLINE-12: a bare name and an absolute path are not looked for in the working directory, so
+/// their refusal names none. The regression it rejects is the sentence added to every refusal of a
+/// program that could not be found, which would tell the planner the directory mattered.
+#[test]
+fn a_bare_name_or_an_absolute_path_that_is_not_found_names_no_directory() {
+    let scratch = Scratch::new("cmdline-12-not-found-bare");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let absolute = scratch.path.join("sub").join("missing-tool");
+    let told = told_after_runs(
+        &workspace,
+        vec![
+            r#"{"command":"no-such-program-anywhere-3983","directory":"sub"}"#.to_string(),
+            format!(
+                r#"{{"command":"{}"}}"#,
+                absolute.to_str().expect("utf-8 path")
+            ),
+        ],
+    );
+    assert!(
+        told.contains("is not a program that could be found: nothing runnable is at that path"),
+        "the absolute path was not refused: {told}"
+    );
+    assert!(
+        !told.contains("It was looked for"),
+        "a refusal not about a relative path named a directory: {told}"
+    );
+}
+
+/// CMDLINE-12: a program named by a relative path that is not there is refused naming the
+/// carried directory as the planner typed it, not where a link in a tree nobody vouched for led.
+#[cfg(unix)]
+#[test]
+fn a_relative_program_not_found_in_a_carried_directory_is_told_as_typed() {
+    let scratch =
+        a_workspace_nobody_vouched_for_with_a_linked_directory("linked-directory-not-found");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p note.txt","directory":"docs"}"#,
+        ),
+        tool_request("run", r#"{"command":"./scripts/tool.sh"}"#),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_turn_approving_runs_once(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the refusal");
+    assert!(
+        last.contains("It was looked for in 'docs', carried from the last run"),
+        "the planner was not told the carried directory as it typed it: {last}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains(LINKED_TARGET)),
+        "where a link led reached the planner through a refusal: {bodies:?}"
+    );
+}
+
+/// CMDLINE-12: a named directory that is a link to the workspace root is told as the planner typed
+/// it when a program named by a relative path is not found there. The regression it rejects is the
+/// sentence chosen from where the link landed, which lets a link in a tree nobody vouched for
+/// decide what the planner is told (LABEL-3).
+#[cfg(unix)]
+#[test]
+fn a_relative_program_not_found_in_a_link_to_the_root_is_told_as_typed() {
+    let scratch = Scratch::new("cmdline-12-not-found-link-to-root");
+    std::fs::create_dir_all(scratch.path.join("scripts")).unwrap();
+    std::os::unix::fs::symlink(".", scratch.path.join("lnk")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let told = told_after_runs(
+        &workspace,
+        vec![r#"{"command":"./scripts/tool.sh","directory":"lnk"}"#.to_string()],
+    );
+    assert!(
+        told.contains("It was looked for in 'lnk'"),
+        "the refusal did not name the directory as typed: {told}"
+    );
+    assert!(
+        !told.contains("at the workspace root"),
+        "where the link landed chose the sentence: {told}"
+    );
+}
+
+/// CMDLINE-12: a program named by a relative path inside a substitution in an assignment is looked
+/// for in the same directory as the step around it, so its refusal says that directory and that it
+/// was carried. A substitution is accepted only in bypass mode, so the turn runs in it. The
+/// regression it rejects is a substitution's refusal that names no directory, or names the
+/// workspace root while the line would have run in the carried one.
+#[cfg(unix)]
+#[test]
+fn a_relative_program_not_found_inside_a_substitution_says_where_it_was_looked_for() {
+    let scratch = Scratch::new("cmdline-12-not-found-substitution");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("scripts")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"/bin/echo hi","directory":"sub"}"#),
+        tool_request_2(
+            "run",
+            r#"{"command":"BRAVEBOT_TEST_X=\"$(./scripts/tool.sh)\" /bin/echo done"}"#,
+        ),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_bypass_turn(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the refusal");
+    assert!(
+        last.contains("is not a program that could be found: nothing runnable is at that path")
+            && last.contains(
+                "It was looked for in 'sub', carried from the last run that named a directory; \
+                 pass `directory` to change it"
+            ),
+        "the substitution's refusal did not say the carried directory it looked in: {last}"
+    );
+}
+
 /// CMDLINE-12: A call may name a directory to run in, inside the workspace.
 /// Absent one, a line runs where the last one ran, and the first runs at the workspace root.
 #[test]
@@ -84878,9 +85997,15 @@ impl Drop for ArmingWatches {
 }
 
 impl PathPlaces {
+    /// Under `target/test-homes` rather than `target/test-scratch`. Under bypass a stage is given a
+    /// row for each entry of every directory on the way to the home's credential directories
+    /// (SANDBOX-28), and on macOS the rows are in the profile `sandbox-exec` takes as an argument.
+    /// `target/test-scratch` holds an entry for each test that ran before, and with about 8000 of
+    /// them the profile is larger than the arguments a program can be started with, so no stage
+    /// starts.
     fn new(name: &str) -> Self {
         let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
+            .join("../../target/test-homes")
             .join(format!("path-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let home = top.join("home");
@@ -91465,7 +92590,7 @@ fn a_file_a_listing_or_a_search_names_does_not_load_a_rule() {
     let scratch = project_with_rules("rule-listing");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("list_files", r#"{"path":"src"}"#),
+        tool_request("list_files", r#"{"directory":"src"}"#),
         tool_request("search", r#"{"pattern":"nothing"}"#),
         reply_with("done"),
     ]);

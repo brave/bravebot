@@ -66,6 +66,7 @@ goes with it is content released only for display ([SCHED-5](#SCHED-5)).
 `verified-by: bravebot_agent::tools::a_schedule_missing_what_it_needs_is_refused`
 `verified-by: bravebot_agent::tools::a_finished_loop_is_ended_rather_than_given_another_wait`
 `verified-by: bravebot_agent::tools::stop_from_a_turn_arranging_a_look_is_not_read`
+`verified-by: bravebot_agent::turn::stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn`
 `verified-by: bravebot_agent::tools::stop_is_offered_only_to_a_tick_of_a_self_paced_loop`
 
 <a id="SCHED-5"></a>
@@ -126,3 +127,4 @@ it writes that to somebody who then believes a watch exists that nothing is keep
 `verified-by: bravebot_agent::tools::a_delegates_descriptions_do_not_name_schedule_next`
 `verified-by: bravebot_cli::running::a_one_shot_run_offers_no_way_to_arrange_a_later_look`
 `verified-by: bravebot_tui::app::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
+`verified-by: bravebot_agent::turn::stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn`

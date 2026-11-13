@@ -2219,6 +2219,8 @@ impl Confinement {
         let not_confined = |detail: String| ExecError::NotConfined {
             program: step.program.clone(),
             detail,
+            before: crate::exec::StartedBefore::Nothing,
+            network_closed: false,
         };
         if let Some(detail) = self.directory_refusal() {
             return Err(not_confined(detail));
@@ -2278,10 +2280,22 @@ impl Confinement {
                 wanted = wanted.with_egress_through(socket);
             }
         }
-        if let Some(detail) = cannot_keep_from_sockets(self.mode, &capabilities)
-            .or_else(|| cannot_close_the_network(&wanted, &capabilities))
-            .or_else(|| cannot_hold_to_the_proxy(&wanted, &capabilities))
-        {
+        if let Some(detail) = cannot_keep_from_sockets(self.mode, &capabilities) {
+            return Err(not_confined(detail));
+        }
+        if let Some(detail) = cannot_close_the_network(
+            &wanted,
+            &capabilities,
+            network_pinned_by_the_administrator(),
+        ) {
+            return Err(ExecError::NotConfined {
+                program: step.program.clone(),
+                detail,
+                before: crate::exec::StartedBefore::Nothing,
+                network_closed: true,
+            });
+        }
+        if let Some(detail) = cannot_hold_to_the_proxy(&wanted, &capabilities) {
             return Err(not_confined(detail));
         }
         let _ = wanted.create_missing_write_rows(&capabilities);
@@ -2322,6 +2336,8 @@ impl Confinement {
             .map_err(|error| ExecError::NotConfined {
                 program: step.program.clone(),
                 detail: error.to_string(),
+                before: crate::exec::StartedBefore::Nothing,
+                network_closed: false,
             })
     }
 }
@@ -2415,6 +2431,8 @@ pub(crate) fn begin(
             return Err(ExecError::NotConfined {
                 program: step.program.clone(),
                 detail: refusal.to_string(),
+                before: crate::exec::StartedBefore::Nothing,
+                network_closed: false,
             });
         }
         let prepared = confinement.prepared(&command, step, directory)?;
@@ -2459,10 +2477,13 @@ impl Container {
             Err(SandboxError::SpawnFailed(error)) => Err(ExecError::NotStarted {
                 program: program_name,
                 detail: error.to_string(),
+                before: crate::exec::StartedBefore::Nothing,
             }),
             Err(other) => Err(ExecError::NotConfined {
                 program: program_name,
                 detail: other.to_string(),
+                before: crate::exec::StartedBefore::Nothing,
+                network_closed: false,
             }),
         }
     }
@@ -3290,7 +3311,11 @@ fn held_under_the_session_network(
 ) -> Held {
     if network.is_closed() {
         let closed = policy.without_network_egress();
-        return match cannot_close_the_network(&closed, capabilities) {
+        return match cannot_close_the_network(
+            &closed,
+            capabilities,
+            network_pinned_by_the_administrator(),
+        ) {
             Some(detail) => Err(detail),
             None => Ok((closed, Vec::new())),
         };
@@ -3325,15 +3350,31 @@ fn held_under_the_session_network(
 /// closed the network and is told only that confinement failed does not know which setting asked
 /// for what the platform cannot do, and a backend that applied the rest and left the network open
 /// would be the silent fall back to `open` the setting exists to forbid.
+///
+/// It names what lets the program start: `run.network` set to `open`, or `--run-network open`.
+/// Where the administrator's managed file pinned the network closed (`pinned`), no setting of the
+/// person's opens it, so it says that and names no setting to change (SANDBOX-20).
 fn cannot_close_the_network(
     policy: &SandboxPolicy,
     capabilities: &bravebot_sandbox::policy::Capabilities,
+    pinned: bool,
 ) -> Option<String> {
-    (!policy.allow_network && !capabilities.network_denial_enforced).then(|| {
-        "the network is closed for this session (run.network) and this platform cannot deny it \
-         to a program that does not need it"
-            .to_string()
+    (!policy.allow_network && !capabilities.network_denial_enforced).then(|| match pinned {
+        true => "the administrator's managed settings close the network for this session \
+                 (run.network), which no flag or settings file of the person's can open, and this \
+                 platform cannot deny it to a program that does not need it"
+            .to_string(),
+        false => "the network is closed for this session (run.network) and this platform cannot \
+                  deny it to a program that does not need it. The person can let it start by \
+                  running bravebot with --run-network open, or by setting run.network to open in \
+                  their own settings where no project settings file closes it"
+            .to_string(),
     })
+}
+
+/// Whether the network this process settled was closed by the administrator's managed file.
+fn network_pinned_by_the_administrator() -> bool {
+    crate::tools::network_pinned_closed(bravebot_config::settled_run_network())
 }
 
 /// Why a backend cannot hold `policy` to the proxy that applies the host list, where the policy
@@ -10897,10 +10938,20 @@ mod tests {
         };
         let (cannot, can) = (backend(false), backend(true));
 
-        let refused = cannot_close_the_network(&denied, &cannot).expect("refused");
+        let refused = cannot_close_the_network(&denied, &cannot, false).expect("refused");
         assert!(refused.contains("run.network"), "{refused}");
-        assert_eq!(cannot_close_the_network(&denied, &can), None);
-        assert_eq!(cannot_close_the_network(&kept, &cannot), None);
+        assert!(
+            refused.contains("--run-network open") && refused.contains("run.network to open"),
+            "the refusal names no setting that lets the program start: {refused}"
+        );
+        let pinned = cannot_close_the_network(&denied, &cannot, true).expect("refused");
+        assert!(
+            pinned.contains("administrator") && !pinned.contains("open in"),
+            "a managed pin was offered a setting that cannot open it: {pinned}"
+        );
+        assert!(!pinned.contains("--run-network"), "{pinned}");
+        assert_eq!(cannot_close_the_network(&denied, &can, false), None);
+        assert_eq!(cannot_close_the_network(&kept, &cannot, false), None);
     }
 
     /// A session directory under the build directory, which no row of the base reaches, and a
@@ -11059,6 +11110,32 @@ mod tests {
         assert!(
             !session.join("late.txt").exists(),
             "the stage before the refused one was left running"
+        );
+    }
+
+    /// SANDBOX-17: a job whose second stage cannot be confined records that the stage before it had
+    /// started and was stopped. The regression it rejects is the position dropped where a job's
+    /// stage is refused, so the job is told nothing of it had started.
+    #[test]
+    fn a_job_refused_at_its_second_stage_records_that_the_first_had_started() {
+        if !can_confine() {
+            return;
+        }
+        let (session, confinement) = a_session("background-refusal-position");
+        let confinement = confinement.failing_for("echo");
+        let plan = plan_of("true | echo hi", &session);
+        let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
+
+        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+
+        assert!(
+            matches!(
+                &refused,
+                Err(ExecError::NotConfined { program, before, .. })
+                    if program == "echo" && *before == crate::exec::StartedBefore::EarlierStages
+            ),
+            "{:?}",
+            refused.err()
         );
     }
 

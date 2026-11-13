@@ -255,8 +255,8 @@ pub enum RunRequestCause {
     Delegate,
     /// The session names no profile directory for a request to be recorded under.
     NoProfileDirectory,
-    /// No line has run with a sandbox and failed in this turn, so there is no refusal of access
-    /// for the request to follow.
+    /// No line has run with a sandbox and failed in this turn, and none was refused because its
+    /// program could not be confined, so there is no refusal for the request to follow.
     NoConfinedAttempt,
 }
 
@@ -272,9 +272,10 @@ impl fmt::Display for RunRequestCause {
             Self::ManagedClosedNetwork => f.write_str("a managed setting closes the network"),
             Self::Delegate => f.write_str("a delegate may not ask"),
             Self::NoProfileDirectory => f.write_str("the session has no profile directory"),
-            Self::NoConfinedAttempt => {
-                f.write_str("the line has not run with a sandbox and failed this turn")
-            }
+            Self::NoConfinedAttempt => f.write_str(
+                "no line has run with a sandbox and failed, or been refused because it could \
+                     not be confined, this turn",
+            ),
         }
     }
 }
@@ -658,6 +659,9 @@ pub struct Policy<'sink, S: Sink> {
     running_offered: bool,
     /// Whether the run is offered `read_output`, which a reference to output kept whole says to use.
     reading_offered: bool,
+    /// Whether the run is offered `read_file`, which the refusal to edit an unvouched file names
+    /// as the read that puts the vouch question.
+    reading_files_offered: bool,
     /// The names this run's definition, and every one above it, allowed it to start, where any
     /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
     /// installed, and a delegate it starts carries them on, so a child cannot start what the file
@@ -843,6 +847,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             writing_offered: true,
             running_offered: true,
             reading_offered: true,
+            reading_files_offered: true,
             spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
@@ -1744,6 +1749,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             writing_offered: self.writing_offered,
             running_offered: self.running_offered,
             reading_offered: self.reading_offered,
+            reading_files_offered: self.reading_files_offered,
             spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
@@ -2319,15 +2325,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         other_names: &[String],
         names_complete: bool,
     ) -> bool {
-        if !self.read_is_quarantined(path)
-            || !names_complete
-            || self.a_name_is_distrusted(other_names)
-            || self.vouch_asked.contains(path)
-        {
+        if !self.would_offer_vouch(path, other_names, names_complete) {
             return false;
         }
         self.vouch_asked.insert(path.to_string());
         true
+    }
+
+    /// Whether [`Policy::should_offer_vouch`] would say to ask about `path` now, without marking
+    /// it asked. For a refusal that names the read which would put the question, so a path already
+    /// asked about this turn, or one a yes could not open, is not sent to that read (TRUST-8).
+    pub fn would_offer_vouch(
+        &self,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> bool {
+        self.read_is_quarantined(path)
+            && names_complete
+            && !self.a_name_is_distrusted(other_names)
+            && !self.vouch_asked.contains(path)
     }
 
     /// Record that the question whether to vouch for `path` is being put to a person.
@@ -2464,6 +2481,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.reading_offered = false;
     }
 
+    /// Say that the run is not offered `read_file`, so a refusal worded from here on does not send
+    /// the planner to it. Told by the turn when its list is settled, as [`Policy::without_vetting`]
+    /// is.
+    pub fn without_reading_files(&mut self) {
+        self.reading_files_offered = false;
+    }
+
     /// Whether a reference the run holds can be given to a processor: the run is offered
     /// `spawn_processor`. Text that tells the planner what to do with a reference reads this where
     /// it is written by hand.
@@ -2480,6 +2504,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether the run is offered `run`, which a refusal may send the planner to.
     pub fn running_is_offered(&self) -> bool {
         self.running_offered
+    }
+
+    /// Whether the run is offered `read_file`, which a refusal may send the planner to.
+    pub fn reading_files_is_offered(&self) -> bool {
+        self.reading_files_offered
     }
 
     /// A reference made now, marked as sending nobody to a tool the run is not offered:
@@ -10157,12 +10186,14 @@ mod tests {
                 policy.without_writing();
                 policy.without_running();
                 policy.without_reading();
+                policy.without_reading_files();
             }
             let mut record = RecordingSink::new();
             let mut branch = policy.branch(&mut record);
             assert_eq!(branch.processors_offered(), !cut);
             assert_eq!(branch.writing_is_offered(), !cut);
             assert_eq!(branch.running_is_offered(), !cut);
+            assert_eq!(branch.reading_files_is_offered(), !cut);
 
             let mut slots = SlotStore::new();
             let described: Vec<String> = a_reference_of_each_kind(&mut branch, &mut slots)
@@ -24298,6 +24329,51 @@ five
                 )),
                 "deciding to ask wrote to the trail: {:?}",
                 sink.events()
+            );
+        }
+
+        /// TRUST-8, EDIT-2. Asking whether a read would offer the vouch does not count as the
+        /// asking, so the refusal that asks it leaves the read it names able to put the question.
+        /// It answers as [`Policy::should_offer_vouch`] does: no for a trusted path, for a file
+        /// distrusted under another name or whose names are incomplete, and for a path already
+        /// asked about this turn.
+        #[test]
+        fn whether_a_read_would_offer_the_vouch_is_asked_without_marking_the_path() {
+            let mut sink = RecordingSink::new();
+            let mut store = TrustStore::new("/work");
+            store.trust("vendor/kept.js");
+            store.distrust("vendor/other.js");
+            let mut policy = open_policy(&mut sink).with_trust(store);
+            let other = vec!["vendor/other.js".to_string()];
+
+            assert!(policy.would_offer_vouch("vendor/lib.js", &[], true));
+            assert!(
+                policy.would_offer_vouch("vendor/lib.js", &[], true),
+                "asking whether to offer marked the path asked"
+            );
+            assert!(
+                policy.should_offer_vouch("vendor/lib.js", &[], true),
+                "asking whether to offer took the offer from the read"
+            );
+            assert!(
+                !policy.would_offer_vouch("vendor/lib.js", &[], true),
+                "a path asked about this turn would be offered again"
+            );
+            assert!(
+                !policy.would_offer_vouch("vendor/kept.js", &[], true),
+                "a trusted path would be offered"
+            );
+            assert!(
+                !policy.would_offer_vouch("vendor/new.js", &other, true),
+                "a file distrusted under another name would be offered"
+            );
+            assert!(
+                !policy.would_offer_vouch("vendor/new.js", &[], false),
+                "a file whose other names are incomplete would be offered"
+            );
+            assert!(
+                policy.would_offer_vouch("vendor/new.js", &[], true),
+                "control: an unread path with complete names would not be offered"
             );
         }
 
