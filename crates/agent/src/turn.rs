@@ -1328,6 +1328,14 @@ impl Worked {
         self.work.count(changed_a_file, ran_a_program, failed);
     }
 
+    /// Count a background job's write, learned at its end in `round`: one write and no command,
+    /// since the command was counted when its line started (GROUND-1). A program made the change,
+    /// so TURN-4 does not say none ran, even in a later turn than the one that started the job.
+    fn count_job_write(&mut self, round: usize) {
+        self.count(round, true, false, false);
+        self.ran_a_program = true;
+    }
+
     /// Count what a delegate did in this run's workspace as this run's own, from the round it was
     /// taken back in, since that is when this run learns a file changed.
     fn adopt(&mut self, round: usize, delegate: Worked) {
@@ -1921,9 +1929,20 @@ fn collect_jobs<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
+    worked: &mut Worked,
+    round: usize,
     release: &mut ReleaseEnded<'_, S, R>,
 ) -> Result<(), TurnError> {
     let finished = jobs.ended(output_cap);
+    // Each job that left the tree different from how its line found it is a write in this round,
+    // and no command: that was counted when its line started (GROUND-1). From the driver's own
+    // marks, not from any output. Counted before anything below can fail or a check on an account
+    // can be stopped, since these jobs are reported now and no later route compares them again.
+    for ended in &finished {
+        if ended.changed_a_file {
+            worked.count_job_write(round);
+        }
+    }
     // Every finish is told before any is presented. A presentation that fails ends the turn, and a
     // job it never reached is marked reported already, so it would read as stopped with the turn.
     for ended in &finished {
@@ -6758,6 +6777,8 @@ mod tests {
                 &mut policy,
                 &mut conversation,
                 &mut reporter,
+                &mut Worked::default(),
+                0,
                 &mut |_, _, _, _| None,
             )
         };

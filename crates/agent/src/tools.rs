@@ -1024,9 +1024,54 @@ struct Job {
     /// What its programs were confined to, where they were, told with a failure so the planner
     /// reads a refusal as the sandbox's and not the file's.
     confinement: Option<String>,
+    /// The workspace tree as the line found it, compared once when the job's end is learned
+    /// (GROUND-1). `None` once compared, so a job is counted as a write at most once, by whichever
+    /// route reports its end first.
+    tree: Option<TreeBefore>,
+}
+
+/// The workspace tree as a background line found it, with what the second mark needs: the root
+/// it was taken under and the stores it left out.
+///
+/// Names, lengths and modification times, as for a foreground line. No file is opened.
+#[derive(Debug)]
+struct TreeBefore {
+    mark: crate::workspace::TreeMark,
+    root: std::path::PathBuf,
+    stores: Vec<std::path::PathBuf>,
+}
+
+impl TreeBefore {
+    /// Mark the workspace's tree now, leaving out its stores.
+    fn take(workspace: &Workspace) -> Self {
+        Self {
+            mark: crate::workspace::TreeMark::take(workspace.root(), &|path| {
+                workspace.in_the_stores(path)
+            }),
+            root: workspace.root().to_path_buf(),
+            stores: workspace.stores().to_vec(),
+        }
+    }
+
+    /// Whether the tree is different now from how this mark found it.
+    fn differs_now(&self) -> bool {
+        let stores = &self.stores;
+        self.mark
+            .differs_from(&crate::workspace::TreeMark::take(&self.root, &|path| {
+                crate::workspace::within_stores(stores, path)
+            }))
+    }
 }
 
 impl Job {
+    /// Whether the job left the workspace tree different from how its line found it, asked once
+    /// at the point its end is reported: the mark is dropped here, so a second report counts
+    /// nothing (GROUND-1). A comparison of metadata the driver took itself, and nothing the job
+    /// printed.
+    fn wrote(&mut self) -> bool {
+        self.tree.take().is_some_and(|tree| tree.differs_now())
+    }
+
     /// Take what the job has printed since the last look, and say which lines of everything it has
     /// printed that is.
     ///
@@ -1204,6 +1249,10 @@ pub struct Ended {
     /// Whether the job's latest `job_output` look asked to read its output in the result, so the
     /// account is released as that look would have been (RUN-22).
     pub read_asked: bool,
+    /// Whether the job left the workspace tree different from how its line found it (GROUND-1).
+    /// Measured from names, lengths and times when this end was learned, never from what it
+    /// printed.
+    pub changed_a_file: bool,
 }
 
 impl Jobs {
@@ -1274,6 +1323,7 @@ impl Jobs {
                 stop: stop.clone(),
                 stopped_by_the_person: None,
                 confinement: None,
+                tree: None,
             },
         );
         (name, stop)
@@ -1322,6 +1372,14 @@ impl Jobs {
         }
     }
 
+    /// Keep the tree as the line of the job named found it, for the comparison when its end is
+    /// reported (GROUND-1).
+    fn tree_found(&mut self, name: &str, tree: TreeBefore) {
+        if let Some(job) = self.running.get_mut(name) {
+            job.tree = Some(tree);
+        }
+    }
+
     /// Every job that has ended and whose finish nobody has been told about yet (CMDLINE-14).
     ///
     /// Polled rather than waited on, so a turn asking between rounds is never held by a program
@@ -1356,6 +1414,7 @@ impl Jobs {
                 continue;
             };
             job.reported = true;
+            let changed_a_file = job.wrote();
             let (printed, look) = job.take();
             job.label = job.label_now();
             // Capped only where the planner may read it, exactly as a run's output is: what it may
@@ -1380,6 +1439,7 @@ impl Jobs {
                 look,
                 covered_by_record: job.covered_by_record,
                 read_asked: job.read_asked,
+                changed_a_file,
             });
         }
         finished
@@ -1424,7 +1484,15 @@ impl Jobs {
     /// One the person asked to stop, with no round left to read the request, is reported as their
     /// stop and recorded in the trail as one (RUN-27), so their stop is not told back to them as
     /// the turn's.
-    pub fn stop_all<S: Sink, R: Reporter>(&mut self, policy: &mut Policy<'_, S>, reporter: &mut R) {
+    ///
+    /// Hands back how many of the jobs it reported left the workspace tree different from how
+    /// their lines found it, compared once they have been stopped, since a killed job has still
+    /// left what it wrote (GROUND-1).
+    pub fn stop_all<S: Sink, R: Reporter>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        reporter: &mut R,
+    ) -> usize {
         for (name, job) in self.running.iter_mut() {
             if job.reported {
                 continue;
@@ -1457,7 +1525,16 @@ impl Jobs {
             .map(|job| &mut job.running)
             .collect();
         crate::exec::Background::stop_together(&mut jobs);
+        // A job reported before this call has had its mark taken already, so only the ones
+        // reported here are compared.
+        let wrote = self
+            .running
+            .values_mut()
+            .map(Job::wrote)
+            .filter(|wrote| *wrote)
+            .count();
         self.running.clear();
+        wrote
     }
 }
 
@@ -10804,6 +10881,7 @@ fn start_the_job<S: Sink, R: Reporter>(
     reporter: &mut R,
     running: crate::exec::Background,
     job: &JobStart<'_>,
+    tree: TreeBefore,
 ) -> (String, bravebot_core::cancel::JobStop) {
     policy.record_ambient(job.spends);
     // The directory is carried over only once pre-flight checks and launch succeed.
@@ -10825,6 +10903,7 @@ fn start_the_job<S: Sink, R: Reporter>(
             confinement.profile_offering(&job.plan.steps(), unconfined_is_offered(policy, tools))
         }),
     );
+    tools.jobs.tree_found(&name, tree);
     if let Some(after) = job.moved_after {
         policy.record_handoff(&name, after);
     }
@@ -11899,6 +11978,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
+        // The tree as the line finds it, compared when the job's end is learned (GROUND-1).
+        let tree_before = TreeBefore::take(tools.workspace);
         return match crate::exec::start_steps_within(
             steps,
             &plan.directory,
@@ -11910,7 +11991,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
                 // it outlives this call, and nothing later in the turn knows what it reached.
-                let (name, _stop) = start_the_job(policy, tools, reporter, running, &started);
+                let (name, _stop) =
+                    start_the_job(policy, tools, reporter, running, &started, tree_before);
                 Produced::new(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
                     // before anything started: leaving it running does not make it trustworthier.
@@ -11971,11 +12053,9 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // The tree as the line finds it, for the comparison that says whether it changed a file
     // (GROUND-1). A measurement of names, lengths and times: no file is read. Taken before the
     // line starts in every case, since whether it moves to the background is known only after it
-    // has started. The second walk is taken only on the paths that use it: a moved line returns
-    // before it.
-    let tree_before = crate::workspace::TreeMark::take(tools.workspace.root(), &|path| {
-        tools.workspace.in_the_stores(path)
-    });
+    // has started. A line that stops in the foreground is compared below; a moved line carries
+    // this mark into its job, which compares it when the job's end is learned.
+    let tree_before = TreeBefore::take(tools.workspace);
     let ran = if movable {
         let handoff = bravebot_core::cancel::Handoff::new();
         reporter.movable(handoff.clone());
@@ -11995,7 +12075,14 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     moved_after: Some(moved.after),
                     ..started
                 };
-                let (name, _stop) = start_the_job(policy, tools, reporter, moved.running, &started);
+                let (name, _stop) = start_the_job(
+                    policy,
+                    tools,
+                    reporter,
+                    moved.running,
+                    &started,
+                    tree_before,
+                );
                 return Produced::new(
                     Labelled::new(String::new(), label),
                     format!("`{said}` moved to the background"),
@@ -12227,10 +12314,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // so that write is not counted; one that existed is written back with its old bytes and a new
     // modification time, so the mark reads it as changed and it is counted. Whether the line ended well does not enter into it: a line that failed halfway has
     // still left what it got to.
-    let changed_a_file = tree_before.differs_from(&crate::workspace::TreeMark::take(
-        tools.workspace.root(),
-        &|path| tools.workspace.in_the_stores(path),
-    ));
+    let changed_a_file = tree_before.differs_now();
     if ran.as_ref().is_ok_and(|ran| {
         ran.ended_well && ran.stopped.is_none() && ran.codes.iter().all(|code| *code == Some(0))
     }) {
@@ -13177,7 +13261,8 @@ fn job_output<S: Sink, R: Reporter>(
     // This answer is the account of the finish, so the turn's own look between rounds does not give
     // it a second time (CMDLINE-14). A killed job is finished too: the planner asked for the end of
     // it and was told what it had done, and news of it exiting afterwards is news of nothing.
-    if (ended || kill || asked) && !job.reported {
+    let finishing = (ended || kill || asked) && !job.reported;
+    if finishing {
         job.reported = true;
         reporter.job(crate::report::JobEvent::Ended {
             name: name.clone(),
@@ -13191,6 +13276,10 @@ fn job_output<S: Sink, R: Reporter>(
     if kill {
         job.running.kill();
     }
+    // Compared at the look that gives the account of the end and at no other, so a job still
+    // running keeps its mark for the end, and one already reported counts nothing again
+    // (GROUND-1). After the kill, so what a killed job left is in it.
+    let changed_a_file = finishing && job.wrote();
 
     // Composed from the outcome the planner is given rather than written out again here, so the
     // screen and the planner cannot come to disagree about the same job. The window a wait watched
@@ -13221,6 +13310,8 @@ fn job_output<S: Sink, R: Reporter>(
     produced.untrusted = !label.is_trusted();
     produced.read_asked = read_asked;
     produced.look = Some(look);
+    // A write and no command: the command was counted when the line started.
+    produced.changed_a_file = changed_a_file;
     // So a person can be asked to read it later, and can see which command they are reading. This is
     // also the one place the window a wait watched is said to the planner, which the note above is
     // not: that one goes to a screen.

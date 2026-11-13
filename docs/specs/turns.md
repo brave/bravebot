@@ -200,7 +200,10 @@ the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
 about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is a changed file here
 only when the workspace tree differs after it ([GROUND-1](grounding.md#GROUND-1)), and is a program
-run only when one started, so a line the person declined counts for TURN-3 and not for this. A write
+run only when one started, so a line the person declined counts for TURN-3 and not for this. For a
+line in the background, "after it" is when the turn learns the job has ended, so its change counts
+from that round. A turn that counts the write of a background job started in an earlier turn has
+run a program, since that job's program made the change. A write
 that landed in the session's own directory leaves nothing to build either: that directory is for
 the turn's own use, outside the project and gone when the session ends. The write is not counted,
 and a turn whose only writes landed there is neither asked the question nor told the closing line.
