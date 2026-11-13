@@ -570,14 +570,11 @@ fn withholds_early(text: &str) -> bool {
         .map(|line| line.split("//").next().unwrap_or("").trim())
         .filter(|code| !code.is_empty())
         .find(|code| {
-            ![
-                "refuse_same_user_inspection(",
-                "disable_core_dumps(",
-                "eprintln!(",
-                "}",
-            ]
-            .iter()
-            .any(|allowed| code.contains(allowed))
+            let protection = ["refuse_same_user_inspection(", "disable_core_dumps("]
+                .iter()
+                .any(|call| code.contains(call));
+            let said = code.starts_with("eprintln!(\"bravebot-") && code.ends_with("\");");
+            !(protection || said || *code == "}")
         })
         .is_some_and(|code| code.contains("withhold_inherited_descriptors("))
 }
@@ -588,6 +585,15 @@ fn withholding_after_other_work_is_too_late() {
     assert!(withholds_early(early));
     let late = "fn main() {\n    let _ = disable_core_dumps();\n    serve();\n    let _ = withhold_inherited_descriptors();\n}\n";
     assert!(!withholds_early(late));
+    for before in [
+        "let _ = std::thread::spawn(|| {});",
+        "eprintln!(\"{}\", start_logging());",
+    ] {
+        let hidden = format!(
+            "fn main() {{\n    let _ = disable_core_dumps();\n    {before}\n    let _ = withhold_inherited_descriptors();\n}}\n"
+        );
+        assert!(!withholds_early(&hidden), "{before}");
+    }
 }
 
 #[test]
