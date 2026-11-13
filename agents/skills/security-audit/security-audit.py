@@ -7,6 +7,7 @@ audit that covers those three, and it spends no model tokens doing it: every lan
 of places rather than from an instruction to go and look at things.
 
     python3 agents/skills/security-audit/security-audit.py [lane ...] [--mechanical-only]
+    python3 agents/skills/security-audit/security-audit.py --before-pr BASE
 
 Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to stderr, because those
 findings are already decided and a reader should see them before any lane runs.
@@ -4054,13 +4055,57 @@ def stop_hook():
     except (OSError, subprocess.CalledProcessError) as problem:
         print(f"the Stop hook could not ask git what changed: {problem}", file=sys.stderr)
         return 0
-    specs = load_specs()
-    if not touches_kept_answers(touched, specs):
+    findings = kept_answer_findings(touched, load_specs())
+    if findings is None:
         return 0
-    response = stop_response(payload, mechanical_findings(specs, mechanics.load_sources()))
+    response = stop_response(payload, findings)
     if response:
         print(json.dumps(response))
     return 0
+
+
+def kept_answer_findings(touched, specs):
+    """The mechanical findings for a change to the paths that keep answers, or None for any other.
+
+    The paths are the ones `touches_kept_answers` names. The `Stop` hook and `--before-pr` both ask
+    this, so the two cannot disagree about which changes are checked.
+    """
+    if not touches_kept_answers(touched, specs):
+        return None
+    return mechanical_findings(specs, mechanics.load_sources())
+
+
+def before_pull_request(base):
+    """Check a branch before its pull request is opened, as brave-dev-loop does.
+
+    The files are the ones `--changed` measures: those the branch's commits change since `base`,
+    and the staged and unstaged changes to tracked files. Untracked files are not counted, since a
+    pull request carries only what is committed. Where the files reach no path that keeps answers
+    (`touches_kept_answers`) nothing is checked and the exit status is 0. Where they do, the
+    mechanical half runs and the exit status is 1 on any error. An empty base, or one git cannot
+    resolve, is bad use, exit status 2, since measuring from it would find nothing and let the pull
+    request open unchecked.
+    """
+    if not base.strip():
+        print("--before-pr needs a base to measure the branch from", file=sys.stderr)
+        return 2
+    known = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if known.returncode != 0:
+        print(f"git cannot resolve {base} to a commit", file=sys.stderr)
+        return 2
+    findings = kept_answer_findings(set(mechanics.changed_files(base)), load_specs())
+    if findings is None:
+        print(f"the diff against {base} reaches no path that keeps answers, nothing was checked")
+        return 0
+    print(render(findings), file=sys.stderr)
+    errors = sum(1 for one in findings if one["severity"] == ERROR)
+    print(f"the diff against {base} reaches a path that keeps answers: {errors} findings at error")
+    return 1 if errors else 0
 
 
 def render(findings):
@@ -4128,6 +4173,12 @@ def main():
         action="store_true",
         help="answer Claude Code's Stop event: check a branch touching the paths that keep answers",
     )
+    parser.add_argument(
+        "--before-pr",
+        metavar="BASE",
+        default=None,
+        help="run the mechanical half where the diff against BASE reaches a path that keeps answers",
+    )
     args = parser.parse_args()
 
     if args.stop_hook:
@@ -4136,6 +4187,11 @@ def main():
     if not Path("docs/specs").is_dir():
         print("run this from the repository root", file=sys.stderr)
         return 2
+
+    if args.before_pr is not None and args.lanes:
+        parser.error("--before-pr takes no lane names")
+    if args.before_pr is not None:
+        return before_pull_request(args.before_pr)
 
     specs = load_specs()
     sources = mechanics.load_sources()

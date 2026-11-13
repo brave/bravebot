@@ -24,6 +24,13 @@ hold?**
 - **Scoped run** (`/security-audit laundering gates`): named lanes only.
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
   one to run before asking for review on a diff that touches a label.
+- **Before a pull request** (`python3 agents/skills/security-audit/security-audit.py --before-pr
+  BASE`): what brave-dev-loop runs before it opens a pull request. Where the branch's commits since
+  `BASE`, or its staged and unstaged changes to tracked files, reach a path that keeps answers
+  (the paths the `Stop` hook checks), it runs the mechanical half and exits
+  1 on an error. Untracked files are not counted. Otherwise it checks nothing and exits 0. It
+  prints one line saying which, and exits 2 on bad use (an empty `BASE`, or lane names given with
+  it) or a `BASE` git cannot resolve.
 - **`mechanical-only`**: the deterministic half alone, no model in the loop. This is what
   `make check-security` runs and what belongs in CI.
 
