@@ -36,10 +36,10 @@ terminal, stops the bump, and `make bump-version BUMP=bugfix YES=1` goes on with
 ledger's commit date is only a lower bound on when the advisory check last ran, because a run that
 finds nothing new commits nothing, which is why the comment is preferred.
 
-`bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
-and `ui/package.json`, commits exactly those four as
+`bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `fuzz/Cargo.lock`, `package.json`,
+`ui/package.json` and `packages/sdk/package.json`, commits exactly those as
 `Bump version to <version>`, and stops there: nothing is pushed and nothing is tagged. It refuses
-if any of the four is already modified, rather than committing changes it did not write, and it
+if any of them is already modified, rather than committing changes it did not write, and it
 runs `make check-versions` before committing, so a bump that misses one fails there rather than
 at the tag. `github-release` refuses to tag unless the tree is clean, every file that states the
 version agrees, and HEAD is `main` at the release remote's `main`, then pushes `v<version>` there.

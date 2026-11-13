@@ -189,8 +189,8 @@ left behind is an app bundle naming a release that was never made.
 
 A refusal at the tag reports that on release day. This reports it in the pull request that caused
 it, which is why CI has a job for it and why `make bump-version` runs it over its own work before
-committing. Four files state a version: the workspace manifest, the published wrapper's manifest, the
-application's manifest and `Cargo.lock`. pnpm's lockfiles do not record the version of the project
+committing. These files state a version: the workspace manifest, the published wrapper's manifest, the
+application's manifest, the unpublished SDK's manifest and `Cargo.lock`. pnpm's lockfiles do not record the version of the project
 they lock, so they are not read.
 
 ```sh

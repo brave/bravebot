@@ -29,7 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "help", "npm", "deps", "fuzz")
+AREAS = ("rust", "ui", "mobile", "sdk", "build", "installers", "docs", "help", "npm", "deps", "fuzz")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -162,6 +162,7 @@ HOST = {
     "rust": ("check",),
     "ui": ("check-ui", "check-agent-client"),
     "mobile": ("check-mobile",),
+    "sdk": ("check-sdk",),
     "docs": ("check-docs",),
     "help": ("check-help",),
     "npm": ("check-npm",),
@@ -188,9 +189,9 @@ def classify_by_area(path, desktop, fuzz):
     if path == "Cargo.toml":
         # Every crate the fuzz package builds takes its version and dependencies from here, so
         # its lockfile goes stale with this one. Cargo.lock below is not read by that build.
-        return frozenset({"rust", "ui", "build", "deps", "fuzz"})
+        return frozenset({"rust", "ui", "build", "deps", "fuzz", "sdk"})
     if path == "Cargo.lock":
-        return frozenset({"rust", "ui", "build", "deps"})
+        return frozenset({"rust", "ui", "build", "deps", "sdk"})
     if path in (".config/deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
@@ -201,11 +202,13 @@ def classify_by_area(path, desktop, fuzz):
         return frozenset({"build"})
     parts = path.split("/")
     if parts[0] == "crates" and len(parts) > 2:
-        found = {"rust"}
+        found = {"rust", "sdk"}
         if parts[1] in desktop:
             found.add("ui")
         if parts[1] in fuzz:
             found.add("fuzz")
+        # The SDK's tests run the bravebot binary built from the workspace, so any crate can
+        # change what they find.
         if parts[2:] == ["Cargo.toml"]:
             found |= {"build", "deps"}
         elif parts[2:] == ["build.rs"]:
@@ -235,6 +238,13 @@ def classify_by_area(path, desktop, fuzz):
         if name == "test-fixtures/wire-contract.json":
             found.add("rust")
         if name in PACKAGE_FILES:
+            found.add("npm")
+        return frozenset(found)
+    if path.startswith("packages/sdk/"):
+        # The SDK's tests run the built bravebot binary in a job of their own and read nothing else
+        # in this tree.
+        found = {"sdk"}
+        if path[len("packages/sdk/"):] in PACKAGE_FILES:
             found.add("npm")
         return frozenset(found)
     for under, area in (("docs/website/", "docs"), ("ui/", "ui"), ("mobile/", "mobile")):
@@ -431,16 +441,16 @@ CASES = (
     (".github/actions/setup/action.yml", EVERYTHING),
     ("crates/README.md", EVERYTHING),
     ("somewhere-new/file.txt", EVERYTHING),
-    ("Cargo.lock", {"rust", "ui", "build", "deps"}),
-    ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz"}),
+    ("Cargo.lock", {"rust", "ui", "build", "deps", "sdk"}),
+    ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz", "sdk"}),
     (".config/deny.toml", {"deps", "rust"}),
     ("contrib/check-deny-reasons.py", {"deps"}),
     ("contrib/Dockerfile.cross", {"build", "rust"}),
-    ("crates/tui/src/render.rs", {"rust"}),
-    ("crates/core/src/policy.rs", {"rust", "ui", "fuzz"}),
-    ("crates/agent/src/regex.rs", {"rust", "fuzz"}),
-    ("crates/agent/Cargo.toml", {"rust", "build", "deps", "fuzz"}),
-    ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),
+    ("crates/tui/src/render.rs", {"rust", "sdk"}),
+    ("crates/core/src/policy.rs", {"rust", "ui", "fuzz", "sdk"}),
+    ("crates/agent/src/regex.rs", {"rust", "fuzz", "sdk"}),
+    ("crates/agent/Cargo.toml", {"rust", "build", "deps", "fuzz", "sdk"}),
+    ("crates/tui/Cargo.toml", {"rust", "build", "deps", "sdk"}),
     ("fuzz/src/lib.rs", {"fuzz"}),
     ("fuzz/fuzz_targets/regex.rs", {"fuzz"}),
     ("fuzz/seeds/regex/0a1b", {"fuzz"}),
@@ -448,7 +458,7 @@ CASES = (
     ("fuzz/Cargo.toml", {"fuzz", "deps", "rust"}),
     ("fuzz/Cargo.lock", {"fuzz", "deps", "rust"}),
     ("docs/development/fuzzing.md", {"rust"}),
-    ("crates/config/build.rs", {"rust", "build"}),
+    ("crates/config/build.rs", {"rust", "build", "sdk"}),
     ("docs/specs/layering.md", {"rust"}),
     ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/sandboxing.md", {"rust"}),
@@ -479,6 +489,13 @@ CASES = (
     ("packages/agent-client/package-lock.json", {"ui", "mobile", "npm"}),
     ("packages/agent-client/pnpm-lock.yaml", {"ui", "mobile", "npm"}),
     ("packages/agent-client/pnpm-workspace.yaml", {"ui", "mobile", "npm"}),
+    ("packages/sdk/src/run.ts", {"sdk"}),
+    ("packages/sdk/package.json", {"sdk", "npm"}),
+    ("packages/sdk/pnpm-lock.yaml", {"sdk", "npm"}),
+    ("packages/sdk/pnpm-workspace.yaml", {"sdk", "npm"}),
+    ("crates/cli/src/main.rs", {"rust", "sdk"}),
+    ("crates/cli/Cargo.toml", {"rust", "sdk", "build", "deps"}),
+    ("docs/specs/sdk.md", {"rust"}),
     ("mobile/src/App.tsx", {"mobile"}),
     ("mobile/ios/Bravebot.xcodeproj/project.pbxproj", {"mobile"}),
     ("mobile/package.json", {"mobile", "npm", "rust"}),
@@ -494,9 +511,9 @@ CASES = (
     ("extension-trusted/tests/cdp.test.mjs", {"rust", "ui"}),
     ("docs/design/browser-extension.md", {"rust", "ui"}),
     ("docs/design/another-design.md", NOTHING),
-    ("crates/browser/src/uploads.rs", {"rust", "ui"}),
-    ("crates/browser/tests/file-names.json", {"rust", "ui"}),
-    ("crates/browser/src/lib.rs", {"rust"}),
+    ("crates/browser/src/uploads.rs", {"rust", "ui", "sdk"}),
+    ("crates/browser/tests/file-names.json", {"rust", "ui", "sdk"}),
+    ("crates/browser/src/lib.rs", {"rust", "sdk"}),
     ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
     ("install.ps1", {"rust"}),
@@ -505,8 +522,8 @@ CASES = (
     ("pnpm-workspace.yaml", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("agents/skills/security-audit/security-audit.py", NOTHING),
-    ("crates/agent/src/answers.rs", {"rust", "fuzz"}),
-    ("crates/agent/src/kept_answers.rs", {"rust", "fuzz"}),
+    ("crates/agent/src/answers.rs", {"rust", "fuzz", "sdk"}),
+    ("crates/agent/src/kept_answers.rs", {"rust", "fuzz", "sdk"}),
     ("docs/specs/prompting.md", {"rust"}),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", {"rust"}),
@@ -703,7 +720,7 @@ def selftest():
             ("docs-add", {"docs", "help"}),
             ("docs-edit", {"docs", "help"}),
             ("docs-remove", {"docs", "help"}),
-            ("move", {"rust"}),
+            ("move", {"rust", "sdk"}),
         ):
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge", branch)
@@ -719,7 +736,7 @@ def selftest():
             return out.read_text(encoding="utf-8").splitlines()
 
         got = written("pull_request")
-        wanted = [f"{area}={'true' if area == 'rust' else 'false'}" for area in AREAS]
+        wanted = [f"{area}={'true' if area in ('rust', 'sdk') else 'false'}" for area in AREAS]
         checks.append(("the job writes each area once, false where the pull request does not "
                        "need it", got == wanted, got))
         got = written("push")

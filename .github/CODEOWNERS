@@ -35,6 +35,7 @@
 /ui/pnpm-lock.yaml @bbondy
 /docs/website/pnpm-lock.yaml @bbondy
 /packages/agent-client/pnpm-lock.yaml @bbondy
+/packages/sdk/pnpm-lock.yaml @bbondy
 /mobile/pnpm-lock.yaml @bbondy
 /ui/pnpm-workspace.yaml @bbondy
 /docs/website/pnpm-workspace.yaml @bbondy
