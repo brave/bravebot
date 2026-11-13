@@ -663,6 +663,17 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     );
 }
 
+/// The entries of the managed file's `mcp.allow` and `mcp.deny` that are neither a host nor a
+/// command. They match no server, and the administrator who wrote one believes a server is kept
+/// from starting (SERVERS-12).
+fn report_managed_server_entries(managed: &Managed) {
+    each(
+        t!(doctor_settings_ignored),
+        bravebot_agent::mcp::managed_entries_unusable(managed),
+        |sentence| sentence,
+    );
+}
+
 /// The network for the programs `run` starts, named only where it is not open, with who decided
 /// it, and the layers that tried to open what a person closed. A word that is neither is read as
 /// absent, so it is said for the reason a mistyped pin is.
@@ -1050,6 +1061,7 @@ pub(crate) fn doctor() -> ExitCode {
             println!("{}", t!(doctor_configuration_ok));
             report_settings_sources(&settings);
             report_ignored_settings(&settings, &managed);
+            report_managed_server_entries(&managed);
 
             let network = bravebot_config::settled_run_network()
                 .cloned()
@@ -3256,6 +3268,34 @@ mod tests {
                 reported,
                 "{text}: {lines:?}"
             );
+        }
+    }
+
+    /// A deny list whose every entry the reader cannot use is still a list the administrator wrote
+    /// as a pin, so `doctor` names `mcp.deny` among what the file pinned (SERVERS-12). A deny list
+    /// with no entry at all is not.
+    ///
+    /// Rejects naming the list only where an entry was kept, which leaves the file reading as
+    /// pinning nothing.
+    #[test]
+    fn doctor_names_a_deny_list_whose_every_entry_was_unusable_as_pinned() {
+        let scratch = Scratch::new("doctor-managed-deny-unusable");
+        let path = scratch.path.join("managed.json");
+        for (text, named) in [
+            (r#"{"mcp": {"deny": [{"host": "fd00::1:zz"}]}}"#, true),
+            (r#"{"mcp": {"deny": [{"command": ["evil-server"]}]}}"#, true),
+            (r#"{"mcp": {"deny": []}}"#, false),
+            (
+                r#"{"mcp": {"allow": [{"command": ["evil-server"]}]}}"#,
+                false,
+            ),
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+
+            let lines = managed_layer(&Managed::at(&path));
+
+            assert_eq!(lines.len(), 1, "{text}: {lines:?}");
+            assert_eq!(lines[0].contains("mcp.deny"), named, "{text}: {lines:?}");
         }
     }
 
