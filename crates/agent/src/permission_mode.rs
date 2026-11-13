@@ -324,12 +324,14 @@ impl LiveMode {
             .store(mode as u8, std::sync::atomic::Ordering::Release);
     }
 
-    /// Whether every write is put to the confirmer, whatever the trust map says about its path.
+    /// Whether a write is put to the confirmer whatever the trust map says about its path, unless a
+    /// rule the person wrote allows it (`tools::put_where_nobody_can_be_asked`).
     ///
     /// A run with nobody to ask holds a trust map its own command line wrote, and what that vouches
     /// for is what the tree's files say, never a write the planner composed: trusting a directory
-    /// opens reads, and the one thing that may lift the refusal of a write is the flag that selects
-    /// the bypass mode, where the confirmer answers for the person who typed it (CLI-1).
+    /// opens reads. What may let a write through there is a rule the person wrote in advance, or
+    /// the flag that selects the bypass mode, where the confirmer answers for the person who typed
+    /// it (CLI-1).
     pub fn writes_are_always_asked(&self) -> bool {
         self.nobody_to_ask && self.get() != PermissionMode::Bypass
     }

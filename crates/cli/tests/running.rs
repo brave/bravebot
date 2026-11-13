@@ -4008,6 +4008,291 @@ fn an_accept_edits_run_refuses_a_command() {
     );
 }
 
+/// The person's settings for `gateway`, with `permissions` as their `permissions` block.
+fn settings_with_rules(gateway: &Gateway, permissions: serde_json::Value) -> String {
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(gateway)).expect("the gateway's settings");
+    settings["permissions"] = permissions;
+    settings.to_string()
+}
+
+/// Runs `-p` in a project whose model writes `path`, with `rules` as the person's `permissions`
+/// block, and says whether the file was made.
+///
+/// No mode flag is given, so a file that lands is a rule's doing. The rules are in the person's own
+/// file, which is a layer whose `allow` entries are always in force (PERM-14).
+fn a_ruled_write_made_the_file(name: &str, rules: &serde_json::Value, path: &'static str) -> bool {
+    let gateway = a_gateway_writing(path, "hi");
+    let scratch = Scratch::new(name);
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(project.join(parent)).expect("a directory to write in");
+    }
+    let scratch = scratch.with_settings(&settings_with_rules(&gateway, rules.clone()));
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["-p", "write a file"],
+    );
+    let (_, stderr) = said(&output);
+    gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+    project.join(path).exists()
+}
+
+/// CLI-1: an `allow` rule in the person's settings lets a one-shot run write where the rule says,
+/// with no mode flag. The second run has the same rule and a write outside the directory it names,
+/// so the first file is the rule's doing and not a run that writes wherever it is asked to.
+#[test]
+fn a_one_shot_run_writes_where_an_allow_rule_lets_it_and_nowhere_else() {
+    let inside = serde_json::json!({"allow": ["Edit(allowed/**)"]});
+    assert!(
+        a_ruled_write_made_the_file("cli-running-rule-write-inside", &inside, "allowed/out.txt"),
+        "an allow rule did not let a one-shot run write where it names"
+    );
+    assert!(
+        !a_ruled_write_made_the_file("cli-running-rule-write-outside", &inside, "other/out.txt"),
+        "a rule naming one directory let a write land in another"
+    );
+}
+
+/// CLI-1: an absolute `allow` rule lets a one-shot run write in a directory `--add-dir` opened,
+/// where a file is named by its full path, and a file in a second added directory the rule does not
+/// name is refused. A run that wrote both would be writing wherever it reaches.
+#[test]
+fn a_one_shot_run_writes_in_an_added_directory_an_absolute_rule_names() {
+    let made = |name: &str, named: &str| {
+        let scratch = Scratch::new(name);
+        let project = scratch.path.join("project");
+        let work = scratch.path.join("work");
+        let other = scratch.path.join("other");
+        for directory in [&project, &work, &other] {
+            std::fs::create_dir_all(directory).expect("a directory");
+        }
+        let work = work.canonicalize().expect("the work directory's own name");
+        let other = other
+            .canonicalize()
+            .expect("the other directory's own name");
+        let target = match named {
+            "work" => work.join("out.txt"),
+            _ => other.join("out.txt"),
+        };
+        let path: &'static str = Box::leak(target.display().to_string().into_boxed_str());
+        let gateway = a_gateway_writing(path, "hi");
+        let rule = format!("Edit(/{}/**)", work.display());
+        let scratch = scratch.with_settings(&settings_with_rules(
+            &gateway,
+            serde_json::json!({"allow": [rule]}),
+        ));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            AT_A_GATEWAY,
+            &[
+                "--add-dir",
+                work.to_str().expect("a path in UTF-8"),
+                "--add-dir",
+                other.to_str().expect("a path in UTF-8"),
+                "-p",
+                "write a file",
+            ],
+        );
+        let (_, stderr) = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+        target.exists()
+    };
+    assert!(
+        made("cli-running-rule-added-named", "work"),
+        "an absolute allow rule did not let a one-shot run write in the added directory it names"
+    );
+    assert!(
+        !made("cli-running-rule-added-other", "other"),
+        "a rule naming one added directory let a write land in another"
+    );
+}
+
+/// CLI-1, PERM-9: a rule covering a protected path does not let a one-shot run write it, as no rule
+/// does in a session. The first run is the same rule over an ordinary file, so the refusal is the
+/// protected name's and not a rule that answers nothing.
+#[test]
+fn a_one_shot_run_refuses_a_protected_write_an_allow_rule_covers() {
+    let everything = serde_json::json!({"allow": ["Edit(**)"]});
+    assert!(
+        a_ruled_write_made_the_file("cli-running-rule-protected-control", &everything, "out.txt"),
+        "the control did not write, so the refusal below says nothing"
+    );
+    assert!(
+        !a_ruled_write_made_the_file(
+            "cli-running-rule-protected",
+            &everything,
+            ".husky/pre-commit"
+        ),
+        "an allow rule let a one-shot run write a hook"
+    );
+}
+
+/// CLI-1, PERM-2: a deny rule over a path outranks an allow rule covering it in a one-shot run, as
+/// it does in a session. The allow rule on its own lets a write through, which
+/// `a_one_shot_run_refuses_a_protected_write_an_allow_rule_covers` shows for the same rule.
+#[test]
+fn a_deny_rule_outranks_an_allow_rule_in_a_one_shot_run() {
+    let both = serde_json::json!({"allow": ["Edit(**)"], "deny": ["Edit(secret.txt)"]});
+    assert!(
+        !a_ruled_write_made_the_file("cli-running-rule-denied", &both, "secret.txt"),
+        "an allow rule outranked a deny rule in a one-shot run"
+    );
+}
+
+/// Runs `-p --trust-workspace` in a project `arrange` lays out, whose model writes `path`, with
+/// `rules` as the person's `permissions` block, and returns the scratch, which removes the project
+/// when it is dropped, beside the project.
+///
+/// The workspace is trusted, so the trust map does not put a write to any name in it, and what
+/// refuses a write is the check that a rule allows it under every name it has (CLI-1, PERM-7).
+fn a_trusted_ruled_write(
+    name: &str,
+    rules: &serde_json::Value,
+    path: &'static str,
+    arrange: impl FnOnce(&Path),
+) -> (Scratch, PathBuf) {
+    let gateway = a_gateway_writing(path, "hi");
+    let scratch = Scratch::new(name);
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("allowed")).expect("the allowed directory");
+    std::fs::create_dir_all(project.join("other")).expect("a directory the rule does not name");
+    arrange(&project);
+    let scratch = scratch.with_settings(&settings_with_rules(&gateway, rules.clone()));
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--trust-workspace", "-p", "write a file"],
+    );
+    let (_, stderr) = said(&output);
+    gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+    (scratch, project)
+}
+
+/// CLI-1, PERM-7: in a trusted workspace, an allow rule over the name a write gives does not let a
+/// one-shot run write the file a link at that name leads to, where no rule allows that name. The
+/// first run writes a plain file under the same rule and flags, so the refusal is the link's and
+/// not a trusted run that writes nothing.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_does_not_write_through_a_link_to_a_name_no_rule_allows() {
+    let rules = serde_json::json!({"allow": ["Edit(allowed/**)"]});
+    let (_control_scratch, control) = a_trusted_ruled_write(
+        "cli-running-rule-link-control",
+        &rules,
+        "allowed/out.txt",
+        |_| {},
+    );
+    assert_eq!(
+        std::fs::read_to_string(control.join("allowed/out.txt")).ok(),
+        Some("hi".to_string()),
+        "the control did not write, so the refusal below says nothing"
+    );
+    let (_scratch, project) =
+        a_trusted_ruled_write("cli-running-rule-link", &rules, "allowed/link", |project| {
+            std::fs::write(project.join("other/target"), "kept\n")
+                .expect("the file the link leads to");
+            std::os::unix::fs::symlink("../other/target", project.join("allowed/link"))
+                .expect("a link out of the allowed directory");
+        });
+    assert_eq!(
+        std::fs::read_to_string(project.join("other/target")).expect("the target"),
+        "kept\n",
+        "an allow rule over a link's name let a one-shot run write where the link leads"
+    );
+    assert!(
+        project
+            .join("allowed/link")
+            .symlink_metadata()
+            .expect("the link")
+            .file_type()
+            .is_symlink(),
+        "the link was replaced by the write"
+    );
+}
+
+/// CLI-1, PERM-7: in a trusted workspace, an allow rule over one name of a file with a hard link
+/// does not let a one-shot run write it, where no rule allows its other name.
+/// `a_one_shot_run_does_not_write_through_a_link_to_a_name_no_rule_allows` shows the same rule and
+/// flags letting a plain write through.
+#[test]
+fn a_one_shot_run_does_not_write_a_file_whose_other_name_no_rule_allows() {
+    let rules = serde_json::json!({"allow": ["Edit(allowed/**)"]});
+    let (_scratch, project) = a_trusted_ruled_write(
+        "cli-running-rule-hard-link",
+        &rules,
+        "allowed/a",
+        |project| {
+            std::fs::write(project.join("other/b"), "kept\n").expect("the file's other name");
+            std::fs::hard_link(project.join("other/b"), project.join("allowed/a"))
+                .expect("a second name in the allowed directory");
+        },
+    );
+    for name in ["allowed/a", "other/b"] {
+        assert_eq!(
+            std::fs::read_to_string(project.join(name)).expect("the file"),
+            "kept\n",
+            "an allow rule over one name of a file let a one-shot run write it ({name} changed)"
+        );
+    }
+}
+
+/// CLI-1: an `allow` rule for a program lets a one-shot run start it with no mode flag, and a rule
+/// for another program does not. The workspace is not trusted, so a confined line in it is asked
+/// about (RUN-5) and the file is the rule's doing.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_runs_a_program_an_allow_rule_names_and_refuses_another() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let made = |name: &str, rule: &str| {
+        let gateway = a_gateway_asking_to_run("touch made.txt");
+        let scratch = Scratch::new(name).with_settings(&settings_with_rules(
+            &gateway,
+            serde_json::json!({"allow": [rule]}),
+        ));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &["-p", "make a file"],
+        );
+        let (_, stderr) = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+        project.join("made.txt").exists()
+    };
+    assert!(
+        made("cli-running-rule-run", "Bash(touch *)"),
+        "an allow rule did not let a one-shot run start the program it names"
+    );
+    assert!(
+        !made("cli-running-rule-run-other", "Bash(mkdir *)"),
+        "a rule for one program let a one-shot run start another"
+    );
+}
+
 /// CLI-1: the flag is refused beside the bypass flag, and where there is no one-shot run to open in
 /// the mode, each with the argument status and nothing sent to the gateway.
 #[test]
@@ -12589,6 +12874,49 @@ fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
     assert!(
         the_planner_saw_the_notes(&gateway),
         "the flag did not trust the working directory of the continued run"
+    );
+}
+
+/// CLI-1: in a one-shot run that trusts its workspace, an `allow` rule over a file lets an edit of it
+/// land, and a rule over another file does not. The trust map alone refuses the same edit
+/// (`a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`), so the
+/// edit that lands is the rule's doing.
+#[test]
+fn a_one_shot_run_applies_an_edit_an_allow_rule_covers_and_refuses_one_it_does_not() {
+    let edited = |name: &str, rule: &str| {
+        let (gateway, scratch, cwd) = a_project_whose_notes_the_model_changes(
+            name,
+            "edit_file",
+            serde_json::json!({
+                "path": "notes.md",
+                "old_text": "THE-WORDS-IN-THE-PROJECT-NOTES",
+                "new_text": "THE-PLANNERS-WORDS",
+            }),
+        );
+        let scratch = scratch.with_settings(&settings_with_rules(
+            &gateway,
+            serde_json::json!({"allow": [rule]}),
+        ));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "-p", "change the notes"],
+        );
+        let (_, stderr) = said(&output);
+        assert!(
+            !requests(&gateway).is_empty(),
+            "the run reached no gateway: {stderr}"
+        );
+        std::fs::read_to_string(cwd.join("notes.md")).expect("the notes") == "THE-PLANNERS-WORDS"
+    };
+    assert!(
+        edited("cli-running-rule-edit", "Edit(notes.md)"),
+        "an allow rule did not let a one-shot run apply the edit it covers"
+    );
+    assert!(
+        !edited("cli-running-rule-edit-other", "Edit(other.md)"),
+        "a rule over another file let a one-shot run apply an edit"
     );
 }
 

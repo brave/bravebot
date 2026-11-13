@@ -224,28 +224,37 @@ pub(crate) fn trusting_the_added_directories(
     trust
 }
 
-/// The rules a one-shot run works under.
+/// The rules a one-shot run works under, which are the rules a session in `workspace` works under
+/// (CLI-1).
 ///
-/// Nobody is watching one, so the allow list is left out: an allow rule answers a prompt in
-/// advance, and where there is nobody to ask it would instead be a line in a settings file letting
-/// the run write, execute or fetch unwatched, beside the flag that is meant to be the only way
-/// that happens. The deny and ask lists carry over, and both still decide something here.
+/// All three lists are read from the same layers a session reads. An allow rule states what the
+/// person wants done with an effect before it comes up, and that does not depend on whether
+/// anybody is watching. An `allow` rule a checkout's file proposed is in force only where this
+/// workspace's record already holds the person's grant of it (PERM-15): nobody is here to be asked
+/// for one, so a rule nobody granted stays out of force, as it does in a session that declines.
 ///
-/// With the flag, the person answered every one of those prompts themselves when they typed it, so
-/// their file is read whole.
+/// `state` is the state directory the record of grants is kept in ([`bravebot_agent::home::directory`]),
+/// taken as an argument so a test reads a record of its own; `None` reads no grant.
 pub(crate) fn rules_for_a_one_shot_run(
     settings: &bravebot_config::Settings,
+    state: Option<&Path>,
     profile: Option<&Path>,
     workspace: &Path,
-    skip_permissions: bool,
 ) -> (
     bravebot_core::permissions::Permissions,
     Vec<bravebot_core::permissions::Rejected>,
 ) {
-    match skip_permissions {
-        true => bravebot_agent::permissions::from_settings(settings, profile, workspace),
-        false => bravebot_agent::permissions::for_an_unattended_run(settings, profile, workspace),
-    }
+    let proposed = bravebot_agent::permissions::proposed(settings, profile);
+    let granted: Vec<String> = state
+        .map(|state| {
+            bravebot_agent::granted::Store::new(state, workspace)
+                .granted(&proposed)
+                .into_iter()
+                .map(|rule| rule.rule.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    bravebot_agent::permissions::with_granted(settings, &granted, profile, workspace)
 }
 
 /// The model the definition `--agent` named will ask for, where it names one the command line did

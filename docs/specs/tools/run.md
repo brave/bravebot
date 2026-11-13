@@ -1509,11 +1509,12 @@ them a fresh session in the same directory reads, is [prompting.md](../prompting
 record is a third one.
 
 **It is read only where a prompt could be drawn, which is less than somebody reading one.** A
-one-shot run and a session whose channel has closed read no record at all. What a record answers is a
-prompt, and where no prompt can be put it would be saying instead which effects may happen with
-nobody to put them to, which is what [cli.md](../cli.md) refuses an allow rule for and what the flag
-that lifts that refusal is named and warned about for. A line in a file in the home directory must
-not do that quietly, so a one-shot run puts a covered line where it puts every other one.
+one-shot run and a session whose channel has closed read no record at all, so a one-shot run puts a
+covered line where it puts every other one. The record is read through the session it was answered
+in, and that same session is what reads the scopes and keys a `/reach` answer keeps for a line, which
+are a person's to give ([SANDBOX-26](../sandboxing.md#SANDBOX-26)); a run with nobody to ask reads
+neither. A line meant to run in a one-shot run is allowed with an `allow` rule
+([CLI-1](../cli.md#CLI-1)).
 
 The boundary is the prompt and not the person, and the difference is where this is at its most
 exposed. A tick of a loop, a round of a goal and a delegate's own step each draw their prompts to a
