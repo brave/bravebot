@@ -14095,8 +14095,11 @@ fn a_one_shot_run_records_its_timing_and_when_it_began() {
 /// `--resume` in the terminal on the same home, and the terminal leaves it as it was.
 ///
 /// The host keeps a project's records under `<root>/<key>/`, the layout of the home's `sessions`
-/// directory, so the record here is the terminal's own moved to a root the host could be given.
-/// The terminal lists it before the move, so a terminal that also read the host's root would fail.
+/// directory, so the record here is the terminal's own, moved to a root the host could be given.
+/// The root is inside the state directory, so a terminal that looked for records anywhere in it, and
+/// not only in `sessions`, would fail. The terminal lists the record before the move, so the record
+/// is one it can read. That the host writes nothing to the home's `sessions` directory is the
+/// desktop test's to show; this test does not run the host.
 #[test]
 fn the_terminal_does_not_list_or_continue_a_record_in_a_hosts_sessions_root() {
     let gateway = a_gateway("[]", |_| usage_reply(None, "done", 12, 5));
@@ -14127,7 +14130,7 @@ fn the_terminal_does_not_list_or_continue_a_record_in_a_hosts_sessions_root() {
         "the terminal did not list its own record"
     );
 
-    let host_root = scratch.path.join("host-sessions");
+    let host_root = scratch.path.join(".bravebot/host-sessions");
     std::fs::rename(scratch.path.join(".bravebot/sessions"), &host_root)
         .expect("move the records to the host's root");
     let record = std::fs::read_dir(&host_root)
