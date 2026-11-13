@@ -1378,11 +1378,21 @@ could not be used ([PROC-13](processors.md#PROC-13)) or where the answer marks n
 at the reader's cap is drafted from what was read and the line says so. Typed during a turn the
 line waits for the turn to end (CMD-8).
 
+A draft is put in the box only where every path the diff names is one the trust map vouches for
+([LABEL-8](labels.md#LABEL-8)). Where one is not, a model still writes the message, since the
+read that reaches it is the one the planner's own read would have kept back the same way, but the
+box is left as it was and a note says so instead: the box is sendable, and the next Enter would
+send a model's words about an unvouched path to the planner as the person's own typed line, which
+is not a line the person wrote. The same holds `/handoff`'s brief and an enhancement's rewrite to
+([SESSION-34](sessions.md#SESSION-34), [INPUT-48](terminal-input.md#INPUT-48)).
+
 **Why.** A message is written from a diff the planner may not be allowed to read, and the answer to
 that elsewhere is a processor. The draft is derived from that diff, so its integrity is the diff's,
-and the one place it is released is a surface the person edits and a key the person presses. A
-credential in a diff is refused where the planner's own read would ask, because nobody is at a
-prompt to agree.
+and the one place it is released is a surface the person edits and a key the person presses, which
+is why that surface gets nothing where the diff's is not trusted: a processor's own output carries
+no provenance of its own that vouching could promote it by, so reading the diff's label is the only
+way to tell whether the draft may go where a press sends it. A credential in a diff is refused
+where the planner's own read would ask, because nobody is at a prompt to agree.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_two_written_out_revisions`
 `verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
@@ -1407,6 +1417,8 @@ prompt to agree.
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
+`verified-by: bravebot_agent::commit_message::a_diff_of_an_unvouched_path_gives_no_sendable_draft`
+`verified-by: bravebot_tui::app::a_draft_that_met_something_untrusted_is_held_back_with_a_note`
 
 ## Answering from what this program carries
 

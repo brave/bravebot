@@ -4615,6 +4615,7 @@ commit-message-ready = the draft is in the box. Edit it, then Enter sends it to 
 commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
 commit-message-failed = the commit message could not be drafted: { $problem }
 commit-message-stopped = the commit message was stopped
+commit-message-untrusted = the draft was not offered: the diff touched a path nobody has vouched for, so the message would not be words the planner could have held
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote
