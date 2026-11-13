@@ -5186,7 +5186,17 @@ shown by running the program, or not entirely:
     `GSETTINGS_BACKEND` and `GIO_USE_VFS` (which choose among modules already loaded). The session
     bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
     judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
-    not run or read.
+    not run or read. On Linux (Ubuntu 25.10, x86_64, `gio` 2.86.0, `xdg-open` 1.2.1) the installed
+    `xdg-open` was run with `XDG_CURRENT_DESKTOP=GNOME`, a scratch `HOME` and `XDG_DATA_DIRS` holding
+    one handler for the scheme `bravebot-test`, and `GIO_LAUNCH_DESKTOP` naming a wrapper script,
+    `GIO_EXTRA_MODULES` a directory holding a shared library with a constructor, and
+    `GIO_MODULE_DIR` the same: each ran its code, and each was not run once the opener had judged the
+    value, with the same name naming an installed path still honoured
+    (`a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome`).
+    That run is of the three names and does not show that no other variable `gio open` reads runs
+    code. The Homebrew and pip `aws` scripts, the asdf and pyenv shims and `kde-open` were not run
+    on Linux, and `osascript` is macOS only, so their lists are as the paragraphs above record them.
+    That is what remains of #3809.
   - **`kde-open`** cannot run to the point of a handler on macOS. On Linux (ubuntu-latest, under
     `dbus-run-session`, the `ci.yml` step `Run kde-open with each name set to a marker handler`)
     the installed `kde-open` started with the baseline environment of the test and exited with
@@ -6142,6 +6152,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::opener::a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk`
 `verified-by: bravebot_tui::opener::gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
+`verified-by: bravebot_tui::opener::a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::opener::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
