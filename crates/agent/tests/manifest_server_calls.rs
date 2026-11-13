@@ -2654,7 +2654,8 @@ fn an_apply_whose_arguments_are_malformed_is_refused_before_anybody_is_asked() {
 }
 
 /// An apply step whose `entries` is not a pointer or an object of them, or names a list the step
-/// does not read, ends the run at the step, with none of its calls made.
+/// does not read, is refused with the plan, before it is put to anybody, so none of its calls is
+/// made and nothing is read for it.
 ///
 /// Rejects an implementation that reads a malformed `entries` as the whole reply or an unknown list
 /// as no pointer, which would number entries from somewhere the plan did not say.
@@ -2672,20 +2673,15 @@ fn an_apply_whose_entries_are_malformed_makes_no_call() {
             session: marks_session(&url, &scratch, MARKS_DECLARED),
             mode: PermissionMode::Ask,
             task: Task::new("organise my bookmarks into folders"),
-            replies: vec![shape(), plan(steps), says(ROWS)],
+            replies: vec![shape(), plan(steps.clone()), plan(steps)],
             mcp: &mcp,
             confirmer: Calls::answering(vec![CallDecision::approve()]),
             grants: None,
         });
         let failure = ran.outcome.expect_err("refused").to_string();
         assert!(failure.contains(says_why), "{says_why}: {failure}");
-        assert!(
-            ran.called
-                .iter()
-                .all(|(tool, _)| tool != "make_folder" && tool != "move_mark"),
-            "{says_why}: {:?}",
-            ran.called
-        );
+        assert!(ran.asked.plans.is_empty(), "{says_why}");
+        assert!(ran.called.is_empty(), "{says_why}: {:?}", ran.called);
     }
 }
 
