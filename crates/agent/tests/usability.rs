@@ -882,6 +882,847 @@ fn a_setup_cargo_is_not_handed_a_wrapper_or_target_flags() {
     }
 }
 
+/// An executable at `path` that writes `marker` and then runs its arguments, so that a program
+/// that starts it as a wrapper or a linker still works and leaves proof.
+fn plant_passthrough(path: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().expect("a directory")).expect("directory");
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n: > '{}'\nexec \"$@\"\n", marker.display()),
+    )
+    .expect("planted file");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): GNU Make 3.81 reads `GNUmakefile` ahead of `Makefile` in the
+/// directory it runs in, and `$(shell ...)` in it runs a command while it is parsed. A file in the
+/// session directory is read by the next unconfined `make` started there. The regression it
+/// rejects: a setup `make` started in a directory that holds a `GNUmakefile` no workflow wrote. The
+/// control shows this `make` runs the file when it is left in place.
+#[test]
+fn a_setup_make_does_not_read_a_gnumakefile_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("gnumakefile");
+    let marker = planted.join("ran");
+    let gnumakefile = format!("$(shell : > '{}')\nall:\n\t@true\n", marker.display());
+
+    withheld_from_a_setup_stage(
+        "gnumakefile",
+        "make",
+        &["-s", "all"],
+        &[
+            ("Makefile", "all:\n\t@true\n"),
+            ("GNUmakefile", &gnumakefile),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 reads `.cargo/config.toml` and `.cargo/config`
+/// in its working directory and runs the `build.rustc-wrapper` they name. A file in the session
+/// directory is read by the next unconfined `cargo` started there. The regression it rejects: a
+/// setup `cargo` started in a directory that holds a `.cargo` directory no workflow wrote. Each name
+/// is a case, since a start that removes one still reads the other. The control shows this `cargo`
+/// runs the wrapper when the file is left in place.
+#[test]
+fn a_setup_cargo_does_not_read_a_cargo_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    for (name, file) in [
+        ("cargo-config-toml", ".cargo/config.toml"),
+        ("cargo-config-bare", ".cargo/config"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant_passthrough(&helper, &marker);
+        let configuration = format!("[build]\nrustc-wrapper = \"{}\"\n", helper.display());
+        withheld_from_a_setup_stage(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &[
+                (
+                    "demo/Cargo.toml",
+                    "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+                ),
+                ("demo/src/main.rs", "fn main() {}\n"),
+                (file, &configuration),
+            ],
+            &[],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 reads `.npmrc` in the project root and runs the
+/// shell its `script-shell` names for a script. A file in the session directory is read by the
+/// next unconfined `npm` started there. The regression it rejects: a setup `npm` started in a
+/// directory that holds an `.npmrc` no workflow wrote. The control shows this `npm` runs the shell
+/// when the file is left in place.
+#[test]
+fn a_setup_npm_does_not_read_an_npmrc_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("npmrc");
+    let marker = planted.join("ran");
+    let shell = planted.join("shell");
+    plant(&shell, &marker);
+    let npmrc = format!("script-shell={}\n", shell.display());
+
+    withheld_from_a_setup_stage(
+        "npmrc",
+        "npm",
+        &["--prefix", "{session}", "run", "-s", "start"],
+        &[
+            (
+                "package.json",
+                "{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{\"start\":\"true\"}}\n",
+            ),
+            (".npmrc", &npmrc),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// The marker shows whether a setup stage started after the suite could not remove a
+/// configuration file, which must stop the start before any program runs.
+fn marking_stage(marker: &Path) -> Stage {
+    Stage::new(
+        "sh",
+        &["-c", format!(": > '{}'", marker.display()).as_str()],
+    )
+}
+
+/// Gives a directory its mode back when it goes out of scope, so a test that made one read-only
+/// leaves a tree the next run can delete.
+struct Restored(PathBuf);
+
+impl Drop for Restored {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): a configuration file that cannot be removed is still read by
+/// the program about to start. The regression it rejects: ignoring a failed removal, so that a
+/// directory named `.npmrc`, which `remove_file` refuses to remove, lets the setup stage run.
+#[test]
+fn a_configuration_name_that_cannot_be_removed_stops_the_start() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("unremovable-name");
+    let marker = planted.join("ran");
+    let workflow = Workflow::new("test", "a directory named .npmrc")
+        .file(".npmrc/inside", "x\n")
+        .setup(marking_stage(&marker))
+        .stage(Stage::new("true", &[]));
+
+    let _environment = Environment::held(&[], &[]);
+    let root = root("unremovable-name");
+    let _ = std::fs::remove_dir_all(&root);
+    let refused = usability::run(&root, &[workflow]);
+
+    assert!(
+        matches!(refused, Err(Unavailable::Io(_))),
+        "expected the suite to be unavailable, got {refused:?}"
+    );
+    assert!(!marker.exists(), "a program started with the file in place");
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): as for a name that is a directory, with a configuration file
+/// in a directory that cannot be written, which no removal can unlink. The first setup stage makes
+/// the directory, the second must not start.
+#[test]
+fn a_configuration_file_in_a_read_only_directory_stops_the_start() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("read-only-parent");
+    let marker = planted.join("ran");
+    let root = root("read-only-parent");
+    let _ = std::fs::remove_dir_all(&root);
+    let workflow = Workflow::new("test", "a read-only .cargo")
+        .setup(Stage::new(
+            "sh",
+            &[
+                "-c",
+                "mkdir -p '{session}/.cargo' && : > '{session}/.cargo/config.toml' \
+                 && chmod 555 '{session}/.cargo'",
+            ],
+        ))
+        .setup(marking_stage(&marker))
+        .stage(Stage::new("true", &[]));
+
+    let _environment = Environment::held(&[], &[]);
+    let refused = usability::run(&root, &[workflow]);
+    let _restored = Restored(root.join("00-confined/session/.cargo"));
+
+    assert!(
+        matches!(refused, Err(Unavailable::Io(_))),
+        "expected the suite to be unavailable, got {refused:?}"
+    );
+    assert!(!marker.exists(), "a program started with the file in place");
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): `.cargo` linked to a directory elsewhere is read by cargo as
+/// that directory's `config.toml`. The removal takes the link away and does not unlink the file it
+/// leads to. The regression it rejects: removing `{session}/.cargo/config.toml` through the link,
+/// which deletes a file outside the places the suite made.
+#[test]
+fn a_linked_cargo_directory_is_removed_and_the_file_behind_it_is_not() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let root = root("linked-cargo");
+    let _ = std::fs::remove_dir_all(&root);
+    let workflow = Workflow::new("test", "a linked .cargo")
+        .setup(Stage::new(
+            "sh",
+            &[
+                "-c",
+                "mkdir -p '{beside}/elsewhere' && : > '{beside}/elsewhere/config.toml' \
+                 && ln -s '{beside}/elsewhere' '{session}/.cargo'",
+            ],
+        ))
+        .setup(Stage::new(
+            "sh",
+            &[
+                "-c",
+                "test -f '{beside}/elsewhere/config.toml' && test ! -e '{session}/.cargo'",
+            ],
+        ))
+        .stage(Stage::new("true", &[]));
+
+    let _environment = Environment::held(&[], &[]);
+    let report = usability::run(&root, &[workflow]).expect("the suite runs");
+
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].outcome, Outcome::Passed, "{:?}", report.rows);
+    assert!(
+        root.join("00-confined/beside/elsewhere/config.toml")
+            .exists()
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): `python3` imports `usercustomize` from the user site under
+/// `HOME` when it starts. The regression it rejects: a setup `python3` started without
+/// `PYTHONNOUSERSITE`, so that a `usercustomize.py` in the scratch home's user site runs. The
+/// first setup stage writes the file where this `python3` names its user site, the second starts
+/// `python3` again. The control shows a `python3` with another home and the file in its user site
+/// runs it.
+#[test]
+fn a_setup_python_does_not_import_a_usercustomize_from_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("usercustomize");
+    let marker = planted.join("ran");
+    let write = format!(
+        "import os, site\nd = site.getusersitepackages()\nos.makedirs(d, exist_ok=True)\n\
+         open(os.path.join(d, 'usercustomize.py'), 'w').write(\"open('{}', 'w').close()\\n\")\n",
+        marker.display()
+    );
+
+    // The control: the same file in the user site of a home of this test's.
+    let home = planted.join("control-home");
+    std::fs::create_dir_all(&home).expect("control home");
+    let home_text = home.to_str().expect("utf-8");
+    let Some(site) = python_output(
+        &["-c", "import site; print(site.getusersitepackages())"],
+        &[("HOME", home_text)],
+    ) else {
+        return skipped("python3 is not installed");
+    };
+    let site = PathBuf::from(site.trim());
+    std::fs::create_dir_all(&site).expect("user site");
+    std::fs::write(
+        site.join("usercustomize.py"),
+        format!("open('{}', 'w').close()\n", marker.display()),
+    )
+    .expect("usercustomize.py");
+    let _ = python_output(&["-c", "pass"], &[("HOME", home_text)]);
+    let control = marker.exists();
+    let _ = std::fs::remove_file(&marker);
+    if !control {
+        return skipped("python3 here does not import usercustomize from the user site");
+    }
+
+    let workflow = Workflow::new("test", "a setup python")
+        .setup(Stage::new("python3", &["-c", &write]))
+        .setup(Stage::new("python3", &["-c", "pass"]))
+        .stage(Stage::new("true", &[]));
+    run_with_planted("usercustomize", &[], workflow, &marker);
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): go 1.27.3 reads an environment file under the home, and
+/// `GOFLAGS=-toolexec=<helper>` in it runs the helper for every tool the build starts. The file is
+/// `Library/Application Support/go/env` on macOS and `.config/go/env` elsewhere, and both are
+/// planted. The regression it rejects: a setup `go` started with the scratch home holding a file
+/// that no workflow wrote. The control shows this `go` runs the helper from a file `GOENV` names.
+#[test]
+fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("go-env-file");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant_passthrough(&helper, &marker);
+    let content = format!("GOFLAGS=-toolexec={}\n", helper.display());
+    let environment_file = planted.join("env");
+    std::fs::write(&environment_file, &content).expect("environment file");
+    let files = [
+        ("go.mod", "module probe\n\ngo 1.20\n"),
+        ("main.go", "package main\n\nfunc main() {}\n"),
+    ];
+    let args = ["-C", "{session}", "build", "./..."];
+
+    match runs_the_helper_when_given(
+        "go-env-file",
+        "go",
+        &args,
+        &files,
+        &[
+            ("GOENV", environment_file.to_str().expect("utf-8")),
+            ("GOTOOLCHAIN", "local"),
+        ],
+        &marker,
+    ) {
+        None => {
+            eprintln!("skipped go-env-file: go is not installed");
+            return;
+        }
+        Some(false) => return skipped("go here does not run -toolexec from a GOENV file"),
+        Some(true) => {}
+    }
+
+    let plant_files = format!(
+        "for d in '{{home}}/Library/Application Support/go' '{{home}}/.config/go'; do \
+         mkdir -p \"$d\" && printf '%s\\n' 'GOFLAGS=-toolexec={}' > \"$d/env\"; done",
+        helper.display()
+    );
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup go"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(Stage::new("sh", &["-c", &plant_files]))
+        .setup(Stage::new("go", &args))
+        .stage(Stage::new("true", &[]));
+    run_with_planted("go-env-file", &[], workflow, &marker);
+}
+
+/// An executable at `path` that writes `marker` and then links as `cc` would, so that a cargo build
+/// that names it as its linker still works and leaves proof.
+fn plant_linker(path: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().expect("a directory")).expect("directory");
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n: > '{}'\nexec cc \"$@\"\n", marker.display()),
+    )
+    .expect("planted file");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+}
+
+/// A setup stage that writes `lines` to `file` under the scratch home, the way a program a stage
+/// started would. It runs before the stage that is judged, which is cleaned of what it wrote.
+fn plant_in_home(file: &str, lines: &[String]) -> Stage {
+    assert!(lines.iter().all(|line| !line.contains('\'')), "{lines:?}");
+    let quoted: Vec<String> = lines.iter().map(|line| format!("'{line}'")).collect();
+    Stage::new(
+        "sh",
+        &[
+            "-c",
+            &format!(
+                "mkdir -p \"$(dirname '{{home}}/{file}')\" && printf '%s\\n' {} > '{{home}}/{file}'",
+                quoted.join(" ")
+            ),
+        ],
+    )
+}
+
+/// The rustup home the control run gives the programs it starts: the `RUSTUP_HOME` the account
+/// configured when it is set and not empty, else `.rustup` under the account's `home`.
+fn rustup_home_for_control(configured: Option<std::ffi::OsString>, home: &str) -> String {
+    match configured.filter(|value| !value.is_empty()) {
+        Some(value) => value.to_str().expect("a utf-8 RUSTUP_HOME").to_string(),
+        None => format!("{home}/.rustup"),
+    }
+}
+
+/// The control run gives cargo the rustup home the account configured, so a machine whose rustup
+/// is not under `$HOME/.rustup` still finds its toolchain and the home tests assert something.
+#[test]
+fn the_control_run_uses_the_rustup_home_the_account_configured() {
+    let configured = Some(std::ffi::OsString::from("/opt/rustup"));
+    assert_eq!(
+        rustup_home_for_control(configured, "/Users/a"),
+        "/opt/rustup"
+    );
+    assert_eq!(
+        rustup_home_for_control(None, "/Users/a"),
+        "/Users/a/.rustup"
+    );
+    assert_eq!(
+        rustup_home_for_control(Some(std::ffi::OsString::new()), "/Users/a"),
+        "/Users/a/.rustup"
+    );
+}
+
+/// Runs the setup stage `program args` over `files`, after a stage that writes `lines` to `file`
+/// under the scratch home, and asserts nothing ran the file that writes `marker`. The control
+/// starts the same program with `lines` in `file` under a home of the test's, and where it does not
+/// run the helper the test proves nothing on this host and says it skipped. The result is whether
+/// the stage ran.
+fn home_configuration_is_not_read(
+    name: &str,
+    program: &str,
+    args: &[&str],
+    files: &[(&str, &str)],
+    file: &str,
+    lines: &[String],
+    marker: &Path,
+) -> bool {
+    let planted = marker.parent().expect("a directory");
+    let control_home = planted.join("control-home");
+    let control_file = control_home.join(file);
+    std::fs::create_dir_all(control_file.parent().expect("a directory")).expect("directory");
+    std::fs::write(&control_file, format!("{}\n", lines.join("\n"))).expect("control file");
+    let home = control_home.to_str().expect("utf-8").to_string();
+    // The rustup proxy finds its toolchains from the account's home, which the control replaces.
+    // A `cargo test` run under it holds `CARGO_HOME` for the account's home, which cargo reads in
+    // place of `.cargo` under `HOME`, so the control names the replacement's. The lock keeps a test
+    // that holds `RUSTUP_HOME` for a start from being read here.
+    let rustup = {
+        let _environment = Environment::held(&[], &[]);
+        rustup_home_for_control(
+            std::env::var_os("RUSTUP_HOME"),
+            &std::env::var("HOME").expect("a home"),
+        )
+    };
+    let cargo_home = format!("{home}/.cargo");
+    match runs_the_helper_when_given(
+        name,
+        program,
+        args,
+        files,
+        &[
+            ("HOME", &home),
+            ("RUSTUP_HOME", &rustup),
+            ("CARGO_HOME", &cargo_home),
+        ],
+        marker,
+    ) {
+        None => {
+            eprintln!("skipped {name}: {program} is not installed");
+            return false;
+        }
+        Some(false) => {
+            eprintln!(
+                "skipped {name}: {program} on {} {} does not run the helper from {file} in its home",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return false;
+        }
+        Some(true) => {}
+    }
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup stage"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(plant_in_home(file, lines))
+        .setup(Stage::new(program, args))
+        .stage(Stage::new("true", &[]));
+    run_with_planted(name, &[], workflow, marker)
+}
+
+/// The files a cargo test builds: a package with nothing to compile but `main`.
+fn cargo_demo_files() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "demo/Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+        ),
+        ("demo/src/main.rs", "fn main() {}\n"),
+    ]
+}
+
+/// Plants the helpers a cargo configuration names under a directory of its own, in `pass` (a
+/// wrapper or a runner) and `linker`, and returns the directory and the marker they write.
+fn cargo_helpers(name: &str) -> (PathBuf, PathBuf) {
+    let planted = planted_dir(name);
+    let marker = planted.join("ran");
+    plant_passthrough(&planted.join("pass"), &marker);
+    plant_linker(&planted.join("linker"), &marker);
+    (planted, marker)
+}
+
+/// Runs a setup `cargo subcommand` over a package and the cargo configuration `configuration` makes
+/// at `file` in the session directory, and asserts nothing ran the helpers.
+fn cargo_ignores_a_configuration_in_its_directory(
+    name: &str,
+    file: &str,
+    subcommand: &str,
+    configuration: impl FnOnce(&Path) -> String,
+) {
+    let (planted, marker) = cargo_helpers(name);
+    let configuration = configuration(&planted);
+    let mut files: Vec<(&str, &str)> = cargo_demo_files();
+    files.push((file, &configuration));
+    withheld_from_a_setup_stage(
+        name,
+        "cargo",
+        &[
+            subcommand,
+            "-q",
+            "--offline",
+            "--manifest-path={session}/demo/Cargo.toml",
+        ],
+        &files,
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 ran the program
+/// `target.<triple>.linker` names in `.cargo/config.toml` in its working directory. The regression
+/// it rejects: a setup `cargo` started in a directory that holds a `.cargo/config.toml` no workflow
+/// wrote. The control shows this `cargo` runs the linker when the file is left in place.
+#[test]
+fn a_setup_cargo_does_not_run_a_linker_from_a_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        return eprintln!("skipped: the host is not one the tests know");
+    };
+    cargo_ignores_a_configuration_in_its_directory(
+        "cargo-config-linker",
+        ".cargo/config.toml",
+        "build",
+        |planted| {
+            format!(
+                "[target.{triple}]\nlinker = \"{}\"\n",
+                planted.join("linker").display()
+            )
+        },
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 ran the program
+/// `target.<triple>.runner` names in `.cargo/config.toml` for `cargo run`. The regression it
+/// rejects: a setup `cargo run` started in a directory that holds a `.cargo/config.toml` no
+/// workflow wrote.
+#[test]
+fn a_setup_cargo_does_not_run_a_runner_from_a_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        return eprintln!("skipped: the host is not one the tests know");
+    };
+    cargo_ignores_a_configuration_in_its_directory(
+        "cargo-config-runner",
+        ".cargo/config.toml",
+        "run",
+        |planted| {
+            format!(
+                "[target.{triple}]\nrunner = \"{}\"\n",
+                planted.join("pass").display()
+            )
+        },
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 ran the linker that
+/// `build.rustflags` names with `-C linker=` in `.cargo/config.toml`, and the same flags under
+/// `target.<triple>.rustflags`. The regression it rejects: a setup `cargo` started in a directory
+/// that holds a `.cargo/config.toml` no workflow wrote. Each table is a case.
+#[test]
+fn a_setup_cargo_does_not_take_rustflags_from_a_configuration_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        return eprintln!("skipped: the host is not one the tests know");
+    };
+    for (name, table) in [
+        ("cargo-config-build-rustflags", "build".to_string()),
+        ("cargo-config-target-rustflags", format!("target.{triple}")),
+    ] {
+        cargo_ignores_a_configuration_in_its_directory(
+            name,
+            ".cargo/config.toml",
+            "build",
+            |planted| {
+                format!(
+                    "[{table}]\nrustflags = [\"-C\", \"linker={}\"]\n",
+                    planted.join("linker").display()
+                )
+            },
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): cargo 1.99.0 on macOS arm64 read `.cargo/config.toml` and
+/// `.cargo/config` in `.cargo` under `HOME` and ran the `build.rustc-wrapper` they name. The
+/// scratch home is a directory a start reads, so the regression it rejects is a start that leaves
+/// the home out of the directories it cleans. Each name is a case.
+#[test]
+fn a_setup_cargo_does_not_read_a_cargo_configuration_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    for (name, file) in [
+        ("cargo-home-config-toml", ".cargo/config.toml"),
+        ("cargo-home-config-bare", ".cargo/config"),
+    ] {
+        let (planted, marker) = cargo_helpers(name);
+        let lines = [
+            "[build]".to_string(),
+            format!("rustc-wrapper = \"{}\"", planted.join("pass").display()),
+        ];
+        home_configuration_is_not_read(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &cargo_demo_files(),
+            file,
+            &lines,
+            &marker,
+        );
+    }
+}
+
+/// A `package.json` whose `start` script is `script`.
+fn package_with_start(script: &str) -> String {
+    format!("{{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{{\"start\":\"{script}\"}}}}\n")
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 read `node-options` in `.npmrc` in
+/// the project and passed it to the `node` a script starts, which loaded the module it names with
+/// `--require`. The regression it rejects: a setup `npm` started in a directory that holds an
+/// `.npmrc` no workflow wrote.
+#[test]
+fn a_setup_npm_does_not_take_node_options_from_an_npmrc_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("npmrc-node-options");
+    let marker = planted.join("ran");
+    let module = planted.join("module.js");
+    plant_module(&module, &marker);
+    let npmrc = format!("node-options=--require={}\n", module.display());
+
+    withheld_from_a_setup_stage(
+        "npmrc-node-options",
+        "npm",
+        &["--prefix", "{session}", "run", "-s", "start"],
+        &[
+            ("package.json", &package_with_start("node -e 0")),
+            (".npmrc", &npmrc),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 read `init-module` in `.npmrc` in
+/// the project and ran the module it names for `npm init`. The regression it rejects: a setup
+/// `npm init` started in a directory that holds an `.npmrc` no workflow wrote.
+#[test]
+fn a_setup_npm_does_not_run_an_init_module_from_an_npmrc_in_its_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("npmrc-init-module");
+    let marker = planted.join("ran");
+    let module = planted.join("module.js");
+    plant_module(&module, &marker);
+    let npmrc = format!("init-module={}\n", module.display());
+    // A project root is the nearest directory with a `package.json`, and without one here npm
+    // would take the checkout's, which holds no `.npmrc` of the test's.
+    withheld_from_a_setup_stage(
+        "npmrc-init-module",
+        "npm",
+        &["init", "-y"],
+        &[
+            ("package.json", "{\"name\":\"a\",\"version\":\"1.0.0\"}\n"),
+            (".npmrc", &npmrc),
+        ],
+        &[],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 read `$HOME/.npmrc` and ran the
+/// shell its `script-shell` names, the module its `init-module` names, and loaded the module its
+/// `node-options` name. The scratch home is a directory a start reads, so the regression it rejects
+/// is a start that leaves the home out of the directories it cleans. Each key is a case.
+#[test]
+fn a_setup_npm_does_not_read_an_npmrc_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    for (name, key) in [
+        ("home-npmrc-script-shell", "script-shell"),
+        ("home-npmrc-node-options", "node-options"),
+        ("home-npmrc-init-module", "init-module"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let shell = planted.join("shell");
+        plant(&shell, &marker);
+        let module = planted.join("module.js");
+        plant_module(&module, &marker);
+        let (line, args, package): (String, &[&str], Vec<(&str, String)>) = match key {
+            "script-shell" => (
+                format!("script-shell={}", shell.display()),
+                &["--prefix", "{session}", "run", "-s", "start"],
+                vec![("package.json", package_with_start("true"))],
+            ),
+            "node-options" => (
+                format!("node-options=--require={}", module.display()),
+                &["--prefix", "{session}", "run", "-s", "start"],
+                vec![("package.json", package_with_start("node -e 0"))],
+            ),
+            _ => (
+                format!("init-module={}", module.display()),
+                &["init", "-y"],
+                vec![],
+            ),
+        };
+        let files: Vec<(&str, &str)> = package
+            .iter()
+            .map(|(path, contents)| (*path, contents.as_str()))
+            .collect();
+        home_configuration_is_not_read(name, "npm", args, &files, ".npmrc", &[line], &marker);
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): npm 11.19.1 on macOS arm64 ran `$HOME/.npm-init.js`, its
+/// default `init-module`, for `npm init`. The regression it rejects: a start that leaves the home
+/// out of the directories it cleans, or that leaves `.npm-init.js` out of the names it removes.
+#[test]
+fn a_setup_npm_does_not_run_an_init_script_from_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("home-npm-init-js");
+    let marker = planted.join("ran");
+    let lines = [
+        format!(
+            "require(\"fs\").writeFileSync(\"{}\", \"x\");",
+            marker.display()
+        ),
+        "module.exports = {};".to_string(),
+    ];
+
+    home_configuration_is_not_read(
+        "home-npm-init-js",
+        "npm",
+        &["init", "-y"],
+        &[],
+        ".npm-init.js",
+        &lines,
+        &marker,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3858): go 1.27.3 read `GOTOOLCHAIN=go1.99.0+path` from its
+/// environment file under the home and ran the `go1.99.0` it found on `PATH`, when the variable
+/// was not set. The file is `Library/Application Support/go/env` on macOS and `.config/go/env`
+/// elsewhere, and both are planted. The suite sets `GOTOOLCHAIN=local`, which wins over the file,
+/// and `GOENV=off`, which stops the file being read, so the regression it rejects is a start with
+/// neither. The control shows this `go` runs the helper from a file `GOENV` names.
+#[test]
+fn a_setup_go_does_not_switch_toolchain_from_an_environment_file_in_the_home() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("go-toolchain-file");
+    let marker = planted.join("ran");
+    plant(&planted.join("go1.99.0"), &marker);
+    let environment_file = planted.join("env");
+    std::fs::write(&environment_file, "GOTOOLCHAIN=go1.99.0+path\n").expect("environment file");
+    let path = {
+        let _environment = Environment::held(&[], &[]);
+        format!(
+            "{}:{}",
+            planted.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    };
+    let files = [
+        ("go.mod", "module probe\n\ngo 1.20\n"),
+        ("main.go", "package main\n\nfunc main() {}\n"),
+    ];
+    let args = ["-C", "{session}", "build", "./..."];
+
+    match runs_the_helper_when_given(
+        "go-toolchain-file",
+        "go",
+        &args,
+        &files,
+        &[
+            ("GOENV", environment_file.to_str().expect("utf-8")),
+            ("PATH", &path),
+        ],
+        &marker,
+    ) {
+        None => {
+            eprintln!("skipped go-toolchain-file: go is not installed");
+            return;
+        }
+        Some(false) => return skipped("go here does not switch toolchain from a GOENV file"),
+        Some(true) => {}
+    }
+
+    let lines = ["GOTOOLCHAIN=go1.99.0+path".to_string()];
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup go"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(plant_in_home("Library/Application Support/go/env", &lines))
+        .setup(plant_in_home(".config/go/env", &lines))
+        .setup(Stage::new("go", &args))
+        .stage(Stage::new("true", &[]));
+    run_with_planted("go-toolchain-file", &[("PATH", &path)], workflow, &marker);
+}
+
 /// SANDBOX-30 (brave/bravebot#3811): npm 11.19.1 ran the shell named by `npm_config_script_shell`
 /// and `NPM_CONFIG_SCRIPT_SHELL` for a script, and read a file named by `npm_config_userconfig`
 /// that names one. The regression it rejects: removing the lower-case prefix only.
@@ -1121,6 +1962,204 @@ fn a_setup_cargo_is_not_handed_a_compiler_or_a_workspace_wrapper() {
             name,
             &["build", "-q", "--offline"],
             &[(variable, helper.to_str().expect("utf-8"))],
+            &marker,
+            Some(&planted),
+        );
+    }
+}
+
+/// The version `Cargo.lock` holds for the crate `name`.
+fn locked_version(name: &str) -> Option<String> {
+    let lock =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .ok()?;
+    let rest = lock
+        .split(&format!("name = \"{name}\"\nversion = \""))
+        .nth(1)?;
+    Some(rest.split('"').next()?.to_string())
+}
+
+/// The `src` directory of the version of the crate `name` that `Cargo.lock` holds, from the
+/// registry cache of the account running the test. `None` when the cache does not hold it.
+fn cached_source(name: &str) -> Option<PathBuf> {
+    let version = locked_version(name)?;
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))?;
+    std::fs::read_dir(cargo_home.join("registry").join("src"))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|index| index.path().join(format!("{name}-{version}")).join("src"))
+        .find(|source| source.is_dir())
+}
+
+/// Every file under `directory` as a path under `prefix` and its text.
+fn source_files(directory: &Path, prefix: &str, into: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(directory).expect("a source directory") {
+        let path = entry.expect("an entry").path();
+        let name = format!(
+            "{prefix}/{}",
+            path.file_name().expect("a name").to_string_lossy()
+        );
+        if path.is_dir() {
+            source_files(&path, &name, into);
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            into.push((name, text));
+        }
+    }
+}
+
+/// A package whose build script compiles a C file and a C++ file with the `cc` crate, the version
+/// in `Cargo.lock`, which it takes with the two crates that one needs from the registry cache as
+/// path dependencies so that no network or registry index is read. `None` where the cache lacks
+/// one of them, and says so.
+fn package_that_builds_with_cc(name: &str) -> Option<Vec<(String, String)>> {
+    let crates = ["cc", "find-msvc-tools", "shlex"];
+    let sources: Vec<Option<PathBuf>> = crates.iter().map(|krate| cached_source(krate)).collect();
+    if sources.iter().any(Option::is_none) {
+        eprintln!(
+            "skipped {name}: the registry cache lacks the locked cc, find-msvc-tools or shlex"
+        );
+        return None;
+    }
+    let mut files = vec![
+        (
+            "demo/Cargo.toml".to_string(),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             build = \"build.rs\"\n[build-dependencies]\ncc = { path = \"vendor/cc\" }\n[workspace]\n"
+                .to_string(),
+        ),
+        ("demo/src/lib.rs".to_string(), "pub fn f() {}\n".to_string()),
+        (
+            "demo/build.rs".to_string(),
+            "fn main() {\n    cc::Build::new().file(\"c.c\").compile(\"democ\");\n    \
+             cc::Build::new().cpp(true).file(\"d.cpp\").compile(\"democpp\");\n}\n"
+                .to_string(),
+        ),
+        ("demo/c.c".to_string(), "int one(void) { return 1; }\n".to_string()),
+        ("demo/d.cpp".to_string(), "int two() { return 2; }\n".to_string()),
+    ];
+    let manifests = [
+        (
+            "cc",
+            "edition = \"2021\"\n[dependencies]\nfind-msvc-tools = { path = \"../find-msvc-tools\" }\n\
+             shlex = { path = \"../shlex\" }\n",
+        ),
+        (
+            "find-msvc-tools",
+            "edition = \"2021\"\n[lib]\nname = \"find_msvc_tools\"\n",
+        ),
+        (
+            "shlex",
+            "edition = \"2018\"\n[features]\ndefault = [\"std\"]\nstd = []\n",
+        ),
+    ];
+    for ((krate, source), (_, manifest)) in crates.iter().zip(&sources).zip(manifests) {
+        let version = locked_version(krate)?;
+        files.push((
+            format!("demo/vendor/{krate}/Cargo.toml"),
+            format!("[package]\nname = \"{krate}\"\nversion = \"{version}\"\n{manifest}"),
+        ));
+        source_files(
+            source.as_deref()?,
+            &format!("demo/vendor/{krate}/src"),
+            &mut files,
+        );
+    }
+    Some(files)
+}
+
+/// SANDBOX-30 (brave/bravebot#3859): the `cc` crate in a build script (the locked version, 1.4.3)
+/// takes the compiler, the C++ compiler, the archiver and the flags from `<NAME>_<target>`,
+/// `<NAME>_<target with _>`, `HOST_<NAME>` and `<NAME>`, in that order, and ran the program or the
+/// helper directory each named. Each is removed whatever it holds.
+///
+/// The test runs ten forms: `CC_<triple>`, `CC_<triple with _>`, `HOST_CC`, `CXX_<triple>`,
+/// `HOST_CXX`, `AR_<triple>`, `HOST_AR`, `CFLAGS_<triple>`, `HOST_CFLAGS` and `CXXFLAGS_<triple>`.
+/// The other forms (`RANLIB`, `NVCC`, `ARFLAGS`, `RANLIBFLAGS` and `PKG_CONFIG` per target, every
+/// `TARGET_` form, `HOST_CXXFLAGS`) are not run here; the unit test
+/// `the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold` pins them by name.
+///
+/// The regression it rejects: a setup `cargo build` of a package that uses `cc`, started with one
+/// of those per-target names the person's shell holds. A name the compiler does not act on, for
+/// example a `-B` directory with no external assembler to find, is skipped by the control and says
+/// so. The test is inert where the registry cache lacks a locked crate: it prints that it skipped
+/// and returns.
+#[test]
+fn a_setup_cargo_is_not_handed_a_per_target_compiler_archiver_or_flags() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        eprintln!("skipped the per-target cc names: the host is unknown to the tests");
+        return;
+    };
+    let underscored = triple.replace('-', "_");
+    let leak = |name: String| -> &'static str { Box::leak(name.into_boxed_str()) };
+    // Flags that make the compiler look for `as` and `ld` in a directory. Apple clang assembles
+    // inside the compiler unless told not to; gcc rejects `-fno-integrated-as`.
+    let search_dir: &'static str = if cfg!(target_os = "macos") {
+        "-fno-integrated-as -B"
+    } else {
+        "-B"
+    };
+    // A name, and what its value is in front of the helper.
+    let cases: Vec<(&str, &'static str, &str)> = vec![
+        ("cc-target-dashes", leak(format!("CC_{triple}")), ""),
+        (
+            "cc-target-underscores",
+            leak(format!("CC_{underscored}")),
+            "",
+        ),
+        ("cc-host", "HOST_CC", ""),
+        ("cxx-target", leak(format!("CXX_{triple}")), ""),
+        ("cxx-host", "HOST_CXX", ""),
+        ("ar-target", leak(format!("AR_{triple}")), ""),
+        ("ar-host", "HOST_AR", ""),
+        (
+            "cflags-target",
+            leak(format!("CFLAGS_{triple}")),
+            search_dir,
+        ),
+        ("cflags-host", "HOST_CFLAGS", search_dir),
+        (
+            "cxxflags-target",
+            leak(format!("CXXFLAGS_{triple}")),
+            search_dir,
+        ),
+    ];
+    for (name, variable, flags) in cases {
+        let Some(files) = package_that_builds_with_cc(name) else {
+            return;
+        };
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let value = if flags.is_empty() {
+            // The program, or for flags a directory holding programs of the names the compiler asks for.
+            let helper = planted.join("helper");
+            plant(&helper, &marker);
+            helper.display().to_string()
+        } else {
+            for tool in ["as", "ld"] {
+                plant(&planted.join(tool), &marker);
+            }
+            format!("{flags}{}", planted.display())
+        };
+        withheld_from_a_setup_stage(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &files,
+            &[(variable, &value)],
             &marker,
             Some(&planted),
         );
@@ -2216,6 +3255,103 @@ fn a_setup_python_venv_is_not_handed_an_executable() {
     );
 }
 
+/// SANDBOX-30 (brave/bravebot#3863): python3 3.15.2 on macOS arm64 imported the module that
+/// `_PYTHON_SYSCONFIGDATA_NAME` names from the working directory, which is on `sys.path` for
+/// `-m`, when `python3 -m venv` read the build variables, and so ran a file a stage had written
+/// there. A plain `python3 -c pass` did not read it. It is a module name, so a start removes it
+/// whatever it holds. The regression it rejects: a setup `python3 -m venv` started with the
+/// module name the person's shell holds.
+#[test]
+fn a_setup_python_venv_is_not_handed_a_sysconfig_module_name() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-sysconfigdata");
+    let marker = planted.join("ran");
+    let module = format!("open('{}', 'w').close()\n", marker.display());
+
+    withheld_from_a_setup_stage(
+        "python-sysconfigdata",
+        "python3",
+        &["-m", "venv", ".venv"],
+        &[("brave_sysconfigdata.py", &module)],
+        &[("_PYTHON_SYSCONFIGDATA_NAME", "brave_sysconfigdata")],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): GNU Make 3.81 on macOS arm64 ran the assembler
+/// `-B<directory>` finds when `ASFLAGS` held `-fno-integrated-as -B<directory>/` and the
+/// built-in rule for a `.S` file ran. A `.s` file ran nothing. gcc, which `cc` is on Linux, takes
+/// `-B` and not `-fno-integrated-as`, so the flag is given on macOS only. It is options, so the
+/// helper is left where no stage can write. The regression it rejects: a setup `make` started with
+/// the assembler flags the person's shell holds.
+#[test]
+fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-rule-asflags");
+    let marker = planted.join("ran");
+    plant(&planted.join("as"), &marker);
+    let value = if cfg!(target_os = "macos") {
+        format!("-fno-integrated-as -B{}/", planted.display())
+    } else {
+        format!("-B{}/", planted.display())
+    };
+
+    withheld_from_a_setup_stage(
+        "make-rule-asflags",
+        "sh",
+        &["-c", "make -s -C {session} || true"],
+        &[("Makefile", "all: x.o\n"), ("x.S", "")],
+        &[("ASFLAGS", &value)],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): `COMPILER_PATH` is a list of directories, and
+/// `GCC_EXEC_PREFIX` a prefix, that the gcc manual ("Environment Variables Affecting GCC") says gcc
+/// searches for the programs it runs (`cc1`, `as`, `ld`), after `-B` and before the standard
+/// directories. The helper is planted as both `as` and `ld`, since gcc runs `as` and Apple clang on
+/// macOS 26 arm64 runs `ld` and has no use for `as`. Apple clang ran the `ld` found through
+/// `COMPILER_PATH` on a plain link and ran nothing for `GCC_EXEC_PREFIX`, so the `COMPILER_PATH`
+/// half of this test runs on macOS. On no recorded host does the `GCC_EXEC_PREFIX` control run the
+/// helper, so it prints `skipped` and that half cannot fail; the unit test of the list pins that
+/// name. `COMPILER_PATH` is a list of directories, so its helper is put in a directory a stage may
+/// write; `GCC_EXEC_PREFIX` is options, so its helper is left where no stage can write. The
+/// regression it rejects: a setup `make` that compiles and links with the directories the person's
+/// shell holds in `COMPILER_PATH`.
+#[test]
+fn a_setup_make_is_not_handed_a_gcc_search_path_for_its_programs() {
+    if !usability::available() {
+        return;
+    }
+    for (variable, writable) in [("COMPILER_PATH", true), ("GCC_EXEC_PREFIX", false)] {
+        let label = format!("make-{}", variable.to_lowercase().replace('_', "-"));
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        plant(&planted.join("as"), &marker);
+        plant(&planted.join("ld"), &marker);
+        let value = format!("{}/", planted.display());
+
+        withheld_from_a_setup_stage(
+            &label,
+            "sh",
+            &["-c", "make -s -C {session} || true"],
+            &[
+                ("Makefile", "all: x\n"),
+                ("x.c", "int main(void) { return 0; }\n"),
+            ],
+            &[(variable, &value)],
+            &marker,
+            writable.then_some(planted.as_path()),
+        );
+    }
+}
+
 /// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 on macOS arm64 searched the directories of `-I` in
 /// `MAKEFLAGS` for a makefile named by `-include`, and ran the `$(shell ...)` in it. `GNUMAKEFLAGS`
 /// and `MFLAGS` are not read by 3.81, so they are not covered here. The regression it rejects: a
@@ -2522,24 +3658,31 @@ fn a_setup_python_is_not_handed_an_openssl_provider() {
     } else {
         "x.so"
     });
-    let built = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))
-        .and_then(|cc| {
-            bravebot_sandbox::programs::start_against(
-                &cc,
-                bravebot_sandbox::programs::Inherits::All,
-                bravebot_sandbox::programs::SearchPath::Inherited,
-                bravebot_sandbox::programs::CodeSelectors::Kept,
-                std::iter::empty(),
-                &|_: &Path| true,
-            )
-            .arg("-shared")
-            .arg("-o")
-            .arg(&library)
-            .arg(&source)
-            .status()
-            .ok()
-        })
-        .is_some_and(|status| status.success());
+    // The environment belongs to the process, so a build started beside a test that holds
+    // `COMPILER_PATH` would be started with it, and gcc would run the `ld` planted there and write
+    // that test's marker. Holding the lock keeps those names out of this one.
+    let built = {
+        let _environment =
+            Environment::held(&[], &["COMPILER_PATH", "GCC_EXEC_PREFIX", "LD_PRELOAD"]);
+        bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))
+            .and_then(|cc| {
+                bravebot_sandbox::programs::start_against(
+                    &cc,
+                    bravebot_sandbox::programs::Inherits::All,
+                    bravebot_sandbox::programs::SearchPath::Inherited,
+                    bravebot_sandbox::programs::CodeSelectors::Kept,
+                    std::iter::empty(),
+                    &|_: &Path| true,
+                )
+                .arg("-shared")
+                .arg("-o")
+                .arg(&library)
+                .arg(&source)
+                .status()
+                .ok()
+            })
+            .is_some_and(|status| status.success())
+    };
     if !built {
         eprintln!("skipped python-openssl: no cc builds a shared library here");
         return;
@@ -2653,6 +3796,73 @@ fn a_setup_go_vet_is_not_handed_a_go_settings_file() {
     );
 }
 
+/// The files `cargo`, `npm`, `go`, `pip` and `make` read to choose code (brave/bravebot#3858), by
+/// where the program looks for them, as `touch` arguments. Each is a directory the suite starts an
+/// unconfined program in or gives it as `HOME`: the session directory, its parent, and the scratch
+/// home.
+const CONFIGURATION_LOCATIONS: &[(&str, &str)] = &[
+    ("cargo-session", "{session}/.cargo/config.toml"),
+    ("npm-session", "{session}/.npmrc"),
+    ("make-session", "{session}/GNUmakefile"),
+    ("cargo-parent", "{session}/../.cargo/config.toml"),
+    ("npm-parent", "{session}/../.npmrc"),
+    ("make-parent", "{session}/../GNUmakefile"),
+    ("cargo-home", "{home}/.cargo/config.toml"),
+    ("cargo-home-bare", "{home}/.cargo/config"),
+    ("npm-home", "{home}/.npmrc"),
+    ("npm-init-home", "{home}/.npm-init.js"),
+    ("go-home-macos", "{home}/Library/Application Support/go/env"),
+    ("go-home-xdg", "{home}/.config/go/env"),
+    ("pip-home", "{home}/.config/pip/pip.conf"),
+    ("pip-home-legacy", "{home}/.pip/pip.conf"),
+];
+
+/// SANDBOX-30 and SANDBOX-21 (brave/bravebot#3858): a configuration file reaches an unconfined
+/// start of the suite only if a confined stage can write it. A confined stage writes the session
+/// directory and nothing else of the workflow's places, so its `.cargo/config.toml`, `.npmrc` and
+/// `GNUmakefile` are read by the next program started in that directory, and the same names in the
+/// directory above it, the scratch home or the places beside it are refused. The regression it
+/// rejects: a toolchain list that names `~/.cargo` or the home directory in place of the cache
+/// beneath it, which lets a confined stage write the file that every later cargo or npm start in
+/// that home reads. The directories exist before the confined stage starts, so a refusal is the
+/// policy's and not a missing parent.
+#[test]
+fn a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let workflows: Vec<Workflow> = CONFIGURATION_LOCATIONS
+        .iter()
+        .map(|(name, path)| {
+            let directory = path.rsplit_once('/').expect("a path").0;
+            let workflow = Workflow::new("test", name)
+                .setup(Stage::new("mkdir", &["-p", directory]))
+                .stage(Stage::new("touch", &[path]));
+            if name.ends_with("session") {
+                workflow
+            } else {
+                workflow.refused()
+            }
+        })
+        .collect();
+
+    let _environment = Environment::held(&[], &[]);
+    let report = run("configuration-locations", &workflows);
+
+    assert!(report.skipped().is_empty(), "{:?}", report.skipped());
+    assert_eq!(report.rows.len(), CONFIGURATION_LOCATIONS.len());
+    for row in &report.rows {
+        assert_eq!(
+            row.outcome,
+            Outcome::Passed,
+            "{} was not {:?}: {:?}",
+            row.name,
+            row.expect,
+            row.outcome
+        );
+    }
+}
+
 /// SANDBOX-21: the `/usr/bin` shims run `$DEVELOPER_DIR/usr/bin/xcrun` before the tool. The
 /// regression it rejects: a setup stage started with the developer directory the person's shell
 /// holds. The shim is named by path, since a `git` from another prefix does not read the variable.
@@ -2675,5 +3885,202 @@ fn a_setup_stage_is_not_handed_a_developer_directory() {
         &[("DEVELOPER_DIR", developer.to_str().expect("utf-8"))],
         workflow,
         &marker,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 4.4.1 on Linux read `-f <file>` from `GNUMAKEFLAGS`
+/// and `MAKEFLAGS` and ran the `$(shell ...)` in that makefile, where 3.81 on macOS did not. The
+/// regression it rejects: a setup `make` started with the `GNUMAKEFLAGS` the person's shell holds,
+/// which a list made on macOS alone would not have caught if it had dropped the name as unread. The
+/// control skips the test on a `make` that does not read the flag.
+#[test]
+fn a_setup_make_is_not_handed_gnumakeflags_that_name_a_makefile() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("gnumakeflags");
+    let marker = planted.join("ran");
+    let makefile = planted.join("extra.mk");
+    std::fs::write(
+        &makefile,
+        format!("$(shell : > '{}')\nall:\n\t@true\n", marker.display()),
+    )
+    .expect("makefile");
+
+    withheld_from_a_setup_stage(
+        "gnumakeflags",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n")],
+        &[("GNUMAKEFLAGS", &format!("-f {}", makefile.display()))],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 4.4.1 on Linux ran the program in the variables of
+/// the built-in rules that preprocess assembler (`CPP`), compile Objective-C (`OBJC`), weave and
+/// tangle (`CWEAVE`, `CTANGLE`, `WEAVE`, `TANGLE`) and typeset (`TEX`), and in `COMPILE.c`,
+/// `COMPILE.cc` and `LINK.c`, which are the recipes of the rules for C and C++ files and for a
+/// program made from one C file. All are options, so a start removes them whatever they hold and the
+/// helper is left where no stage can write. The stage ends its `make` with `|| true`, since a rule
+/// whose real tool is not installed makes `make` fail: the test is whether the helper ran. The
+/// regression it rejects: a setup `make` started with a rule program the person's shell holds that
+/// the list made on macOS did not name.
+#[test]
+fn a_setup_make_is_not_handed_a_rule_program_that_gnu_make_4_reads() {
+    if !usability::available() {
+        return;
+    }
+    const LINK: &str = "int main(void) { return 0; }\n";
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static [(&'static str, &'static str)],
+    );
+    let cases: [Case; 9] = [
+        ("CPP", "all: x.s\n", &[("x.S", "")]),
+        ("OBJC", "all: x.o\n", &[("x.m", "")]),
+        ("CWEAVE", "all: x.tex\n", &[("x.w", "@\n")]),
+        ("CTANGLE", "all: x.c\n", &[("x.w", "@\n")]),
+        ("WEAVE", "all: x.tex\n", &[("x.web", "@\n")]),
+        ("TANGLE", "all: x.p\n", &[("x.web", "@\n")]),
+        ("TEX", "all: x.dvi\n", &[("x.tex", "\\end\n")]),
+        ("COMPILE.c", "all: x.o\n", &[("x.c", LINK)]),
+        ("LINK.c", "all: x\n", &[("x.c", LINK)]),
+    ];
+    for (variable, makefile, extra) in cases {
+        let label = format!("make-gnu4-{}", variable.to_lowercase().replace('.', "-"));
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let mut files = vec![("Makefile", makefile)];
+        files.extend_from_slice(extra);
+        // A name with a dot is one `sh` drops from the environment it hands a program, so `make` is
+        // started directly for those. The helper exits zero, so `make` does too.
+        let (program, args): (&str, &[&str]) = if variable.contains('.') {
+            ("make", &["-s", "-C", "{session}"])
+        } else {
+            ("sh", &["-c", "make -s -C {session} || true"])
+        };
+        withheld_from_a_setup_stage(
+            &label,
+            program,
+            args,
+            &files,
+            &[(variable, &helper.display().to_string())],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 4.4.1 on Linux ran the program `.SHELLFLAGS` held as
+/// the first argument of the shell, which runs it as a script. The name has a dot, so `make` is
+/// started directly. The regression it rejects: a setup `make` started with the `.SHELLFLAGS` the
+/// person's shell holds, which only the dotted-name matcher removes.
+#[test]
+fn a_setup_make_is_not_handed_shell_flags_that_name_a_script() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-shellflags");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+
+    withheld_from_a_setup_stage(
+        "make-shellflags",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n")],
+        &[(".SHELLFLAGS", &helper.display().to_string())],
+        &marker,
+        None,
+    );
+}
+
+/// A shared object in `directory` whose constructor writes `marker`, and an OpenSSL configuration
+/// that loads it as a provider and as an engine. `None` where no C compiler can build it.
+fn provider_configuration(directory: &Path, marker: &Path) -> Option<PathBuf> {
+    let source = directory.join("ctor.c");
+    let library = directory.join("ctor.so");
+    std::fs::write(
+        &source,
+        format!(
+            "#include <stdio.h>\n\
+             __attribute__((constructor)) static void init(void) {{ FILE *f = fopen(\"{}\", \"w\"); if (f) fclose(f); }}\n\
+             int OPENSSL_provider_init(void *a, void *b, void *c, void *d) {{ return 0; }}\n\
+             int bind_engine(void *a, const char *b, void *c) {{ return 0; }}\n\
+             unsigned long v_check(unsigned long v) {{ return v; }}\n",
+            marker.display()
+        ),
+    )
+    .expect("source");
+    let resolved = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("cc"))?;
+    let status = {
+        let _environment = Environment::held(&[], &["LD_PRELOAD", "COMPILER_PATH"]);
+        let mut command = bravebot_sandbox::programs::start_against(
+            &resolved,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
+            std::iter::empty(),
+            &|_: &Path| true,
+        );
+        command
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&library)
+            .arg(&source)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?
+    };
+    if !status.success() {
+        return None;
+    }
+    let configuration = directory.join("openssl.cnf");
+    std::fs::write(
+        &configuration,
+        format!(
+            "openssl_conf = openssl_init\n[openssl_init]\nproviders = provider_sect\nengines = engine_sect\n\
+             [provider_sect]\nplanted = planted_provider\n[planted_provider]\nmodule = {library}\nactivate = 1\n\
+             [engine_sect]\nplanted = planted_engine\n[planted_engine]\ndynamic_path = {library}\nengine_id = planted\ninit = 0\n",
+            library = library.display()
+        ),
+    )
+    .expect("configuration");
+    Some(configuration)
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): python3 3.13.7 on Linux loaded the shared object an OpenSSL
+/// configuration named, and ran its constructor, when `hashlib` was imported. The name is the
+/// generic table's `OPENSSL_CONF`, a file, which `gcloud` and the AWS CLI also list, so the suite
+/// lists it for `python3` and the `pip` that `venv` runs. A configuration in a directory a stage
+/// wrote into is removed. The regression it rejects: a setup `python3` started with the
+/// configuration the person's shell holds.
+#[test]
+fn a_setup_python_is_not_handed_an_openssl_configuration() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-openssl-conf");
+    let marker = planted.join("ran");
+    let Some(configuration) = provider_configuration(&planted, &marker) else {
+        eprintln!("skipped python-openssl-conf: no C compiler can build the provider");
+        return;
+    };
+
+    withheld_from_a_setup_stage(
+        "python-openssl-conf",
+        "python3",
+        &["-c", "import hashlib"],
+        &[],
+        &[("OPENSSL_CONF", configuration.to_str().expect("utf-8"))],
+        &marker,
+        Some(&planted),
     );
 }

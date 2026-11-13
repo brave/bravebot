@@ -306,6 +306,7 @@ a mouse. At the plain prompt the click is [MOUSE-23](#MOUSE-23).
 `verified-by: bravebot_tui::app::a_drag_over_a_delegate_or_a_click_off_one_opens_no_view`
 `verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_opens_no_delegate`
 `verified-by: bravebot_tui::app::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
+`verified-by: bravebot_tui::app::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
 `verified-by: bravebot_tui::app::a_click_on_every_row_of_a_delegates_block_in_the_scroller_opens_its_view`
 
 <a id="MOUSE-11"></a>

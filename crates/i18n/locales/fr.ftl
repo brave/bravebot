@@ -694,6 +694,8 @@ doctor-settings-network-unreadable =
     run.network dans { $path } n'est ni open ni closed, donc il est lu comme absent
 doctor-managed-network-unreadable =
     run.network dans { $path } n'est ni open ni closed, donc le réseau est fermé
+doctor-managed-retrieval-unreadable =
+    retrieval dans { $path } n'est pas un bloc dont enabled est un booléen, donc il est lu comme absent et n'épingle rien
 doctor-sandbox-filesystem = système de fichiers du bac à sable
 doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
 doctor-sandbox-filesystem-refused = { $key } { $path } n'est pas appliqué : { $reason } ({ $source })
@@ -836,6 +838,7 @@ permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la 
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
+permission-rule-not-a-host = a un port, un schéma, un chemin ou un autre texte qui n'est pas un hôte après 'domain:' ; écrivez un nom d'hôte ou une adresse seul, comme WebFetch(domain:example.com) ou WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = a besoin d'un serveur, ou d'un serveur et de l'un de ses outils ; écrivez Mcp(weather) ou Mcp(weather:get_forecast)
 # Un bloc permissions, ou sa liste deny, ask ou allow, écrit autrement qu'en liste. Les règles
 # qu'un autre fichier de réglages a écrites restent en vigueur, d'où « n'en retire aucune ».
@@ -900,7 +903,7 @@ import-found-keys =
     Une clé d'API pour un service de modèle que bravebot peut utiliser est exportée dans l'environnement de ce processus.
 import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
 import-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
-import-ollama-window-small = Ollama abandonne les premiers tours au-delà de cette fenêtre, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Définissez OLLAMA_CONTEXT_LENGTH plus haut avant de démarrer Ollama pour en garder davantage.
+import-ollama-window-small = Chaque requête demande à Ollama la fenêtre avec laquelle le modèle a été entraîné, jusqu'à { $assumed } jetons, donc il recharge le modèle avec cette fenêtre plutôt que d'abandonner les premiers tours. Une fenêtre plus grande prend plus de mémoire : définissez contextWindow sur l'entrée ci-dessous pour en demander moins.
 import-lm-studio-window-small = Une conversation plus longue que cette fenêtre ne tient pas dans le modèle tel que LM Studio l'a chargé, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Chargez le modèle avec une longueur de contexte plus grande dans LM Studio pour en garder davantage.
 import-adds = L'import ajoute ceci à { $file } :
 import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
@@ -1577,6 +1580,7 @@ mcp-tools-withheld =
         [one] un outil a été retenu par la liste d'autorisation ou d'exclusion du serveur
        *[other] { $count } outils ont été retenus par la liste d'autorisation ou d'exclusion du serveur
     }
+mcp-tools-read-only = en lecture seule, d'après le serveur
 mcp-tools-argument-list-of = { $kind } de { $items }
 mcp-tools-argument-required = requis
 mcp-tools-yes = Oui, les proposer
@@ -2592,6 +2596,7 @@ turn-done = tour { $turn } terminé
 turn-failed = tour { $turn } en échec
 notice-turn-finished = bravebot : tour terminé
 notice-waiting = bravebot : en attente d'une réponse
+herdr-waiting = en attente d'une réponse
 turn-cancelled = tour { $turn } annulé
 
 

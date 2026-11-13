@@ -33,6 +33,7 @@
 //! it back: `additionalDirectories` is a separate statement, and one that asks for a directory
 //! rather than opening it.
 
+use crate::ambient::{CanonicalHost, canonical_host};
 use crate::trust::is_absolute_key;
 use std::fmt;
 
@@ -171,8 +172,12 @@ enum Pattern {
     Absolute(PathPattern),
     /// A command pattern, matched against one stage's argv.
     Command(String),
-    /// A host, from a `domain:` specifier, matched against a URL's host and its subdomains.
-    Domain(String),
+    /// A host name, from a `domain:` specifier, matched against a URL's host and its subdomains.
+    /// The second is the name's ASCII form ([`crate::punycode::to_ascii`]) where a label is outside
+    /// ASCII, so the rule covers the host in either spelling.
+    Domain(String, Option<String>),
+    /// A host address, from a `domain:` specifier naming one, matched against that address alone.
+    Address(std::net::IpAddr),
     /// Every tool of one server, from `Mcp(weather)` or `Mcp(weather:*)`.
     Server(String),
     /// One tool of one server, from `Mcp(weather:get_forecast)`.
@@ -315,11 +320,28 @@ impl Rule {
                 let Some(domain) = specifier.strip_prefix("domain:") else {
                     return Err(Rejected::new(text, Unreadable::NotADomainRule));
                 };
-                let domain = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+                let domain = domain.trim().trim_start_matches('.');
                 if domain.is_empty() {
                     return Err(Rejected::new(text, Unreadable::NoDomainNamed));
                 }
-                Pattern::Domain(domain)
+                // The rule is put in the form the fetched host is put in (PERM-1), so a spelling
+                // of the same host on either side is the same host.
+                match canonical_host(domain) {
+                    CanonicalHost::Address(address) => Pattern::Address(address),
+                    CanonicalHost::Name(name) if is_host_name(&name) => {
+                        let ascii = match name.is_ascii() {
+                            true => None,
+                            false => Some(
+                                crate::punycode::to_ascii(&name)
+                                    .ok_or_else(|| Rejected::new(text, Unreadable::NotAHost))?,
+                            ),
+                        };
+                        Pattern::Domain(name, ascii)
+                    }
+                    CanonicalHost::Name(_) => {
+                        return Err(Rejected::new(text, Unreadable::NotAHost));
+                    }
+                }
             }
             Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
                 .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
@@ -362,7 +384,8 @@ impl Rule {
             Pattern::Absolute(pattern) => (pattern, true),
             Pattern::Everything
             | Pattern::Command(_)
-            | Pattern::Domain(_)
+            | Pattern::Domain(..)
+            | Pattern::Address(_)
             | Pattern::Server(_)
             | Pattern::Tool(..) => return,
         };
@@ -485,7 +508,8 @@ impl Rule {
             .any(|pattern| match pattern {
                 Pattern::Everything => true,
                 Pattern::Command(_)
-                | Pattern::Domain(_)
+                | Pattern::Domain(..)
+                | Pattern::Address(_)
                 | Pattern::Server(_)
                 | Pattern::Tool(..) => false,
                 Pattern::Relative(pattern) => covers(pattern, false),
@@ -502,31 +526,42 @@ impl Rule {
             Pattern::Command(pattern) => command_matches(pattern, argv, restricting),
             Pattern::Relative(_)
             | Pattern::Absolute(_)
-            | Pattern::Domain(_)
+            | Pattern::Domain(..)
+            | Pattern::Address(_)
             | Pattern::Server(_)
             | Pattern::Tool(..) => false,
         }
     }
 
-    /// Whether this rule covers fetching from `host`, which is already lowercased.
+    /// Whether this rule covers fetching from `host`, already in its one form.
     ///
     /// A rule for `example.com` covers `docs.example.com`, which is what a person writing one
     /// means, and never `notexample.com`: the boundary has to be a label boundary or a rule about
-    /// one site would silently cover somebody else's.
-    fn covers_host(&self, host: &str) -> bool {
-        match &self.pattern {
-            Pattern::Everything => true,
-            Pattern::Domain(domain) => {
-                host == domain
-                    || host
-                        .strip_suffix(domain)
-                        .is_some_and(|prefix| prefix.ends_with('.'))
+    /// one site would silently cover somebody else's. A rule for an address covers that address
+    /// and nothing else, since an address has no subdomains. A rule on an international name
+    /// covers the host spelled as written and spelled in its ASCII form.
+    fn covers_host(&self, host: &CanonicalHost) -> bool {
+        let under = |host: &str, domain: &str| {
+            host == domain
+                || host
+                    .strip_suffix(domain)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        };
+        match (&self.pattern, host) {
+            (Pattern::Everything, _) => true,
+            (Pattern::Domain(domain, ascii), CanonicalHost::Name(host)) => {
+                under(host, domain) || ascii.as_deref().is_some_and(|ascii| under(host, ascii))
             }
-            Pattern::Relative(_)
-            | Pattern::Absolute(_)
-            | Pattern::Command(_)
-            | Pattern::Server(_)
-            | Pattern::Tool(..) => false,
+            (Pattern::Address(address), CanonicalHost::Address(host)) => address == host,
+            (Pattern::Domain(..) | Pattern::Address(_), _) => false,
+            (
+                Pattern::Relative(_)
+                | Pattern::Absolute(_)
+                | Pattern::Command(_)
+                | Pattern::Server(_)
+                | Pattern::Tool(..),
+                _,
+            ) => false,
         }
     }
 
@@ -542,7 +577,8 @@ impl Rule {
             Pattern::Relative(_)
             | Pattern::Absolute(_)
             | Pattern::Command(_)
-            | Pattern::Domain(_) => false,
+            | Pattern::Domain(..)
+            | Pattern::Address(_) => false,
         }
     }
 }
@@ -590,6 +626,10 @@ pub enum Unreadable {
     NotADomainRule,
     /// `WebFetch(domain:)`, which names no host.
     NoDomainNamed,
+    /// A `WebFetch` rule whose domain is neither an address nor a host name, as one holding a
+    /// scheme, a port, a path, a space or an empty label. No fetched host is spelled that way, so
+    /// the rule would cover nothing.
+    NotAHost,
     /// An `Mcp` rule whose specifier is not `alias` or `alias:tool`.
     NotAToolRule,
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
@@ -917,11 +957,10 @@ impl Permissions {
 
     /// The rule that decides [`Permissions::for_host`].
     pub fn rule_for_host(&self, host: &str) -> Option<(Ruling, &Rule)> {
-        // A URL may spell a fully-qualified name with a trailing dot; that dot is spelling, not a
-        // label, and a rule about `example.com` is about the same host either way.
-        let host = host.to_ascii_lowercase();
-        let host = host.strip_suffix('.').unwrap_or(&host);
-        self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
+        // A URL may spell one host several ways: a trailing dot, brackets, an address in another
+        // notation or inside IPv6. The host is put in the form the rule was put in.
+        let host = canonical_host(host);
+        self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(&host))
     }
 
     /// What the rules say about calling `tool` of the server declared as `alias`.
@@ -996,6 +1035,28 @@ fn decision_of(deciding: Option<(Ruling, &Rule)>) -> Decision {
         Some((ruling, _)) => Decision::Ruled(ruling),
         None => Decision::Unmatched,
     }
+}
+
+/// Whether `name`, a host in its one form ([`canonical_host`]), is a name a URL could hold.
+///
+/// Labels of letters, digits, `-` and `_`, none of them empty. A domain holding a scheme, a port,
+/// a path, a space or a second trailing dot names no host a fetch reaches, so a rule spelled that
+/// way would cover nothing and read as protection that is not there. A character outside ASCII is
+/// kept where it is a letter or a digit ([`char::is_alphanumeric`]), so `bücher.example` is a
+/// name, and the rule also covers its ASCII form `xn--bcher-kva.example`. Any other character
+/// outside ASCII, such as a no-break space, an ideographic full stop (U+3002), a fullwidth colon
+/// (U+FF1A) or a zero-width space, is no part of a name the rule could be compared in, so the
+/// domain is not a host.
+fn is_host_name(name: &str) -> bool {
+    name.split('.').all(|label| {
+        !label.is_empty()
+            && label.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || c == '-'
+                    || c == '_'
+                    || (!c.is_ascii() && c.is_alphanumeric())
+            })
+    })
 }
 
 /// Read an `Mcp` specifier: `alias` for every tool of a server, `alias:tool` for one of them.
@@ -1764,10 +1825,12 @@ fn covers_place(c: char, place: &Place, restricting: bool) -> bool {
 /// Whether a character of a restricting rule meets a character of the program word.
 ///
 /// The letters meet when [`fold_simple`](crate::trust::fold_simple) takes them to the same letter:
-/// upper case first and then lower case, one letter to one letter. That is how NTFS compares names,
-/// and it joins `\u{17f}` with `s` and `\u{131}` with `i`, which lowercasing leaves apart. The
-/// Kelvin sign lowercases to `k`, so lowercasing joins it too. Every pair that lowercases to the
-/// same letter is joined by the fold as well, which
+/// upper case first and then lower case, one letter to one letter. That joins `\u{17f}` with `s` and
+/// `\u{131}` with `i`, which lowercasing leaves apart. NTFS opens none of `\u{17f}`, `\u{131}` and
+/// the Kelvin sign as an ASCII letter (`program_word_fold` on Windows), so on Windows the rule
+/// covers three spellings the volume does not start as the program, which is the direction PERM-4
+/// allows. The Kelvin sign lowercases to `k`, so lowercasing joins it too. Every pair that
+/// lowercases to the same letter is joined by the fold as well, which
 /// `lowercasing_joins_no_letters_that_the_simple_fold_keeps_apart` checks over every code point.
 /// ASCII letters are compared directly.
 fn program_letters_meet(c: char, found: char) -> bool {
@@ -4740,6 +4803,249 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "a bare deny stopped covering a host that reduces to nothing"
         );
+    }
+
+    /// A table of spellings of one host, each in a rule and in a URL, for every list. PERM-1 puts
+    /// the rule in the form the host is put in, so each pair is one host whichever side wrote the
+    /// spelling. A fix that normalised only the host side, or only one spelling, fails a row.
+    /// An address is read by value in every spelling a resolver reads, and covers itself alone: a
+    /// rule that read an address as a name would cover `127.0.0.1` from a rule about `0.0.1`.
+    #[test]
+    fn a_domain_rule_and_a_fetched_host_are_compared_in_one_form() {
+        // (rule's domain, URL, whether the rule covers the URL's host)
+        let rows: [(&str, &str, bool); 38] = [
+            // A loopback address in a resolver's spellings, on the host side and the rule side.
+            ("127.0.0.1", "http://2130706433/", true),
+            ("127.0.0.1", "http://127.1/", true),
+            ("127.0.0.1", "http://0x7f000001/", true),
+            ("127.0.0.1", "http://0177.0.0.1/", true),
+            ("127.0.0.1", "http://2130706434/", false),
+            ("2130706433", "http://127.0.0.1:8080/m", true),
+            ("127.1", "http://[::ffff:127.0.0.1]/", true),
+            ("10.0.0.1", "http://[64:ff9b::a00:1]/", true),
+            // A public address in dword, hex and short dotted spellings.
+            ("93.184.216.34", "http://1572395042/", true),
+            ("93.184.216.34", "http://0x5db8d822/", true),
+            ("93.184.216.34", "http://93.184.55330/", true),
+            ("93.184.216.34", "http://93.12113954/", true),
+            ("93.184.216.34", "http://93.184.216.35/", false),
+            ("0x5DB8D822", "https://93.184.216.34/", true),
+            // An address covers that address and nothing else.
+            ("0.0.1", "http://127.0.0.1/", false),
+            ("0.0.1", "http://10.0.0.1/", false),
+            ("0.0.1", "http://0.0.0.1/", true),
+            ("0.0.1", "http://[::1]/", false),
+            ("10.0.0.1", "http://evil.10.0.0.1/", false),
+            ("10.0.0.1", "http://10.0.0.10/", false),
+            // A name covers itself and its subdomains at a label boundary, and no address.
+            ("example.com", "https://example.com/", true),
+            ("example.com", "https://a.b.example.com/", true),
+            ("example.com", "https://notexample.com/", false),
+            ("example.com", "https://example.com.evil.test/", false),
+            ("1.example", "http://0.0.0.1/", false),
+            ("127.0.0.1.", "http://127.0.0.1:8080/m", true),
+            ("example.com.", "https://example.com/", true),
+            ("example.com.", "https://docs.example.com/", true),
+            ("example.com.", "https://notexample.com/", false),
+            ("[::1]", "http://[::1]:8080/m", true),
+            ("[::1]", "http://[::2]:8080/m", false),
+            ("127.0.0.1", "http://[::ffff:127.0.0.1]:8080/m", true),
+            ("127.0.0.1", "http://[::ffff:7f00:1]:8080/m", true),
+            ("127.0.0.1", "http://[::ffff:127.0.0.2]:8080/m", false),
+            ("::1", "http://[0:0:0:0:0:0:0:1]:8080/m", true),
+            ("::1", "http://[0:0:0:0:0:0:0:2]:8080/m", false),
+            ("EXAMPLE.com", "https://Docs.Example.COM./", true),
+            ("[::ffff:10.0.0.1]", "http://10.0.0.1/", true),
+        ];
+        for (domain, url, covers) in rows {
+            let rule = format!("WebFetch(domain:{domain})");
+            let host = crate::url::host_of(url).expect("the URL has a host");
+            for (list, ruling) in [(0, Ruling::Deny), (1, Ruling::Ask), (2, Ruling::Allow)] {
+                let mut lists: [&[&str]; 3] = [&[], &[], &[]];
+                let named = [rule.as_str()];
+                lists[list] = &named;
+                let permissions = rules(lists[0], lists[1], lists[2]);
+                let expected = match covers {
+                    true => Decision::Ruled(ruling),
+                    false => Decision::Unmatched,
+                };
+                assert_eq!(
+                    permissions.for_host(&host),
+                    expected,
+                    "{rule} as {ruling:?} against {url} (host {host})"
+                );
+            }
+        }
+    }
+
+    /// The issue's case: a deny on one spelling holds under a broader allow, which is the case in
+    /// which a miss lets the fetch out silently.
+    #[test]
+    fn a_deny_in_another_spelling_of_the_host_holds_over_a_bare_allow() {
+        for (deny, url) in [
+            ("WebFetch(domain:127.0.0.1.)", "http://127.0.0.1/"),
+            ("WebFetch(domain:127.0.0.1)", "http://[::ffff:127.0.0.1]/"),
+            ("WebFetch(domain:[::1])", "http://[::1]/"),
+        ] {
+            let permissions = rules(&[deny], &[], &["WebFetch"]);
+            let host = crate::url::host_of(url).expect("the URL has a host");
+            assert_eq!(
+                permissions.for_host(&host),
+                Decision::Ruled(Ruling::Deny),
+                "{deny} did not refuse {url}"
+            );
+        }
+    }
+
+    /// PERM-11: a domain that names no host a URL could hold is reported rather than kept as a rule
+    /// that covers nothing: a port, a scheme, a path, a second trailing dot, a space, and a
+    /// character outside ASCII that is neither a letter nor a digit (a no-break space, an
+    /// ideographic full stop, a fullwidth colon, a zero-width space). The rule beside them is still
+    /// read, and an ordinary name, an international name and an address still are.
+    #[test]
+    fn a_domain_that_names_no_host_is_reported_as_not_a_host() {
+        let unreadable = [
+            "WebFetch(domain:example.com:443)",
+            "WebFetch(domain:https://example.com)",
+            "WebFetch(domain:example.com/docs)",
+            "WebFetch(domain:example.com..)",
+            "WebFetch(domain:exa mple.com)",
+            "WebFetch(domain:exa\u{a0}mple.com)",
+            "WebFetch(domain:example\u{3002}com)",
+            "WebFetch(domain:example.com\u{ff1a}443)",
+            "WebFetch(domain:exa\u{200b}mple.com)",
+        ];
+        let mut texts: Vec<String> = unreadable.iter().map(|s| s.to_string()).collect();
+        texts.push("WebFetch(domain:example.org)".to_string());
+        let (permissions, rejected) = Permissions::parse(&texts, &[], &[], &anchors());
+        let said: Vec<(&str, Unreadable)> = rejected
+            .iter()
+            .map(|r| (r.text.as_str(), r.reason))
+            .collect();
+        let expected: Vec<(&str, Unreadable)> = unreadable
+            .iter()
+            .map(|text| (*text, Unreadable::NotAHost))
+            .collect();
+        assert_eq!(said, expected);
+        assert_eq!(
+            permissions.for_host("example.org"),
+            Decision::Ruled(Ruling::Deny),
+            "the readable rule beside them was dropped"
+        );
+        for readable in [
+            "WebFetch(domain:my_host.example)",
+            "WebFetch(domain:xn--bcher-kva.example)",
+            "WebFetch(domain:bücher.example)",
+            "WebFetch(domain:[::1])",
+            "WebFetch(domain:.example.com)",
+        ] {
+            let (_, rejected) = Permissions::parse(&[readable.into()], &[], &[], &anchors());
+            assert!(rejected.is_empty(), "{readable} was reported");
+        }
+    }
+
+    /// A deny on a name with a letter outside ASCII refuses a URL that spells the host that way,
+    /// under a bare allow, as it did before rules were put in one form. The host is read with no
+    /// IDNA conversion, so a URL may hold the name as written; the regression this rejects is
+    /// such a domain reported as unreadable, or compared only in its ASCII form, either of which
+    /// leaves the fetch to the allow.
+    #[test]
+    fn a_deny_on_an_international_name_refuses_a_url_spelling_it() {
+        let permissions = rules(&["WebFetch(domain:bücher.example)"], &[], &["WebFetch"]);
+        for url in ["https://bücher.example/", "https://docs.Bücher.example./a"] {
+            let host = crate::url::host_of(url).expect("the URL has a host");
+            assert_eq!(
+                permissions.for_host(&host),
+                Decision::Ruled(Ruling::Deny),
+                "the deny did not refuse {url} (host {host})"
+            );
+        }
+        let host = crate::url::host_of("https://bucher.example/").expect("a host");
+        assert_eq!(permissions.for_host(&host), Decision::Ruled(Ruling::Allow));
+    }
+
+    /// A rule about the metadata address and the metadata-service warning read a host the same
+    /// way: for every spelling, the rule covers the host exactly where [`crate::ambient::at_host`]
+    /// names the metadata service. The failure this rejects is the two keeping readings of their
+    /// own, so a spelling one of them reads as the address and the other does not is a fetch that
+    /// is warned about and not refused, or refused and not warned about.
+    #[test]
+    fn a_rule_and_the_metadata_warning_read_a_host_the_same_way() {
+        let permissions = rules(&["WebFetch(domain:169.254.169.254)"], &[], &[]);
+        for (host, metadata) in [
+            ("169.254.169.254", true),
+            ("169.254.169.254.", true),
+            ("[::ffff:169.254.169.254]", true),
+            ("[::ffff:a9fe:a9fe]", true),
+            ("[64:ff9b::a9fe:a9fe]", true),
+            ("2852039166", true),
+            ("0xA9FEA9FE", true),
+            ("169.254.169.253", false),
+            ("169.254.169.254.example.test", false),
+            ("[::1]", false),
+        ] {
+            assert_eq!(
+                crate::ambient::at_host(host).is_some(),
+                metadata,
+                "the warning for {host}"
+            );
+            assert_eq!(
+                permissions.for_host(host) == Decision::Ruled(Ruling::Deny),
+                metadata,
+                "the rule for {host}"
+            );
+        }
+    }
+
+    /// A rule in the ASCII form of an international name covers the URL whose host is held in that
+    /// form, which is the only spelling of it a fetch compares.
+    #[test]
+    fn a_domain_rule_in_ascii_form_covers_the_international_name_it_spells() {
+        let permissions = rules(&["WebFetch(domain:xn--bcher-kva.example)"], &[], &[]);
+        let host = crate::url::host_of("https://xn--bcher-kva.example/").expect("a host");
+        assert_eq!(permissions.for_host(&host), Decision::Ruled(Ruling::Deny));
+    }
+
+    /// PERM-1: a deny, ask or allow rule on a name with a letter outside ASCII also covers the
+    /// name's ASCII form, `xn--` and the Punycode of each such label, and that form's subdomains,
+    /// while still stopping at a label boundary. The regression it rejects is a rule compared only
+    /// as written, which leaves a URL spelling the host in ASCII to whatever else is listed.
+    #[test]
+    fn a_rule_on_an_international_name_covers_its_ascii_form() {
+        for (list, ruling) in [(0, Ruling::Deny), (1, Ruling::Ask), (2, Ruling::Allow)] {
+            let mut lists: [&[&str]; 3] = [&[], &[], &[]];
+            let written = [
+                "WebFetch(domain:Bücher.example)",
+                "WebFetch(domain:münchen.example)",
+            ];
+            lists[list] = &written;
+            let permissions = rules(lists[0], lists[1], lists[2]);
+            for url in [
+                "https://xn--bcher-kva.example/",
+                "https://docs.XN--BCHER-KVA.example./a",
+                "https://xn--mnchen-3ya.example/",
+                "https://bücher.example/",
+            ] {
+                let host = crate::url::host_of(url).expect("the URL has a host");
+                assert_eq!(
+                    permissions.for_host(&host),
+                    Decision::Ruled(ruling),
+                    "{ruling:?} rule did not cover {url} (host {host})"
+                );
+            }
+            for url in [
+                "https://notxn--bcher-kva.example/",
+                "https://xn--bcher-kva.example.evil/",
+                "https://bcher-kva.example/",
+            ] {
+                let host = crate::url::host_of(url).expect("the URL has a host");
+                assert_eq!(
+                    permissions.for_host(&host),
+                    Decision::Unmatched,
+                    "{ruling:?} rule covered {url}"
+                );
+            }
+        }
     }
 
     fn limit_of(patterns: &[&str]) -> (Permissions, Vec<Rejected>) {

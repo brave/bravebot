@@ -1983,10 +1983,25 @@ pub fn run(
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
     // alternate screen is worse than the original error.
-    hand_back_terminal(terminal.backend_mut())?;
-    terminal.show_cursor()?;
+    end_the_run(&mut terminal, hand_back_terminal)?;
 
     result
+}
+
+/// Give the terminal back for good at the end of [`run`], cursor and all. However the run ended, it
+/// has left its herdr pane: a `/resume` stays inside the loop, and a process started on the way out
+/// reports for itself.
+///
+/// Split from `run` so a test can reach it, since that function needs a real terminal, and told how
+/// to hand the terminal back so that a test does not ask the terminal the test binary runs in about
+/// its keyboard modes or take it out of raw mode. A process outside the terminal's foreground group
+/// is stopped by the terminal at either, and a test that is stopped never finishes.
+fn end_the_run<W: Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    hand_back: impl FnOnce(&mut CrosstermBackend<W>) -> io::Result<()>,
+) -> io::Result<()> {
+    leave(terminal.backend_mut(), hand_back)?;
+    terminal.show_cursor()
 }
 
 /// Sign in to the backend the next request will use, where it needs one and has none.
@@ -2360,6 +2375,9 @@ fn adopt_settings(
     settings: &bravebot_config::Settings,
     asked_effort: Option<bravebot_aichat::protocol::Effort>,
 ) {
+    // Once the settings are read and before the first question the session can ask, so herdr
+    // knows bravebot holds the pane from the start rather than from the first frame (HERDR-8).
+    crate::herdr::state(crate::title::State::Ready);
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
     // And the level a turn asks for, which the record or this file answers, whichever BACKEND-43
@@ -2399,6 +2417,16 @@ fn adopt_settings(
     }
     session.adopt_prompt_files(crate::prompt_files::directory());
     session.adopt_suggestions(settings.suggestions() == Some(true));
+}
+
+/// Name the session's id where it is handed on, on every pass of the loop: to the panel, and to
+/// herdr, which reopens the session by it. Any path that changes the session reaches both on the
+/// next pass, once the record `--resume` reads is on disk (HERDR-9). Returns whether the panel
+/// changed.
+fn name_the_id(session: &mut Session, stored: &bravebot_session::sessions::Handle) -> bool {
+    let changed = session.name_id(stored.resumable());
+    crate::herdr::resume(stored.resumable());
+    changed
 }
 
 /// Put what the command line asked for on a session whose record is open and every startup
@@ -2635,7 +2663,7 @@ fn begin_session(
         settings.notification_condition(),
         std::env::var("TERM_PROGRAM").ok().as_deref(),
     );
-    let sources = RuleSources::ambient(workspace.root());
+    let sources = RuleSources::ambient();
     let Some(permissions) = rules_from(
         &mut session,
         &settings,
@@ -2880,7 +2908,7 @@ fn event_loop(
             crate::status::abbreviate(workspace.root()),
             stored.branch(),
         );
-        needs_draw |= session.name_id(stored.resumable());
+        needs_draw |= name_the_id(&mut session, &stored);
         // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
         // and no report to wake the loop (MOUSE-37).
         needs_draw |= session.scroll_toward_the_pointer(Instant::now());
@@ -5713,6 +5741,20 @@ mod tests {
 
         assert_eq!(config.context_budget, 65_536);
         assert!(!config.budget_is_guessed());
+
+        // In Ollama's own protocol a fifth is kept for the reply (BACKEND-73), since each request
+        // asks the server for the window and a prompt past it is cut short rather than refused.
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"ollama": {"npm": "ollama-ai-provider-v2",
+                "options": {"baseURL": "http://localhost:11434/api", "contextWindow": 65536},
+                "models": {"tiny": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+
+        adopt_listing_for_model(&mut config, "ollama/tiny");
+
+        assert_eq!(config.context_budget, 52_429);
     }
 
     /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file
@@ -7641,6 +7683,79 @@ mod tests {
             assert!(
                 session.watching().is_none(),
                 "the view had nowhere to go and stayed"
+            );
+        }
+
+        /// An answer opens the view by itself on its own row (WATCH-19), and a recap of a session
+        /// the person came back to is one. They never saw the list, so the way back leaves the
+        /// mode for the conversation they were reading, however many rows the list has. Going to
+        /// the list first puts them two steps from where they were.
+        #[test]
+        fn the_way_back_from_an_answer_the_view_opened_by_itself_closes_it() {
+            for leaving in [key(KeyCode::Esc), key(KeyCode::Char('q'))] {
+                let mut session = Session::new("kernel-enforced");
+                spawn(&mut session, "reader", "find the parser");
+                session.reporting_for(None);
+                session.begin_aside();
+                // Read back during the wait, which answers keys.
+                session.scroll = 7;
+                aside_answered(
+                    &mut session,
+                    crate::command_table::RECAP_LABEL.to_string(),
+                    bravebot_agent::aside::Answered {
+                        shown: "the parser was being rewritten".to_string(),
+                        kept: None,
+                        usage: Default::default(),
+                    },
+                );
+                assert!(
+                    session.watched_aside().is_some(),
+                    "the answer did not open the view"
+                );
+                assert_eq!(session.watchable().len(), 2, "there is no list to skip");
+
+                handle_key(&mut session, leaving);
+
+                assert!(
+                    session.watching().is_none(),
+                    "{leaving:?} did not close the view: listing {}",
+                    session.listing_delegates()
+                );
+                assert_eq!(
+                    session.scroll, 7,
+                    "{leaving:?} lost the conversation's place"
+                );
+            }
+        }
+
+        /// An answer that lands while a row opened from the list is on the screen replaces that
+        /// row with one the list did not open. The way back is the answer's, which closes, and not
+        /// the replaced row's.
+        #[test]
+        fn an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.reporting_for(None);
+            handle_key(&mut session, ctrl('l'));
+            session.open_watched();
+            session.begin_aside();
+            aside_answered(
+                &mut session,
+                crate::command_table::RECAP_LABEL.to_string(),
+                bravebot_agent::aside::Answered {
+                    shown: "the parser was being rewritten".to_string(),
+                    kept: None,
+                    usage: Default::default(),
+                },
+            );
+            assert!(session.watched_aside().is_some(), "the answer did not open");
+
+            handle_key(&mut session, key(KeyCode::Esc));
+
+            assert!(
+                session.watching().is_none(),
+                "escape went back to the list the replaced row came from"
             );
         }
 
@@ -10495,6 +10610,38 @@ mod tests {
         assert!(session.selection.is_none());
         assert!(session.stop_watching());
         assert!(session.scrolling());
+    }
+
+    /// MOUSE-10 and MOUSE-23: a click opens a delegate's view without the list, so Escape from it
+    /// goes back to where the click was, the scroller or the conversation, and not to a list of the
+    /// delegates the person never opened.
+    #[test]
+    fn escape_from_a_clicked_delegate_returns_to_where_the_click_was() {
+        let mut scrolling = scroller_over_two_delegates();
+        let (row, column) = find_on_text(&scrolling, "write the docs");
+        click(&mut scrolling, row, column);
+        assert!(scrolling.watching_a_delegate(), "the click opened no view");
+
+        handle_key(&mut scrolling, key(KeyCode::Esc));
+        assert!(
+            scrolling.watching().is_none(),
+            "escape did not close the view: listing {}",
+            scrolling.listing_delegates()
+        );
+        assert!(scrolling.scrolling(), "escape left the scroller");
+
+        let (mut resting, buffer) = at_rest_over_two_delegates();
+        let (row, column) = find_on(&buffer, "write the docs");
+        click(&mut resting, row, column);
+        assert!(resting.watching_a_delegate(), "the click opened no view");
+
+        handle_key(&mut resting, key(KeyCode::Esc));
+        assert!(
+            resting.watching().is_none(),
+            "escape did not close the view: listing {}",
+            resting.listing_delegates()
+        );
+        assert!(!resting.scrolling());
     }
 
     /// MOUSE-10 and WATCH-7: the watch key opens from the scroller the view the click opens, the
@@ -19919,11 +20066,30 @@ mod tests {
 
     fn drafted(message: &str) -> bravebot_agent::commit_message::Drafted {
         bravebot_agent::commit_message::Drafted {
-            message: message.to_string(),
+            message: Some(message.to_string()),
             partial: false,
             substituted: None,
             usage: bravebot_aichat::protocol::Usage::default(),
         }
+    }
+
+    /// CMD-23, LABEL-8: a draft about a path nobody vouched for is not put in the box. Enter would
+    /// send it to the planner as the person's own typed line, and only a draft the planner could
+    /// have held may go there.
+    #[test]
+    fn a_draft_that_met_something_untrusted_is_held_back_with_a_note() {
+        let mut session = Session::new("none");
+        for c in "typing".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        let mut done = drafted("Rename old to renamed");
+        done.message = None;
+        commit_message_answered(&mut session, Ok(done));
+        assert_eq!(session.input(), "typing", "the box was changed");
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(commit_message_untrusted)
+        );
     }
 
     /// CMD-23, CMD-1: a draft that is itself a command is put in the box after the driver's words,
@@ -40929,7 +41095,6 @@ mod tests {
         let sources = RuleSources {
             state: Some(state.to_path_buf()),
             named: named.map(std::path::Path::to_path_buf),
-            left: vec![root.to_path_buf()],
             managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(root);
@@ -40975,7 +41140,6 @@ mod tests {
         let sources = RuleSources {
             state: Some(root.join("state")),
             named: None,
-            left: vec![root.clone()],
             managed: bravebot_config::Managed::at(&file),
         };
         let elsewhere = root.join("elsewhere");
@@ -41355,12 +41519,12 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// PERM-14: a file `--settings` named inside the checkout the session opened in is still that
-    /// checkout's after `/cd` leaves it, so its rule is put to the person rather than granted by
-    /// the move.
+    /// PERM-14: a file `--settings` named is the person's own wherever it sits, so one inside the
+    /// directory the session opened in grants its rule there and after `/cd` leaves it, and nothing
+    /// is put to the person about it.
     #[test]
-    fn a_named_file_in_the_checkout_left_behind_is_still_asked_about_after_moving() {
-        use bravebot_core::permissions::Decision;
+    fn a_named_file_inside_the_directory_left_behind_still_grants_after_moving() {
+        use bravebot_core::permissions::{Decision, Ruling};
         let root = crate::testutil::scratch_dir("bravebot-cd-named-test");
         let _ = std::fs::remove_dir_all(&root);
         let (a, b) = (root.join("a"), root.join("b"));
@@ -41379,6 +41543,14 @@ mod tests {
             Some(&tooling),
         );
         let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        assert_eq!(
+            answers
+                .rules
+                .permissions
+                .for_command(&["bash", "scripts/check.sh"]),
+            Decision::Ruled(Ruling::Allow),
+            "a named file inside the working directory was withheld"
+        );
 
         let mut offered = Vec::new();
         assert_eq!(
@@ -41401,69 +41573,12 @@ mod tests {
                 .rules
                 .permissions
                 .for_command(&["bash", "scripts/check.sh"]),
-            Decision::Unmatched,
-            "moving out of the checkout made its file the person's"
+            Decision::Ruled(Ruling::Allow),
+            "moving out of the directory withheld the named file's rule"
         );
-        assert_eq!(
-            offered,
-            [bravebot_agent::granted::Proposed::new(
-                &tooling,
-                "Bash(bash scripts/check.sh)"
-            )],
-            "the named file left behind was not asked about"
-        );
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// PERM-14: every directory `/cd` leaves is remembered, not only the first. A `--settings`
-    /// file in the second directory stays the checkout's after the third is entered.
-    #[test]
-    fn a_named_file_in_a_directory_moved_through_is_still_asked_about_after_moving_on() {
-        use bravebot_core::permissions::Decision;
-        let root = crate::testutil::scratch_dir("bravebot-cd-named-through-test");
-        let _ = std::fs::remove_dir_all(&root);
-        let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
-        // Each is a checkout of its own, so the repository the scratch directory sits in is not
-        // what makes the file one of a checkout's.
-        for directory in [&a, &b, &c] {
-            std::fs::create_dir_all(directory.join(".git")).expect("scratch");
-        }
-        let tooling = b.join("tooling.json");
-        std::fs::write(&tooling, CHECK).expect("the named file");
-
-        let mut workspace = Workspace::new(&a).expect("workspace");
-        let mut session = Session::new("none");
-        let trust = TrustStore::new(workspace.root());
-        let rules = starting_rules_naming(
-            &mut session,
-            &root.join("state"),
-            workspace.root(),
-            Some(&tooling),
-        );
-        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
-
-        for directory in [&b, &c] {
-            assert_eq!(
-                change_directory(
-                    &mut session,
-                    &mut workspace,
-                    &mut answers,
-                    "a-session",
-                    directory.to_str().expect("utf-8 path"),
-                    |_, _| Some(false),
-                ),
-                Changed::Moved
-            );
-        }
-
-        assert_eq!(
-            answers
-                .rules
-                .permissions
-                .for_command(&["bash", "scripts/check.sh"]),
-            Decision::Unmatched,
-            "moving on from the directory the file is in made it the person's"
+        assert!(
+            offered.is_empty(),
+            "the named file was put to the person as a checkout's"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -41525,7 +41640,6 @@ mod tests {
         let sources = RuleSources {
             state: Some(state.clone()),
             named: None,
-            left: vec![checkout.clone()],
             managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(&checkout);
@@ -45278,6 +45392,8 @@ mod tests {
     mod chrome;
     mod clicks;
     mod completions;
+    #[cfg(unix)]
+    mod herdr;
     mod hints;
     mod history_search;
     mod hover;

@@ -3909,6 +3909,102 @@ def test_the_stop_hook_answers_on_standard_output():
     )
 
 
+def run_before_pr(base, touched, findings):
+    """Run `--before-pr BASE` through `main`, as it is run before opening a pull request.
+
+    The diff and the mechanical pass are replaced for the call, so what is measured is the mode's
+    own decisions: whether it checks, and what exit status it gives. Returns the exit status, what
+    it wrote to standard output, how many times the pass was run, and the lanes `changed_lanes`
+    picks for the same diff.
+    """
+    runs = []
+
+    def pass_over(specs, sources):
+        runs.append(1)
+        return findings
+
+    kept = (audit.mechanics.changed_files, audit.mechanical_findings, sys.argv)
+    audit.mechanics.changed_files = lambda asked: list(touched) if asked == base else []
+    audit.mechanical_findings = pass_over
+    sys.argv = ["security-audit.py", "--before-pr", base]
+    written = io.StringIO()
+    try:
+        with redirect_stdout(written), redirect_stderr(io.StringIO()):
+            status = with_cwd(ROOT, audit.main)
+        lanes = with_cwd(ROOT, lambda: audit.changed_lanes(base, audit.load_specs()))
+    finally:
+        audit.mechanics.changed_files, audit.mechanical_findings, sys.argv = kept
+    return status, written.getvalue(), len(runs), lanes
+
+
+def test_the_check_before_a_pull_request():
+    """`--before-pr` checks a branch whose diff reaches a path that keeps answers, and only that one.
+
+    A caller opens the pull request when this exits 0 and stops when it exits 1, so a mode
+    that always exits 0, one that checks every branch, and one that checks none each fail a case
+    below. The paths are the ones `touches_kept_answers` names, which the `Stop` hook checks too.
+    Where a case's diff picks some lanes, `changed_lanes` is asked as well, and it picks the
+    approval-binding lane for the same diffs.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    only_warned = audit.finding(audit.WARNING, "kept-in-stale", "t", "an entry outliving its member", "trust", "low")
+
+    for touched in (["Makefile", "README.md"], ["crates/core/src/label.rs", "docs/specs/labels.md"]):
+        status, out, runs, lanes = run_before_pr("HEAD", touched, [broken])
+        check(
+            f"a branch that touched {touched} reaches no path that keeps answers, is not checked and exits 0",
+            status == 0
+            and runs == 0
+            and "approval-binding" not in lanes
+            and "reaches no path that keeps answers" in out,
+            f"{status} {runs} {out!r}",
+        )
+
+    # `changed_lanes` gives every lane to a diff that selects none of them, so for README.md alone it
+    # names approval-binding too. This mode follows the Stop hook and asks only whether the diff
+    # reaches a path that keeps an answer.
+    status, out, runs, _ = run_before_pr("HEAD", ["README.md"], [broken])
+    check(
+        "a branch that touched only README.md is not checked and exits 0, as the Stop hook lets it stop",
+        status == 0 and runs == 0,
+        f"{status} {runs} {out!r}",
+    )
+
+    touched = ["crates/agent/src/kept_answers.rs", "README.md"]
+    status, out, runs, lanes = run_before_pr("HEAD", touched, [only_warned])
+    check(
+        "a branch that reaches a path that keeps answers and passes the mechanical half exits 0",
+        status == 0
+        and runs == 1
+        and "approval-binding" in lanes
+        and "reaches a path that keeps answers: 0 findings" in out,
+        f"{status} {runs} {out!r}",
+    )
+
+    for path in ("crates/agent/src/kept_answers.rs", "docs/specs/prompting.md"):
+        status, out, runs, lanes = run_before_pr("HEAD", [path], [only_warned, broken])
+        check(
+            f"a branch that touched {path} is checked and exits 1 on a mechanical error",
+            status == 1 and runs == 1 and "approval-binding" in lanes,
+            f"{status} {runs} {out!r}",
+        )
+
+    status, out, runs, _ = run_before_pr("refs/heads/no-such-base-for-the-selftest", ["docs/specs/prompting.md"], [])
+    check(
+        "a base git cannot resolve is bad use, exit 2, with nothing checked",
+        status == 2 and runs == 0,
+        f"{status} {runs} {out!r}",
+    )
+
+    # An empty string is falsy, so a mode that tests the flag's truth runs the full audit instead.
+    status, out, runs, _ = run_before_pr("", ["docs/specs/prompting.md"], [])
+    check(
+        "an empty base is bad use, exit 2, with nothing checked",
+        status == 2 and runs == 0,
+        f"{status} {runs} {out!r}",
+    )
+
+
 def test_verifier_prompt_composes():
     candidate = {
         "summary": "a branch on a released value",
@@ -5016,7 +5112,7 @@ def test_the_checkout_lane_starts_from_the_layers():
     check(
         "the merge, the unread keys, the permission texts and the names a file set are on the lane's list",
         {
-            ("settings.rs", "layered_since"),
+            ("settings.rs", "layered"),
             ("settings.rs", "unread_keys"),
             ("settings.rs", "rule_texts"),
             ("settings.rs", "names"),
@@ -5357,6 +5453,88 @@ def test_no_name_in_the_enumerator_is_bound_twice():
         not twice,
         ", ".join(twice),
     )
+
+
+def audit_lookups(files):
+    where = in_tree(files)
+    return with_cwd(
+        where,
+        lambda: list(audit.check_program_lookups_follow_the_record(audit.mechanics.load_sources())),
+    )
+
+
+def test_a_new_program_lookup_is_not_unlisted():
+    """A lookup in a file `LOOKUPS_LISTED` does not count, and a `main` that records late, are errors.
+
+    The faults rejected: a check that lists nothing and so lets a new lookup in a command with no
+    session pass, one that counts files and not lookups, one that accepts a `main` which records the
+    directory after it has matched the command, and one that drops the check for a listed file that
+    holds no lookup, which leaves the list admitting a lookup nobody wrote.
+    """
+    recorded = (
+        "fn keep_out_where_this_ran() {}\nfn main() {\n    keep_out_where_this_ran();\n    match args.first() {}\n}\n"
+    )
+    listed = next(iter(audit.LOOKUPS_LISTED))
+    one = "fn a() {\n    let r = Resolved::find(\"aws\", &path);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one})
+    check("a listed file with its counted lookup is clean", found == [], str(kinds(found)))
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: "fn a() {}\n"})
+    check(
+        "a listed file that holds no lookup is an error",
+        kinds(found) == ["program-lookup-allowance-unused"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": one})
+    check(
+        "a lookup in a file the list does not name is an error",
+        "program-lookup-unlisted" in kinds(found) and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one + one})
+    check(
+        "a second lookup in a listed file is an error",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
+    bare = (
+        "use bravebot_sandbox::programs::find_in;\n"
+        "fn a() {\n    let r = find_in(\"aws\", &path);\n}\n"
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": bare})
+    check(
+        "a bare lookup in a file that imports it is found",
+        "program-lookup-unlisted" in kinds(found),
+        str(kinds(found)),
+    )
+
+    quiet = "fn a() {\n    // Resolved::find(\"aws\")\n}\n#[cfg(test)]\nmod t {\n    fn b() { Resolved::find(\"a\"); }\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": quiet})
+    check(
+        "a comment and test-only code are not lookups",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+
+    late = (
+        "fn keep_out_where_this_ran() {}\nfn main() {\n    match args.first() {}\n    keep_out_where_this_ran();\n}\n"
+    )
+    for name, text in {
+        "records after matching the command": late,
+        "never records": "fn main() {\n    match args.first() {}\n}\n",
+        "defines the helper and never calls it": (
+            "fn keep_out_where_this_ran() {}\nfn main() {\n    match args.first() {}\n}\n"
+        ),
+    }.items():
+        found = audit_lookups({"crates/cli/src/main.rs": text})
+        check(
+            f"a main that {name} is an error",
+            "program-lookup-record-missing" in kinds(found),
+            str(kinds(found)),
+        )
 
 
 def test_the_inherited_environment_lane_lists_each_start_with_its_selectors():
@@ -6028,6 +6206,7 @@ TESTS = (
     test_changes_under_a_yes,
     test_the_stop_hook,
     test_the_stop_hook_answers_on_standard_output,
+    test_the_check_before_a_pull_request,
     test_verifier_prompt_composes,
     test_impact_sets_severity,
     test_labels,
@@ -6051,6 +6230,7 @@ TESTS = (
     test_no_name_in_the_enumerator_is_bound_twice,
     test_every_lane_has_its_file_and_its_row,
     test_the_inherited_environment_lane_lists_each_start_with_its_selectors,
+    test_a_new_program_lookup_is_not_unlisted,
     test_the_exemption_stops_at_the_person_s_own_configuration,
     test_candidates_that_make_one_claim_are_checked_together,
     test_a_group_is_one_verifier_and_the_others_are_in_its_prompt,

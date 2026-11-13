@@ -983,19 +983,13 @@ fn too_long_words(
 /// The name comes from the person's configuration or from `/model`, so it is not a service's
 /// words, but a settings file may hold any characters and the line is drawn in the status area,
 /// written to the session record and exported ([VIEW-4](../../../docs/specs/terminal-transcript.md#VIEW-4)).
-/// A control character becomes its Unicode picture (U+2400 and after), or U+FFFD where it has none;
-/// a character that draws as nothing is spelled by [`bravebot_core::invisible::spelled`].
+/// A control character becomes its Unicode picture (U+2400 and after), DEL `␡`, and a C1 control
+/// `‹U+XXXX›`, all as [`bravebot_agent::confirm::printable_with_tab_pictured`] draws them; a
+/// character that draws as nothing is spelled by [`bravebot_core::invisible::spelled`].
 fn model_words(model: &str) -> String {
-    bravebot_core::invisible::spelled(model.to_string())
-        .text
-        .chars()
-        .map(|c| match c {
-            '\u{7f}' => '\u{2421}',
-            c if (c as u32) < 0x20 => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
-            c if c.is_control() => '\u{fffd}',
-            c => c,
-        })
-        .collect()
+    bravebot_agent::confirm::printable_with_tab_pictured(
+        &bravebot_core::invisible::spelled(model.to_string()).text,
+    )
 }
 
 /// The words for a backend, as a failure line names it.
@@ -5063,7 +5057,7 @@ mod tests {
         assert!(!hostile.chars().any(char::is_control), "{hostile:?}");
         assert!(!hostile.contains('\u{200b}'), "{hostile:?}");
         assert!(
-            hostile.contains("a\u{241b}[2Jb\u{240a}c\u{2421}d\u{fffd}e"),
+            hostile.contains("a\u{241b}[2Jb\u{240a}c\u{2421}d\u{2039}U+0085\u{203a}e"),
             "{hostile:?}"
         );
     }

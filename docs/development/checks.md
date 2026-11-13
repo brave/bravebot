@@ -55,6 +55,11 @@ source file under `crates/` as text, so a missing reason fails `make check` on a
 the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
 the same rule.
 
+`crates/cli/tests/layering.rs` compares each member's manifest with its row in the
+[LAYER-1](../specs/layering.md#LAYER-1) table, and fails a member that declares a `bravebot-*`
+dependency its code never names, so an edge a change stops using is removed with it. Third-party
+dependencies are not checked.
+
 Clippy is run for one target per operating system the project ships for: the Linux job, the macOS job
 and `cargo clippy --target x86_64-pc-windows-gnu`. Those cover the other shipped architectures
 (`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-pc-windows-gnullvm`) as long as no
@@ -80,6 +85,12 @@ whether its code-selecting variables are checked.
 reason, a mark that covers more than one start, and a mark in a production file, or a second one in
 a file, that `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` does not
 list.
+
+`make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`) in a
+production file that `LOOKUPS_LISTED` in the same script does not count, and a `main` that does not
+call `keep_out_where_this_ran()` before it matches the command. A command that opens no
+session has recorded only that directory, so a new lookup is read for what is recorded when it runs
+(SANDBOX-30).
 
 Then run the tests the diff is under, scoped as tightly as the diff is: `cargo test -p bravebot-tui
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A
@@ -214,6 +225,10 @@ workflows under the sandbox default, so a default change cannot break `git`, `gh
 the variables that choose code to run removed or checked, so a value the person's environment
 holds does not run in a setup stage or a control run, which have the person's access
 ([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21), [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)).
+Before each of those starts it also removes the configuration files `make`, `cargo` and `npm` read
+to choose code (`CONFIGURATION_FILES` in `crates/agent/src/usability.rs`) from the directories it
+chose. `make check-code-selectors` does not read that list: the files are not variables, and
+`a_setup_make_does_not_read_a_gnumakefile_in_its_directory` and the tests beside it plant each one.
 
 These are local checks, not a promise that every CI environment passes. Windows Clippy
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
@@ -392,7 +407,11 @@ opener's, the `powershell` starts' or the usability suite's file has no `CODE_SE
 as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
 `ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
 does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
-read them and Electron reaches the session bus through the last two (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only the second. `make check` runs it and so does CI. It
+read them and Electron reaches the session bus through the last two, and the ten Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
+`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
+which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). Without `HOME`, `gio` reads the account's
+passwd home, which is a further reason for `HOME`
+([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)). An options variable needs only the second. `make check` runs it and so does CI. It
 cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
 `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in

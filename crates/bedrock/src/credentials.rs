@@ -932,10 +932,32 @@ mod tests {
     /// a copy is what stops agreeing with the original the first time either is edited, and the
     /// comparison holds on a machine that has switched the withholding off, where handing the
     /// credential over is what was asked for.
+    ///
+    /// The set is read from the start in an environment holding no variable that selects code, so
+    /// what the SANDBOX-30 check takes off for this process, such as an `LD_LIBRARY_PATH` it was
+    /// started with, is not read as a credential. Each command is then held to that start as this
+    /// process's environment makes it, so none of them is started another way.
     #[test]
     fn this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts() {
         let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
+        let mut withheld = withheld_from(&command_for_with(
+            Path::new("/usr/bin/aws"),
+            std::iter::empty(),
+            &|_: &Path| true,
+        ));
+        withheld.sort();
+        assert_eq!(
+            withheld, expected,
+            "the start was handed a different set from the one the configuration names"
+        );
+
+        let mut started = withheld_from(&aws());
+        started.sort();
+        assert!(
+            expected.iter().all(|name| started.contains(name)),
+            "the start in this environment was handed a credential: {started:?}"
+        );
         for (what, command) in [
             ("the export", export_command(None)),
             ("the export for a profile", export_command(Some("work"))),
@@ -945,10 +967,7 @@ mod tests {
         ] {
             let mut withheld = withheld_from(&command);
             withheld.sort();
-            assert_eq!(
-                withheld, expected,
-                "{what} was handed a different set from the one the configuration names"
-            );
+            assert_eq!(withheld, started, "{what} was not started as every aws is");
         }
     }
 

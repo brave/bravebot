@@ -23,6 +23,7 @@ export interface ViewPatch {
   status?: Status
   pending?: Pending | null
   rows?: readonly Row[]
+  omitted?: number
 }
 
 export interface Call {
@@ -66,7 +67,7 @@ export class FakeSession implements AgentSession {
       status: initial.status ?? (options.trust ? 'awaiting_trust' : 'idle'),
       pending: initial.pending ?? null,
       rows: [...(initial.rows ?? [])],
-      omitted: 0,
+      omitted: initial.omitted ?? 0,
       resyncing: false,
       ended: null,
     }
@@ -103,7 +104,7 @@ export class FakeSession implements AgentSession {
       status: patch.status ?? this.current.status,
       pending: patch.pending === undefined ? this.current.pending : patch.pending,
       rows,
-      omitted: this.current.omitted,
+      omitted: patch.omitted ?? this.current.omitted,
       resyncing: this.current.resyncing,
       ended: this.current.ended,
     }
@@ -129,6 +130,14 @@ export class FakeSession implements AgentSession {
   async send(text: string): Promise<SendResult> {
     this.calls.push({ method: 'send', args: [text] })
     return (await this.on.send?.(text)) ?? { turn: this.current.turn + 1, target: this.current.target + 1 }
+  }
+
+  async messageStatus(): Promise<never> {
+    throw new Error('not used')
+  }
+
+  async resend(): Promise<never> {
+    throw new Error('not used')
   }
 
   async decide(request: number, decision: 'approve' | 'reject'): Promise<void> {
@@ -230,6 +239,14 @@ export class FakeClient implements AgentClient {
     const session = this.sessions.find((candidate) => candidate.id === id)
     if (session === undefined) throw new Error(`no session ${id}`)
     return session
+  }
+
+  async instance(): Promise<never> {
+    throw new Error('not used')
+  }
+
+  async attach(): Promise<never> {
+    throw new Error('not used')
   }
 
   async unsupported(): Promise<never> {

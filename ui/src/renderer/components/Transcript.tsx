@@ -2719,6 +2719,9 @@ function Card({
             {request.tools.map((tool) => (
               <li key={tool.name}>
                 <code className="mcp-tool-name">{tool.name}</code>
+                {tool.read_only && (
+                  <p className="mcp-tool-read-only">read-only, as the server says</p>
+                )}
                 {tool.arguments.length > 0 && (
                   <ul className="mcp-tool-arguments">
                     {tool.arguments.map((argument, index) => (

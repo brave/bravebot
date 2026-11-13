@@ -225,17 +225,52 @@ impl Workspace {
     }
 
     fn confines_as(&self, path: &Path, write: Option<bool>) -> Result<(), WorkspaceError> {
-        let escapes = || WorkspaceError::Escapes {
+        let escapes = |remedy| WorkspaceError::Escapes {
             path: path.display().to_string(),
-            remedy: Remedy::Nothing,
+            remedy,
         };
-        let resolved = destination(path).ok_or_else(escapes)?;
-        if (self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write))
-            && !self.in_the_stores(&resolved)
-        {
+        let resolved = destination(path).ok_or_else(|| escapes(Remedy::Nothing))?;
+        if self.in_the_stores(&resolved) {
+            return Err(escapes(Remedy::Nothing));
+        }
+        if self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write) {
             return Ok(());
         }
-        Err(escapes())
+        Err(escapes(self.remedy_for_destination(path, &resolved)))
+    }
+
+    /// What a person can do so that `path`, which lands on `resolved` outside every opened
+    /// directory, is reached: the remedy the file tools give for an absolute path
+    /// ([`Workspace::remedy_outside`]), since the destination is tested where it lands and opening
+    /// that directory makes the same path pass (TRUST-10, CMDLINE-5).
+    ///
+    /// [`Remedy::Nothing`] where the path, with each `..` taken out of the text, is written inside
+    /// the root or an opened directory and still lands outside them: a link carries it out, and the
+    /// directory a sentence would name is not the one the path is written in. Also where a `..`
+    /// climbs off the top of the file system, which the kernel reads as the top itself, or the path
+    /// lands on a name that is not UTF-8, which a sentence cannot spell, as the file tools do.
+    /// Decided from the path the line spelled and where the file system says it leads, never from
+    /// what a file holds.
+    fn remedy_for_destination(&self, path: &Path, resolved: &Path) -> Remedy {
+        if resolved.to_str().is_none() {
+            return Remedy::Nothing;
+        }
+        let mut written = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::ParentDir => {
+                    if !written.pop() {
+                        return Remedy::Nothing;
+                    }
+                }
+                Component::CurDir => {}
+                other => written.push(other),
+            }
+        }
+        if self.lands_in_reach(&written) {
+            return Remedy::Nothing;
+        }
+        self.remedy_outside(resolved)
     }
 
     /// Other names of the file something else opens at the absolute `path`, spelled as
@@ -249,10 +284,19 @@ impl Workspace {
     /// everything is followed, as [`Workspace::confines`] tests it, which is the only name there is
     /// where a `..` leaves a link.
     pub(crate) fn names_reached(&self, path: &Path) -> Vec<String> {
+        self.paths_reached(path)
+            .iter()
+            .map(|reached| self.relative_display(reached))
+            .collect()
+    }
+
+    /// The paths [`Workspace::names_reached`] spells, before they are spelled. A caller that
+    /// decides on a name checks each with `to_str` first, since the spelling of one that is not
+    /// UTF-8 is the name of a different file (PATH-001).
+    pub(crate) fn paths_reached(&self, path: &Path) -> Vec<PathBuf> {
         self.climbed(path)
             .into_iter()
             .chain(destination(path))
-            .map(|reached| self.relative_display(&reached))
             .collect()
     }
 

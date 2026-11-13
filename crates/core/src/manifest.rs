@@ -299,7 +299,7 @@ impl Step {
 
         // A call reads as a call is put to a person, `alias:tool` (SERVERS-7).
         let (subject, routing) = match self.tool {
-            MCP_CALL => (
+            MCP_CALL | MCP_READ => (
                 vec![subject, Part::Words(format!(":{}", self.text("tool")))],
                 Vec::new(),
             ),
@@ -584,6 +584,18 @@ pub fn is_connector(tool: &str) -> bool {
 /// body the plan wrote, as a file write's `contents` are.
 pub const MCP_CALL: &str = "mcp_call";
 
+/// The step that calls one tool of a vouched-for list that its server marks read-only, and puts
+/// the reply in a slot.
+///
+/// Named for the reason [`ANSWER`] is. It is [`MCP_CALL`] at the fetch tier: the same routing and
+/// the same literal arguments, and its reply is quarantined as any fetch's is.
+pub const MCP_READ: &str = "mcp_read";
+
+/// Whether a step calls a tool of an MCP server, to act or to read.
+pub fn is_server_call(tool: &str) -> bool {
+    tool == MCP_CALL || tool == MCP_READ
+}
+
 /// The static contract for one tool.
 ///
 /// This is the specification's `TOOL_SCHEMA`, and it plays the same role: the single place that
@@ -808,6 +820,26 @@ const CONTRACTS: &[Contract] = &[
         routing: &["server", "tool"],
         headline: &["server"],
         verb: "call",
+    },
+    // A read is a call whose tool its server marks read-only, held to that by the vouched list
+    // before the plan is put to anybody. It is a fetch, so it comes before every act, and its
+    // reply fills the slot it names, quarantined. Its arguments are still the plan's own text,
+    // so nothing a step read is named in what it sends.
+    Contract {
+        tool: MCP_READ,
+        tier: Tier::Fetch,
+        required: &["server", "tool", "out_slot"],
+        accepted: &["server", "tool", "arguments", "out_slot"],
+        slot_output: Some("out_slot"),
+        slot_inputs: &[],
+        slot_refs: &[],
+        paths: &[],
+        counts: &[],
+        texts: &["arguments"],
+        alternatives: &[],
+        routing: &["server", "tool"],
+        headline: &["server"],
+        verb: "read",
     },
     Contract {
         tool: ANSWER,
@@ -1152,6 +1184,8 @@ pub enum Origin {
     Workspace,
     /// Fetched through a connector, from one place.
     Place { connector: String, place: String },
+    /// Returned by one read-only tool of an MCP server, as `alias:tool`.
+    Server { tool: String },
 }
 
 impl fmt::Display for Origin {
@@ -1160,6 +1194,7 @@ impl fmt::Display for Origin {
             Self::Workspace => f.write_str("workspace"),
             Self::Place { connector, place } if place.is_empty() => f.write_str(connector),
             Self::Place { connector, place } => f.write_str(&destination(connector, place)),
+            Self::Server { tool } => f.write_str(tool),
         }
     }
 }
@@ -1303,6 +1338,10 @@ impl Manifest {
                     BTreeSet::from([Origin::Place {
                         connector: step.text("connector").to_string(),
                         place: step.text("place").to_string(),
+                    }])
+                } else if step.tool == MCP_READ {
+                    BTreeSet::from([Origin::Server {
+                        tool: format!("{}:{}", step.text("server"), step.text("tool")),
                     }])
                 } else if step.tier == Tier::Fetch {
                     BTreeSet::from([Origin::Workspace])
@@ -2095,6 +2134,85 @@ mod tests {
             ]))
             .is_ok()
         );
+    }
+
+    fn server_read(server: &str, tool: &str, slot: &str) -> DraftStep {
+        DraftStep::new(MCP_READ)
+            .with_text("server", server)
+            .with_text("tool", tool)
+            .with_text("out_slot", slot)
+    }
+
+    /// A read is a fetch: its reply fills the slot it names, a transform and an answer can use
+    /// that slot, and the line says where the content came from. It is locked as a call is, by its
+    /// alias and tool and never by its arguments.
+    #[test]
+    fn a_server_read_fills_a_slot_a_later_step_uses() {
+        let plan = validate(&Draft::new(vec![
+            server_read("browser", "list_recent_bookmarks", "marks")
+                .with_text("arguments", r#"{"max":5}"#),
+            process(&["marks"], "list"),
+            answer("list"),
+        ]))
+        .unwrap();
+        assert_eq!(plan.steps()[0].tier(), Tier::Fetch);
+        assert_eq!(
+            plan.steps()[0].describe(),
+            "read browser:list_recent_bookmarks into marks"
+        );
+        let routing = plan.routing();
+        assert!(routing.contains(&("step_0_server".to_string(), "browser".to_string())));
+        assert!(routing.contains(&(
+            "step_0_tool".to_string(),
+            "list_recent_bookmarks".to_string()
+        )));
+        assert!(
+            routing.iter().all(|(key, _)| !key.ends_with("arguments")),
+            "{routing:?}"
+        );
+        assert_eq!(
+            plan.origins().get(&SlotId::new("list")),
+            Some(&BTreeSet::from([Origin::Server {
+                tool: "browser:list_recent_bookmarks".to_string()
+            }]))
+        );
+    }
+
+    /// A read has a fetch's place in the order: after an action it is refused as any read is, and
+    /// it names no slot it takes from, so its arguments are still the plan's own text.
+    #[test]
+    fn a_server_read_comes_before_every_action_and_takes_from_no_slot() {
+        assert_eq!(
+            validate(&Draft::new(vec![
+                call("browser", "create_bookmark"),
+                server_read("browser", "list_recent_bookmarks", "marks"),
+            ])),
+            Err(ManifestError::ReadAfterAction {
+                step: 1,
+                tool: MCP_READ
+            })
+        );
+        for field in ["from_slot", "reads", "on", "take", "with"] {
+            let failure = validate(&Draft::new(vec![
+                read("a.md", "doc"),
+                server_read("browser", "search_bookmarks", "found").with_text(field, "doc"),
+            ]))
+            .expect_err(field);
+            assert!(
+                matches!(&failure, ManifestError::Unknown { step: 1, field: named, .. } if named == field),
+                "{field}: {failure:?}"
+            );
+        }
+        let mut unnamed = server_read("browser", "search_bookmarks", "found");
+        unnamed.args.remove("out_slot");
+        assert!(matches!(
+            validate(&Draft::new(vec![unnamed])),
+            Err(ManifestError::Missing {
+                step: 0,
+                field: "out_slot",
+                ..
+            })
+        ));
     }
 
     /// A filter the plan left out is locked as the empty string, and printing that would read as a

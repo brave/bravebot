@@ -30,7 +30,9 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise. A path inside the workspace that is refused for not being named
+reference, the path otherwise. A `run` line's redirection refused for leaving the workspace is
+recorded the same way, with the remedy the planner was told, which is none where nobody can be asked
+in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A path inside the workspace that is refused for not being named
 relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
 relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
 write call the permission mode refuses before the tool runs
@@ -148,6 +150,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::tools::a_directory_inside_the_workspace_is_refused_as_inside_it`
 `verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
 `verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
 `verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
 `verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::manifest::a_plan_refused_by_plan_mode_is_recorded_as_a_refusal`
@@ -330,7 +333,12 @@ policy decides a command or a write is to be put to the person, a second entry u
 says what answered: the mode that answered in their place and so drew nothing, or no mode, which
 leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
 in "asking" say what the policy decided, and they read as a person having been asked. A write that
-is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
+is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)). A run that redirects into a
+protected path ([PERM-9](permissions.md#PERM-9)) is never answered by a mode short of bypassing, so its
+entry names no mode and the trail has no "answered by auto mode, nobody was asked" for it, and no
+`auto_mode` entry, since the classifier is not asked.
+
+`verified-by: bravebot_agent::turn::a_run_into_a_protected_file_is_not_put_to_the_classifier_by_any_name_it_has`
 
 A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
 `approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
@@ -552,6 +560,11 @@ them:
   its test directory, which names no path either.
 
 The line breaks those sentences run over are kept and every other control character is pictured.
+A control character is drawn as `bravebot_agent::confirm::printable` draws it: U+0000 to U+001F as
+the Control Pictures U+2400 to U+241F, DEL as `␡` (U+2421), and each C1 control (U+0080 to U+009F),
+which has no picture, as `‹U+XXXX›`. Two different controls do not draw alike, and none draws as
+one of the enclosed alphanumerics U+2480 to U+249F; a text that holds the characters `‹U+0085›` or
+`␡` itself draws the same as the control it spells.
 The `bravebot` command line draws with `progress::printable`, which also spells a bidirectional
 control and a zero-width character as `‹U+XXXX›`, so every existing caller of it draws them that
 way as well as the control characters. The terminal client draws only control characters in notes;
@@ -567,6 +580,10 @@ That does not make its text safe for a terminal: a file name in a clone can hold
 that sets the terminal's title or colour. The replacement is a change of characters and the sink
 still branches on none of them ([TRACE-5](#TRACE-5)).
 
+`verified-by: bravebot_agent::confirm::a_control_character_is_drawn_as_a_mark_for_it_and_other_text_is_unchanged`
+`verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
+`verified-by: bravebot_core::invisible::a_single_character_is_written_out_as_its_code_point`
+`verified-by: bravebot_cli::progress::a_c1_control_is_drawn_once_as_its_code_point_by_the_command_line`
 `verified-by: bravebot_cli::main::a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`

@@ -72,6 +72,7 @@ answer to either question makes it reachable ([TRUST-10](../trust-map.md#TRUST-1
 `verified-by: bravebot_agent::turn::a_declined_destination_sends_no_request_and_leaves_the_file`
 `verified-by: bravebot_agent::turn::a_download_to_a_file_outside_the_workspace_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::turn::a_download_from_a_denied_host_is_refused_without_asking`
+`verified-by: bravebot_agent::turn::a_download_from_another_spelling_of_a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_download_redirected_to_another_host_saves_nothing`
 `verified-by: bravebot_agent::turn::a_download_sends_no_accept_preference_of_its_own`
 `verified-by: bravebot_agent::turn::an_allow_rule_answers_a_downloads_host_and_the_destination_is_still_asked`

@@ -349,7 +349,11 @@ pub enum ExecError {
     ///
     /// Carries the program name, which is safe to report: argv was endorsed by a person, so it is
     /// not content an attacker chose.
-    NotStarted { program: String, detail: String },
+    NotStarted {
+        program: String,
+        detail: String,
+        before: StartedBefore,
+    },
     /// The directory the line was to run in no longer exists, so the pipeline was not started.
     ///
     /// Checked immediately before the first stage is spawned, since an approval can wait for
@@ -363,7 +367,15 @@ pub enum ExecError {
     /// never a program started without one ([SANDBOX-17]).
     ///
     /// [SANDBOX-17]: ../../../docs/specs/sandboxing.md
-    NotConfined { program: String, detail: String },
+    NotConfined {
+        program: String,
+        detail: String,
+        before: StartedBefore,
+        /// The refusal is a closed `run.network` this platform cannot deny, decided from the
+        /// session's settings and the backend's capabilities. A line with no profile would then
+        /// have the network open, which the result says where it names that route (SANDBOX-29).
+        network_closed: bool,
+    },
     /// The user asked the turn to stop while this was running, and it has been killed.
     Cancelled,
     /// The plumbing itself failed: a pipe that could not be created or read.
@@ -390,6 +402,50 @@ pub enum ExecError {
         source: String,
         failure: SubstitutionFailure,
     },
+}
+
+/// What the line had started before a program of it was refused or failed to start, read off the
+/// processes this module spawned and nothing they printed.
+///
+/// Made [`StartedBefore::Nothing`] where the error is made, and set by the run of the line, which
+/// is the one place that knows what it spawned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartedBefore {
+    /// No program of the line had been started.
+    #[default]
+    Nothing,
+    /// No stage of this program's pipeline had been started, and a part of the line before it
+    /// had: a part joined with `&&`, `||` or `;`, or a `$(...)` an assignment reads.
+    EarlierPart,
+    /// Stages before it in its pipeline had been started, and were stopped.
+    EarlierStages,
+}
+
+impl ExecError {
+    /// This error with `before` recorded, where it is one a program that did not start gives.
+    fn started_before(self, before: StartedBefore) -> Self {
+        match self {
+            Self::NotStarted {
+                program, detail, ..
+            } => Self::NotStarted {
+                program,
+                detail,
+                before,
+            },
+            Self::NotConfined {
+                program,
+                detail,
+                network_closed,
+                ..
+            } => Self::NotConfined {
+                program,
+                detail,
+                before,
+                network_closed,
+            },
+            other => other,
+        }
+    }
 }
 
 /// How a `$(source)` ended without a value.
@@ -428,11 +484,15 @@ pub enum VariableProblem {
 impl fmt::Display for ExecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotStarted { program, detail } => {
+            Self::NotStarted {
+                program, detail, ..
+            } => {
                 write!(f, "'{program}' could not be started: {detail}")
             }
             Self::DirectoryGone => f.write_str("the directory it was to run in no longer exists"),
-            Self::NotConfined { program, detail } => {
+            Self::NotConfined {
+                program, detail, ..
+            } => {
                 write!(
                     f,
                     "'{program}' was not started, since it could not be confined: {detail}"
@@ -643,6 +703,8 @@ struct Running<'a> {
     moved: Option<Moved>,
     /// What each step is confined to, where the session asked for it.
     confinement: Option<&'a Confinement>,
+    /// Whether a program of this line, or of a `$(...)` it read, has been started.
+    started_any: bool,
 }
 
 /// Why a wait came back without an error.
@@ -682,6 +744,7 @@ impl<'a> Running<'a> {
             handoff: None,
             moved: None,
             confinement: None,
+            started_any: false,
         }
     }
 
@@ -749,6 +812,7 @@ impl<'a> Running<'a> {
         inner.entering = self.entering.take();
         inner.reading = self.reading.take();
         let ended = inner.run(steps);
+        self.started_any |= inner.started_any;
         self.entering = inner.entering.take();
         self.reading = inner.reading.take();
         let well = match ended {
@@ -812,13 +876,29 @@ impl<'a> Running<'a> {
         }
     }
 
+    /// What the line had started before the pipeline about to start.
+    fn before_this_pipeline(&self) -> StartedBefore {
+        match self.started_any {
+            true => StartedBefore::EarlierPart,
+            false => StartedBefore::Nothing,
+        }
+    }
+
+    /// What the line had started before the next stage of a pipeline that has started `children`.
+    fn before_stage(&self, children: &[Process]) -> StartedBefore {
+        match children.is_empty() {
+            true => self.before_this_pipeline(),
+            false => StartedBefore::EarlierStages,
+        }
+    }
+
     /// Run one pipeline of steps, chained by descriptor the way a shell chains them.
     fn pipeline(&mut self, steps: &[Step]) -> Result<bool, ExecError> {
         if steps.is_empty() {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
         the_directory_exists(self.directory)?;
-        still_approved(steps)?;
+        still_approved(steps).map_err(|error| error.started_before(self.before_this_pipeline()))?;
         // Every step's assignments are worked out before anything in this pipeline starts, so a
         // variable that is unset or withheld, or a substitution that fails, refuses the pipeline
         // with nothing of it running. The values live in `expanded` and reach `command_for` and
@@ -858,7 +938,8 @@ impl<'a> Running<'a> {
             let command = command_for(step, self.directory, self.scratch, &expanded[index]);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
-            let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
+            let launching = crate::confine::begin(self.confinement, command, step, self.directory)
+                .map_err(|error| error.started_before(self.before_stage(&children)))?;
 
             let mut into = Where::Upstream;
             let mut out = if index == last {
@@ -933,13 +1014,15 @@ impl<'a> Running<'a> {
             let child = match launch(launching, step, reading_from, writing, erring) {
                 Ok(child) => child,
                 Err(error) => {
+                    let before = self.before_stage(&children);
                     // Whatever started already is killed rather than left running behind a
                     // pipeline that will never complete.
                     stop(&mut children);
-                    return Err(error);
+                    return Err(error.started_before(before));
                 }
             };
             children.push(child);
+            self.started_any = true;
 
             // Read on threads of their own, started as each step spawns, so a program printing
             // more than a pipe holds is being drained while it is still writing. Waiting first and
@@ -1247,6 +1330,7 @@ fn launch(
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
                     detail: e.to_string(),
+                    before: StartedBefore::Nothing,
                 })
         }
         #[cfg(windows)]
@@ -1552,6 +1636,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             resolved,
             started_as,
             args: _,
+            matched: _,
             environment: _,
             expansions: _,
             routes: _,
@@ -1560,6 +1645,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             return Err(ExecError::NotStarted {
                 program: program.clone(),
                 detail: "it no longer leads to the program that was approved".to_string(),
+                before: StartedBefore::Nothing,
             });
         }
     }
@@ -1874,6 +1960,7 @@ fn command_for(
         resolved: _,
         started_as,
         args: _,
+        matched: _,
         environment: _,
         // Their values are `expanded`, worked out by the caller for the whole pipeline before its
         // first step starts.
@@ -1986,8 +2073,9 @@ pub fn start_steps_within(
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {
+                let before = resolving.before_stage(&children);
                 stop(&mut children);
-                return Err(error);
+                return Err(error.started_before(before));
             }
         };
 
@@ -2007,8 +2095,9 @@ pub fn start_steps_within(
         }) {
             Ok(child) => child,
             Err(error) => {
+                let before = resolving.before_stage(&children);
                 stop(&mut children);
-                return Err(error);
+                return Err(error.started_before(before));
             }
         };
         children.push(child);

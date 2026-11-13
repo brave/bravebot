@@ -147,7 +147,7 @@ jobs:
             echo "installing the cached packages failed, falling back to apt" >&2
           fi
           for attempt in 1 2 3 4; do
-            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives xdg-utils libglib2.0-bin kde-cli-tools"; then
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives xdg-utils libglib2.0-bin kde-cli-tools dbus"; then
               exit 0
             fi
             echo "apt attempt $attempt failed or timed out" >&2
@@ -182,6 +182,25 @@ jobs:
       # nextest does not run doctests.
       - name: Doctests
         run: cargo test --workspace --doc --locked
+
+      # Whether `kde-open` needs a session bus is not established (SANDBOX-30 reads the source and
+      # did not run it). The runner has none, so the Test step skips the test that runs it. This
+      # step runs it under `dbus-run-session`, so a bus exists. With BRAVEBOT_OBSERVE_KDE_OPEN set the
+      # test fails when `kde-open` is missing, when the baseline run starts no handler, and when a
+      # name that made `kde-open` run the planted handler is not one the opener removes. The names
+      # it observed are in the log as `kde-open observed:` lines. The first command prints which
+      # `kde-open` programs the package installed, so a run that ends with a baseline that started no
+      # handler shows which program was run and what it printed (the test's own message carries its
+      # exit status and stderr). The step keeps failing only when the test fails.
+      - name: Run kde-open with each name set to a marker handler
+        env:
+          BRAVEBOT_OBSERVE_KDE_OPEN: "1"
+        run: |
+          command -v kde-open kde-open5 kde-open6 || true
+          dpkg -s kde-cli-tools | grep -E '^(Package|Version):' || true
+          dpkg -L kde-cli-tools | grep -E '/bin/' || true
+          ls /etc/xdg/menus 2>&1 || true
+          dbus-run-session -- cargo test -p bravebot-tui --lib kde_open_run_with_each_name --locked -- --nocapture
 
       # Run once, with its output, to put the number of workflows skipped for want of a tool in the
       # log. Running it inside the Test step as well used to double its tens of seconds.
@@ -907,8 +926,12 @@ jobs:
   # and the empty Windows base rest on the code alone.
   #
   # Only the tests written for Windows run. The rest of the sandbox crate's tests use Unix paths
-  # and programs, and the agent's other confined-process tests spawn a POSIX shell. Target as in
-  # the windows job above.
+  # and programs, and the agent's other confined-process tests spawn a POSIX shell. The browser
+  # opener's three Windows tests in bravebot-tui also run (the step that follows the confine
+  # test): `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`,
+  # `a_windows_name_is_removed_in_whatever_case_it_is_set` and
+  # `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`. Target as
+  # in the windows job above.
   sandbox-windows:
     name: Sandbox on Windows
     runs-on: windows-latest
@@ -1018,7 +1041,7 @@ jobs:
         run: cargo test -p bravebot-sandbox --locked --no-fail-fast --lib 'windows::'
 
       - name: Test the backend with real processes
-        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows -- --nocapture
 
       - name: Test a confined program run for a person
         # The session is granted its temporary directory, so it is a directory of its own and not
@@ -1028,6 +1051,24 @@ jobs:
           export TMP="$(cygpath -w "$RUNNER_TEMP/confine")"
           export TEMP="$TMP"
           cargo test -p bravebot-agent --locked --no-fail-fast --test confine
+
+      # The browser opener's Windows start, `rundll32 url.dll,FileProtocolHandler` (#3860). The
+      # run test starts a child of the test binary with the nine names of the list set to a
+      # stage-written helper, asserts the opener's start removes them and that the helper does not
+      # run, and prints, for each name and for `PSModulePath`, whether a start with that name put
+      # back ran it. The printed record is not asserted and is kept in the step output. `3 passed`
+      # fails the step if a test was filtered out.
+      - name: Test the browser opener's Windows start
+        run: |
+          mkdir -p "$RUNNER_TEMP/opener"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/opener")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-tui --locked --lib -- --nocapture --exact \
+            opener::tests::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it \
+            opener::tests::a_windows_name_is_removed_in_whatever_case_it_is_set \
+            opener::tests::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments \
+            | tee "$RUNNER_TEMP/opener.log"
+          grep -q 'test result: ok. 3 passed' "$RUNNER_TEMP/opener.log"
 
   # The tests that ask the volume whether two awkward names are two files, run on the volume that
   # holds names apart that no other host does (#2869, TRUST-2). On every other host `two_files`

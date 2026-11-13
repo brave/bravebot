@@ -127,7 +127,6 @@ type DirectoryIdentity = fn(&Path) -> Option<(u64, u64)>;
 pub(crate) use resolve::destination;
 pub use resolve::expand_home;
 use resolve::{named_home, refuse_unkeyable, written_below};
-pub(crate) use results::MAX_ENTRIES;
 pub use results::{
     ContextLine, FileTally, Listing, MAX_SEARCH_CONTEXT, MAX_SEARCH_FILES, Match, Matches, Page,
     Paging, RepoMap, SearchOutput,
@@ -136,6 +135,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
+pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
@@ -2706,12 +2706,17 @@ struct Collected<'a> {
     /// of the tree, and what it points at is not read, so the count is all a caller can say. It
     /// is taken from the entry's file type and from nothing in a file.
     links: usize,
+    /// The most files taken from any one directory, or `None` for no such cap. Set only by a
+    /// depth-bounded listing (LIST-5).
+    per_directory: Option<usize>,
+    /// Directories `per_directory` cut, each with how many of its files were left out.
+    partly_listed: Vec<(String, usize)>,
 }
 
 impl Collected<'_> {
     /// How much of the cap has been spent.
     fn len(&self) -> usize {
-        self.files.len() + self.stopped_at.len()
+        self.files.len() + self.stopped_at.len() + self.partly_listed.len()
     }
 }
 
@@ -2915,13 +2920,35 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
+                // Only a bounded listing, whose purpose is the shape of the tree. An unbounded one
+                // asked for every file, and keeps the one cap over the whole walk.
+                per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                partly_listed: Vec::new(),
             };
-            let _ =
-                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &rules, &mut collected)?;
+            // The name the root is reported under if the per-directory cap cuts it: `.` for the
+            // workspace root, whose relative name is empty, and its relative name otherwise. Taken
+            // once from the resolved directory argument, the value `under` already holds, and
+            // passed into the walk, so no subdirectory's name is tested for it.
+            let root_shown = if under.is_empty() {
+                "."
+            } else {
+                under.as_str()
+            };
+            let _ = self.walk_filtered(
+                &root,
+                root_shown,
+                wanted,
+                depth,
+                MAX_ENTRIES,
+                &rules,
+                &mut collected,
+            )?;
             let unreadable = collected.unreadable;
             let links = collected.links;
+            let mut partly_listed = std::mem::take(&mut collected.partly_listed);
             found.sort();
             stopped_at.sort();
+            partly_listed.sort();
 
             // Labelled after the walk, because which paths were visited is not known before it. A
             // listing is trusted only if every path in it is. A directory name is a name out of the
@@ -2938,6 +2965,8 @@ impl Workspace {
             // outside the boundary like the walk, and it can only lower the label.
             let mut keyed = self.walked_keys(&walk_names, &relative, &root, &found, true);
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &stopped_at, false));
+            let cut: Vec<String> = partly_listed.iter().map(|(name, _)| name.clone()).collect();
+            keyed.extend(self.walked_keys(&walk_names, &relative, &root, &cut, false));
             // The walk above reads directory entries and no file's bytes, and runs outside the
             // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
             // names, and the label of a name is the map's answer for its path, taken inside the
@@ -2960,17 +2989,24 @@ impl Workspace {
             // the same order every time, which is the walk's doing rather than this sort's: what
             // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
             // kept.
-            let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
+            //
+            // A directory the per-directory cap cut leaves files out as the whole-walk cap does, so
+            // the listing is reported as truncated either way (LIST-4).
+            let at_the_cap = found.len() + stopped_at.len() + partly_listed.len() > MAX_ENTRIES;
+            let truncated = at_the_cap || !partly_listed.is_empty();
             found.truncate(MAX_ENTRIES);
             stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
+            partly_listed.truncate(MAX_ENTRIES.saturating_sub(found.len() + stopped_at.len()));
 
             Ok(Labelled::new(
                 Listing {
                     files: found,
                     directories: stopped_at,
                     truncated,
+                    at_the_cap,
                     unreadable,
                     links,
+                    partly_listed,
                 },
                 label,
             ))
@@ -3032,9 +3068,12 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
+                per_directory: None,
+                partly_listed: Vec::new(),
             };
             let hit_the_cap = self.walk_filtered(
                 &root,
+                &under,
                 wanted,
                 None,
                 self.search_files,
@@ -3335,9 +3374,12 @@ impl Workspace {
                     withheld: false,
                     unreadable: false,
                     links: 0,
+                    per_directory: None,
+                    partly_listed: Vec::new(),
                 };
                 let unvisited = self.walk_filtered(
                     &root,
+                    &under,
                     wanted,
                     None,
                     self.search_files,
@@ -4275,9 +4317,19 @@ impl Workspace {
     /// reaches contributes its own contents before the walk disappears into the first subtree
     /// under it. A partial answer cannot be helped once the cap is reached. Which part it
     /// is can.
+    ///
+    /// `shown` is the name `directory` is reported under if the per-directory cap cuts it. The
+    /// caller supplies it: the first call passes the root's name, and each recursive call passes
+    /// the relative name it already built for the subdirectory. So the walk tests no name to tell
+    /// the root from a subdirectory.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk's arguments plus the name a cut directory is reported under"
+    )]
     fn walk_filtered<S: Sink>(
         &self,
         directory: &Path,
+        shown: &str,
         wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
@@ -4321,6 +4373,9 @@ impl Workspace {
         files.sort();
         directories.sort();
 
+        // Files this directory gave the listing, and files past `per_directory` it did not.
+        let mut taken = 0;
+        let mut left_out = 0;
         for path in files {
             if collected.len() > limit {
                 return Ok(true);
@@ -4343,7 +4398,17 @@ impl Workspace {
                 collected.withheld = true;
                 continue;
             }
+            // Counted after the include and the rules, so the number left out is of files the
+            // listing would have shown, and the cap is decided from that count alone.
+            if collected.per_directory.is_some_and(|most| taken >= most) {
+                left_out += 1;
+                continue;
+            }
+            taken += 1;
             collected.files.push(relative);
+        }
+        if left_out > 0 {
+            collected.partly_listed.push((shown.to_string(), left_out));
         }
 
         for path in directories {
@@ -4373,6 +4438,7 @@ impl Workspace {
             // records only that it did, which a caller says without a name.
             match self.walk_filtered(
                 &path,
+                &relative,
                 wanted,
                 remaining.map(|left| left - 1),
                 limit,
@@ -7871,5 +7937,237 @@ mod tests {
         let path = destination_holding("left-at-lossy", &held);
 
         assert_eq!(left_at(&path, 1024), Some(format!("{declared}\u{FFFD}")));
+    }
+
+    /// The remedy a redirection refused for leaving the workspace carries.
+    fn destination_remedy(workspace: &Workspace, path: &Path) -> Remedy {
+        match workspace.confines_writing(path) {
+            Err(WorkspaceError::Escapes { remedy, .. }) => remedy,
+            other => panic!("{} was not refused for leaving: {other:?}", path.display()),
+        }
+    }
+
+    /// TRUST-10, CMDLINE-5: a redirection outside every opened directory is refused with the
+    /// remedy the file tools give an absolute path, chosen from where it lands.
+    ///
+    /// The regression it rejects: `confines_as` refusing every destination with
+    /// [`Remedy::Nothing`], so the planner is never told the directory can be opened.
+    #[test]
+    fn a_redirection_outside_is_offered_the_directory_the_file_tools_offer() {
+        let (home, project) = home_and_project("redirect-remedy-open");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(
+            destination_remedy(&workspace, &beside.join("notes.txt")),
+            Remedy::Open
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &project.join("../beside/new.txt")),
+            Remedy::Open,
+            "a climb into a directory that is not open is offered it, as TRUST-10 says"
+        );
+        assert_eq!(destination_remedy(&workspace, &beside), Remedy::OpenItself);
+        assert!(
+            workspace
+                .confines_writing(&beside.join("notes.txt"))
+                .expect_err("refused")
+                .describe("x")
+                .contains("/add-dir"),
+            "the refusal does not name /add-dir"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10, CHECKOUT-7: a destination whose directory holds the working directory says what
+    /// opening it costs.
+    ///
+    /// The regression it rejects: the plain remedy for a directory that holds the root.
+    #[test]
+    fn a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts() {
+        let (home, project) = home_and_project("redirect-remedy-checkouts");
+        let base = home.parent().expect("base").to_path_buf();
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(
+            destination_remedy(&workspace, &base.join("notes.txt")),
+            Remedy::OpenEndsCheckouts
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &base),
+            Remedy::OpenItselfEndsCheckouts
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-10, SANDBOX-18: a destination in a credential location is offered no directory, and
+    /// one naming the location itself is offered nothing.
+    ///
+    /// The regression it rejects: `/add-dir` named for a directory it refuses to open.
+    #[test]
+    fn a_redirection_into_a_credential_location_is_offered_no_directory() {
+        let (home, project) = home_and_project("redirect-remedy-credential");
+        std::fs::create_dir_all(home.join(".ssh")).expect("ssh");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        assert_eq!(
+            destination_remedy(&workspace, &home.join(".ssh/config")),
+            Remedy::Credential
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &home.join(".ssh")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a refusal opening a directory cannot fix offers nothing: a link that carries the
+    /// destination out, and the stores.
+    ///
+    /// The regression it rejects: the remedy chosen from where a link leads, which names a
+    /// directory the line's path is not written in, and the stores offered as a directory to open.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing() {
+        let (home, project) = home_and_project("redirect-remedy-nothing");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        std::os::unix::fs::symlink(&beside, project.join("out")).expect("link");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_state(&state);
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+
+        assert_eq!(
+            destination_remedy(&workspace, &project.join("out/notes.txt")),
+            Remedy::Nothing
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &state.join("facts/x.md")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a redirection whose path climbs above the top of the file system offers nothing.
+    /// The kernel reads the extra `..` as `/`, so no directory the path is written in can be
+    /// opened to reach it.
+    ///
+    /// The regression it rejects: the remedy chosen from where the path lands, which names the top
+    /// of the file system as a directory to open.
+    #[test]
+    fn a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing() {
+        let (home, project) = home_and_project("redirect-remedy-off-the-top");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let climbs = "../".repeat(project.components().count() + 2);
+
+        assert_eq!(
+            destination_remedy(&workspace, &project.join(format!("{climbs}notes.txt"))),
+            Remedy::Nothing
+        );
+        assert_eq!(
+            destination_remedy(&workspace, Path::new("/../../notes.txt")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a redirection whose destination is a name that is not UTF-8 offers nothing, since
+    /// a sentence naming its directory would name a different one. Unix only: Windows names are
+    /// UTF-16 and macOS refuses such a name on APFS, so the directory is not made there.
+    ///
+    /// The lookalike `beside-\u{FFFD}`, which is valid UTF-8, is offered the directory to open as
+    /// any other name outside is.
+    ///
+    /// The regression it rejects: `/add-dir` offered with a lossy spelling of the directory, and
+    /// a check on the lossy spelling that also refuses the lookalike.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing() {
+        use std::os::unix::ffi::OsStrExt;
+        let (home, project) = home_and_project("redirect-remedy-not-utf8");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let beside = home
+            .parent()
+            .expect("base")
+            .join(std::ffi::OsStr::from_bytes(b"beside-\xff"));
+        let destination = beside.join("notes.txt");
+        if std::fs::create_dir_all(&beside).is_ok() {
+            assert_eq!(
+                destination_remedy(&workspace, &destination),
+                Remedy::Nothing
+            );
+        }
+        assert_eq!(
+            destination_remedy(&workspace, &destination),
+            Remedy::Nothing,
+            "a name nothing is at yet"
+        );
+        let lookalike = home.parent().expect("base").join("beside-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).expect("lookalike");
+        assert_eq!(
+            destination_remedy(&workspace, &lookalike.join("notes.txt")),
+            Remedy::Open,
+            "the valid UTF-8 lookalike"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// CMDLINE-5, TRUST-10: the destination a redirection was refused for is let through once the
+    /// directory its remedy names is opened, spelled from the top of the file system and with a
+    /// `..` out of the root.
+    ///
+    /// The regression it rejects: a remedy naming `/add-dir` for a destination that opening the
+    /// directory does not let through.
+    #[test]
+    fn a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened() {
+        let (home, project) = home_and_project("redirect-remedy-then-opened");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let absolute = beside.join("notes.txt");
+        let climbing = project.join("../beside/notes.txt");
+
+        assert_eq!(destination_remedy(&workspace, &absolute), Remedy::Open);
+        assert_eq!(destination_remedy(&workspace, &climbing), Remedy::Open);
+        workspace
+            .add_directory(beside.to_str().expect("utf-8"))
+            .expect("beside opened");
+        assert!(
+            workspace.confines_writing(&absolute).is_ok(),
+            "the absolute destination is still refused after its directory was opened"
+        );
+        assert!(
+            workspace.confines_writing(&climbing).is_ok(),
+            "the climbing destination is still refused after its directory was opened"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// PERM-16: where `readsStayInWorkspace` holds, a redirection outside is told so and offered
+    /// no directory.
+    ///
+    /// The regression it rejects: `/add-dir` named where opening a directory counts for nothing.
+    #[test]
+    fn a_redirection_outside_where_reads_stay_inside_is_offered_no_directory() {
+        let (home, project) = home_and_project("redirect-remedy-kept");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_reads_kept_inside(true);
+
+        assert_eq!(
+            destination_remedy(&workspace, &beside.join("notes.txt")),
+            Remedy::Kept
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 }

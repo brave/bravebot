@@ -352,10 +352,13 @@ write it, and a checkout's file may too, since it only asks for more.
 ## Asking for no sandbox
 
 A line is run with the sandbox first. A request to run a line with `unconfined: true` is accepted only
-after a line in the same turn ran with the sandbox and exited non-zero, and each such failure earns
+after a line in the same turn ran with the sandbox and exited non-zero, or a line was refused because
+the platform could not confine its program, and each such failure earns
 one request. The failed line need not be the one the request names. A request made before any line
-has failed is refused without asking you, and the planner is told to run the line with the sandbox
-first. A request you decline keeps the one it earned, and accepting one spends it.
+has failed or been refused that way is refused without asking you, and the planner is told to run
+the line with the sandbox first. Where the refusal was a closed `run.network` this platform cannot
+deny, the planner is told that a line with no sandbox, or the mode `off`, runs with the network
+open. A request you decline keeps the one it earned, and accepting one spends it.
 
 A line stopped at its deadline or by you, a line that already ran with no sandbox and a line moved
 to the background earn nothing. A line whose own redirection leaves the workspace is the exception:
@@ -537,7 +540,10 @@ reference, nobody is asked, and the result says the argument did not return it. 
 person is also told that auto-vetting kept the output back. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
-holds nothing the job has printed. [`fetch_url`](tools.md#fetch_url) and the tools of an
+holds nothing the job has printed. [`job_output`](tools.md#job_output) takes `read` too: a look that
+passes `read: true` gets the slice in its own result on the same terms, and the account of a job's
+end does too where the job's latest look passed it. [`fetch_url`](tools.md#fetch_url), [`search`](tools.md#search),
+[`list_files`](tools.md#list_files) and the tools of an
 [MCP server](../customize/mcp-servers.md) take the same argument, described under
 [Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 

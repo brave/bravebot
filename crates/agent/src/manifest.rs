@@ -108,6 +108,12 @@ may call one tool with arguments written out in the plan. What a call returns is
 person and is not available to later steps, so nothing a call returns can be an argument of \
 another. Every call is put to the person as it comes up. The tools:";
 
+/// Added to [`SERVER_SHAPE`] where a listed tool is marked read-only.
+const SERVER_READ_SHAPE: &str = "\n\
+A tool marked read-only may instead be read: what it returns goes into a slot, as a file read \
+does, so later steps can transform it or show it. Its arguments are still written out in the \
+plan, and reads come before every call that acts.";
+
 /// What the first planning call is told.
 ///
 /// Deliberately knows nothing about slots, capabilities or JSON. Asking for the goal in plain
@@ -305,6 +311,17 @@ const REGISTRY: &[Advertised] = &[
                a step read can be named in it)",
     },
     Advertised {
+        capability: "SERVER_READ",
+        tool: manifest::MCP_READ,
+        tier: Tier::Fetch,
+        gate: None,
+        summary: "Call one tool of an MCP server a person has vouched for that is marked \
+                  read-only, and put what it returns in a slot. The arguments are written out in \
+                  full here and fixed; the call is put to the person as it comes up",
+        args: "server* (an alias from the list below), tool* (one marked read-only), out_slot*, \
+               arguments (a JSON object; nothing a step read can be named in it)",
+    },
+    Advertised {
         capability: "ANSWER",
         tool: manifest::ANSWER,
         tier: Tier::Act,
@@ -327,6 +344,7 @@ fn offered(
 ) -> bool {
     match entry.tool {
         manifest::MCP_CALL => servers.any(),
+        manifest::MCP_READ => servers.any_read_only(),
         tool => connectors.any() || !manifest::is_connector(tool),
     }
 }
@@ -1022,7 +1040,15 @@ fn plan<S: Sink, R: Reporter>(
                 String::new()
             },
             if servers.any() {
-                format!("{SERVER_SHAPE}\n{}", servers.listing())
+                format!(
+                    "{SERVER_SHAPE}\n{}{}",
+                    servers.listing(),
+                    if servers.any_read_only() {
+                        SERVER_READ_SHAPE
+                    } else {
+                        ""
+                    }
+                )
             } else {
                 String::new()
             },
@@ -1510,11 +1536,22 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let reply = match answer {
         Some(answered) => answered,
         None => {
-            shown = format!(
-                "Ran the {} step(s) in the plan. It had no ANSWER step, so there is nothing to \
-                 show.",
-                plan.len()
-            );
+            shown = match plan
+                .steps()
+                .iter()
+                .any(|step| step.tool() == manifest::MCP_CALL)
+            {
+                true => format!(
+                    "Ran the {} step(s) in the plan. It had no ANSWER step; what each server call \
+                     returned is shown under it.",
+                    plan.len()
+                ),
+                false => format!(
+                    "Ran the {} step(s) in the plan. It had no ANSWER step, so there is nothing \
+                     to show.",
+                    plan.len()
+                ),
+            };
             Labelled::trusted(shown.clone())
         }
     };
@@ -1865,7 +1902,28 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let alias = locked(policy, index, "server")?;
             let word = locked(policy, index, "tool")?;
             Ok(Done {
-                note: servers.call(policy, egress, confirmer, reporter, &alias, &word, step)?,
+                note: servers.call(
+                    policy, egress, confirmer, reporter, &alias, &word, step, None,
+                )?,
+                ..Done::default()
+            })
+        }
+        // A read is the same call, and its reply fills the slot the step names.
+        manifest::MCP_READ => {
+            let alias = locked(policy, index, "server")?;
+            let word = locked(policy, index, "tool")?;
+            let out_slot = slot_to_fill(step)?;
+            Ok(Done {
+                note: servers.call(
+                    policy,
+                    egress,
+                    confirmer,
+                    reporter,
+                    &alias,
+                    &word,
+                    step,
+                    Some((out_slot, slots)),
+                )?,
                 ..Done::default()
             })
         }
@@ -2454,6 +2512,21 @@ fn write<S: Sink, C: Confirmer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MANIFEST-15. The planner is offered `mcp_read` only where some tool it is offered is marked
+    /// read-only, and `mcp_call` wherever a tool is offered. The regression it rejects is a read
+    /// offered for a list with nothing it may read, which a plan could then only be refused for.
+    #[test]
+    fn a_read_is_offered_only_where_a_tool_is_marked_read_only() {
+        let servers = crate::server_calls::Servers::offering(crate::mcp::offer_for_test(&[(
+            "brave__open_tab",
+            "brave",
+            "open_tab",
+        )]));
+        let told = catalogue(&crate::connectors::Connectors::default(), &servers);
+        assert!(told.contains("SERVER_CALL"), "{told}");
+        assert!(!told.contains("SERVER_READ"), "{told}");
+    }
     use crate::confirm::shown_name;
 
     /// A plan whose only file-naming steps use `names` as the path of a read and a write.
@@ -2752,10 +2825,9 @@ mod tests {
             &crate::connectors::Connectors::default(),
             &Servers::default(),
         );
-        for entry in REGISTRY
-            .iter()
-            .filter(|entry| !manifest::is_connector(entry.tool) && entry.tool != manifest::MCP_CALL)
-        {
+        for entry in REGISTRY.iter().filter(|entry| {
+            !manifest::is_connector(entry.tool) && !manifest::is_server_call(entry.tool)
+        }) {
             assert!(
                 shown.contains(entry.capability),
                 "{} is missing",

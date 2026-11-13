@@ -334,7 +334,8 @@ pub(super) const ENDS_CHECKOUTS: &str = "while one is open no delegate is given 
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
     /// or onto a name that is not UTF-8; a link carries it out; it names a credential location,
-    /// which cannot be opened; or what was refused is a command's redirection or a rewind.
+    /// which cannot be opened; it is in the stores; or what was refused is a rewind. A command's
+    /// redirection is given the remedy a file tool's write to the same path is given.
     Nothing,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
     /// opened. It is named in some other way than relative to the root: from the top of the file

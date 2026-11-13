@@ -821,6 +821,10 @@ doctor-settings-network-unreadable =
     run.network in { $path } is neither open nor closed, so it is read as absent
 doctor-managed-network-unreadable =
     run.network in { $path } is neither open nor closed, so the network is closed
+# The managed file's retrieval pin is a block whose enabled is false. Anything else there is read
+# as absent, so retrieval is left to the person's own file and nothing else would say so.
+doctor-managed-retrieval-unreadable =
+    retrieval in { $path } is not a block with a boolean enabled, so it is read as absent and pins nothing
 doctor-sandbox-filesystem = sandbox filesystem
 # The key is allowRead, denyRead, allowWrite or denyWrite, the path is as written, and the source is
 # the file that wrote it or the command line.
@@ -1009,6 +1013,7 @@ permission-rule-whitespace-at-an-end = has whitespace at the start or end of its
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
+permission-rule-not-a-host = has a port, scheme, path or other text that is not a host after 'domain:'; write a host name or an address alone, as WebFetch(domain:example.com) or WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
 # A permissions block, or its deny, ask or allow list, written as something other than a list.
 # The rules another settings file wrote still apply, which is what "removes none" says.
@@ -1108,9 +1113,9 @@ import-found-keys =
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 # Under the model, where the running server stated the window it holds that model loaded with.
 import-window = the server has it loaded with a context window of { $window } tokens
-# Said where that window is below the one a conversation is otherwise budgeted against. The entry
-# listed below it carries the figure as contextWindow, so a conversation is kept within it.
-import-ollama-window-small = Ollama drops the earliest turns beyond that window, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
+# Said where that window is below the one a conversation is otherwise budgeted against. Nothing is
+# written for it: each request names the window it needs, and Ollama reloads the model with it.
+import-ollama-window-small = Every request asks Ollama for the window the model was trained with, up to { $assumed } tokens, so it reloads the model with that window rather than dropping the earliest turns. A larger window takes more memory: set contextWindow on the entry below to ask for less.
 import-lm-studio-window-small = A conversation longer than that window does not fit the model as LM Studio has loaded it, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Load the model with a longer context length in LM Studio to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
@@ -1874,6 +1879,8 @@ mcp-tools-withheld =
         [one] one tool was withheld by the server's allow or deny list
        *[other] { $count } tools were withheld by the server's allow or deny list
     }
+# Under a tool its server marks read-only. The server's word, not something bravebot checked.
+mcp-tools-read-only = read-only, as the server says
 # How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
 # the server's JSON Schema words and stay as it wrote them.
 mcp-tools-argument-list-of = { $kind } of { $items }
@@ -2334,6 +2341,8 @@ watching-output-live-more = { $count ->
     }
 run-line-sent = the model wrote:
 run-writes = it writes these files:
+run-write-lands-on = { $written } (lands on { $landing })
+run-write-protected = { $path } (protected path: something runs this file later)
 run-is-fed = it is fed the contents of:
 run-not-sandboxed = this is not sandboxed: it runs with the access your own shell has
 # Said instead of the line above where the turn confines what a run starts, and followed by the
@@ -3048,6 +3057,8 @@ turn-failed = turn { $turn } failed
 # terminal was left. Fixed: it never carries a command, a path or any part of a reply.
 notice-turn-finished = bravebot: turn finished
 notice-waiting = bravebot: waiting for an answer
+# What herdr shows beside a session that is waiting on the person. Fixed, like the notice above.
+herdr-waiting = waiting for an answer
 # Said of a turn the person stopped themselves, which is neither of the above.
 turn-cancelled = turn { $turn } cancelled
 
@@ -4611,6 +4622,7 @@ commit-message-ready = the draft is in the box. Edit it, then Enter sends it to 
 commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
 commit-message-failed = the commit message could not be drafted: { $problem }
 commit-message-stopped = the commit message was stopped
+commit-message-untrusted = the draft was not offered: the diff touched a path nobody has vouched for, so the message would not be words the planner could have held
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote

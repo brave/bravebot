@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-agent"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-aichat",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-aichat"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-approval"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-i18n",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-backtrace"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-config",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-bedrock"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-aichat",
  "bravebot-config",
@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-browser"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.7",
@@ -259,14 +259,14 @@ dependencies = [
 
 [[package]]
 name = "bravebot-choice"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-core",
 ]
 
 [[package]]
 name = "bravebot-cli"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-approval",
@@ -275,7 +275,6 @@ dependencies = [
  "bravebot-core",
  "bravebot-diag",
  "bravebot-i18n",
- "bravebot-mcp",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-schedule",
@@ -292,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-config"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-sandbox",
  "serde",
@@ -302,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-connector"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-core",
  "bravebot-sandbox",
@@ -313,29 +312,39 @@ dependencies = [
 
 [[package]]
 name = "bravebot-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "unicode-normalization",
 ]
 
 [[package]]
 name = "bravebot-diag"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "bravebot-filetype"
-version = "0.21.0"
+version = "0.22.0"
+
+[[package]]
+name = "bravebot-herdr"
+version = "0.22.0"
+dependencies = [
+ "bravebot-sandbox",
+ "rustix 1.1.6",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "bravebot-i18n"
-version = "0.21.0"
+version = "0.22.0"
 
 [[package]]
 name = "bravebot-lsp"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
@@ -347,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-mcp"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -361,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-mentions"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-filetype",
  "tempfile",
@@ -369,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-net"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
@@ -382,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-sandbox"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "landlock",
  "libc",
@@ -392,10 +401,9 @@ dependencies = [
 
 [[package]]
 name = "bravebot-schedule"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-agent",
- "bravebot-approval",
  "bravebot-config",
  "bravebot-core",
  "bravebot-i18n",
@@ -406,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-session"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -423,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-signing"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -432,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-skus"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "hmac",
  "rand 0.8.7",
@@ -445,11 +453,11 @@ dependencies = [
 
 [[package]]
 name = "bravebot-stamp"
-version = "0.21.0"
+version = "0.22.0"
 
 [[package]]
 name = "bravebot-tui"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -458,6 +466,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-filetype",
+ "bravebot-herdr",
  "bravebot-i18n",
  "bravebot-mcp",
  "bravebot-mentions",
@@ -481,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-ui-bridge"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -493,6 +502,7 @@ dependencies = [
  "bravebot-diag",
  "bravebot-filetype",
  "bravebot-i18n",
+ "bravebot-mcp",
  "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
@@ -511,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-ui-files"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-filetype",
  "rustix 1.1.6",
@@ -523,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-update"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-config",
@@ -2301,8 +2311,6 @@ dependencies = [
 [[package]]
 name = "ratatui-image"
 version = "11.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9593d10c61ec2007f429d1fafc4f4a19fecdbae4d06b531a2d505227fb82f5ea"
 dependencies = [
  "base64-simd",
  "flate2",

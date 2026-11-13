@@ -782,6 +782,7 @@ fn an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after() {
         resolved: "/bin/cat".into(),
         started_as: "/bin/cat".into(),
         args: Vec::new(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),
@@ -1006,6 +1007,93 @@ fn holding_the_temporary_directory_back_refuses_a_write_there_and_nothing_else()
     );
 }
 
+/// SANDBOX-14, SANDBOX-19, SANDBOX-28: on macOS a confined `git commit` in a real linked worktree,
+/// whose git directory lies under the main clone's `.git` outside the session, is refused, and the
+/// failure sentence opens by naming the worktree's `.git` file. A write grant of the main clone's
+/// `.git`, as a `request_path` with write gives, lets the same commit through. The same commit with
+/// no sandbox is the control that the commit itself works. The regressions it rejects: a failure
+/// sentence that does not name the `.git` file of a real worktree (#3989), and a request route the
+/// sentence names that cannot let the commit through.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_commit_in_a_linked_worktree_is_refused_named_and_let_through_by_a_write_grant_on_macos() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("linked-worktree-commit");
+    let main = places.beside.join("main");
+    let git = |directory: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let top = places.beside.parent().expect("a parent").to_path_buf();
+    if !(git(&places.beside, &["init", "-q", "main"])
+        && std::fs::write(main.join("f"), "a\n").is_ok()
+        && git(&main, &["add", "f"])
+        && git(&main, &["commit", "-qm", "f"])
+        && git(&main, &["worktree", "add", "-q", "../../wt", "-b", "b"]))
+    {
+        return;
+    }
+    let worktree = resolved(&top.join("wt"));
+    assert!(
+        worktree.join(".git").is_file(),
+        "a linked worktree has a .git file"
+    );
+    let commit_line = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qam m";
+    let confinement = Confinement::here(vec![worktree.clone()], None, Some(&places.home))
+        .expect("a platform with a base");
+    let run = |line: &str, confinement: Option<&Confinement>| {
+        let plan = bravebot_agent::cmdline::compile(line, &worktree, None, &mut |_, _| Ok(()))
+            .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"));
+        let ran = exec::run_plan_observed(
+            &plan,
+            &Cancel::new(),
+            exec::LIMIT,
+            None,
+            None,
+            confinement,
+            &mut |_| Ok(()),
+        )
+        .unwrap_or_else(|error| panic!("`{line}` should start: {error}"));
+        (plan, ran)
+    };
+
+    std::fs::write(worktree.join("f"), "b\n").expect("a change");
+    let (plan, refused) = run(commit_line, Some(&confinement));
+    assert!(!refused.ended_well, "{refused:?}");
+    let said = confinement.profile(&plan.steps());
+    let entry = format!("`{}` is a file", worktree.join(".git").display());
+    assert!(said.starts_with(&entry), "{said}");
+
+    let granted =
+        confinement
+            .clone()
+            .with_path_reach(&[bravebot_agent::workspace::PathReach::new(
+                resolved(&main.join(".git")),
+                true,
+                "the worktree's git directory".into(),
+            )]);
+    let (_, through) = run(commit_line, Some(&granted));
+    assert!(through.ended_well, "{through:?}");
+
+    std::fs::write(worktree.join("f"), "c\n").expect("a second change");
+    let (_, control) = run(commit_line, None);
+    assert!(control.ended_well, "{control:?}");
+}
+
 /// SANDBOX-14, SANDBOX-18: on macOS a stage whose program is not git cannot write a repository's
 /// hooks or configuration, a submodule's configuration under `.git/modules` or a `.git` file that
 /// names a gitdir, and neither can git when a script starts it, while a stage whose program is git
@@ -1086,6 +1174,75 @@ fn only_git_writes_a_repositorys_hooks_and_configuration_on_macos() {
     let configuration =
         std::fs::read_to_string(repository.join(".git/config")).expect("the configuration");
     assert!(configuration.contains("probe = yes"), "{configuration}");
+}
+
+/// SANDBOX-18, SANDBOX-30, #3901: a stage opened in a subdirectory of a checkout reads the checkout's
+/// `.git` and writes nothing in it, whatever its program is. git runs what the configuration and the
+/// hooks of that `.git` name, so a write there is code outside the confinement the next time
+/// anybody runs git. The regression it rejects is a row for the enclosing checkout, which would let
+/// a stage that is not given that directory change its configuration or plant a hook, and which
+/// the stage whose program is git would reach on macOS as well, since its profile lifts the `.git`
+/// refusal. The unconfined run of each line is the control that the file is writable, and the
+/// confined `git config --get` is the control that git finds the enclosing repository at all.
+#[cfg(unix)]
+#[test]
+fn a_stage_in_a_subdirectory_reads_the_enclosing_git_directory_and_writes_none_of_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("git-enclosing");
+    let checkout = places.session.parent().expect("a parent").to_path_buf();
+    let initialised = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&checkout)
+        .status();
+    if !initialised.is_ok_and(|status| status.success()) {
+        return;
+    }
+    let confinement = places.confinement();
+
+    let beside = places.run(&touch("made.txt"), Some(&confinement));
+    assert!(
+        beside.ended_well && places.session.join("made.txt").exists(),
+        "the stage could not write the session, so a refusal below means nothing: {beside:?}"
+    );
+    let read = places.run("git config --get core.bare", Some(&confinement));
+    assert!(
+        read.ended_well && read.stdout == "false\n",
+        "git did not read the enclosing repository's configuration: {read:?}"
+    );
+    let cat = places.run(
+        &cat(checkout.join(".git/config").display()),
+        Some(&confinement),
+    );
+    assert!(
+        cat.ended_well && cat.stdout.contains("[core]"),
+        "the enclosing configuration was not read: {cat:?}"
+    );
+
+    let hook = checkout.join(".git/hooks/post-checkout");
+    let hook_line = format!("sh -c 'printf x > {}'", hook.display());
+    for (line, file) in [
+        (
+            "git config bravebot.probe yes".to_string(),
+            checkout.join(".git/config"),
+        ),
+        (hook_line, hook),
+    ] {
+        let before = std::fs::read(&file).ok();
+        let confined = places.run(&line, Some(&confinement));
+        assert!(
+            !confined.ended_well && std::fs::read(&file).ok() == before,
+            "`{line}` wrote {}: {confined:?}",
+            file.display()
+        );
+        let control = places.run(&line, None);
+        assert!(
+            control.ended_well && std::fs::read(&file).ok() != before,
+            "`{line}` does not write {} without the sandbox: {control:?}",
+            file.display()
+        );
+    }
 }
 
 /// SANDBOX-22 under bypass: a stage writes beside the working directory with no request, which is
@@ -1522,7 +1679,7 @@ fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
     );
 
     assert!(
-        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("run.network")),
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, network_closed: true, .. }) if detail.contains("run.network")),
         "{refused:?}"
     );
 }

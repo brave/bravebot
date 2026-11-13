@@ -747,6 +747,46 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
     );
 }
 
+/// A server's tool is sent an argument its schema does not declare, as the server describes it,
+/// rather than refused the way a built-in's is (TOOL-3).
+///
+/// The regression it rejects: the undeclared-argument check applied to a server's tool, which
+/// would refuse a call the server accepts and list names the server wrote in the refusal.
+#[test]
+fn a_server_tool_is_sent_an_argument_its_schema_does_not_declare() {
+    let scratch = Scratch::new("server-undeclared");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","unit":"celsius"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast for Paris").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [_, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    assert!(
+        !second.contains("takes no argument"),
+        "the server's tool was checked as a built-in: {second}"
+    );
+    let called: Vec<String> = server.try_iter().collect();
+    let [call] = called.as_slice() else {
+        panic!("the server was sent {called:?}");
+    };
+    assert!(call.contains(r#""method":"tools/call""#), "{call}");
+    assert!(call.contains(r#""unit":"celsius""#), "{call}");
+}
+
 /// The first eight bytes of a PNG, as base64: a picture this client takes, whatever it shows.
 const A_PNG: &str = "iVBORw0KGgo=";
 

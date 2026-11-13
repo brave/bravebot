@@ -73,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 77] = [
+const CODE_SELECTORS: [(&str, Names); 85] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -107,6 +107,10 @@ const CODE_SELECTORS: [(&str, Names); 77] = [
     ("LDFLAGS", Names::Options),
     ("LDLIBS", Names::Options),
     ("TARGET_ARCH", Names::Options),
+    // make 4.4.1 on Linux: the program of the rule that preprocesses assembler, and the machine
+    // flag of the assembler rule.
+    ("CPP", Names::Options),
+    ("TARGET_MACH", Names::Options),
     // make: the program or flags of the rules for Objective-C, TeX and literate programs, and the
     // option that places a compiler's output. `MAKE_COMMAND` is the name `$(MAKE)` expands from in
     // a recipe line marked `+`. Flag variables of the languages a built-in rule compiles.
@@ -162,6 +166,10 @@ const CODE_SELECTORS: [(&str, Names); 77] = [
     ("NODE_PATH", Names::Directories),
     // python3: the program `sys.executable` names, which `-m venv` starts to make the environment.
     ("PYTHONEXECUTABLE", Names::Program),
+    // python3: the name of the module `sysconfig` imports for its build variables. It is imported
+    // from `sys.path`, which holds the working directory for `-c` and `-m`, so a file the stage
+    // wrote there runs. A module name and not a path, so it is judged as options.
+    ("_PYTHON_SYSCONFIGDATA_NAME", Names::Options),
     // go: flags that name a tool to run (`-toolexec`, `-exec`), a program that serves the build
     // cache, and the C compiler, `pkg-config` and linker flags a package that uses cgo is built
     // with. `CC` and `CXX` are also the compilers of make's built-in rules and of the `cc` crate in
@@ -174,6 +182,19 @@ const CODE_SELECTORS: [(&str, Names); 77] = [
     ("GOCACHEPROG", Names::Options),
     ("CC", Names::Options),
     ("CXX", Names::Options),
+    // The `cc` crate puts this in front of the name of the compiler, `ar` and `ranlib` it starts
+    // when it builds for another target, so a value with a directory in it picks the program. It is
+    // a prefix and not a program, so it is judged as options. The per-target names the crate reads
+    // are a family, matched by `names_a_compiler_for_a_target`.
+    ("CROSS_COMPILE", Names::Options),
+    // The `cc` crate reads these four with the same lookup as `CC` and `AR`: `RANLIB` is the
+    // program `get_ranlib` returns, `NVCC` the program it starts instead of the compiler for
+    // `cuda(true)`, and `ARFLAGS` and `RANLIBFLAGS` are put on the `ar` and `ranlib` it starts.
+    // Their per-target forms are removed whatever they hold, so these are judged as options too.
+    ("RANLIB", Names::Options),
+    ("NVCC", Names::Options),
+    ("ARFLAGS", Names::Options),
+    ("RANLIBFLAGS", Names::Options),
     ("PKG_CONFIG", Names::Program),
     ("CGO_LDFLAGS", Names::Options),
     ("CGO_CFLAGS", Names::Options),
@@ -185,19 +206,66 @@ const CODE_SELECTORS: [(&str, Names); 77] = [
 /// `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`, `CARGO_CREDENTIAL_ALIAS_<name>`, which cargo
 /// reads as a credential provider command, and make's rule variables with a dot in the name:
 /// `COMPILE.<suffix>`, `LINK.<suffix>`, `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and
-/// `LINT.<suffix>`. The triple, the registry, the alias or the suffix is part of the name, so
+/// `LINT.<suffix>`, and `.SHELLFLAGS`, which GNU Make 4.4.1 on Linux runs a program from when it
+/// is given one. The triple, the registry, the alias or the suffix is part of the name, so
 /// these are matched as a family and not listed.
 fn names_a_target_program(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
-        (name.starts_with("CARGO_TARGET_")
-            && ["_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS"]
-                .iter()
-                .any(|end| name.ends_with(end)))
+        name == ".SHELLFLAGS"
+            || (name.starts_with("CARGO_TARGET_")
+                && ["_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS"]
+                    .iter()
+                    .any(|end| name.ends_with(end)))
             || (name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_CREDENTIAL_PROVIDER"))
             || name.starts_with("CARGO_CREDENTIAL_ALIAS_")
             || ["COMPILE.", "LINK.", "PREPROCESS.", "LEX.", "YACC.", "LINT."]
                 .iter()
                 .any(|start| name.starts_with(start) && name.len() > start.len())
+    })
+}
+
+/// The names the `cc` crate and the `pkg-config` crate read through the same four spellings, in
+/// this order: `<NAME>_<target>`, `<NAME>_<target with - and . as _>`, `HOST_<NAME>` or
+/// `TARGET_<NAME>`, then `<NAME>`. The last is in [`CODE_SELECTORS`]. A compiler, an archiver, an
+/// indexer and the flags passed to them, and the `pkg-config` program.
+const PER_TARGET_NAMES: [&str; 10] = [
+    "CC",
+    "CXX",
+    "AR",
+    "RANLIB",
+    "NVCC",
+    "CFLAGS",
+    "CXXFLAGS",
+    "ARFLAGS",
+    "RANLIBFLAGS",
+    "PKG_CONFIG",
+];
+
+/// Whether the variable `name` is one of [`PER_TARGET_NAMES`] for a target or a kind of build, which
+/// the `cc` crate and the `pkg-config` crate read in place of the plain name: `CC_<target>`,
+/// `HOST_CC`, `TARGET_CFLAGS` and the others. The target is part of the name, so these are matched
+/// as a family and not listed.
+///
+/// A target is spelled in lower case, as rustc names it, with `-` and `.` or with `_` in their
+/// place, so the text after `<NAME>_` has to start with a lower case letter or a digit. That leaves
+/// out the names these crates read that do not choose a program or a flag, such as
+/// `CC_FORCE_DISABLE` and `PKG_CONFIG_PATH`;
+/// [SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30) lists them. A name that is not text
+/// is not one of them, because a target is.
+///
+/// A value of these is removed whatever it holds. They hold a program with arguments or flags, as
+/// the plain `CC`, `CXX`, `AR` and `CFLAGS` do, and a build that needs one sets it for the
+/// stage's own environment.
+fn names_a_compiler_for_a_target(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        PER_TARGET_NAMES.iter().any(|base| {
+            name.strip_prefix(base)
+                .and_then(|rest| rest.strip_prefix('_'))
+                .and_then(|target| target.chars().next())
+                .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+                || name.strip_prefix("HOST_") == Some(*base)
+                || name.strip_prefix("TARGET_") == Some(*base)
+        })
     })
 }
 
@@ -577,6 +645,72 @@ impl Places {
     }
 }
 
+/// Files, relative to a directory a program is started in or given as `HOME`, that `make`,
+/// `cargo` and `npm` read to choose code to run ([SANDBOX-30]). `go` and `python3` read theirs
+/// from the home, which `stage_command` switches off with `GOENV=off` and `PYTHONNOUSERSITE=1`. A
+/// directory the suite starts an unconfined program in holds what bravebot, the workflow's files
+/// and the setup stages before it put there, so these names are removed from it before every
+/// unconfined start. Each is a name bravebot chose, and removing one never reads it.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md#SANDBOX-30
+const CONFIGURATION_FILES: &[&str] = &[
+    "GNUmakefile",
+    "makefile",
+    ".cargo/config.toml",
+    ".cargo/config",
+    ".npmrc",
+    ".npm-init.js",
+];
+
+/// Whether `a` and `b` are one file. On a volume that ignores case `makefile` is the `Makefile` the
+/// workflow wrote, and removing it would remove the workflow's own file.
+fn one_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Whether `path` is a symbolic link itself, not what it points to.
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+}
+
+/// Remove [`CONFIGURATION_FILES`] from each of `directories`.
+///
+/// A name that is not there is skipped. A removal that fails for any other reason, such as a
+/// directory of that name or a directory that cannot be written, leaves the file in effect, so it
+/// is an error and no program is started. Where the directory a name is in (`.cargo`) is a link, the
+/// link is removed and not the file it leads to, which is outside the places.
+fn remove_configuration_files(directories: &[PathBuf]) -> std::io::Result<()> {
+    for directory in directories {
+        for name in CONFIGURATION_FILES {
+            let path = directory.join(name);
+            if *name == "makefile" && one_file(&path, &directory.join("Makefile")) {
+                continue;
+            }
+            let target = match path.parent() {
+                Some(parent) if parent != directory.as_path() && is_link(parent) => {
+                    parent.to_path_buf()
+                }
+                _ => path,
+            };
+            match std::fs::remove_file(&target) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(std::io::Error::new(
+                        error.kind(),
+                        format!("cannot remove {}: {error}", target.display()),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn attempt(
     root: &Path,
     index: usize,
@@ -593,6 +727,14 @@ fn attempt(
         std::fs::write(&file, places.fill(contents))?;
         if contents.starts_with("#!") {
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    // The directories an unconfined start reads configuration from: the home, the session, and the
+    // directory of each file the workflow wrote.
+    let mut directories = vec![places.home.clone(), places.session.clone()];
+    for (path, _) in &workflow.files {
+        if let Some(parent) = places.session.join(path).parent() {
+            directories.push(parent.to_path_buf());
         }
     }
     let confinement = if confined {
@@ -613,6 +755,7 @@ fn attempt(
     };
     for (number, stage) in workflow.setup.iter().enumerate() {
         let log = places.logs.join(format!("setup-{}.log", number + 1));
+        remove_configuration_files(&directories)?;
         let ran = start(stage, &places, None, &log);
         if !matches!(ran, Ok(Some(0))) {
             done.ended = Ended::Setup(number + 1);
@@ -629,6 +772,9 @@ fn attempt(
         done.stage = number + 1;
         done.log = Some(log.clone());
         done.code = None;
+        if confinement.is_none() {
+            remove_configuration_files(&directories)?;
+        }
         match start(stage, &places, confinement.as_ref(), &log) {
             Ok(Some(0)) => done.code = Some(0),
             Ok(code) => {
@@ -655,7 +801,8 @@ enum Started {
 }
 
 /// Start one stage, wait for it, and give its exit code, or `None` when a signal ended it or it ran
-/// past [`LIMIT`].
+/// past [`LIMIT`]. A caller starting a stage with no `confinement` first clears the
+/// [`CONFIGURATION_FILES`] with [`remove_configuration_files`].
 fn start(
     stage: &Stage,
     places: &Places,
@@ -671,6 +818,7 @@ fn start(
         resolved: started_as.canonicalize().map_err(|_| Started::Other)?,
         started_as: started_as.clone(),
         args: args.clone(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),
@@ -722,7 +870,11 @@ fn stage_command(
     let target_programs: Vec<OsString> = held
         .iter()
         .map(|(name, _)| name.clone())
-        .filter(|name| names_a_target_program(name) || is_npm_config_name(name))
+        .filter(|name| {
+            names_a_target_program(name)
+                || names_a_compiler_for_a_target(name)
+                || is_npm_config_name(name)
+        })
         .collect();
     let mut command = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
@@ -744,6 +896,10 @@ fn stage_command(
     command
         .env("HOME", &places.home)
         .env("GOTOOLCHAIN", "local")
+        // No environment file: `off` is go's switch for not reading one, wherever it would be.
+        .env("GOENV", "off")
+        // No `usercustomize.py` or `.pth` file from the user site under the home.
+        .env("PYTHONNOUSERSITE", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
@@ -914,6 +1070,7 @@ fn ask_for_the_login(
         resolved: gh.canonicalize().map_err(|_| Started::Other)?,
         started_as: gh.to_path_buf(),
         args: args.to_vec(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),
@@ -1429,7 +1586,8 @@ mod tests {
     /// setup stage or a control run starts `git` or `make` with a template directory, helper
     /// directory, common directory, makefile or developer directory the person's environment names
     /// (brave/bravebot#3797). The value is a genuine file outside every row, so the removal is not
-    /// a judgment of the value.
+    /// a judgment of the value. `GOENV` is set again to `off` by the start, so it counts as
+    /// withheld because the value the person's environment held does not reach the stage.
     #[test]
     fn the_variables_that_choose_the_code_a_stage_runs_are_removed_whatever_they_hold() {
         let (session, _planted, genuine) = planted_and_genuine("usability-host");
@@ -1441,7 +1599,6 @@ mod tests {
             "MAKEFILES",
             "DEVELOPER_DIR",
             "GOROOT",
-            "GOENV",
         ] {
             assert!(HOST_VARIABLES.contains(&name), "{name}");
             let parent = genuine.parent().unwrap();
@@ -1453,14 +1610,12 @@ mod tests {
                 "{name}"
             );
         }
+        assert!(HOST_VARIABLES.contains(&"GOENV"));
+        assert!(withheld("GOENV", genuine.parent().unwrap(), &session));
+        let goenv = stage_with(OsStr::new("GOENV"), genuine.as_os_str(), &session);
+        assert_eq!(set_to(&goenv, "GOENV"), Some(OsString::from("off")));
         for name in HOST_VARIABLES {
-            assert!(
-                removed(
-                    &stage_with(OsStr::new(name), genuine.as_os_str(), &session),
-                    OsStr::new(name)
-                ),
-                "{name}"
-            );
+            assert!(withheld(name, &genuine, &session), "{name}");
         }
     }
 
@@ -1628,6 +1783,7 @@ mod tests {
             "Npm_Config_Userconfig",
             "npm_config_init_module",
             "GOCACHEPROG",
+            "_PYTHON_SYSCONFIGDATA_NAME",
             "CC",
             "CXX",
             "CGO_LDFLAGS",
@@ -1655,6 +1811,9 @@ mod tests {
             "LEX.l",
             "YACC.y",
             "LINT.c",
+            "CPP",
+            "TARGET_MACH",
+            ".SHELLFLAGS",
         ] {
             assert!(withheld(name, &genuine, &session), "{name}");
         }
@@ -1668,7 +1827,15 @@ mod tests {
             assert!(withheld(name, &planted, &session), "{name} was kept");
             assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
-        for name in ["COMPILE", "COMPILE.", "LINKER", "CARGO_CREDENTIAL_ALIA"] {
+        for name in [
+            "COMPILE",
+            "COMPILE.",
+            "LINKER",
+            "CARGO_CREDENTIAL_ALIA",
+            ".SHELL",
+            "SHELLFLAGS",
+            "X.SHELLFLAGS",
+        ] {
             assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
         for name in [
@@ -1698,6 +1865,115 @@ mod tests {
             assert_eq!(set_to(&command, "RUSTUP_HOME"), None);
             assert!(!removed(&command, OsStr::new("RUSTUP_HOME")));
         }
+    }
+
+    /// The regression it rejects: removing `HOST_RANLIB` and `RANLIB_<triple>` and leaving the plain
+    /// `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS`, which the `cc` crate reads when none of its
+    /// per-target spellings is set (brave/bravebot#3859); or keeping one because its value names a
+    /// directory outside every one a stage may write, when it holds a program with arguments or flags.
+    #[test]
+    fn the_plain_ranlib_nvcc_and_archiver_flag_names_the_cc_crate_reads_are_removed() {
+        let (session, planted, genuine) = planted_and_genuine("usability-plain-cc");
+
+        for name in ["RANLIB", "NVCC", "ARFLAGS", "RANLIBFLAGS"] {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+            assert!(withheld(name, &genuine, &session), "{name} was kept");
+            let per_target = format!("HOST_{name}");
+            assert!(withheld(&per_target, &planted, &session), "{per_target}");
+        }
+        for name in [
+            "RANLIB_PATH",
+            "NVCC_PREPEND_FLAGS",
+            "ARFLAGS_",
+            "RANLIBFLAGS_X",
+        ] {
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+    }
+
+    /// The regression it rejects: leaving the per-target spellings of the compiler, archiver and flags
+    /// the `cc` crate reads (brave/bravebot#3859), because the list holds only the plain names; or
+    /// matching only one spelling of the triple, only `CC` and not the other names, or only the
+    /// `HOST_` form and not `TARGET_`; or removing a name that only begins like one, such as
+    /// `CC_FORCE_DISABLE`, `PKG_CONFIG_PATH` and `CARGO_TARGET_DIR`; or unwrapping a name that is not
+    /// text.
+    #[test]
+    fn the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold() {
+        let (session, planted, genuine) = planted_and_genuine("usability-per-target");
+
+        for name in [
+            "CC_aarch64-apple-darwin",
+            "CC_aarch64_apple_darwin",
+            "CC_x86_64-unknown-linux-gnu",
+            "CC_x86_64_unknown_linux_gnu",
+            "CC_armv7-unknown-linux-gnueabihf",
+            "CXX_aarch64_apple_darwin",
+            "CXX_x86_64-unknown-linux-gnu",
+            "AR_aarch64_apple_darwin",
+            "AR_x86_64-unknown-linux-gnu",
+            "RANLIB_aarch64_apple_darwin",
+            "NVCC_aarch64_apple_darwin",
+            "CFLAGS_aarch64_apple_darwin",
+            "CFLAGS_x86_64-unknown-linux-gnu",
+            "CXXFLAGS_aarch64_apple_darwin",
+            "ARFLAGS_aarch64_apple_darwin",
+            "RANLIBFLAGS_aarch64_apple_darwin",
+            "PKG_CONFIG_aarch64_apple_darwin",
+            "PKG_CONFIG_x86_64-unknown-linux-gnu",
+            "HOST_CC",
+            "HOST_CXX",
+            "HOST_AR",
+            "HOST_RANLIB",
+            "HOST_NVCC",
+            "HOST_CFLAGS",
+            "HOST_CXXFLAGS",
+            "HOST_ARFLAGS",
+            "HOST_RANLIBFLAGS",
+            "HOST_PKG_CONFIG",
+            "TARGET_CC",
+            "TARGET_CXX",
+            "TARGET_AR",
+            "TARGET_RANLIB",
+            "TARGET_CFLAGS",
+            "TARGET_CXXFLAGS",
+            "TARGET_PKG_CONFIG",
+            "CROSS_COMPILE",
+        ] {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+            assert!(withheld(name, &genuine, &session), "{name} was kept");
+        }
+        for name in [
+            "CC_FORCE_DISABLE",
+            "CC_ENABLE_DEBUG_OUTPUT",
+            "CC_SHELL_ESCAPED_FLAGS",
+            "CC_KNOWN_WRAPPER_CUSTOM",
+            "CRATE_CC_NO_DEFAULTS",
+            "CXXSTDLIB",
+            "PKG_CONFIG_PATH",
+            "PKG_CONFIG_LIBDIR",
+            "PKG_CONFIG_SYSROOT_DIR",
+            "PKG_CONFIG_ALLOW_CROSS",
+            "HOST_CCFLAGS",
+            "TARGET_ARCH_X",
+            "CCACHE_DIR",
+            "CC_",
+            "CARGO_TARGET_DIR",
+        ] {
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+        // The name is not text, and its lossy rendering is a name the family matches, so a match on
+        // the lossy rendering removes it. The rendering written out is text and is removed.
+        let bytes = OsString::from_vec(b"CC_aarch64\xff".to_vec());
+        let lookalike = OsString::from("CC_aarch64\u{fffd}");
+        assert_eq!(bytes.to_string_lossy(), lookalike.to_string_lossy());
+        assert!(removed(
+            &stage_with(&lookalike, genuine.as_os_str(), &session),
+            &lookalike
+        ));
+        assert!(!removed(
+            &stage_with(&bytes, genuine.as_os_str(), &session),
+            &bytes
+        ));
     }
 
     /// The regression it rejects: leaving `CARGO_TARGET_<triple>_LINKER` and `_RUNNER`, which name a

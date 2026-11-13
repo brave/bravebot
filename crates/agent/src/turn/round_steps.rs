@@ -226,7 +226,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // `run` description was written in the one the turn started in, so a change is said to the
     // planner before the next request, in words the driver wrote from the two modes.
     let sandbox = task.sandbox.get();
-    if let Some(notice) = crate::confine::change_notice(
+    if let Some(notice) = crate::confine::change_notice_for(
         task.confine_runs,
         state.told_sandbox,
         sandbox,
@@ -234,8 +234,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
             task.confine_runs,
             sandbox,
             tools::workspace_is_trusted(policy, workspace),
-        ),
+        ) && task.permission_mode.answers_requests(),
         plan.beside.holds(tools::Named::RequestPath),
+        crate::confine::Askable::nobody_when(task.permission_mode.nobody_to_ask()),
     ) {
         conversation.push_composed_from(
             Message::user(&notice),
@@ -313,16 +314,56 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
 
     // And whatever exited while it was running, for the same reason and in the same place:
     // the finish of a background job is news the turn is told rather than something the
-    // planner has to remember to ask about (CMDLINE-14).
+    // planner has to remember to ask about (CMDLINE-14). A job whose latest look asked to read
+    // has its account released as that look was (RUN-22), with the check's cost the turn's.
+    let mut stopped = None;
     collect_jobs(
         state.jobs,
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+        !task.permission_mode.get().answers_a_run_unasked(),
         read_output_is(),
         plan.beside,
         policy,
         conversation,
         reporter,
+        &mut |policy, slots, reporter, slot| {
+            let mut chat = crate::processor::Chat::new(config, egress, task.account_session())
+                .spending(state.subscription.as_mut())
+                .on(state.turn_model.as_deref())
+                .stoppable_by(cancel);
+            let released = tools::read_in_the_result(
+                policy,
+                slots,
+                task.permission_mode.get(),
+                task.auto_vetting,
+                &mut *confirmer,
+                &mut chat,
+                reporter,
+                &mut state.objections,
+                slot,
+            );
+            if let Some(interval) = released.waited {
+                reporter.inference_interval(interval);
+                state.spent.inference += interval.duration();
+            }
+            state.account.add_call(released.usage, released.completed);
+            if released.stopped.is_some() {
+                stopped = released.stopped;
+            }
+            reporter.spent(crate::outcome::Spent {
+                timing: state.spent.finish(&state.account),
+                ..state.account
+            });
+            released.text
+        },
     )?;
+    // A stop during the check ends the turn once the account is in the conversation, as one
+    // during a run's release does. The slot stays quarantined and unrefused.
+    if let Some(stopped) = stopped {
+        return Err(TurnError::Cancelled {
+            attempts: stopped.attempts,
+        });
+    }
 
     show_what_running_jobs_have_printed(state.jobs, policy, reporter);
 
@@ -1087,6 +1128,7 @@ pub(super) fn limit_the_tools<R: Reporter>(
 pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
     started: Vec<(DelegateId, crate::delegate::Seeded)>,
+    wake_after: usize,
     delegates: &mut Vec<Working<'scope>>,
     servers: Option<&crate::lsp::LanguageServers>,
     confirming: &'scope crate::shared::Lent<'_, C>,
@@ -1117,6 +1159,12 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     // started, which is the one its parent was asking at the time.
     let spawning_model = turn_model.clone();
     let spawning_effort = effort;
+    // One call's delegates are one batch, named by the first of them (DELEGATE-17).
+    let size = started.len();
+    let Some(lead) = started.first().map(|(lead, _)| *lead) else {
+        return;
+    };
+    let batch = super::Batch::of_call(lead, size, wake_after);
     for (id, seeded) in started {
         let vouched = seeded.vouched.clone();
         let checkout = seeded
@@ -1184,6 +1232,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
             rounds,
             budget,
             stop,
+            batch,
             handle,
         });
     }
@@ -1985,6 +2034,7 @@ pub(super) fn tools_for_a_call<'a>(
         delegated: task.delegate.is_some(),
         keeping_links: task.keeps_links && task.delegate.is_none(),
         confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
+        offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
         jobs: &mut *state.jobs,
@@ -2010,7 +2060,8 @@ pub(super) fn tools_for_a_call<'a>(
 /// and the pieces taken out of `output` are the ones the caller does not use again.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output"
+    clippy::too_many_lines,
+    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output; the body is the steps that follow a call, in the order a round takes them"
 )]
 pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
@@ -2087,6 +2138,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     start_delegates(
         scope,
         std::mem::take(&mut output.delegate),
+        output.wake_after,
         delegates,
         state.servers.as_deref(),
         confirming,

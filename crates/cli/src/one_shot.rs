@@ -242,10 +242,15 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
 
     /// Put to the program sending the lines where the person let it answer (CLI-36), with the line
     /// as the plan renders it. A line that asks for credential scopes or to run unconfined is not
-    /// put, for the reason accepting edits does not answer one (SANDBOX-26).
+    /// put, for the reason accepting edits does not answer one (SANDBOX-26). Nor is a line that
+    /// redirects into a protected path, for the reason a write to one is not put: the driver
+    /// derived that from the plan's destinations, and a program's yes does not stand in for the
+    /// person (MODE-2, PERM-9).
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         let decision = match self.approver() {
-            Some(lines) if !request.asks_for_scopes() && !request.unconfined => {
+            Some(lines)
+                if !request.asks_for_scopes() && !request.unconfined && !request.protected =>
+            {
                 let said = lines.ask_permission(
                     "run",
                     &[
@@ -703,6 +708,28 @@ mod tests {
         assert_eq!(asked.len(), 1, "{asked:?}");
         let gates: Vec<_> = one_shot.declined().iter().map(|d| d.gate).collect();
         assert_eq!(gates, ["run", "run"]);
+    }
+
+    /// CLI-36, MODE-2, PERM-9: a run that redirects into a protected path is never put to the
+    /// program, so an approving answer cannot let it through. A plain run is put first as the
+    /// control. A fault that put every run, as `confirm_run` did before it read `protected`, would
+    /// have the program approve a redirection into `.git/hooks`.
+    #[test]
+    fn a_run_with_a_protected_destination_is_not_put_to_a_program_that_approves_everything() {
+        let mut protected = a_run();
+        protected.protected = true;
+
+        let (mut one_shot, said, program) = approving_over_lines(1);
+        let control = one_shot.confirm_run(&a_run());
+        let refused = one_shot.confirm_run(&protected);
+        program.leaves();
+
+        assert!(control.approved(), "the control was not approved");
+        assert!(!refused.approved(), "a run into a protected path proceeded");
+        let asked = said.permissions();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let gates: Vec<_> = one_shot.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["run"]);
     }
 
     /// CLI-36: an approval answers a write, a run or a fetch and no other question. The question a

@@ -28,9 +28,10 @@ guards:
       - crates/aichat/src/generate_content.rs: 5
       - crates/aichat/src/responses.rs: 4
       - crates/aichat/src/lib.rs: 7
+      - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 140
+      - crates/core/src/policy.rs: 141
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -55,8 +56,8 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 67
-      - crates/aichat/tests/client.rs: 12
+      - crates/agent/tests/workspace.rs: 71
+      - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 70
@@ -75,15 +76,16 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/manifest.rs: 13
       - crates/agent/src/preamble.rs: 1
+      - crates/agent/src/server_calls.rs: 1
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 26
-      - crates/agent/src/turn.rs: 8
+      - crates/agent/src/turn.rs: 10
       - crates/agent/src/workspace.rs: 17
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 289
+      - crates/agent/tests/workspace.rs: 293
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -146,7 +148,7 @@ guards:
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 16
+      - crates/agent/src/turn.rs: 17
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
@@ -238,6 +240,7 @@ guards:
       - crates/aichat/src/lib.rs: 3
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
+      - crates/aichat/src/ollama_chat.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1
@@ -1171,3 +1174,30 @@ arrives at all.
   The listener holds no `declassify`. The body reaches the run's standard input unchanged and is read
   by nothing here. A header, a path suffix or a byte of the body that selects a trigger, an event, a
   flag, a directory or a limit is a violation, and not one of these four.
+
+- **A bounded listing's count of the files left out of each directory it cut is not one of the
+  ten.** A listing with a depth takes at most 200 files from any one directory
+  ([LIST-5](tools/list-files.md#LIST-5)). The walk sorts a directory's files by name, drops each
+  file the include pattern does not match or a permission rule covers, and keeps the first 200 of
+  the rest, so which 200 are kept is decided by the name order that already decides what the cap
+  over the whole walk keeps. The count of files left out is taken after the include pattern and the
+  rules, which the walk applies to every file it reports whether or not a cap applies. A cut
+  directory is recorded under the name its caller passes to `walk_filtered`: `Workspace::list`
+  passes the walk root's name once, `.` when the resolved directory argument is the workspace root
+  and its relative name otherwise, and each recursive call passes the relative name it built for the
+  subdirectory, so no name read from a directory entry is tested to tell the root from a
+  subdirectory. Each cut directory counts as one entry against the cap over the whole walk, in
+  `Collected::len` during the walk and in `at_the_cap` after it. `Workspace::list` sets
+  `at_the_cap` when the files, the directories stopped at and the cut directories together pass
+  that cap, and sets `truncated` to `at_the_cap || !partly_listed.is_empty()`. It sorts the cut
+  directories by name and truncates them to what the cap leaves after the files and the directories
+  stopped at, the same sort by name and truncation it applies to those two lists. Each count and
+  `at_the_cap` are released inside the existing release in `list_files`, and each count reaches
+  the planner as a number beside the directory's reference, with no name. The driver branches on
+  the comparison of the files taken from a directory with 200 and on whether its count is above
+  zero, in the walk; on whether any directory was cut and on `at_the_cap`, which together choose
+  the sentences in `list_files` and in `listing_capped_note` (`cut.is_empty() || at_the_cap`); and
+  on each count's value, which `tally` compares with 1 to write "file" or "files". Apart from the
+  include pattern, the rules, the resolved directory argument and the name order above, no name is
+  in any of these conditions. A name in that sentence, or a choice of which directory to cut or how
+  to word the sentence made from a name, is a violation and not covered here.

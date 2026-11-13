@@ -1260,6 +1260,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
         resolved: "/usr/bin/printf".into(),
         started_as: "/usr/bin/printf".into(),
         args: vec!["hello world".into()],
+        matched: Vec::new(),
         environment: vec![("MODE".into(), "preview".into())],
         expansions: Vec::new(),
         routes: vec![Route::Stdout {
@@ -1272,6 +1273,8 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
         unconfined: false,
         key_choice: None,
         classified: Default::default(),
+        protected: false,
+        destinations: Vec::new(),
         confined: None,
         record: None,
         pattern: None,
@@ -1360,6 +1363,60 @@ fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person(
         bidi["confinement"]["shownDirectories"],
         json!(["\"/wo\\u{202e}rk\""])
     );
+}
+
+/// PERM-9, MODE-2: a run that redirects into a protected path says so across the bridge, with the
+/// landing and the mark in `shownWrites`, and offers nothing to remember, so a client that answers
+/// for the person has the field to refuse on and no standing answer to give. A run into an
+/// ordinary file carries `protected: false` (control). Rejects a bridge that sends the name alone
+/// and one that sends `protected: true` for a plain redirection.
+#[test]
+fn a_run_into_a_protected_path_says_so_across_the_bridge() {
+    use bravebot_agent::confirm::{RunDestination, RunRequest};
+    use bravebot_core::command::{Pipeline, Stage};
+    let run = |destination: RunDestination| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        request.plan.writes = vec![destination.written.clone()];
+        request.protected = destination.protected;
+        request.destinations = vec![destination];
+        wire::run_request(1, &request)
+    };
+    let hook = run(RunDestination {
+        written: "notes.txt".into(),
+        lands_on: Some(".git/hooks/pre-commit".into()),
+        protected: true,
+    });
+    assert_eq!(hook["protected"], json!(true));
+    assert_eq!(hook["canBeRemembered"], json!(false));
+    assert_eq!(hook["writes"], json!(["notes.txt"]));
+    let shown = hook["shownWrites"][0].as_str().expect("a spelled path");
+    assert!(
+        shown.contains("notes.txt (lands on .git/hooks/pre-commit)"),
+        "{shown}"
+    );
+    assert!(shown.contains("protected path"), "{shown}");
+
+    let plain = run(RunDestination {
+        written: "made.txt".into(),
+        lands_on: None,
+        protected: false,
+    });
+    assert_eq!(plain["protected"], json!(false));
+    assert_eq!(plain["shownWrites"], json!(["made.txt"]));
+
+    // The mark alone decides `canBeRemembered`: with no file to write, the plan's own rule about
+    // writes does not apply, and the same request unmarked can be remembered (control).
+    let marked = |protected: bool| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        assert!(request.plan.writes.is_empty());
+        request.protected = protected;
+        wire::run_request(1, &request)
+    };
+    assert_eq!(marked(false)["canBeRemembered"], json!(true));
+    assert_eq!(marked(true)["protected"], json!(true));
+    assert_eq!(marked(true)["canBeRemembered"], json!(false));
 }
 
 /// PROMPT-1: the desktop is handed the directory a line runs in and the file each step runs
@@ -1584,6 +1641,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
                 resolved: "/bin/sh".into(),
                 started_as: "/bin/sh".into(),
                 args: vec!["deploy.sh".into()],
+                matched: Vec::new(),
                 environment: vec![],
                 expansions: vec![],
                 routes: vec![],
@@ -1593,6 +1651,8 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
             stdin: None,
         },
         classified: Default::default(),
+        protected: false,
+        destinations: Vec::new(),
     };
     let value = wire::run_request(2, &request);
     assert_eq!(value["requestedScopes"], json!(["aws", "docker"]));
@@ -1639,6 +1699,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
                 resolved: "/usr/bin/wc".into(),
                 started_as: "/usr/bin/wc".into(),
                 args: vec!["-l".into(), "notes.txt".into(), "report.txt".into()],
+                matched: Vec::new(),
                 environment: vec![],
                 expansions: vec![],
                 routes: vec![],
@@ -1648,6 +1709,8 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
             stdin: None,
         },
         classified: Default::default(),
+        protected: false,
+        destinations: Vec::new(),
     };
 
     let value = wire::run_request(4, &request);
@@ -1683,6 +1746,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
                 resolved: "/bin/ls".into(),
                 started_as: "/bin/ls".into(),
                 args: vec!["-1".into()],
+                matched: Vec::new(),
                 environment: vec![],
                 expansions: vec![],
                 routes: vec![],
@@ -1692,6 +1756,8 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
             stdin: None,
         },
         classified: Default::default(),
+        protected: false,
+        destinations: Vec::new(),
     };
 
     let value = wire::run_request(5, &request);
@@ -2170,6 +2236,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
                 name: "weather:get_forecast".into(),
                 arguments: vec!["city (string, required)".into()],
                 description: Some("the forecast".into()),
+                read_only: true,
             }],
             refused: 2,
             withheld: 1,
@@ -2180,7 +2247,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     assert_eq!(
         tools["tools"],
         json!([{"name": "weather:get_forecast", "arguments": ["city (string, required)"],
-            "description": "the forecast"}])
+            "description": "the forecast", "read_only": true}])
     );
     assert_eq!(tools["refused"], 2);
     assert_eq!(tools["withheld"], 1);

@@ -9,6 +9,7 @@
 
 use std::net::IpAddr;
 
+use crate::address::ipv4_form;
 use crate::toolchain::Toolchain;
 
 /// The hosts a stage carrying the remote scope reaches by default.
@@ -69,6 +70,16 @@ pub fn normalise(host: &str) -> String {
 pub fn recordable(host: &str) -> Option<String> {
     let name = normalise(host);
     (valid_name(&name) || name.parse::<std::net::IpAddr>().is_ok()).then_some(name)
+}
+
+/// The IP address `host`, already normalised, spells, in brackets or not. An address written
+/// another way, such as `2130706433`, is a name and gives `None`.
+fn address_of(host: &str) -> Option<IpAddr> {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse().ok()
 }
 
 fn valid_name(name: &str) -> bool {
@@ -155,12 +166,23 @@ impl HostList {
     }
 
     /// The decision for `host`, from the name and nothing else.
+    ///
+    /// A host that is an IP address, in brackets or not, is compared in one form, an IPv4 address
+    /// inside an IPv6 one (IPv4-mapped or NAT64) as that IPv4 address, so the spelling a program
+    /// chose cannot pass a denied entry. Only an exact allowed entry names an address, as in
+    /// [`Self::names_address`].
     pub fn decide(&self, host: &str) -> Verdict {
         let host = normalise(host);
+        let address = address_of(&host).map(|address| ipv4_form(address).to_string());
+        let host = address.clone().unwrap_or(host);
         if let Some(rule) = self.denied.iter().find(|rule| rule.covers(&host)) {
             return Verdict::Refused(Refusal::Denied(rule.clone()));
         }
-        match self.allowed.iter().find(|rule| rule.covers(&host)) {
+        let names = |rule: &&HostRule| match address {
+            Some(_) => !rule.wildcard && rule.name == host,
+            None => rule.covers(&host),
+        };
+        match self.allowed.iter().find(names) {
             Some(rule) => Verdict::Allowed(rule.clone()),
             None => Verdict::Refused(Refusal::NotListed),
         }
@@ -170,8 +192,13 @@ impl HostList {
     ///
     /// A wildcard rule is covered only by a wildcard on the same domain or on a domain above it, so
     /// a list of `api.example.com` does not cover `*.example.com`.
+    ///
+    /// A wildcard names no address, as in [`Self::decide`], so an exact rule spelling an address is
+    /// covered only by an exact entry spelling the same address.
     pub fn allows_every_name_of(&self, rule: &HostRule) -> bool {
+        let address = address_of(&rule.name).is_some();
         self.allowed.iter().any(|allowed| match rule.wildcard {
+            false if address => !allowed.wildcard && allowed.name == rule.name,
             false => allowed.covers(&rule.name),
             true => allowed.wildcard && (allowed.name == rule.name || allowed.covers(&rule.name)),
         })
@@ -194,15 +221,23 @@ impl HostList {
     }
 
     /// Whether an exact entry of the allowed list is `address` and no denied entry covers it. An
-    /// IPv4-mapped address is compared as its IPv4 address. A wildcard names no address, so
-    /// `*.0.0.1` does not let a tunnel reach `127.0.0.1`, and no entry can spell an IPv6 address.
+    /// IPv4 address inside an IPv6 one is compared as that IPv4 address. A wildcard names no
+    /// address, so `*.0.0.1` does not let a tunnel reach `127.0.0.1`, and no entry can spell an
+    /// IPv6 address.
     pub fn names_address(&self, address: IpAddr) -> bool {
-        let address = address.to_canonical().to_string();
-        !self.denied.iter().any(|rule| rule.covers(&address))
-            && self
-                .allowed
+        self.denying(address).is_none() && {
+            let address = ipv4_form(address).to_string();
+            self.allowed
                 .iter()
                 .any(|rule| !rule.wildcard && rule.name == address)
+        }
+    }
+
+    /// The denied entry that covers `address`, compared as [`Self::decide`] compares a host that is
+    /// an address: an IPv4 address inside an IPv6 one as that IPv4 address.
+    pub fn denying(&self, address: IpAddr) -> Option<&HostRule> {
+        let address = ipv4_form(address).to_string();
+        self.denied.iter().find(|rule| rule.covers(&address))
     }
 
     pub fn allowed(&self) -> &[HostRule] {
@@ -221,7 +256,7 @@ pub fn registry_hosts(toolchain: Toolchain) -> &'static [&'static str] {
         Toolchain::Node => &["registry.npmjs.org"],
         Toolchain::Python => &["pypi.org", "files.pythonhosted.org"],
         Toolchain::Go => &["proxy.golang.org"],
-        Toolchain::Maven | Toolchain::Gradle => &[],
+        Toolchain::Maven | Toolchain::Gradle | Toolchain::Gh => &[],
     }
 }
 
@@ -253,6 +288,22 @@ mod tests {
         ] {
             assert!(!list.allows_every_name_of(&rule(wider)), "{wider}");
         }
+    }
+
+    /// An exact entry naming an address is covered only by an exact entry naming the same address,
+    /// since a wildcard names no address. The regression it rejects is a server declaration listing
+    /// `1.2.216.34` kept under a session's `*.216.34`, which then reaches an address the session's
+    /// own list refuses.
+    #[test]
+    fn a_wildcard_allows_no_address_a_narrower_list_names() {
+        let rule = |entry: &str| HostRule::parse(entry).expect("a rule");
+        let wildcard = list(&["*.216.34"], &[]);
+        assert!(!wildcard.allows_every_name_of(&rule("1.2.216.34")));
+        assert!(wildcard.allows_every_name_of(&rule("0x5d.0xb8.216.34")));
+        assert!(wildcard.allows_every_name_of(&rule("a.216.34")));
+        let exact = list(&["1.2.216.34"], &[]);
+        assert!(exact.allows_every_name_of(&rule("1.2.216.34")));
+        assert!(!exact.allows_every_name_of(&rule("5.6.216.34")));
     }
 
     /// A record carries a host name or an address, normalised, and nothing else. The regression
@@ -342,11 +393,111 @@ mod tests {
         assert!(!exact.names_address(ip("::1")));
 
         let wildcard = list(&["*.0.0.1"], &[]);
-        assert!(wildcard.decide("127.0.0.1").is_allowed());
+        assert_eq!(
+            wildcard.decide("127.0.0.1"),
+            Verdict::Refused(Refusal::NotListed)
+        );
         assert!(!wildcard.names_address(ip("127.0.0.1")));
 
         let denied = list(&["10.0.0.1"], &["10.0.0.1"]);
         assert!(!denied.names_address(ip("10.0.0.1")));
+    }
+
+    /// The list reads an address in one form whatever the spelling: an IPv4-mapped address, in
+    /// brackets or with a trailing dot, is decided as its IPv4 address, an allowed entry names an
+    /// address only exactly, and a denied wildcard still covers the text of an IPv4 address. An
+    /// address written another way is a name. The regressions it rejects: a mapped spelling
+    /// passing a denied entry, a wildcard allowed entry listing an address, and a denied wildcard
+    /// that stops refusing addresses below its domain.
+    #[test]
+    fn an_address_is_decided_in_its_ipv4_form_and_named_only_by_an_exact_allowed_entry() {
+        let denied = HostRule::parse("93.184.216.34").unwrap();
+        let both = list(&["*.216.34", "93.184.216.34"], &["93.184.216.34"]);
+        for host in [
+            "93.184.216.34",
+            "93.184.216.34.",
+            "::ffff:93.184.216.34",
+            "[::ffff:93.184.216.34]",
+            "[::FFFF:5db8:d822].",
+        ] {
+            assert_eq!(
+                both.decide(host),
+                Verdict::Refused(Refusal::Denied(denied.clone())),
+                "{host}"
+            );
+        }
+
+        let exact = list(&["*.216.34", "1.2.216.34"], &[]);
+        let rule = HostRule::parse("1.2.216.34").unwrap();
+        for host in ["1.2.216.34", "[::ffff:1.2.216.34]", "::ffff:102:d822"] {
+            assert_eq!(exact.decide(host), Verdict::Allowed(rule.clone()), "{host}");
+        }
+        for host in ["5.6.216.34", "::ffff:5.6.216.34", "[::ffff:5.6.216.34]"] {
+            assert_eq!(
+                exact.decide(host),
+                Verdict::Refused(Refusal::NotListed),
+                "{host}"
+            );
+        }
+        assert!(exact.decide("a.216.34").is_allowed(), "a name below it");
+
+        let wide = list(&["5.6.216.34"], &["*.216.34"]);
+        for host in ["5.6.216.34", "::ffff:5.6.216.34"] {
+            assert!(
+                matches!(wide.decide(host), Verdict::Refused(Refusal::Denied(_))),
+                "{host}"
+            );
+        }
+
+        let decimal = list(&["2130706433"], &[]);
+        assert!(decimal.decide("2130706433").is_allowed());
+        assert!(!decimal.decide("127.0.0.1").is_allowed());
+    }
+
+    /// An IPv4 address inside a NAT64 one (`64:ff9b::/96`) is decided as that IPv4 address, as an
+    /// IPv4-mapped one is: a denied entry refuses it, a denied wildcard covers it, and an exact
+    /// allowed entry names it, in the list's decision and in the check of an answer. The deprecated
+    /// IPv4-compatible form `::a.b.c.d` stays an IPv6 address, which no entry can name. The
+    /// regressions it rejects: the NAT64 spelling compared as spelled, so it passes a denied entry
+    /// and misses the exact entry naming its IPv4 address, and the compatible form read as IPv4,
+    /// which `bravebot-core` does not do.
+    #[test]
+    fn an_ipv4_address_inside_a_nat64_one_is_decided_as_the_ipv4_address() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let denied = HostRule::parse("93.184.216.34").unwrap();
+        let both = list(&["*.216.34", "93.184.216.34"], &["93.184.216.34"]);
+        for host in [
+            "64:ff9b::5db8:d822",
+            "[64:ff9b::93.184.216.34]",
+            "64:FF9B::5DB8:D822.",
+        ] {
+            assert_eq!(
+                both.decide(host),
+                Verdict::Refused(Refusal::Denied(denied.clone())),
+                "{host}"
+            );
+        }
+        assert_eq!(both.denying(ip("64:ff9b::5db8:d822")), Some(&denied));
+        assert_eq!(
+            both.decide("::93.184.216.34"),
+            Verdict::Refused(Refusal::NotListed)
+        );
+        assert_eq!(both.denying(ip("::93.184.216.34")), None);
+
+        let wide = list(&["5.6.216.34"], &["*.216.34"]);
+        assert!(matches!(
+            wide.decide("64:ff9b::506:d822"),
+            Verdict::Refused(Refusal::Denied(_))
+        ));
+
+        let exact = list(&["1.2.216.34", "127.0.0.1"], &[]);
+        assert_eq!(
+            exact.decide("[64:ff9b::102:d822]"),
+            Verdict::Allowed(HostRule::parse("1.2.216.34").unwrap())
+        );
+        assert!(exact.names_address(ip("64:ff9b::7f00:1")));
+        assert!(!exact.names_address(ip("::127.0.0.1")));
+        assert!(!exact.names_address(ip("64:ff9b:1::7f00:1")));
     }
 
     #[test]

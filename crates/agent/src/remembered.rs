@@ -701,6 +701,7 @@ mod tests {
                 resolved: PathBuf::from(format!("/usr/bin/{program}")),
                 started_as: PathBuf::from(format!("/usr/local/bin/{program}")),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                matched: Vec::new(),
                 environment: vec![("CI".to_string(), "1".to_string())],
                 expansions: Vec::new(),
                 routes: vec![Route::StderrToStdout],
@@ -1158,6 +1159,7 @@ mod tests {
                 args: ["pr", "view", number, "--repo", "brave/bravebot"]
                     .map(String::from)
                     .to_vec(),
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),
@@ -1179,6 +1181,7 @@ mod tests {
                 args: [words[0], words[1], number, "--repo", repository]
                     .map(String::from)
                     .to_vec(),
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),

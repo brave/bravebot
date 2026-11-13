@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 257
+      - crates/agent/src/tools.rs: 259
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
@@ -34,8 +34,8 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | Tool | Routing arguments | Content arguments | Result |
 |---|---|---|---|
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
-| [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
-| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | matching lines, files or counts, or a reference |
+| [`list_files`](list-files.md) | `directory`, `pattern`, `depth`, `read` | none | the paths, or a reference per entry |
+| [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output`, `read` | none | matching lines, files or counts, or a reference |
 | [`repo_map`](repo-map.md) | `directory`, `budget` | none | the map text, from files a person vouched for |
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
@@ -47,8 +47,8 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
-| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit` | none | a slice of what it has printed since the previous look, with the count of lines that begin in it, the number of the first, and the references of the earlier looks |
-| [`fetch_url`](fetch-url.md) | `url` | none | a reference |
+| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit`, `read` | none | a slice of what it has printed since the previous look, with the count of lines that begin in it, the number of the first, and the references of the earlier looks |
+| [`fetch_url`](fetch-url.md) | `url`, `read` | none | a reference |
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
 | [`search_skills`](search-skills.md) | `query` | none | matching skills' names and descriptions, or a count of further matches |
@@ -110,11 +110,32 @@ excluded. An argument vector passes the test, which is why running a pipeline of
 `verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
 
 <a id="TOOL-3"></a>
-### TOOL-3: an unknown tool is reported to the planner rather than ignored
+### TOOL-3: an unknown tool or an undeclared argument is reported to the planner rather than ignored
+
+A call to a built-in tool that names an argument the schema it was offered with does not declare
+is refused before the tool runs, and nobody is asked about it. It is not read ahead with the
+reads beside it ([TURN-10](../turns.md#TURN-10)) either, so nothing on disk is read for it. The
+refusal names the argument and lists the ones the tool takes. For `run` it also says that a
+variable is set as `NAME=value` in
+front of the program, and, in the mode where
+[CMDLINE-17](command-line.md#CMDLINE-17) accepts it, that `NAME=$VAR` and
+`NAME="$(cmd)"` are accepted there too. An argument given as `null` reads as absent. A server's
+tool is not checked, and neither is a name a tool reads to give its own answer: `path_ref` for
+`watch_file` and `download_url`, `read` for `fetch_url` where `vet_content` is not offered, `read`
+for `spawn_processor` ([SPAWN-5](spawn-processor.md#SPAWN-5)), and `stop` for `schedule_next` in
+a turn arranging a look ([SCHED-4](schedule-next.md#SCHED-4)).
 
 `verified-by: bravebot_agent::turn::an_unknown_tool_is_reported_to_the_model`
 `verified-by: bravebot_agent::turn::a_refused_call_is_reported_as_one`
 `verified-by: bravebot_agent::turn::each_tool_call_is_announced_before_it_runs_and_summarised_after`
+`verified-by: bravebot_agent::turn::an_undeclared_run_argument_is_refused_and_names_the_prefix`
+`verified-by: bravebot_agent::turn::an_undeclared_run_argument_in_bypass_mode_names_the_variable_form`
+`verified-by: bravebot_agent::turn::an_undeclared_argument_is_refused_by_any_built_in_tool`
+`verified-by: bravebot_agent::turn::a_call_giving_why_is_not_refused_as_undeclared`
+`verified-by: bravebot_agent::turn::a_stdin_ref_that_is_not_a_string_keeps_its_own_refusal`
+`verified-by: bravebot_agent::turn::a_download_given_a_path_reference_gets_its_own_refusal_and_a_blank_one_none`
+`verified-by: bravebot_agent::turn::a_call_with_an_undeclared_argument_is_not_read_ahead`
+`verified-by: bravebot_agent::mcp::a_server_tool_is_sent_an_argument_its_schema_does_not_declare`
 
 <a id="TOOL-4"></a>
 ### TOOL-4: a refusal is worded by the driver
@@ -209,14 +230,19 @@ sends text made from it to the processor names `spawn_processor` only where the 
 
 The texts a tool writes into its result are written the same way. The advice on a run's quarantined
 result names `read_output`, `spawn_processor` and `read_file` each only where the list holds it, and
-says only what the quarantine is about where it holds none of them ([RUN-14](run.md#RUN-14)). The
+says only what the quarantine is about where it holds none of them ([RUN-14](run.md#RUN-14)). It
+and the account of an ended job say that a delegate cannot read the output either only where the
+list holds `spawn_agent`, and that sentence names no other tool, since the reference it follows
+names `spawn_processor` wherever the list holds it. The
 sentence on git history names `read_git`, and the account of an ended job names `read_output` and
 `read_file`, only where the list holds them. The notes that start a job, move a line to the
 background and remind a later turn of a kept job name `job_output` only where the list holds it,
 and keep the sentence not to start the job again. The note on a file past the size cap that
 `read_git` shows names `read_file` and `run`, and the heading over the files it could not compare
 names `run`, each only where the list holds them. The refusal of an empty `old_text` names
-`write_file`, the refusal of an editor names `edit_file`, the refusal of `read_output` for a
+`write_file`, the refusal of an untrusted file by `edit_file` names `write_file`, `run` and
+`read_file` ([EDIT-2](edit-file.md#EDIT-2)), the refusal of an editor names `edit_file`, the
+refusal of `read_output` for a
 reference no program printed names `vet_content`, the refusals of `vet_content` and the empty-`reads`
 error of `spawn_processor` name `spawn_processor` and `write_file`, the refusal of `lsp` for a server
 that cannot be confined names `search` and `read_file`, and the refusal of a processor after private
@@ -235,7 +261,14 @@ notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_process
 `vet_content` names `spawn_processor`, each only where the list holds it. The description of
 `spawn_agent` names `vet_content`, `ask_user`, `fetch_url` and `download_url`, as the tools a
 delegate cannot call, each only where the list holds it, and says nothing of them where it holds
-none ([AGENT-1](spawn-agent.md#AGENT-1)).
+none, and names `spawn_processor`, for output a delegate cannot read either, only where the list
+holds it ([AGENT-1](spawn-agent.md#AGENT-1)).
+
+`search` and `list_files` lose their `read` argument where the list lacks `vet_content`, since
+`read` asks for the release `vet_content` makes ([VET-6](vet-content.md#VET-6)).
+
+`job_output` names `read_output` in its `read` argument only where the list holds it, as `run`
+does ([RUN-22](run.md#RUN-22)).
 
 Two refusals are written from the list rather than from the policy's general denial. That denial
 ends "Use a reference to it instead", which neither tool can follow: neither returns a reference at
@@ -277,8 +310,7 @@ the tool list is the one that is true.
 Not every text is written this way yet. Some results and refusals still name `run`, `read_file`,
 `edit_file`, `read_output`, `job_output`, `lsp`, `search_skills`, `load_skill`, `download_url`,
 `apply_checkout` or `read_git` without reading the list: the decoding note of a page read, the
-result of an approved `request_path`, the unconfined way out that a refused write names, some
-refusals of `read_output` and `job_output`, the checkout notes of `spawn_agent`, the descriptions of
+result of an approved `request_path`, the unconfined way out that a refused write names, the checkout notes of `spawn_agent`, the descriptions of
 `load_skill`, `search_skills`, `download_url` and `ask_user`, the notice about `search_skills`, the
 planning, person-facing and environment prompts, the reminder of a kept skill after compaction, and
 the refusals of a checkout. A text of this kind is to be written from the list when it is found, and
@@ -288,6 +320,7 @@ tool as the control.
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::ask_user_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
@@ -327,6 +360,8 @@ tool as the control.
 `verified-by: bravebot_agent::tools::the_notes_that_start_a_job_name_job_output_only_where_it_is_offered`
 `verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word`
+`verified-by: bravebot_agent::tools::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_read_file_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_edit_file_description_names_write_file_only_where_the_list_holds_it`

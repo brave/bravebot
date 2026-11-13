@@ -540,6 +540,8 @@ pub struct Tool<'a> {
     pub arguments: &'a [String],
     /// The server's own sentence about it.
     pub description: Option<&'a str>,
+    /// Whether the server marks it read-only.
+    pub read_only: bool,
 }
 
 /// The tools an MCP server lists, as the lines a person reads before they are offered to a model.
@@ -575,6 +577,9 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
         lines.push(format!("  {}", printable(tool.name)));
         if !tool.arguments.is_empty() {
             lines.push(format!("    {}", printable(&tool.arguments.join(", "))));
+        }
+        if tool.read_only {
+            lines.push(format!("    {}", t!(mcp_tools_read_only)));
         }
         if let Some(description) = tool.description {
             lines.extend(
@@ -1295,12 +1300,43 @@ mod tests {
         );
     }
 
+    /// A tool its server marks read-only says so under its name, as the server's word, and a tool
+    /// it does not mark says nothing of the kind.
+    #[test]
+    fn a_tool_the_server_marks_read_only_says_so_and_no_other_does() {
+        let reading = Tool {
+            name: "brave:list_tabs",
+            arguments: &[],
+            description: None,
+            read_only: true,
+        };
+        let acting = Tool {
+            name: "brave:close_tab",
+            arguments: &[],
+            description: None,
+            read_only: false,
+        };
+        let marked = format!("    {}", t!(mcp_tools_read_only));
+        let lines = tools_lines(&Tools {
+            alias: "brave",
+            tools: &[reading, acting],
+            refused: 0,
+            withheld: 0,
+            check: Check::Safe,
+        });
+        let at = |name: &str| lines.iter().position(|line| line.trim() == name).unwrap();
+        assert_eq!(lines[at("brave:list_tabs") + 1], marked);
+        assert_ne!(lines.get(at("brave:close_tab") + 1), Some(&marked));
+        assert_eq!(lines.iter().filter(|line| **line == marked).count(), 1);
+    }
+
     #[test]
     fn a_tool_list_with_withheld_tools_reports_them() {
         let tool = Tool {
             name: "weather:get_forecast",
             arguments: &[],
             description: None,
+            read_only: false,
         };
         let lines = tools_lines(&Tools {
             alias: "weather",

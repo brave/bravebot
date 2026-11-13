@@ -23,6 +23,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [delegation.md](delegation.md) | `DELEGATE` | 33 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 14 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
+| [bots.md](bots.md) | `BOT` | 18 | how the terminal gets the bots the GUI has: one set of rows both read and write, one module that holds the code, the writes a window cannot reach, where a turn runs, the memory view, and a second layout for bots (proposed, not built) |
 | [recall.md](recall.md) | `RECALL` | 11 | what a person's sessions remember across projects: rules loaded in full every turn, facts ranked and recalled, and how neither lets untrusted content in (proposed: built, thresholds not yet measured on a bravebot store) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
@@ -46,8 +47,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [terminal-input.md](terminal-input.md) | `INPUT` | 51 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 43 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
-| [session-view.md](session-view.md) | `RPCVIEW` | 11 | the opt-in shared Rust view for fresh local bridge sessions and its bounded snapshot, the message id every send carries and the record and lookup of each send, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
-| [local-host.md](local-host.md) | `HOST` | 12 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, when a session is closed, and the development relay that hands it to an app on loopback |
+| [session-view.md](session-view.md) | `RPCVIEW` | 13 | the opt-in shared Rust view for fresh local bridge sessions and its bounded snapshot, the message id every send carries and the record and lookup of each send, the stdio TypeScript client that applies it, takes over a session whose controller left, and settles a send whose connection was lost, and the anonymous channel they speak over |
+| [local-host.md](local-host.md) | `HOST` | 13 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, when a session is closed, the development relay that hands it to an app on loopback, and that it has no name to be found by |
 | [watching.md](watching.md) | `WATCH` | 24 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, the mode Ctrl-L opens over the delegates and the questions, and `/outputs` and Alt-L, which open it over what commands printed |
 | [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
@@ -61,9 +62,10 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [browser.md](browser.md) | `BROWSER` | 46 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 71 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 73 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 19 | shortening a long conversation into a summary of itself, in the request only |
+| [retrieval.md](retrieval.md) | `RETRIEVE` | 23 | retrieving earlier excerpts of a long bot conversation instead of summarising it: the setting, what is embedded, the file the vectors are kept in, the request a retrieving turn sends, and what an administrator may pin |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
 | [triggers.md](triggers.md) | `TRIGGER` | 11 | `bravebot trigger`: a prompt registered under a name and an event, the loopback listener that starts it for a signed delivery, and what it is given and allowed |
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
@@ -88,6 +90,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [releases.md](releases.md) | `RELEASE` | 22 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
+| [herdr.md](herdr.md) | `HERDR` | 12 | telling herdr, a terminal runtime, what a session is doing and how to resume it |
 
 ## The tools
 

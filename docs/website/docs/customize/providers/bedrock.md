@@ -7,7 +7,7 @@ description: Configure AWS Bedrock models and extra model names, sign in to AWS,
 # Reaching a model through AWS Bedrock
 
 Set these variables to reach models through your own AWS account. They are read from your own
-settings file, a `--settings` file outside the project and the environment, and from no project or
+settings file, the file `--settings` names and the environment, and from no project or
 local file: `bravebot doctor` reports a checkout's file that names one, and the name decides nothing.
 
 | Variable | What it sets |

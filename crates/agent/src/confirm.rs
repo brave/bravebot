@@ -305,6 +305,30 @@ pub struct RunRequest {
     /// A closed word that the driver reads and a mode other than auto ignores, so a word on a
     /// request cannot answer in a session that did not ask for a classifier.
     pub classified: Classified,
+    /// Whether a file this line redirects output into is a protected path (PERM-9), as typed, as
+    /// it lands after links are followed, or under another name of a file with several hard links.
+    ///
+    /// Derived by the driver from the plan's destinations and the file system, never from a byte
+    /// of any file. Auto does not answer such a line, whatever the classifier said, and the
+    /// classifier is not asked about it (MODE-2, AUTO-3).
+    pub protected: bool,
+    /// Where each file in `plan.writes` lands and whether it is a protected path, so the prompt
+    /// can draw a link next to the file it reaches and mark a protected destination.
+    ///
+    /// Derived by the driver from the destinations and the file system where the request is
+    /// built, never from a byte of any file. A write with no entry here is drawn as its name.
+    pub destinations: Vec<RunDestination>,
+}
+
+/// One file a `run` line redirects into, as the driver found it when the line was checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunDestination {
+    /// The path as `plan.writes` holds it.
+    pub written: std::path::PathBuf,
+    /// Where it lands once every link is followed, where that is not the path itself.
+    pub lands_on: Option<std::path::PathBuf>,
+    /// Whether the name, the place it lands or another name of the file is a protected path.
+    pub protected: bool,
 }
 
 /// What the auto mode's classifier said about one question (AUTO-6).
@@ -617,6 +641,7 @@ impl RunRequest {
                 resolved: std::path::PathBuf::from(path),
                 started_as: std::path::PathBuf::from(path),
                 args: stage.args.clone(),
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),
@@ -633,6 +658,8 @@ impl RunRequest {
             unconfined: false,
             key_choice: None,
             classified: Classified::NotAsked,
+            protected: false,
+            destinations: Vec::new(),
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -717,12 +744,52 @@ impl RunRequest {
         self.plan.stdin.is_some()
     }
 
+    /// The files the line writes, each spelled as [`shown_path`] spells a path, with the file a
+    /// link leads to beside its name and a protected destination marked.
+    ///
+    /// Every front end draws these strings and none works the marks out for itself, so a prompt
+    /// cannot show `out` for a line that writes `.git/hooks/pre-commit`.
+    pub fn shown_writes(&self) -> Vec<String> {
+        self.plan
+            .writes
+            .iter()
+            .map(|path| {
+                let written = shown_path(path);
+                let found = self
+                    .destinations
+                    .iter()
+                    .find(|found| found.written == *path);
+                let named = match found.and_then(|found| found.lands_on.as_deref()) {
+                    Some(landing) => t!(
+                        run_write_lands_on,
+                        written = written,
+                        landing = shown_path(landing)
+                    )
+                    .to_string(),
+                    None => written,
+                };
+                if found.is_some_and(|found| found.protected) {
+                    t!(run_write_protected, path = named).to_string()
+                } else {
+                    named
+                }
+            })
+            .collect()
+    }
+
     /// Whether an entry could record this line at all, which is what `a` would make.
     ///
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    ///
+    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
+    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
+    /// neither ([PERM-9]).
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered() && !self.asks_for_scopes() && !self.unconfined
+        self.plan.can_be_remembered()
+            && !self.asks_for_scopes()
+            && !self.unconfined
+            && !self.protected
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -1156,20 +1223,32 @@ pub fn shown_text(text: &str) -> String {
 ///
 /// The one implementation behind every `printable` a front end draws through. The margin in front
 /// of a row is written by the caller, and an escape sequence in the content would let the content
-/// write one instead, so each control character becomes its Unicode picture (an escape reads as
-/// `␛`) and is not dropped: a character silently removed is one nobody can tell was ever there.
-/// A tab is kept, for a surface that lays it out as indentation (a diff body in `--plain` or in an
-/// editor). [`printable_with_tab_pictured`] pictures it as well, for the terminal interface, whose
-/// drawing library drops a tab without drawing anything.
+/// write one instead, so each control character is replaced and none is dropped: a character
+/// silently removed is one nobody can tell was ever there. What each range becomes:
 ///
-/// A map from characters to characters: no branch is taken on what the text says.
+/// - U+0000 to U+001F become their Control Pictures (U+2400 to U+241F), so an escape reads as `␛`.
+///   A tab is the exception: it is kept, for a surface that lays it out as indentation (a diff body
+///   in `--plain` or in an editor). [`printable_with_tab_pictured`] pictures it as `␉`, for the
+///   terminal interface, whose drawing library drops a tab without drawing anything.
+/// - U+007F (DEL) becomes `␡` (U+2421), the picture the block has for it.
+/// - U+0080 to U+009F (the C1 controls) have no picture, and 0x2400 plus their value lands on the
+///   enclosed alphanumerics (U+0085 on `⒅`), which are ordinary text. Each is written as
+///   `‹U+XXXX›` as [`bravebot_core::invisible::spelled`] writes a character that draws as nothing,
+///   so two different controls draw differently and neither draws as one of the enclosed
+///   alphanumerics. A name that holds the characters `‹U+0085›` or `␡` itself still draws the same
+///   as the control it spells. U+FFFD was the other candidate; it is also what an invalid byte and a
+///   literal U+FFFD draw as.
+///
+/// A map from characters to characters, chosen by the character's code point alone: no branch is
+/// taken on what the text says.
 pub fn printable(text: &str) -> String {
     pictured(text, true)
 }
 
-/// [`printable`] with a tab pictured (`␉`) like every other control character.
+/// [`printable`] with a tab pictured (`␉`) like every other C0 control character.
 ///
-/// For the terminal interface. A caller that lays a tab out as width does so before this.
+/// For the terminal interface. A caller that lays a tab out as width does so before this. DEL and
+/// the C1 controls are drawn as [`printable`] draws them.
 pub fn printable_with_tab_pictured(text: &str) -> String {
     pictured(text, false)
 }
@@ -1178,15 +1257,19 @@ fn pictured(text: &str, keep_tab: bool) -> String {
     if !text.chars().any(char::is_control) {
         return text.to_string();
     }
-    text.chars()
-        .map(|c| {
-            if !c.is_control() || (keep_tab && c == '\t') {
-                c
-            } else {
-                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
+    let mut out = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        match c {
+            '\t' if keep_tab => out.push(c),
+            '\u{7f}' => out.push('\u{2421}'),
+            '\u{0}'..='\u{1f}' => {
+                out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
             }
-        })
-        .collect()
+            _ if c.is_control() => out.push_str(&bravebot_core::invisible::written_out(c)),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// One argument of a call to a server's tool, as the rows a person reads it in (SERVERS-7).
@@ -1284,6 +1367,7 @@ pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
         resolved,
         started_as,
         args: _,
+        matched: _,
         environment: _,
         expansions: _,
         routes: _,
@@ -1509,6 +1593,8 @@ pub struct ListedTool {
     pub arguments: Vec<String>,
     /// The server's own sentence about the tool, where it wrote one.
     pub description: Option<String>,
+    /// Whether the server marks the tool read-only. Its word, not a check of what the tool does.
+    pub read_only: bool,
 }
 
 /// A call to an MCP server's tool the planner has asked for (SERVERS-7).
@@ -3475,15 +3561,16 @@ mod tests {
         }
     }
 
-    /// LAYER-3: every control character is drawn as its picture and none is dropped. A string with
+    /// LAYER-3: every control character is drawn as a mark for it and none is dropped. A string with
     /// none comes back as it was, so text that needs no change is not altered.
     #[test]
-    fn a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged() {
+    fn a_control_character_is_drawn_as_a_mark_for_it_and_other_text_is_unchanged() {
         for plain in [
             "",
             "note.md",
             "two words.md",
             "caf\u{e9} \u{1f600} \u{202e}",
+            "\u{2421}\u{2485}\u{249f}\u{fffd}",
         ] {
             assert_eq!(printable(plain), plain, "{plain:?}");
             assert_eq!(printable_with_tab_pictured(plain), plain, "{plain:?}");
@@ -3494,10 +3581,50 @@ mod tests {
             ("a\u{0}b", "a\u{2400}b"),
             ("a\u{1f}b", "a\u{241f}b"),
             ("a\u{1b}[31mred", "a\u{241b}[31mred"),
+            ("a\u{7f}b", "a\u{2421}b"),
+            ("a\u{85}b", "a\u{2039}U+0085\u{203a}b"),
         ] {
             assert_eq!(printable(text), drawn, "{text:?}");
             assert_eq!(printable_with_tab_pictured(text), drawn, "{text:?}");
         }
+    }
+
+    /// LAYER-3: DEL and each C1 control draw as a mark that differs from the old one and from each
+    /// other. The old mapping added 0x2400 to the code point, which put DEL on U+247F and the C1
+    /// controls on the enclosed alphanumerics U+2480 to U+249F, so `a<U+0085>b` drew as `a⒅b`, the
+    /// same as a literal U+2485. A name that holds a literal `‹U+0085›` or U+2421 still draws the
+    /// same as the control it spells.
+    #[test]
+    fn del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as() {
+        assert_eq!(printable("\u{7f}"), "\u{2421}");
+        assert_eq!(printable_with_tab_pictured("\u{7f}"), "\u{2421}");
+        let mut seen = std::collections::HashSet::new();
+        for code in 0x80..=0x9f_u32 {
+            let c = char::from_u32(code).unwrap();
+            let text = format!("a{c}b");
+            let drawn = printable(&text);
+            assert_eq!(drawn, printable_with_tab_pictured(&text), "{code:#x}");
+            assert_eq!(
+                drawn,
+                format!("a\u{2039}U+{code:04X}\u{203a}b"),
+                "{code:#x}"
+            );
+            assert!(!drawn.chars().any(char::is_control), "{code:#x}");
+            let old = char::from_u32(0x2400 + code).unwrap();
+            assert_ne!(drawn, format!("a{old}b"), "{code:#x}");
+            assert!(seen.insert(drawn), "{code:#x} draws as another control");
+        }
+        assert_ne!(printable("a\u{85}b"), printable("a\u{2485}b"));
+        assert_ne!(printable("\u{85}"), "\u{2485}");
+        assert_ne!(printable("\u{7f}"), "\u{247f}");
+        assert_eq!(
+            printable("\t\u{7f}\u{85}"),
+            "\t\u{2421}\u{2039}U+0085\u{203a}"
+        );
+        assert_eq!(
+            printable_with_tab_pictured("\t\u{7f}\u{85}"),
+            "\u{2409}\u{2421}\u{2039}U+0085\u{203a}"
+        );
     }
 
     /// LAYER-3: the terminal interface pictures a tab, because its drawing library drops one, and
@@ -3834,6 +3961,7 @@ mod tests {
                 resolved: std::path::PathBuf::from("/usr/bin/gh"),
                 started_as: std::path::PathBuf::from("/usr/bin/gh"),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),
@@ -3926,6 +4054,8 @@ mod tests {
             unconfined: false,
             key_choice: None,
             classified: Classified::NotAsked,
+            protected: false,
+            destinations: Vec::new(),
         };
         let offered = request(
             a_listed_line(),
@@ -4474,6 +4604,87 @@ mod tests {
         let answer = Unattended.confirm_run(&a_run());
         assert!(!answer.approved());
         assert!(!answer.remember, "a standing permission was inferred");
+    }
+
+    /// PERM-9, PROMPT-9: a run into a protected path is refused where nobody can be asked, like any
+    /// other run, and it offers nothing to remember. Rejects an unattended confirmer that answered
+    /// from the request's `protected` mark, which would be the one place a mark approved.
+    #[test]
+    fn an_unattended_run_into_a_protected_path_is_refused_and_not_remembered() {
+        let mut request = a_run();
+        request.plan.writes = vec!["/tmp/project/.git/hooks/pre-commit".into()];
+        request.protected = true;
+        request.destinations = vec![RunDestination {
+            written: "/tmp/project/.git/hooks/pre-commit".into(),
+            lands_on: None,
+            protected: true,
+        }];
+        let answer = Unattended.confirm_run(&request);
+        assert!(!answer.approved());
+        assert!(!answer.remember);
+        assert!(!request.can_be_remembered());
+    }
+
+    /// PERM-9: the `protected` mark removes the standing answer from a run by itself. The request
+    /// names no file to write, so the plan's own rule about writes does not apply, and the same
+    /// request without the mark can be remembered (control). Rejects a `can_be_remembered` that
+    /// leaves the mark out and relies on the plan's destinations alone.
+    #[test]
+    fn the_protected_mark_alone_removes_the_standing_answer_from_a_run() {
+        let mut request = a_run();
+        assert!(request.plan.writes.is_empty());
+        assert!(request.can_be_remembered(), "the control is rememberable");
+        request.protected = true;
+        assert!(!request.can_be_remembered());
+    }
+
+    /// PERM-9, PROMPT-1: the files a run writes are drawn as the name, with where a link leads
+    /// beside it and a protected destination marked. A name with no destination recorded is drawn
+    /// as `shown_path` spells it, so a request built without the driver's findings is unchanged.
+    /// Rejects a drawing that shows only the name (the hook hidden behind `notes.txt`), one that
+    /// marks every write, and one that marks the wrong entry.
+    #[test]
+    fn the_files_a_run_writes_are_drawn_with_their_landing_and_a_protected_mark() {
+        let mut request = a_run();
+        request.plan.writes = vec![
+            "/tmp/project/notes.txt".into(),
+            "/tmp/project/plain.txt".into(),
+            "/tmp/project/.git/config".into(),
+            "/tmp/project/unrecorded.txt".into(),
+        ];
+        request.destinations = vec![
+            RunDestination {
+                written: "/tmp/project/notes.txt".into(),
+                lands_on: Some("/tmp/project/.git/hooks/pre-commit".into()),
+                protected: true,
+            },
+            RunDestination {
+                written: "/tmp/project/plain.txt".into(),
+                lands_on: None,
+                protected: false,
+            },
+            RunDestination {
+                written: "/tmp/project/.git/config".into(),
+                lands_on: None,
+                protected: true,
+            },
+        ];
+        let shown = request.shown_writes();
+        assert_eq!(shown.len(), 4);
+        assert!(
+            shown[0].contains("/tmp/project/notes.txt")
+                && shown[0].contains("lands on /tmp/project/.git/hooks/pre-commit")
+                && shown[0].contains("protected path"),
+            "{shown:?}"
+        );
+        assert_eq!(shown[1], "/tmp/project/plain.txt");
+        assert!(
+            shown[2].starts_with("/tmp/project/.git/config")
+                && shown[2].contains("protected path")
+                && !shown[2].contains("lands on"),
+            "{shown:?}"
+        );
+        assert_eq!(shown[3], "/tmp/project/unrecorded.txt");
     }
 
     /// A refusal never remembers. Saying no to a run is not a reason to vouch for the program.

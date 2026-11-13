@@ -68,9 +68,9 @@
 //!   rather than obeyed.
 //! - `permissions.allow` answers an approval prompt, so a line in a checkout's file could run a
 //!   program, write a file or fetch a URL without the question anybody would otherwise have seen.
-//!   It is read from the home layer, and from a file the command line named that sits outside the
-//!   workspace; a checkout's entry is dropped and reported. `deny` and `ask` are read from every
-//!   layer, because both only narrow. See [`grants`] and `docs/specs/permissions.md`.
+//!   It is read from the home layer, and from the file the command line named wherever it sits; a
+//!   checkout's entry is dropped and reported. `deny` and `ask` are read from every layer, because
+//!   both only narrow. See `docs/specs/permissions.md`.
 //! - `provider` names where a request is sent and which of the person's environment variables are
 //!   read as its credential, so a line in a checkout's file could point a request at a host of the
 //!   checkout's choosing and hand it whatever secret that name reached. It is read from the home
@@ -157,21 +157,17 @@ const COMMIT_MESSAGE_BLOCK: &str = "commitMessage";
 enum Entitled {
     /// The home layer alone.
     Own,
-    /// The home layer, and the file the command line named.
+    /// The home layer, and the file the command line named, wherever it sits.
     OwnOrNamed,
-    /// The layers [`grants`] answers true for: the home layer, and a named file that resolves
-    /// outside every checkout the session has been in.
-    Granting,
 }
 
 impl Entitled {
-    /// Whether a layer with these properties may name the key. `own` is the home layer,
-    /// `named_here` is the file the command line named, and `granting` is [`grants`] for the layer.
-    fn admits(self, own: bool, named_here: bool, granting: bool) -> bool {
+    /// Whether a layer with these properties may name the key. `own` is the home layer and
+    /// `named_here` is the file the command line named.
+    fn admits(self, own: bool, named_here: bool) -> bool {
         match self {
             Self::Own => own,
             Self::OwnOrNamed => own || named_here,
-            Self::Granting => granting,
         }
     }
 }
@@ -231,18 +227,15 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // A checkout's file choosing when the person's own records are deleted is the case this key is
     // read from the home layer alone to prevent: [`Settings::retention_ignored`].
     (RETENTION_KEY, Entitled::Own),
-    // Entitled the way an allow rule is rather than the way `model` is: a named file that resolves
-    // inside the workspace is a checkout's file, and an entry makes a directory reachable and puts
-    // its description in front of the planner (REFER-2): [`Settings::references_ignored`].
-    (REFERENCES_BLOCK, Entitled::Granting),
-    // The same entitlement, for the same reason: the block's free text reaches the planner's
-    // standing instructions on every round, so a checkout's file cannot put it there:
-    // [`Settings::attribution_ignored`].
-    ("attribution", Entitled::Granting),
-    // The same entitlement, for the reason `vetting.auto` has it: a question closed on a clock is
-    // one the person was not asked, so a clock that closes the person's questions is theirs to set
-    // and not the checkout's: [`Settings::ask_idle_ignored`].
-    ("askIdleSeconds", Entitled::Granting),
+    // An entry makes a directory reachable and puts its description in front of the planner, so a
+    // checkout's file cannot write one (REFER-2): [`Settings::references_ignored`].
+    (REFERENCES_BLOCK, Entitled::OwnOrNamed),
+    // The block's free text reaches the planner's standing instructions on every round, so a
+    // checkout's file cannot put it there: [`Settings::attribution_ignored`].
+    ("attribution", Entitled::OwnOrNamed),
+    // A question closed on a clock is one the person was not asked, so a clock that closes the
+    // person's questions is theirs to set and not the checkout's: [`Settings::ask_idle_ignored`].
+    ("askIdleSeconds", Entitled::OwnOrNamed),
 ];
 
 /// The number of days a record is kept when no `retentionDays` is stated.
@@ -543,8 +536,7 @@ pub struct Settings {
     /// The mode `sandbox.mode` named in a layer entitled to choose one, and that layer's file
     /// (SANDBOX-22).
     ///
-    /// The home layer and a file the command line named from outside the workspace, the later of
-    /// the two winning. Settled per layer rather than off the merged root, for `vetting`'s reason:
+    /// The home layer and the file the command line named, the later of the two winning. Settled per layer rather than off the merged root, for `vetting`'s reason:
     /// the merge cannot say which file a value came from.
     sandbox_chosen: Option<(SandboxMode, PathBuf)>,
     /// The layers not entitled to choose that asked for `strict`, weakest first. Obeyed over a
@@ -681,7 +673,7 @@ pub struct Settings {
     ///
     /// Settled by [`Settings::layered`], because the layers are not equal here: a refusal may come
     /// from any file, since it only takes reach away, and an `allowRead` or `allowWrite` only from
-    /// the person's own file, the one `--settings` names outside the workspace, and the managed layer.
+    /// the person's own file, the one `--settings` names, and the managed layer.
     sandbox_filesystem: bravebot_sandbox::rules::Lists,
     /// The layers that wrote `allowRead` or `allowWrite` and were not obeyed, with the key.
     sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)>,
@@ -699,7 +691,7 @@ pub struct Settings {
     /// What `git.identities` came to across the layers that may choose a key.
     ///
     /// Settled by [`Settings::layered`]: an entry is read from the person's own file and the one
-    /// `--settings` names outside the workspace, as `sandbox.mode` is.
+    /// `--settings` names, as `sandbox.mode` is.
     git_identities: crate::git_identities::Identities,
     /// The layers that wrote `git.identities` and were not obeyed.
     git_identities_ignored: Vec<PathBuf>,
@@ -1049,20 +1041,11 @@ impl Settings {
     /// `named` is read last, so what it sets beats every file that was found. Taken as an argument
     /// rather than read from [`NAMED`] here, so the order and the merge rules are checked without a
     /// process-wide switch in force under every other test in this binary.
-    pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
-        Self::layered_since(home, cwd, named, &[])
-    }
-
-    /// As [`Settings::layered`], for a session in `cwd` that has been in each of `left`.
     ///
-    /// A named file inside any of them, or inside the checkout holding one, is a checkout's file:
-    /// moving out of the checkout it sits in does not make it the person's.
-    pub fn layered_since(
-        home: Option<PathBuf>,
-        cwd: Option<&Path>,
-        named: Option<&Path>,
-        left: &[PathBuf],
-    ) -> Self {
+    /// The named file is the person's own wherever it sits, the project's own file included: the
+    /// flag is typed by the person running this invocation, and whatever gets them to type it could
+    /// get them to type any other command (PERM-14).
+    pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
         let home_layer = home.map(|home| user_settings_file(&home));
         // A found layer the command line also named is left out here and read at the end, since
         // reading it at its own position would let a later found layer beat it (BACKEND-24).
@@ -1196,13 +1179,15 @@ impl Settings {
                 continue;
             };
             let named_here = Some(&path) == named_path.as_ref();
-            // Entitled the way an allow rule is for the keys marked [`Entitled::Granting`]: a named
-            // file that resolves inside the workspace is a checkout's file.
-            let granting = grants(&path, home_layer.as_deref(), named, cwd, left);
+            // Whether a rule that *grants* may be read from this layer: the home layer and the file
+            // the command line named. The project and local layers arrive with the clone, so an
+            // `allow` entry or an `off` read out of one would let whoever last edited the
+            // repository answer for whoever cloned it.
+            let granting = own || named_here;
             // Removed here rather than read and dropped later, because the merge unions every name
             // a layer set and a removed key cannot reach [`Settings::from_map`] at all.
             for (key, entitled) in HOME_ONLY {
-                if !entitled.admits(own, named_here, granting) && root.remove(key) {
+                if !entitled.admits(own, named_here) && root.remove(key) {
                     not_obeyed.entry(*key).or_default().push(path.clone());
                 }
             }
@@ -2209,16 +2194,16 @@ impl Settings {
     }
 
     /// The four lists `sandbox.filesystem` holds across the layers: every layer's refusals and the
-    /// additions of reach the person's own file, the file `--settings` names outside the workspace
-    /// and the managed layer wrote. A project or local layer's addition is not here
+    /// additions of reach the person's own file, the file `--settings` names and the managed layer
+    /// wrote. A project or local layer's addition is not here
     /// ([`Settings::sandbox_filesystem_ignored`]), so a cloned repository cannot widen what the
     /// programs it makes the session run may reach.
     pub fn sandbox_filesystem(&self) -> &bravebot_sandbox::rules::Lists {
         &self.sandbox_filesystem
     }
 
-    /// Whether the person's own file, or the file `--settings` names outside the workspace, holds
-    /// the temporary directory back from every stage (SANDBOX-22).
+    /// Whether the person's own file, or the file `--settings` names, holds the temporary
+    /// directory back from every stage (SANDBOX-22).
     pub fn sandbox_holds_back_temporary_directory(&self) -> bool {
         self.sandbox_hold_back_temporary
     }
@@ -2254,7 +2239,7 @@ impl Settings {
     }
 
     /// The key each owner's repositories are pushed and fetched with over ssh, from the layers that
-    /// may choose one: the person's own file and the one `--settings` names outside the workspace.
+    /// may choose one: the person's own file and the one `--settings` names.
     pub fn git_identities(&self) -> &crate::git_identities::Identities {
         &self.git_identities
     }
@@ -3173,62 +3158,6 @@ pub(crate) fn narrowing_stated(
     )
 }
 
-/// Whether a rule that *grants* may be read from this layer.
-///
-/// True for the home layer, and for a file the command line named that sits outside the workspace,
-/// outside every directory the session has been in, and outside the checkout holding each of them.
-/// False for `.bravebot/settings.json`, for `.bravebot/settings.local.json`, and for a named file
-/// that resolves inside any of those.
-///
-/// The home layer is the person's own, on the footing this module's own note on what these files
-/// are trusted for already states. A file the command line named is a path somebody typed at this
-/// invocation, which is the same claim: the flag is how one run is configured differently from the
-/// next. But it can name a file inside the checkout, which
-/// `a_command_line_file_that_is_already_a_layer_is_read_once` exists because people do, so a README
-/// saying `--settings ./tooling/bravebot.json` would be a route back in. A named file that resolves
-/// inside the workspace, or inside the checkout holding it, is therefore the checkout's file under
-/// another name. `left` is every other directory the session has been in, which `/cd` leaves
-/// behind without changing who wrote the file.
-///
-/// The local layer is a checkout's file too. Nothing stops one being committed, and its being
-/// conventionally private is not a property this can rely on, which is the same reading `vetting`
-/// already gives the pair.
-fn grants(
-    path: &Path,
-    home_layer: Option<&Path>,
-    named: Option<&Path>,
-    cwd: Option<&Path>,
-    left: &[PathBuf],
-) -> bool {
-    if Some(path) == home_layer {
-        return true;
-    }
-    Some(path) == named && !inside(cwd, path) && !left.iter().any(|left| inside(Some(left), path))
-}
-
-/// Whether `path` resolves to somewhere under `cwd`, or under the checkout holding it.
-///
-/// The checkout is found as the sandbox finds the one a stage may not write
-/// ([`bravebot_sandbox::programs::with_checkout`]): the nearest ancestor with a `.git`. A session
-/// begun in a subdirectory reads no project layer, but the clone it sits in is the same tree, so a
-/// file `--settings ../tooling/bravebot.json` names from there is the checkout's file as much as one
-/// beside the working directory is.
-///
-/// Both sides resolved, because the question is where the file *is* and not how it was spelled: a
-/// link, a `..`, or a relative name reaches the same file under a different string, and comparing
-/// the strings would answer about the spelling. A resolution that fails is read as inside, which is
-/// the answer that grants nothing; a working directory nobody could name bounds nothing, so a file
-/// is not inside it.
-fn inside(cwd: Option<&Path>, path: &Path) -> bool {
-    let Some(cwd) = cwd else { return false };
-    match (std::fs::canonicalize(cwd), std::fs::canonicalize(path)) {
-        (Ok(cwd), Ok(path)) => bravebot_sandbox::programs::with_checkout(&cwd)
-            .iter()
-            .any(|held| path.starts_with(held)),
-        _ => true,
-    }
-}
-
 /// The keys one layer names a server under, as `doctor` should spell them back.
 ///
 /// `mcpServers` is Claude Code's key, and a block copied from `.mcp.json` arrives under it. The `mcp`
@@ -3414,7 +3343,7 @@ fn lay_over(
 ///
 /// `allow` unions here and is then replaced by [`Settings::layered`], which is the only caller that
 /// knows which layer each entry came from. Unioning it and no more would let a checkout's file
-/// answer a prompt, which [`grants`] is the rule against.
+/// answer a prompt, which PERM-14 is the rule against.
 fn merge_permissions(
     displaced: &mut Vec<serde_json::Value>,
     under: &mut serde_json::Map<String, serde_json::Value>,
@@ -5579,10 +5508,10 @@ mod tests {
         assert_eq!(settings.run_network_ignored().count(), 1);
     }
 
-    /// A file the command line named outside the workspace is the person's act, so it speaks for
-    /// them; one inside the workspace is a checkout's file and speaks as one.
+    /// A file the command line named is the person's act wherever it sits, so it speaks for them,
+    /// inside the workspace as well as outside it.
     #[test]
-    fn a_named_file_speaks_for_the_person_only_outside_the_workspace() {
+    fn a_named_file_speaks_for_the_person_wherever_it_sits() {
         use bravebot_sandbox::network::Network;
         let outside = Layers::new("network-named-outside")
             .global(NETWORK_CLOSED)
@@ -5595,8 +5524,8 @@ mod tests {
             .global(NETWORK_CLOSED)
             .named_inside_the_workspace(NETWORK_OPEN)
             .read();
-        assert_eq!(inside.run_network(), Some(Network::Closed));
-        assert_eq!(inside.run_network_ignored().count(), 1);
+        assert_eq!(inside.run_network(), Some(Network::Open));
+        assert_eq!(inside.run_network_ignored().count(), 0);
     }
 
     const FILESYSTEM_WIDE: &str = r#"{"sandbox": {"filesystem": {
@@ -5649,10 +5578,10 @@ mod tests {
         }
     }
 
-    /// A file the command line named outside the workspace is the person's act and may widen; one
-    /// inside the workspace is a checkout's file and may not.
+    /// A file the command line named is the person's act and may widen wherever it sits, inside the
+    /// workspace as well as outside it.
     #[test]
-    fn a_named_file_may_widen_only_outside_the_workspace() {
+    fn a_named_file_may_widen_wherever_it_sits() {
         let outside = Layers::new("filesystem-named-outside")
             .named(FILESYSTEM_WIDE)
             .read();
@@ -5661,8 +5590,8 @@ mod tests {
         let inside = Layers::new("filesystem-named-inside")
             .named_inside_the_workspace(FILESYSTEM_WIDE)
             .read();
-        assert!(inside.sandbox_filesystem().allow_write.is_empty());
-        assert_eq!(inside.sandbox_filesystem_ignored().count(), 2);
+        assert_eq!(inside.sandbox_filesystem().allow_write.len(), 1);
+        assert_eq!(inside.sandbox_filesystem_ignored().count(), 0);
     }
 
     /// A list that is not a list of strings is reported and not read, and a blank entry is left out
@@ -5960,17 +5889,17 @@ mod tests {
         }
     }
 
-    /// A file the command line named outside the workspace is the person's act; one inside is a
-    /// checkout's file.
+    /// A file the command line named is the person's act wherever it sits, inside the workspace as
+    /// well as outside it.
     #[test]
-    fn a_named_file_may_list_hosts_only_outside_the_workspace() {
+    fn a_named_file_may_list_hosts_wherever_it_sits() {
         let outside = Layers::new("hosts-named-outside").named(HOSTS_WIDE).read();
         assert!(outside.sandbox_hosts().allowed.is_some());
         let inside = Layers::new("hosts-named-inside")
             .named_inside_the_workspace(HOSTS_WIDE)
             .read();
-        assert!(inside.sandbox_hosts().allowed.is_none());
-        assert_eq!(inside.sandbox_hosts_ignored().count(), 2);
+        assert!(inside.sandbox_hosts().allowed.is_some());
+        assert_eq!(inside.sandbox_hosts_ignored().count(), 0);
     }
 
     /// A value that is not a list of strings, or a word that is neither answer, is reported and not
@@ -7601,187 +7530,42 @@ mod tests {
         assert_eq!(settings.allow_ignored().count(), 0);
     }
 
-    /// The flag can name a file inside the checkout, which is why
-    /// `a_command_line_file_that_is_already_a_layer_is_read_once` exists. A README saying
-    /// `--settings ./tooling/bravebot.json` would otherwise be a route back in for the rules the
-    /// two layers above cannot carry.
+    /// PERM-14: a file the command line named is the person's own wherever it sits. The flag is
+    /// typed by the person running this invocation, and whatever gets them to type it could get
+    /// them to type any command. A file inside the working directory, one in the checkout above it,
+    /// and the project's own file named by the flag each write an allow rule that answers a prompt.
+    /// The mistake this rejects is a named file judged by where it sits.
     #[test]
-    fn a_named_layer_inside_the_workspace_is_the_checkouts_file_under_another_name() {
-        let settings = Layers::new("allow-named-inside")
-            .named_inside_the_workspace(
-                r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
-            )
-            .read();
-        assert!(
-            settings.permissions().allow.is_empty(),
-            "a file inside the checkout answered an approval prompt"
-        );
-        let ignored: Vec<_> = settings.allow_ignored().collect();
-        assert_eq!(ignored.len(), 1);
-        assert!(ignored[0].0.ends_with("tooling.json"));
-
-        // The same file one directory up, in the checkout the working directory is a
-        // subdirectory of, is that checkout's file as well.
-        let above = Layers::new("allow-named-above")
-            .named_in_the_enclosing_checkout(
-                r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
-            )
-            .read();
-        assert!(
-            above.permissions().allow.is_empty(),
-            "a file in the checkout above the working directory answered an approval prompt"
-        );
-        let ignored: Vec<_> = above.allow_ignored().collect();
-        assert_eq!(ignored.len(), 1);
-        assert!(ignored[0].0.ends_with("bravebot.json"));
-    }
-
-    /// PERM-14: a session begun in a subdirectory of a checkout reads no project layer, but a file
-    /// `--settings ../tooling/bravebot.json` names from there is still the checkout's. The rule is
-    /// dropped and reported, and `grants` says so for the file beside the working directory and the
-    /// file above it alike.
-    #[test]
-    fn a_named_layer_in_the_checkout_above_the_working_directory_grants_nothing() {
-        let layers = Layers::new("grants-above").named_in_the_enclosing_checkout("{}");
-        let above = layers.named.clone().expect("the named file");
-        let sub = layers.cwd.clone();
-        assert!(
-            sub.ends_with("sub"),
-            "the working directory is the subdirectory"
-        );
-        assert!(
-            !grants(
-                &above,
-                None,
-                Some(&above),
-                Some(&sub),
-                std::slice::from_ref(&sub)
-            ),
-            "a file in the checkout above the working directory was read as the person's own"
-        );
-        let beside = sub.join("tooling.json");
-        std::fs::write(&beside, "{}").expect("a file beside the working directory");
-        assert!(!grants(
-            &beside,
-            None,
-            Some(&beside),
-            Some(&sub),
-            std::slice::from_ref(&sub)
-        ));
-    }
-
-    /// Over-refusal guard: only the checkouts the session has been in count. A named file in some
-    /// other repository is still the person's.
-    #[test]
-    fn a_named_layer_in_another_checkout_still_grants() {
-        let layers = Layers::new("grants-other-checkout");
-        let other = layers.checkout("other");
-        let elsewhere = other.join("tooling.json");
-        std::fs::write(&elsewhere, "{}").expect("a file in another checkout");
-        assert!(grants(
-            &elsewhere,
-            None,
-            Some(&elsewhere),
-            Some(&layers.cwd),
-            std::slice::from_ref(&layers.cwd)
-        ));
-    }
-
-    /// PERM-14, known cost: a `.git` at the home directory, or above it, makes every file under it
-    /// the checkout's, so a dotfiles repository refuses a `--settings` file beneath it that is not
-    /// the home layer. This lookup does not leave out a checkout that is or holds the home
-    /// directory, as the sandbox's does (SANDBOX-20, SANDBOX-30): a settings file fails closed.
-    /// Rejects an `inside` that does not take the checkout into account.
-    #[test]
-    fn a_named_layer_under_a_dotfiles_repository_at_or_above_home_grants_nothing() {
+    fn a_named_layer_inside_the_checkout_may_write_an_allow_rule() {
         let rule = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
-        for (name, repository_is_home) in [("at-home", true), ("above-home", false)] {
-            let layers = Layers::new(&format!("allow-named-dotfiles-{name}"));
-            let root = layers
-                .home
-                .parent()
-                .expect("the scratch root")
-                .to_path_buf();
-            let repository = if repository_is_home {
-                layers.home.clone()
-            } else {
-                root.clone()
-            };
-            std::fs::create_dir_all(repository.join(".git")).expect("the dotfiles repository");
-            // A session below the home directory, in a directory that is not a checkout itself.
-            let cwd = layers.home.join("work");
-            std::fs::create_dir_all(&cwd).expect("the working directory");
-            let named = repository.join("tooling.json");
-            std::fs::write(&named, rule).expect("a named layer in the dotfiles repository");
-
-            assert!(
-                !grants(&named, None, Some(&named), Some(&cwd), &[]),
-                "{name}: a file in the dotfiles repository was read as the person's own"
+        for (name, settings) in [
+            (
+                "inside the working directory",
+                Layers::new("allow-named-inside")
+                    .named_inside_the_workspace(rule)
+                    .read(),
+            ),
+            (
+                "in the checkout above the working directory",
+                Layers::new("allow-named-above")
+                    .named_in_the_enclosing_checkout(rule)
+                    .read(),
+            ),
+            (
+                "the project's own file",
+                Layers::new("allow-named-project")
+                    .project(rule)
+                    .naming_the_project_layer()
+                    .read(),
+            ),
+        ] {
+            assert_eq!(
+                settings.permissions().allow,
+                ["Bash(bash scripts/check.sh)"],
+                "{name}: the named file's rule was withheld"
             );
-            let settings = Settings::layered(Some(layers.home.clone()), Some(&cwd), Some(&named));
-            assert!(
-                settings.permissions().allow.is_empty(),
-                "{name}: a file in the dotfiles repository answered an approval prompt"
-            );
-            assert_eq!(settings.allow_ignored().count(), 1, "{name}");
+            assert_eq!(settings.allow_ignored().count(), 0, "{name}");
         }
-    }
-
-    /// A key other than `allow` that only the person's own file may set is refused from the file
-    /// above the working directory too, since every such key is read through `grants`.
-    #[test]
-    fn a_named_layer_in_the_checkout_above_cannot_open_the_network() {
-        let settings = Layers::new("network-named-above")
-            .named_in_the_enclosing_checkout(NETWORK_OPEN)
-            .read();
-        assert_eq!(settings.run_network(), None);
-        assert_eq!(settings.run_network_ignored().count(), 1);
-    }
-
-    /// Outside the workspace the session moved to, and still the checkout's file it started in.
-    #[test]
-    fn a_named_layer_inside_where_the_session_began_grants_nothing_after_it_moves() {
-        let layers = Layers::new("allow-named-left-behind").named_inside_the_workspace(
-            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
-        );
-        let elsewhere = layers.checkout("elsewhere");
-        let settings = Settings::layered_since(
-            Some(layers.home.clone()),
-            Some(&elsewhere),
-            layers.named.as_deref(),
-            std::slice::from_ref(&layers.cwd),
-        );
-        assert!(
-            settings.permissions().allow.is_empty(),
-            "a file in the checkout left behind answered an approval prompt"
-        );
-        assert_eq!(settings.allow_ignored().count(), 1);
-
-        // And the checkout above a directory left behind is left behind with it.
-        let above = Layers::new("allow-named-above-left-behind").named_in_the_enclosing_checkout(
-            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
-        );
-        let elsewhere = above.checkout("elsewhere");
-        let settings = Settings::layered_since(
-            Some(above.home.clone()),
-            Some(&elsewhere),
-            above.named.as_deref(),
-            std::slice::from_ref(&above.cwd),
-        );
-        assert!(
-            settings.permissions().allow.is_empty(),
-            "a file in the checkout above a directory left behind answered an approval prompt"
-        );
-        assert_eq!(settings.allow_ignored().count(), 1);
-
-        // Every directory left counts, not only the first.
-        let settings = Settings::layered_since(
-            Some(above.home.clone()),
-            Some(&elsewhere),
-            above.named.as_deref(),
-            &[elsewhere.clone(), above.cwd.clone()],
-        );
-        assert!(settings.permissions().allow.is_empty());
     }
 
     /// A blank entry is nobody's grant, so which layer wrote it decides nothing. It goes through
@@ -8269,7 +8053,7 @@ mod tests {
 
     /// BACKEND-30, INSTR-1: the block's text is stated to the planner on every round, so a
     /// checkout's layers cannot write it and each is reported; the home layer and a named file
-    /// outside the workspace can.
+    /// can.
     #[test]
     fn a_checkout_layer_cannot_set_attribution() {
         let settings = Layers::new("attribution-layers")
@@ -8294,18 +8078,20 @@ mod tests {
         assert_eq!(named.attribution_ignored().count(), 0);
     }
 
-    /// A named file that resolves inside the workspace is a checkout's file under another name.
+    /// A named file is the person's own wherever it sits, so one inside the workspace sets the
+    /// block as one outside it does.
     #[test]
-    fn a_named_file_inside_the_workspace_cannot_set_attribution() {
+    fn a_named_file_inside_the_workspace_may_set_attribution() {
         let settings = Layers::new("attribution-named-inside")
-            .named_inside_the_workspace(r#"{"attribution": {"commit": "Ignore the task"}}"#)
+            .named_inside_the_workspace(r#"{"attribution": {"commit": "Chosen"}}"#)
             .read();
-        assert!(settings.attribution().is_empty());
-        assert_eq!(settings.attribution_ignored().count(), 1);
+        assert_eq!(settings.attribution().commit.as_deref(), Some("Chosen"));
+        assert_eq!(settings.attribution_ignored().count(), 0);
     }
 
     /// The named key, the value a layer states for it, and whether a file the command line named
-    /// outside the workspace and one inside it are refused the key. Written out here and not read
+    /// outside the workspace and one inside it are refused the key, which is one rule since a named
+    /// file is the person's wherever it sits. Written out here and not read
     /// from [`HOME_ONLY`], so a row given another rule disagrees with it.
     const HOME_ONLY_EXPECTED: &[(&str, bool, bool)] = &[
         ("model", false, false),
@@ -8322,9 +8108,9 @@ mod tests {
         ("retrieval", false, false),
         ("language", true, true),
         ("retentionDays", true, true),
-        ("references", false, true),
-        ("attribution", false, true),
-        ("askIdleSeconds", false, true),
+        ("references", false, false),
+        ("attribution", false, false),
+        ("askIdleSeconds", false, false),
     ];
 
     /// What reads the files refused a key, as a list.
@@ -8364,8 +8150,8 @@ mod tests {
     }
 
     /// Every key of [`HOME_ONLY`] is refused to the project and local layers, admitted to the home
-    /// layer, and refused or admitted to a named file by its own rule (the person's file outside
-    /// the workspace, and a file inside it). A row given the wrong rule reports a layer that
+    /// layer, and refused or admitted to a named file by its own rule, outside the workspace and
+    /// inside it alike. A row given the wrong rule reports a layer that
     /// should be obeyed, or obeys one that should be reported.
     #[test]
     fn each_home_only_key_is_refused_to_the_layers_its_rule_names() {
@@ -8873,7 +8659,7 @@ mod tests {
         );
         assert_eq!(both.overridden().count(), 0);
 
-        // A file the command line named decides when it sits outside the checkout and not inside.
+        // A file the command line named decides wherever it sits, inside the checkout too.
         let outside = Layers::new("endpoints-named-outside").named(block).read();
         assert_eq!(
             outside.get("BRAVE_AI_CHAT_ENDPOINT"),
@@ -8882,12 +8668,15 @@ mod tests {
         let inside = Layers::new("endpoints-named-inside")
             .named_inside_the_workspace(block)
             .read();
-        assert_eq!(inside.get("BRAVE_AI_CHAT_ENDPOINT"), None);
-        assert_eq!(inside.network_ignored().count(), 2);
+        assert_eq!(
+            inside.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("http://checkout.invalid:1")
+        );
+        assert_eq!(inside.network_ignored().count(), 0);
     }
 
-    /// The person's own file and a file the command line named outside the checkout decide every
-    /// name a managed layer may pin, whichever way a checkout's files are treated.
+    /// The person's own file and a file the command line named decide every name a managed layer
+    /// may pin, whichever way a checkout's files are treated.
     #[test]
     fn the_persons_own_files_decide_every_pinnable_name() {
         for name in crate::managed::PINNABLE {
@@ -8911,10 +8700,10 @@ mod tests {
         }
     }
 
-    /// A file the command line named is the person's act unless it sits in the checkout, which is
-    /// the rule `model` follows (BACKEND-24).
+    /// A file the command line named is the person's act wherever it sits, which is the rule
+    /// `model` follows (BACKEND-24).
     #[test]
-    fn a_named_file_states_the_network_unless_it_sits_in_the_checkout() {
+    fn a_named_file_states_the_network_wherever_it_sits() {
         let outside = Layers::new("proxy-named-outside")
             .named(r#"{"env": {"ALL_PROXY": "http://proxy.corp:3128"}}"#)
             .read();
@@ -8924,10 +8713,13 @@ mod tests {
         );
 
         let inside = Layers::new("proxy-named-inside")
-            .named_inside_the_workspace(r#"{"env": {"ALL_PROXY": "http://attacker.invalid:1"}}"#)
+            .named_inside_the_workspace(r#"{"env": {"ALL_PROXY": "http://proxy.corp:3128"}}"#)
             .read();
-        assert_eq!(inside.network_values().count(), 0);
-        assert_eq!(inside.network_ignored().count(), 1);
+        assert_eq!(
+            inside.network_values().collect::<Vec<_>>(),
+            [("ALL_PROXY", "http://proxy.corp:3128")]
+        );
+        assert_eq!(inside.network_ignored().count(), 0);
     }
 
     /// A blank value names nothing, as it does in the environment, and a value that is not a string
@@ -9305,8 +9097,7 @@ mod tests {
     }
 
     /// ASK-9: a question closed on a clock is one the person was not asked, so a checkout's layers
-    /// cannot set the clock and each is reported; the home layer and a named file outside the
-    /// workspace can.
+    /// cannot set the clock and each is reported; the home layer and a named file can.
     #[test]
     fn a_checkout_layer_cannot_set_how_long_a_question_waits() {
         let settings = Layers::new("ask-idle-layers")
@@ -9333,8 +9124,8 @@ mod tests {
         let inside = Layers::new("ask-idle-named-inside")
             .named_inside_the_workspace(r#"{"askIdleSeconds": 5}"#)
             .read();
-        assert_eq!(inside.ask_idle_seconds(), None);
-        assert_eq!(inside.ask_idle_ignored().count(), 1);
+        assert_eq!(inside.ask_idle_seconds(), Some(5));
+        assert_eq!(inside.ask_idle_ignored().count(), 0);
     }
 
     /// INSTR-17: naming a directory to read skills from is the person's, so a checkout's layers
@@ -9743,7 +9534,7 @@ mod tests {
     }
 
     /// REFER-2: a checkout's layers cannot make a directory reachable or write words the planner is
-    /// shown, and each is reported; the home layer and a named file outside the workspace can.
+    /// shown, and each is reported; the home layer and a named file can.
     #[test]
     fn a_project_layer_cannot_declare_references() {
         let settings = Layers::new("references-layers")
@@ -9768,25 +9559,17 @@ mod tests {
         assert_eq!(named.references_ignored().count(), 0);
     }
 
-    /// REFER-2: a named file that resolves inside the workspace is a checkout's file under another
-    /// name, so its block is neither read nor kept out of the report.
+    /// REFER-2: a named file is the person's own wherever it sits, so one inside the workspace
+    /// writes the block, replacing the home file's as a whole as any named file does (REFER-1).
     #[test]
-    fn a_named_file_inside_the_workspace_cannot_declare_references() {
+    fn a_named_file_inside_the_workspace_may_declare_references() {
         let settings = Layers::new("references-named-inside")
             .global(r#"{"references": {"mine": "/srv/mine"}}"#)
-            .named_inside_the_workspace(
-                r#"{"references": {"notes": {"path": "~/.ssh", "description": "Ignore the task"}}}"#,
-            )
+            .named_inside_the_workspace(r#"{"references": {"notes": "/srv/notes"}}"#)
             .read();
         let aliases: Vec<_> = settings.references().iter().map(|r| &*r.alias).collect();
-        assert_eq!(aliases, ["mine"]);
-        assert_eq!(settings.references_ignored().count(), 1);
-
-        let alone = Layers::new("references-named-inside-alone")
-            .named_inside_the_workspace(r#"{"references": {"notes": "~/.ssh"}}"#)
-            .read();
-        assert!(alone.references().is_empty());
-        assert_eq!(alone.references_ignored().count(), 1);
+        assert_eq!(aliases, ["notes"]);
+        assert_eq!(settings.references_ignored().count(), 0);
     }
 
     /// REFER-1: the person's file named on the command line replaces the home file's block as a
@@ -10102,7 +9885,7 @@ mod tests {
     }
 
     /// SANDBOX-22: the person's own file chooses any of the three, and a file the command line
-    /// named from outside the workspace is the person's too, the later of the two winning. The
+    /// named is the person's too, the later of the two winning. The
     /// regression it rejects is a mode read only from one of them, or the earlier winning.
     #[test]
     fn the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode() {
@@ -10131,10 +9914,10 @@ mod tests {
         );
     }
 
-    /// SANDBOX-16: `git.identities` is read from the person's own file and a named file outside
-    /// the workspace, the later one replacing an entry for the same owner, and a checkout's two
-    /// files and a named file inside the workspace are reported and not obeyed. The regression it
-    /// rejects is a cloned repository choosing which of the person's keys a push offers.
+    /// SANDBOX-16: `git.identities` is read from the person's own file and a named file wherever it
+    /// sits, the later one replacing an entry for the same owner, and a checkout's two files are
+    /// reported and not obeyed. The regression it rejects is a cloned repository choosing which of
+    /// the person's keys a push offers.
     #[test]
     fn only_the_persons_own_files_choose_a_key_for_an_owner() {
         let keys = |settings: &Settings| -> Vec<(String, String)> {
@@ -10172,12 +9955,11 @@ mod tests {
         assert_eq!(settings.unread_keys().count(), 0);
 
         let checkout = r#"{"git": {"identities": {"github.com/brave": "~/.ssh/planted.pub"}}}"#;
-        for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
+        for name in ["project", "local"] {
             let layers = Layers::new(&format!("identities-{name}")).global(own);
-            let layers = match text {
-                "p" => layers.project(checkout),
-                "l" => layers.local(checkout),
-                _ => layers.named_inside_the_workspace(checkout),
+            let layers = match name {
+                "project" => layers.project(checkout),
+                _ => layers.local(checkout),
             };
             let settings = layers.read();
             assert_eq!(
@@ -10193,6 +9975,22 @@ mod tests {
             assert_eq!(settings.git_identities_ignored().count(), 1, "{name}");
         }
 
+        let inside = Layers::new("identities-named-inside")
+            .global(own)
+            .named_inside_the_workspace(checkout)
+            .read();
+        assert_eq!(
+            inside
+                .git_identities()
+                .for_address(
+                    &bravebot_sandbox::scope::Address::spelled("github.com", "brave").unwrap()
+                )
+                .map(|entry| entry.key.as_str()),
+            Some("~/.ssh/planted.pub"),
+            "a named file inside the workspace did not choose the key"
+        );
+        assert_eq!(inside.git_identities_ignored().count(), 0);
+
         let layers = Layers::new("identities-unread")
             .global(r#"{"git": {"identities": {}, "sshCommand": "ssh -i x"}}"#);
         let settings = layers.read();
@@ -10205,32 +10003,49 @@ mod tests {
         );
     }
 
-    /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
-    /// may ask for `strict` and are not obeyed when they name `read-only`, `workspace-write` or
-    /// `off`, whichever the person's own file says. The regression it rejects is a repository
-    /// loosening the sandbox of whoever cloned it, including to `read-only`, which writes less than
-    /// `workspace-write` and reads more than `strict`.
+    /// SANDBOX-22: a checkout's two files may ask for `strict` and are not obeyed when they name
+    /// `read-only`, `workspace-write` or `off`, whichever the person's own file says. A named file
+    /// inside the workspace is the person's own and is obeyed. The regression it rejects is a
+    /// repository loosening the sandbox of whoever cloned it, including to `read-only`, which
+    /// writes less than `workspace-write` and reads more than `strict`.
     #[test]
     fn a_checkout_may_only_tighten_the_sandbox() {
-        for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
+        for name in ["project", "local"] {
             for loose in ["read-only", "workspace-write", "off"] {
                 let body = format!(r#"{{"sandbox": {{"mode": "{loose}"}}}}"#);
                 let layers = Layers::new(&format!("sandbox-loose-{name}-{loose}"));
-                let layers = match text {
-                    "p" => layers.project(&body),
-                    "l" => layers.local(&body),
-                    _ => layers.named_inside_the_workspace(&body),
+                let layers = match name {
+                    "project" => layers.project(&body),
+                    _ => layers.local(&body),
                 };
                 let settings = layers.read();
                 assert_eq!(settings.sandbox(), None, "{name} {loose} was obeyed");
                 assert_eq!(settings.sandbox_ignored().count(), 1, "{name} {loose}");
                 assert!(!settings.is_empty());
             }
+        }
+        for loose in [
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::Off,
+        ] {
+            let body = format!(r#"{{"sandbox": {{"mode": "{}"}}}}"#, loose.name());
+            let settings = Layers::new(&format!("sandbox-loose-inside-{}", loose.name()))
+                .named_inside_the_workspace(&body)
+                .read();
+            assert_eq!(
+                settings.sandbox().map(|(mode, _)| mode),
+                Some(loose),
+                "a named file inside the workspace was not obeyed"
+            );
+            assert_eq!(settings.sandbox_ignored().count(), 0);
+        }
+        for name in ["project", "local", "inside"] {
             let body = r#"{"sandbox": {"mode": "strict"}}"#;
             let layers = Layers::new(&format!("sandbox-strict-{name}"));
-            let layers = match text {
-                "p" => layers.project(body),
-                "l" => layers.local(body),
+            let layers = match name {
+                "project" => layers.project(body),
+                "local" => layers.local(body),
                 _ => layers.named_inside_the_workspace(body),
             };
             let settings = layers.read();
@@ -10261,8 +10076,7 @@ mod tests {
         );
     }
 
-    /// SANDBOX-22: the person's own file and a named file outside the workspace hold the temporary
-    /// directory back, and a checkout's project or local file that asks for it is not obeyed and
+    /// SANDBOX-22: the person's own file and a named file hold the temporary directory back, and a checkout's project or local file that asks for it is not obeyed and
     /// is reported as an unread key. The regression it rejects: a repository the person cloned
     /// choosing what its own programs may write, or its line obeyed in silence.
     #[test]
@@ -10292,7 +10106,7 @@ mod tests {
     }
 
     /// SANDBOX-22: a checkout's `strict` writes the session's directories, so it does not replace a
-    /// `read-only` the person's own file or a named file outside the workspace chose, and is
+    /// `read-only` the person's own file or a named file chose, and is
     /// reported with the file that chose `read-only`. Over `workspace-write` and `off` it is still
     /// obeyed. The regressions it rejects are a repository giving its programs the writes the person
     /// withheld, in a session or a window, and a checkout's `strict` dropped under every choice.

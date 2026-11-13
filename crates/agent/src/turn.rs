@@ -128,7 +128,9 @@ enum ReadOutputIs {
     /// behind its reference with nobody asked.
     ByACheck,
     /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
-    /// the output and decides.
+    /// the output and decides. A turn not offered `read_output` is told this whatever the mode, so
+    /// what its results say of vouching is decided by whether the mode asks a person about runs,
+    /// and where it does not, they say the output cannot be shown in this turn instead (RUN-14).
     Asked,
 }
 
@@ -183,6 +185,11 @@ impl ReadOutputIs {
 /// is left out where a record already stops the asking for that exact line (RUN-14).
 const STOP_BEING_ASKED: &str = "To stop being asked, a person vouching for every stage of the \
      exact command makes what it prints visible from then on.";
+
+/// What a turn not offered `read_output` is told in place of [`STOP_BEING_ASKED`] where the mode
+/// answers runs: no prompt is drawn and a run the mode approved vouches for nothing, so nothing
+/// will make the output visible in this turn. It names no mode (RUN-14, MODE-3).
+const NOT_SHOWN_THIS_TURN: &str = "What it printed cannot be shown to you in this turn.";
 
 /// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
 fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
@@ -609,6 +616,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             keeping_links: false,
             delegated: false,
             confined_to: None,
+            offered: None,
             servers: None,
             mcp: None,
             jobs: &mut jobs,
@@ -1244,6 +1252,9 @@ struct Working<'scope> {
     budget: Option<u64>,
     /// What a person set, where they stopped this delegate alone (DELEGATE-25).
     stop: bravebot_core::cancel::DelegateStop,
+    /// The `spawn_agent` call that started it, and how many of that call's delegates have to end
+    /// before the planner is asked again (DELEGATE-17).
+    batch: Batch,
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
@@ -1253,6 +1264,42 @@ struct Working<'scope> {
             Vec<crate::timing::Interval>,
         ),
     >,
+}
+
+/// The `spawn_agent` call a delegate was started by, and how many of that call's delegates have to
+/// end before the planner is asked again (DELEGATE-17).
+///
+/// Both are the driver's: the call is named by the number of its first delegate, and the count is
+/// the planner's own `wake_after` argument, or 1 where it gave none. Nothing a delegate reports
+/// sets or changes either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Batch {
+    /// The first delegate the call started, which no other call's delegates share.
+    pub(crate) lead: DelegateId,
+    /// How many delegates the call started.
+    pub(crate) size: usize,
+    /// How many of the call's delegates have to end before the planner is woken, between 1 and
+    /// `size`: a figure above `size` is all of them.
+    pub(crate) wake_after: usize,
+}
+
+impl Batch {
+    /// A call that started `size` delegates, the first `lead`, and asked to be woken after
+    /// `wake_after` of them.
+    pub(crate) fn of_call(lead: DelegateId, size: usize, wake_after: usize) -> Self {
+        let size = size.max(1);
+        Self {
+            lead,
+            size,
+            wake_after: wake_after.clamp(1, size),
+        }
+    }
+
+    /// A delegate whose call started it alone, which wakes the turn when it ends.
+    #[cfg(test)]
+    pub(crate) fn alone(lead: DelegateId) -> Self {
+        Self::of_call(lead, 1, 1)
+    }
 }
 
 /// What a run has done to the workspace it works in, which TURN-4's question and closing line
@@ -1563,13 +1610,38 @@ fn a_typed_line_wakes(task: &Task, arrival: &crate::interjections::Arrival, seen
     task.delegate.is_none() && arrival.is_waiting() && arrival.typed() > seen
 }
 
+/// Whether some `spawn_agent` call has had as many of its delegates end as it asked to be woken
+/// after (DELEGATE-17).
+///
+/// A call's ended delegates are the ones already taken back, by this call's wake or another's,
+/// and the ones whose threads have finished since. It wakes the turn when that reaches its count
+/// and one of them is still to be taken back, so a call past its count wakes the turn for each
+/// later end, and one with nothing left to collect never wakes it. A call with the default count
+/// of 1 wakes at each of its delegates' ends, as every call did before the count existed. The facts
+/// read are which call started each delegate, the counts, and whether its thread has finished; no
+/// report is read, whatever its label.
+fn a_call_has_enough_ended(delegates: &[Working<'_>]) -> bool {
+    delegates.iter().any(|working| {
+        let batch = working.batch;
+        let (left, finished) = delegates
+            .iter()
+            .filter(|other| other.batch.lead == batch.lead)
+            .fold((0usize, 0usize), |(left, finished), other| {
+                (left + 1, finished + usize::from(other.handle.is_finished()))
+            });
+        let ended = batch.size.saturating_sub(left) + finished;
+        finished > 0 && ended >= batch.wake_after
+    })
+}
+
 /// Block until the turn has a reason to ask the planner again while its delegates work (DELEGATE-17).
 ///
-/// The reasons are a delegate that ended, a line the person typed, or a stop. Each is a count or a
-/// flag the driver holds: how many threads have finished, whether a line is waiting and how many
-/// have been typed since the last wait woke for one, and whether the turn was cancelled. Nothing a
-/// delegate reported is read, so a report that is quarantined wakes the turn exactly as one that
-/// is shown does.
+/// The reasons are a call that has had as many of its delegates end as it asked to be woken after
+/// ([`a_call_has_enough_ended`]), a line the person typed, or a stop. Each is a count or a flag
+/// the driver holds: how many threads of each call have finished against the call's own count,
+/// whether a line is waiting and how many have been typed since the last wait woke for one, and
+/// whether the turn was cancelled. Nothing a delegate reported is read, so a report that is
+/// quarantined wakes the turn exactly as one that is shown does.
 ///
 /// A line that is waiting wakes the wait once. The count keeps a line the turn cannot take from
 /// waking every wait after it and sending the planner a request each time.
@@ -1590,13 +1662,14 @@ fn wait_for_a_wake<C: Confirmer, R: Reporter>(
     let arrival = confirmer.arrival();
     // Remembered before anything else runs, so a line typed from here on is one this wait woke for.
     let seen = waits.typed_seen();
-    // Every delegate still working is named, since the wait ends at whichever of them is first.
+    // Every delegate not yet taken back is named, since the end of any of them can be the one that
+    // brings its call to its count.
     for working in delegates {
         reporter.delegate_waiting(working.id);
     }
     waits.begin_wait();
     while !cancel.is_cancelled()
-        && !delegates.iter().any(|working| working.handle.is_finished())
+        && !a_call_has_enough_ended(delegates)
         && !a_typed_line_wakes(task, &arrival, seen)
     {
         std::thread::sleep(WAKE_POLL);
@@ -1833,14 +1906,22 @@ const LIVE_LINES: usize = 200;
 /// Nothing here reads what a job printed. The handle and the status are the driver's own structure,
 /// worked out from a name it minted and the exit codes it collected, and the output goes through
 /// the same gate as any other result: a job nobody vouched for hands the planner a reference.
+/// Where the job's latest look asked to read, the account is released by `release`, the turn's
+/// `read_output` path, and presented as that call's result would be (RUN-22).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the jobs, the cap, the mode's answer, who answers a read and the list's tools are separate inputs, and the release is the turn's read_output path lent for a job whose look asked to read"
+)]
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
     output_cap: usize,
+    runs_asked: bool,
     read_output_is: ReadOutputIs,
     beside: tools::Beside,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
+    release: &mut ReleaseEnded<'_, S, R>,
 ) -> Result<(), TurnError> {
     let finished = jobs.ended(output_cap);
     // Every finish is told before any is presented. A presentation that fails ends the turn, and a
@@ -1887,6 +1968,50 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     .map_err(|d| TurnError::Precommit(d.to_string()))?,
             ),
             _ => None,
+        };
+
+        // The job's latest look asked to read, and read_output's answer is already given: the
+        // account is released by read_output's own path, as that look's result would have been
+        // (RUN-22). Decided from the planner's boolean, who answers, and the size the slot states,
+        // so no byte of the output is read to decide. Past the cap, or where the release is kept
+        // back, the account stays a reference.
+        //
+        // Recorded first, once, as the result path does, whether or not the account is released:
+        // read_output releases only a slot a program printed, and the slot is this look's, so a
+        // later look at the job lists it among the earlier ones. A released slot keeps its name and
+        // its bytes, so it is as much a place to find those lines again as a quarantined one.
+        // Counts and names the driver minted; `record_look` drops it if the job is no longer held.
+        if let Some(Presentation::Quarantined(reference)) = &presented {
+            policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
+            jobs.record_look(&ended.name, reference.slot.to_string());
+        }
+        let mut released_from = None;
+        let presented = match presented {
+            Some(Presentation::Quarantined(reference))
+                if ended.read_asked
+                    && read_output_is != ReadOutputIs::Asked
+                    && reference
+                        .bytes
+                        .is_some_and(|bytes| bytes != 0 && bytes <= output_cap) =>
+            {
+                match release(policy, conversation.quarantine(), reporter, &reference.slot) {
+                    Some(text) => {
+                        let shown = policy
+                            .present(
+                                "job_output",
+                                reference.slot.clone(),
+                                &origin,
+                                &text,
+                                conversation.quarantine(),
+                            )
+                            .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                        released_from = Some(reference.slot.to_string());
+                        Some(shown)
+                    }
+                    None => Some(Presentation::Quarantined(reference)),
+                }
+            }
+            presented => presented,
         };
 
         // The transcript says the job is over, because nothing else in it does: the row drawn when
@@ -1963,10 +2088,6 @@ fn collect_jobs<S: Sink, R: Reporter>(
                 )
             }
             Some(Presentation::Quarantined(reference)) => {
-                policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
-                // The reference is this look's, so a later look at the job lists it. Counts and
-                // names the driver minted; `record_look` drops it if the job is no longer held.
-                jobs.record_look(&ended.name, reference.slot.to_string());
                 let looked = ended.look.note(&ended.name);
                 // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
                 // the reason a run's result leaves it out. Where a check's word answers in the
@@ -1974,11 +2095,18 @@ fn collect_jobs<S: Sink, R: Reporter>(
                 // decided it (RUN-14). Where somebody is asked, the account says how to stop being
                 // asked, as a run's result does (RUN-14), unless a record already stops the asking
                 // for this exact line: no prompt will return there for a person to answer, and
-                // read_output is then the whole of what is said.
-                let then = match (read_output_is, ended.covered_by_record) {
-                    (ReadOutputIs::Asked, false) => format!(" {STOP_BEING_ASKED}"),
-                    _ => String::new(),
-                };
+                // read_output is then the whole of what is said. A list without `read_output` is
+                // told `Asked` whatever the mode, so there the mode decides: where it answers runs,
+                // no vouch stops an asking that does not happen, and the account says the output
+                // cannot be shown in this turn instead.
+                let then = sentences::vouching(
+                    runs_asked,
+                    read_output_is,
+                    beside,
+                    ended.covered_by_record,
+                )
+                .map(|sentence| format!(" {sentence}"))
+                .unwrap_or_default();
                 // Each tool named is one the turn's list holds (TOOL-6). A list without
                 // `read_output` has nothing to call for a look at it, so the sentence says only
                 // whose answer the quarantine is about.
@@ -1990,10 +2118,13 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     true => " To read a file, use read_file.",
                     false => "",
                 };
+                // Worded as a run's result words it (RUN-14). The reference's description above
+                // names `spawn_processor` wherever the list holds it, so this sentence does not.
+                let delegate = sentences::delegate_note(beside);
                 format!(
                     "{told} What it printed could not be shown to you: {}{looked}\n\nThis is about who \
                      answered for the command rather than about what it printed.{to_see}{then}\
-                     {read_file}",
+                     {delegate}{read_file}",
                     reference.describe()
                 )
             }
@@ -2002,14 +2133,27 @@ fn collect_jobs<S: Sink, R: Reporter>(
         conversation.push_composed_from(
             Message::user(body),
             Composed::Notice,
-            presented.as_ref().map_or(Provenance::Driver, |presented| {
-                provenance_of(presented, "job output")
-            }),
+            match (&presented, released_from) {
+                (_, Some(slot)) => Provenance::Released(slot),
+                (None, None) => Provenance::Driver,
+                (Some(presented), None) => provenance_of(presented, "job output"),
+            },
         );
         conversation.observed(policy.context_label());
     }
     Ok(())
 }
+
+/// How [`collect_jobs`] releases the account of a job whose latest look asked to read: the slot's
+/// bytes at the label `read_output` gives them, or `None` where they stay quarantined. The turn's
+/// is [`tools::read_in_the_result`] with its accounting.
+pub(super) type ReleaseEnded<'a, S, R> = dyn FnMut(
+        &mut Policy<'_, S>,
+        &bravebot_core::SlotStore,
+        &mut R,
+        &bravebot_core::SlotId,
+    ) -> Option<Labelled<String>>
+    + 'a;
 
 /// Say which jobs the session kept from an earlier turn are still running, and under which names
 /// (RUN-15).
@@ -2062,12 +2206,13 @@ fn reads_that_run_together(
     calls: &[ToolCall],
     repeats: &crate::repeated_call::Repeats,
     confined_to: Option<&[String]>,
+    offered: Option<&[bravebot_aichat::protocol::Tool]>,
     hooks: &bravebot_config::hooks::Hooks,
 ) -> usize {
     let mut counting = repeats.clone();
     let mut together = 0;
     for call in calls {
-        if !tools::can_read_ahead(call, confined_to)
+        if !tools::can_read_ahead(call, confined_to, offered)
             || hooks
                 .firing(
                     bravebot_config::hooks::Moment::ToolFinished,
@@ -2864,7 +3009,8 @@ where
             task.confine_runs,
             sandbox_at_start,
             tools::workspace_is_trusted(policy, workspace),
-        ),
+        ) && task.permission_mode.answers_requests(),
+        task.permission_mode.nobody_to_ask(),
     );
     tools::state_withheld_variables(&mut offered);
 
@@ -2897,6 +3043,9 @@ where
     }
     if !offered_names(&offered, "run") {
         policy.without_running();
+    }
+    if !offered_names(&offered, "read_file") {
+        policy.without_reading_files();
     }
     if !offers_read_output {
         policy.without_reading();
@@ -3955,6 +4104,7 @@ where
                     &completion.calls[index..],
                     &state.repeats,
                     addressed.as_ref().map(|addressed| addressed.tools()),
+                    Some(&state.offered),
                     hooks,
                 );
                 examined = index + reads.max(1);
@@ -4145,7 +4295,16 @@ where
             let mut message_sent: Option<Composed> = None;
             // Set in each arm below, where the presentation that decides it is in scope.
             let result_from: Provenance;
-            let body = if let Some(entries) = &output.entries {
+            // A listing whose call asked to read, where the mode or a check answers vet_content,
+            // takes the route of any other result: one slot holding the listing as one document,
+            // released below by vet_content's path (VET-6). Decided by the planner's argument, the
+            // mode and the offered tools; nothing the listing holds is read to decide.
+            let a_listing_to_release = output.read_asked
+                && output.tool == "list_files"
+                && setup::vet_content_is(task, plan.offers_vet_content) != ReadOutputIs::Asked;
+            let body = if let Some(entries) =
+                output.entries.as_ref().filter(|_| !a_listing_to_release)
+            {
                 // A listing the planner may not see. The names never come out: it gets one
                 // reference per entry, and can read through and write back to the ones
                 // that stand for files without ever being told what any of them is called.
@@ -4216,12 +4375,16 @@ where
                 // and the planner is not being given the body: it gets the references, and a
                 // capped sample of a tree read as the whole of it is how a planner concludes a
                 // file it cannot find does not exist.
-                let capped = if output.incomplete {
-                    " The listing stopped at that many entries and is incomplete: list a \
-             subdirectory to see the rest."
-                } else {
-                    ""
-                };
+                // The directories the per-directory cap cut are the last references, so each is
+                // paired with its count by position and never by a name.
+                let cut: Vec<(String, usize)> = ids
+                    [ids.len().saturating_sub(entries.left_out.len())..]
+                    .iter()
+                    .map(ToString::to_string)
+                    .zip(entries.left_out.iter().copied())
+                    .collect();
+                let capped =
+                    sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
                 // The pattern's own sentence, which the tool wrote from the pattern the planner
@@ -4415,10 +4578,10 @@ where
                 // nothing for a check to read, so the result takes the route of a run that
                 // printed nothing (RUN-24) and the trail says why no check was made.
                 let output_cap = task.output_cap.unwrap_or(tools::OUTPUT_CAP);
-                // Who answers a read of this result: read_output's answer for a run, and
-                // vet_content's for `fetch_url` and a server's tool, each asked of the list that
-                // holds the release the read makes a round early.
-                let a_run = output.tool == "run";
+                // Who answers a read of this result: read_output's answer for a run and a look at
+                // a job, and vet_content's for `fetch_url` and a server's tool, each asked of the
+                // list that holds the release the read makes a round early.
+                let a_run = output.tool == "run" || output.tool == "job_output";
                 let read_gate = if a_run {
                     read_output_is()
                 } else {
@@ -4430,7 +4593,11 @@ where
                     && reference.bytes == Some(0)
                 {
                     policy.record_empty_output(
-                        if a_run { "run" } else { "vet_content" },
+                        if a_run {
+                            output.tool.as_str()
+                        } else {
+                            "vet_content"
+                        },
                         &reference.slot,
                     );
                 }
@@ -4807,12 +4974,21 @@ where
                         let capped =
                             sentences::capped_note(&output.tool, output.incomplete, output.paging);
                         let linked = sentences::links_note(&output.tool, output.links);
+                        // A listing that asked to read and was kept back is one reference, so the
+                        // pattern's sentence the per-entry arm carries goes here (LIST-7). Only a
+                        // quarantined listing sets it, from the pattern the planner typed.
+                        let unmatched = output
+                            .unmatched
+                            .as_deref()
+                            .map(|note| format!("\n\n{note}"))
+                            .unwrap_or_default();
                         // How to see this one and how to stop being asked, for a run and only for a run:
                         // the reasoning is on `sentences::run_advice`.
                         let advice_beside = |beside: tools::Beside| {
                             sentences::run_advice(
                                 output.printed_by.is_some(),
                                 output.covered_by_record,
+                                !task.permission_mode.get().answers_a_run_unasked(),
                                 read_output_is(),
                                 beside,
                                 &output.tool,
@@ -4859,7 +5035,7 @@ where
                         };
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{history}",
                                 output.tool,
                             )
                         };
@@ -5248,6 +5424,18 @@ mod tests {
         assert_eq!(setup::arming_for(&plain(Task::new("x"))), allowed);
     }
 
+    /// DELEGATE-17: a `wake_after` above the number of delegates a call starts asks for all of
+    /// them, and one of 0 is the default of 1. The parser keeps a large figure as written, so
+    /// `Batch::of_call` is where it is held to the call's size; a count left above the size could
+    /// never be reached and the wait would not wake until a cancel.
+    #[test]
+    fn a_wake_count_above_the_calls_size_is_all_of_its_delegates() {
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 2, 40).wake_after, 2);
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 2, 2).wake_after, 2);
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 3, 2).wake_after, 2);
+        assert_eq!(Batch::of_call(DelegateId::nth(1), 2, 0).wake_after, 1);
+    }
+
     /// ARM-6: a run limited by `--tools` to a list without `watch_file` is not told by the
     /// read's description that a watch is the better answer, since none can be armed.
     #[test]
@@ -5408,6 +5596,7 @@ mod tests {
                 rounds: 60,
                 budget: None,
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: worker,
             }];
             let mut account = crate::outcome::Spent::default();
@@ -5489,6 +5678,7 @@ mod tests {
                     rounds: 120,
                     budget: None,
                     stop: Default::default(),
+                    batch: super::Batch::alone(DelegateId::nth(1)),
                     handle: stopped,
                 },
                 Working {
@@ -5499,6 +5689,7 @@ mod tests {
                     rounds: 60,
                     budget: None,
                     stop: Default::default(),
+                    batch: super::Batch::alone(DelegateId::nth(2)),
                     handle: lost,
                 },
             ];
@@ -5614,6 +5805,7 @@ mod tests {
                 rounds: 5,
                 budget: None,
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: answered,
             }];
             collect_delegates(
@@ -5822,6 +6014,7 @@ mod tests {
                 rounds: 1,
                 budget: None,
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: answered,
             }];
             collect_delegates(
@@ -5918,6 +6111,7 @@ mod tests {
                 rounds: 60,
                 budget: Some(1000),
                 stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
                 handle: answered,
             }];
             collect_delegates(
@@ -6017,6 +6211,7 @@ mod tests {
                         rounds: 1,
                         budget: None,
                         stop: Default::default(),
+                        batch: super::Batch::alone(DelegateId::nth(1 + at as u32)),
                         handle: answered,
                     }
                 })
@@ -6135,6 +6330,7 @@ mod tests {
                             rounds: 1,
                             budget: None,
                             stop: Default::default(),
+                            batch: super::Batch::alone(DelegateId::nth(1 + at as u32)),
                             handle: answered,
                         }
                     })
@@ -6200,6 +6396,150 @@ mod tests {
             (1, 1),
             "a report's label changed whether its delegate's ending woke the turn"
         );
+    }
+
+    /// DELEGATE-17 and AGENT-3. A call that asked to be woken after all of its delegates counts
+    /// each one's end, whatever label its report carries, and wakes the turn only when the last of
+    /// them has ended, while a call with the default count wakes it at its own delegate's end.
+    ///
+    /// Rejects a wait that wakes at any delegate's end, which wakes after the first of the call's
+    /// two, and a count over only the delegates not yet collected, which never wakes for a call
+    /// whose first delegate another wake already took back.
+    #[test]
+    fn a_call_waiting_for_all_of_its_delegates_counts_each_end_whatever_its_label() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
+        );
+        const LIMIT: Duration = Duration::from_secs(5);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "count the ends of one call's delegates");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let quarantined = policy.label_piped_input("REPORT-WORDS".to_string());
+        let visible = bravebot_core::Labelled::trusted("REPORT-WORDS".to_string());
+        assert!(
+            !quarantined.label().is_trusted() && visible.label().is_trusted(),
+            "the two reports carry the same label, so nothing here was tested"
+        );
+        let settle = |delegates: &[Working<'_>], id: DelegateId| {
+            let working = delegates
+                .iter()
+                .find(|working| working.id == id)
+                .expect("the delegate is still held");
+            let began = std::time::Instant::now();
+            while !working.handle.is_finished() {
+                assert!(began.elapsed() < LIMIT, "the delegate's thread never ended");
+                std::thread::yield_now();
+            }
+        };
+        // A delegate answers with `report` once its sender is used or dropped.
+        let (one_tx, one_rx) = mpsc::channel::<()>();
+        let (two_tx, two_rx) = mpsc::channel::<()>();
+        let (alone_tx, alone_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let call = Batch::of_call(DelegateId::nth(1), 2, 2);
+            let lone = Batch::of_call(DelegateId::nth(3), 1, 1);
+            let mut delegates: Vec<Working<'_>> = [
+                (1, quarantined, call, one_rx),
+                (2, visible, call, two_rx),
+                (
+                    3,
+                    bravebot_core::Labelled::trusted("ALONE".to_string()),
+                    lone,
+                    alone_rx,
+                ),
+            ]
+            .into_iter()
+            .map(|(n, report, batch, released)| {
+                let handed = seeded.clone();
+                let answered = scope.spawn(move || -> Joined {
+                    let _ = released.recv_timeout(LIMIT);
+                    (
+                        crate::delegate::Ended {
+                            delegated: Ok(crate::delegate::Delegated {
+                                report,
+                                kind: "one-round".to_string(),
+                                usage: Default::default(),
+                                requests: 0,
+                            }),
+                            vouched: handed,
+                            notices: Vec::new(),
+                            rounds: 1,
+                            took: Duration::from_millis(5),
+                            worked: Default::default(),
+                        },
+                        Default::default(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                });
+                Working {
+                    join_started: None,
+                    id: DelegateId::nth(n),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 1,
+                    budget: None,
+                    stop: Default::default(),
+                    batch,
+                    handle: answered,
+                }
+            })
+            .collect();
+            assert!(
+                !a_call_has_enough_ended(&delegates),
+                "the turn was woken with nothing ended"
+            );
+
+            drop(one_tx);
+            settle(&delegates, DelegateId::nth(1));
+            assert!(
+                !a_call_has_enough_ended(&delegates),
+                "the turn was woken when one of a call's two delegates, whose report is \
+                 quarantined, had ended, though the call asked for both"
+            );
+
+            drop(alone_tx);
+            settle(&delegates, DelegateId::nth(3));
+            assert!(
+                a_call_has_enough_ended(&delegates),
+                "a call with the default count was not woken for its delegate's end"
+            );
+            // That wake takes back every delegate that has ended, the first of the call among
+            // them.
+            let mut taken = Vec::new();
+            for at in (0..delegates.len()).rev() {
+                if delegates[at].handle.is_finished() {
+                    taken.push(delegates.remove(at));
+                }
+            }
+            assert_eq!(taken.len(), 2, "the wake did not take both ended delegates");
+            assert!(
+                !a_call_has_enough_ended(&delegates),
+                "the turn was woken again with the call's second delegate still working"
+            );
+
+            drop(two_tx);
+            settle(&delegates, DelegateId::nth(2));
+            assert!(
+                a_call_has_enough_ended(&delegates),
+                "the call's second delegate, whose report is shown, ended and the turn was not \
+                 woken, so the first one's end was not counted once it had been taken back"
+            );
+            for working in taken.into_iter().chain(delegates) {
+                let _ = working.handle.join();
+            }
+        });
     }
 
     /// INPUT-10 and DELEGATE-17: a line waiting for the turn wakes a wait once, and a delegate's
@@ -6319,6 +6659,7 @@ mod tests {
                     rounds: 1,
                     budget: None,
                     stop: Default::default(),
+                    batch: super::Batch::alone(DelegateId::nth(1)),
                     handle: answered,
                 }];
                 collect_delegates(
@@ -6411,11 +6752,13 @@ mod tests {
             collect_jobs(
                 &mut jobs,
                 tools::OUTPUT_CAP,
+                true,
                 ReadOutputIs::Asked,
                 tools::Beside::every(),
                 &mut policy,
                 &mut conversation,
                 &mut reporter,
+                &mut |_, _, _, _| None,
             )
         };
 
@@ -7149,7 +7492,10 @@ mod tests {
             let carried = scripted::sessions();
             scripted::clear();
 
-            assert_eq!(drafted.expect("a draft").message, "Rename old to renamed");
+            assert_eq!(
+                drafted.expect("a draft").message,
+                Some("Rename old to renamed".to_string())
+            );
             assert_eq!(carried, vec![carried_by(&session)]);
         }
 
@@ -9778,6 +10124,51 @@ mod tests {
             let _ = std::fs::remove_dir_all(scratch);
         }
 
+        /// The regression it rejects: a call refused for an argument its schema does not declare
+        /// being read ahead, so the disk is read for a call that is then refused (TOOL-3). The
+        /// first listing names `path`, which `list_files` does not declare, and is refused; the
+        /// two after it still run together. The hook records every directory a walk reads.
+        #[test]
+        fn a_call_with_an_undeclared_argument_is_not_read_ahead() {
+            let (scratch, workspace) = workspace("together-undeclared");
+            let walked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let seen = walked.clone();
+            workspace.hold_reads(move |directory| {
+                seen.lock().unwrap().push(directory.to_string());
+            });
+
+            let round = take(
+                &workspace,
+                &[
+                    ("list_files", r#"{"directory":"a","path":"a"}"#),
+                    ("search", &search("b")),
+                    ("search", &search("c")),
+                ],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().expect("the turn ended");
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 3, "{told:?}");
+            assert!(
+                told[0].contains("list_files takes no argument 'path'"),
+                "{}",
+                told[0]
+            );
+            let walked = walked.lock().unwrap().clone();
+            assert!(
+                !walked.iter().any(|directory| directory == "a"),
+                "the refused call was read ahead: {walked:?}"
+            );
+            assert!(
+                walked.iter().any(|directory| directory == "b")
+                    && walked.iter().any(|directory| directory == "c"),
+                "the reads after it did not run: {walked:?}"
+            );
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
         /// One call per name, each with arguments of its own so that no two are a repeat.
         fn calls(names: &[&str]) -> Vec<ToolCall> {
             names
@@ -9804,7 +10195,7 @@ mod tests {
             let none = bravebot_config::hooks::Hooks::default();
             let repeats = crate::repeated_call::Repeats::default();
             let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
-                reads_that_run_together(&calls(names), &repeats, None, hooks)
+                reads_that_run_together(&calls(names), &repeats, None, None, hooks)
             };
 
             assert_eq!(run(&["search", "list_files", "search"], &none), 3);
@@ -9835,12 +10226,15 @@ mod tests {
                     })
                     .collect()
             };
-            assert_eq!(reads_that_run_together(&same(4), &repeats, None, &none), 2);
+            assert_eq!(
+                reads_that_run_together(&same(4), &repeats, None, None, &none),
+                2
+            );
             let mut after_two = crate::repeated_call::Repeats::default();
             after_two.is_held(&same(1)[0]);
             after_two.is_held(&same(1)[0]);
             assert_eq!(
-                reads_that_run_together(&same(3), &after_two, None, &none),
+                reads_that_run_together(&same(3), &after_two, None, None, &none),
                 0
             );
         }

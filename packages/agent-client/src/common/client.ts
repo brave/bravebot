@@ -1,8 +1,8 @@
 import { describeThrown, isolate } from './isolate.js'
-import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
+import { CapabilityError, ProtocolError, RpcError, UnknownSendError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
-import { applySnapshot, applyUpdate, awaitSnapshot, endView, startView, type ViewState } from './view.js'
+import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, HeldSession, InstanceInfo, MessageStatus, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
+import { applySnapshot, applyUpdate, awaitSnapshot, endView, startView, viewFromSnapshot, type ViewState } from './view.js'
 import {
   SESSION_VIEW_RESYNC,
   SESSION_VIEW_START,
@@ -60,6 +60,10 @@ class Session implements AgentSession {
   private resyncs = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
+  /** Whether `session.attach` is unanswered, the only time a snapshot may start the view. */
+  attaching = false
+  /** The ids whose latest lookup answered `not_received`, each of which may be resent once. */
+  private readonly resendable = new Set<string>()
 
   constructor(
     readonly id: string,
@@ -107,8 +111,9 @@ class Session implements AgentSession {
         if (this.retained !== null && view.ended === null && !view.resyncing && update.sequence !== view.sequence + 1) this.resync()
         else this.set(applyUpdate(view, update, this.retained ?? Infinity))
       } else if (event.event === 'session.view.snapshot') {
-        if (this.current === null) throw new ProtocolError('a view snapshot arrived before the initial view')
-        this.set(applySnapshot(this.current, decodeSnapshot(event.data)))
+        if (this.current !== null) this.set(applySnapshot(this.current, decodeSnapshot(event.data)))
+        else if (this.attaching) this.set(viewFromSnapshot(decodeSnapshot(event.data)))
+        else throw new ProtocolError('a view snapshot arrived before the initial view')
       }
     } catch (error) {
       if (!(error instanceof ProtocolError)) throw error
@@ -166,12 +171,32 @@ class Session implements AgentSession {
     if (this.trust === asked) this.trust = null
   }
 
-  async send(text: string): Promise<SendResult> {
+  send(text: string): Promise<SendResult> {
+    return this.submit(text, newMessageId())
+  }
+
+  async resend(messageId: string, text: string): Promise<SendResult> {
+    this.live('resend')
+    if (!this.resendable.delete(messageId)) throw new StaleActionError(`message ${messageId} has not been looked up as not received`)
+    return this.submit(text, messageId)
+  }
+
+  async messageStatus(messageId: string): Promise<MessageStatus> {
+    this.resendable.delete(messageId)
+    const status = readMessageStatus(await this.connection.request('turn.lookup', this.params({ messageId })))
+    if (status.state === 'not_received') this.resendable.add(messageId)
+    return status
+  }
+
+  private async submit(text: string, messageId: string): Promise<SendResult> {
     this.live('send')
     this.sending++
     let result: unknown
     try {
-      result = await this.connection.request('turn.send', this.params({ prompt: text, messageId: newMessageId() }))
+      result = await this.connection.request('turn.send', this.params({ prompt: text, messageId }))
+    } catch (error) {
+      if (error instanceof RpcError && error.outcome === 'unknown') throw new UnknownSendError(messageId, error)
+      throw error
     } finally {
       this.sending--
     }
@@ -265,6 +290,37 @@ class Session implements AgentSession {
 function newMessageId(): string {
   const random = (): string => Math.floor(Math.random() * 2 ** 32).toString(36)
   return `${Date.now().toString(36)}-${random()}-${random()}`
+}
+
+const HELD_STATES: readonly string[] = ['open', 'closing', 'closed']
+
+function readMessageStatus(value: unknown): MessageStatus {
+  if (isRecord(value)) {
+    if (value.state === 'not_received') return { state: 'not_received' }
+    if (value.state === 'accepted' && isCount(value.turn) && isCount(value.target)) return { state: 'accepted', turn: value.turn, target: value.target }
+    const error = value.error
+    if (value.state === 'refused' && isRecord(error) && typeof error.code === 'string' && typeof error.message === 'string') {
+      return { state: 'refused', error: { code: error.code, message: error.message } }
+    }
+  }
+  throw new ProtocolError('turn.lookup answered in a shape it does not have')
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function readInstance(value: unknown): InstanceInfo {
+  if (!isRecord(value) || typeof value.instance !== 'string' || !Array.isArray(value.sessions)) {
+    throw new ProtocolError('instance.info did not name an instance and its sessions')
+  }
+  const sessions: HeldSession[] = value.sessions.map((held: unknown) => {
+    if (!isRecord(held) || typeof held.session !== 'string' || typeof held.state !== 'string' || !HELD_STATES.includes(held.state) || typeof held.working !== 'boolean' || typeof held.controlled !== 'boolean') {
+      throw new ProtocolError('instance.info listed a session in a shape it does not have')
+    }
+    return { session: held.session, state: held.state as HeldSession['state'], working: held.working, controlled: held.controlled }
+  })
+  return { instance: value.instance, sessions }
 }
 
 type RawAccess = (client: RpcAgentClient, method: string, params: Record<string, unknown>) => Promise<unknown>
@@ -399,7 +455,35 @@ export class RpcAgentClient implements AgentClient {
     return Promise.reject(new UnsupportedError('opening a listed session is unavailable on the local stdio client'))
   }
 
-  unsupported(operation: 'attach' | 'takeControl' | 'messageStatus'): Promise<never> {
+  async instance(): Promise<InstanceInfo> {
+    return readInstance(await this.#connection.request('instance.info'))
+  }
+
+  async attach(id: string): Promise<AgentSession> {
+    const held = (): void => {
+      if (this.sessions.has(id)) throw new RpcError('bad_request', 'this client already holds that session', 'rejected')
+    }
+    held()
+    const described = await this.describe()
+    held()
+    const session = new Session(id, this.#connection, (gone) => this.sessions.delete(gone), (message) => this.report(message), described.actionTargets, described.sessionView.retainedRows ?? null)
+    // Registered before the request, because the host sends the snapshot before its answer.
+    session.attaching = true
+    this.sessions.set(id, session)
+    try {
+      await this.#connection.request('session.attach', { session: id })
+      if (session.refused !== null || !session.hasView) {
+        throw new ProtocolError(session.refused ?? 'the snapshot did not arrive before the attach answer')
+      }
+    } catch (error) {
+      if (this.sessions.get(id) === session) this.sessions.delete(id)
+      throw error
+    }
+    session.attaching = false
+    return session
+  }
+
+  unsupported(operation: 'takeControl'): Promise<never> {
     return Promise.reject(new UnsupportedError(`${operation} is unavailable on the local stdio client`))
   }
 

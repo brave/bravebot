@@ -120,6 +120,23 @@ fn bravebot(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Ou
     run(home, None, environment, arguments)
 }
 
+/// The directory a run with no directory of its own starts in: a sibling of `home` that holds a
+/// `.git`, so it is its own checkout and not part of the home a test inspects.
+///
+/// The binary leaves out of its lookups the checkout holding the directory it ran in (SANDBOX-30).
+/// The scratch directories are under this repository's `target`, so a run left in the directory the tests
+/// started in would have this whole repository as its checkout and lose the stand-ins and files
+/// the scratch holds.
+fn a_checkout_of_its_own_under(home: &Path) -> PathBuf {
+    let name = home
+        .file_name()
+        .expect("a home with a name")
+        .to_string_lossy();
+    let here = home.with_file_name(format!("{name}-run-here"));
+    std::fs::create_dir_all(here.join(".git")).expect("create a checkout to run in");
+    here
+}
+
 /// The same, started in a directory of the test's choosing.
 ///
 /// The working directory is where a checkout's `.bravebot` is found, and [`bravebot`] leaves it
@@ -176,9 +193,11 @@ fn prepared(
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
         // input rather than waiting on whatever started the tests.
         .stdin(Stdio::null());
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
+    let here = match cwd {
+        Some(cwd) => cwd.to_path_buf(),
+        None => a_checkout_of_its_own_under(home),
+    };
+    command.current_dir(here);
     command
 }
 
@@ -3276,6 +3295,45 @@ fn auth_status_bedrock_starts_no_aws_from_the_checkout_it_runs_in() {
     assert!(stdout.starts_with("bedrock work: signed in: "), "{stdout}");
 }
 
+/// SANDBOX-30 over the process: `doctor` reports the sign-in of each AWS account before it has read
+/// the workspace, and the AWS CLI it asks is the installed one, not one in a `bin` of the checkout
+/// or of the directory it runs in. Nothing but the record `main` makes before the command is
+/// dispatched leaves those directories out at that point.
+///
+/// Rejects a `doctor` that records the directory only where it reads the workspace, which is after
+/// the report of the backends: the planted `aws` is then started and its marker is made.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_the_checkout_or_the_directory_it_runs_in() {
+    let scratch = Scratch::new("cli-running-doctor-aws-planted-twice").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#,
+    );
+    std::fs::write(scratch.path.join("aws-work"), "").expect("sign in to work");
+    let installed = AWS_WITH_A_LAPSED_PROFILE.trim_start_matches("#!/bin/sh\n");
+    let planted = plant_and_install(&scratch, &[("aws", installed)]);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", planted.path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "lapsed"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(&scratch.path, &planted.here, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not asked: {stdout}"
+    );
+}
+
 /// `path` with the system directories behind it, so `script` is found when the command is run at a
 /// terminal. The planted and installed programs come first.
 #[cfg(unix)]
@@ -3452,6 +3510,126 @@ fn the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in() {
     assert!(
         stdout.contains("(signed in)"),
         "the installed aws did not report the account signed in: {stdout}{stderr}"
+    );
+}
+
+/// A `PATH` whose first entry is a `bin` in the checkout `here` is in, holding an `aws` that
+/// records a start in a marker file and signs nothing, and whose second entry is the stand-in AWS
+/// CLI that answers. Returns the `PATH`, the directory to run in and the marker.
+#[cfg(unix)]
+fn planted_aws_before_the_stand_in(scratch: &Scratch) -> (String, PathBuf, PathBuf) {
+    let installed = aws_stand_in(scratch);
+    let work = checkout_in(scratch);
+    let here = work.join("sub");
+    std::fs::create_dir_all(&here).unwrap();
+    let marker = scratch.path.join("planted-aws");
+    let body = format!("printf x >> '{}' 2>/dev/null; exit 255", marker.display());
+    stand_in(&work.join("bin"), "aws", &body);
+    let path = std::env::join_paths([work.join("bin").as_path(), Path::new(&installed)]).unwrap();
+    (path.to_str().unwrap().to_string(), here, marker)
+}
+
+/// SANDBOX-30 over the process: `auth status` asks the `aws` on `PATH` outside the checkout it
+/// runs in, not one in a `bin` of that checkout that is first on `PATH`. The program in the
+/// checkout's root is planted and the command runs in a subdirectory, so leaving out only the
+/// directory the command ran in fails too. The stand-in behind it is signed in, so a status of
+/// signed in tells the installed program from one that answers for it.
+#[cfg(unix)]
+#[test]
+fn auth_status_starts_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-status-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    let (path, here, marker) = planted_aws_before_the_stand_in(&scratch);
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &here,
+        &environment,
+        &["auth", "status", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !marker.exists(),
+        "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.starts_with("bedrock work: signed in: "),
+        "the installed aws was not the one asked: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over the process: `auth login bedrock` signs in with the `aws` outside the checkout
+/// it runs in. Set up as for `auth status`, with the planted program in the checkout's root.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_signs_in_with_the_aws_outside_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-login-bedrock-planted")
+        .with_settings(r#"{"model": "opus"}"#);
+    let (path, here, marker) = planted_aws_before_the_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &here,
+        &environment,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !marker.exists(),
+        "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("profile work is signed in"),
+        "the installed aws did not sign in: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over the process: plain `doctor` asks the `aws` outside the checkout it runs in
+/// whether the configured profile is signed in, not one in a `bin` of that checkout first on
+/// `PATH`. Set up as for `auth status`, with the planted program in the checkout's root and the
+/// command run in a subdirectory. Rejects a record of the directory alone, and no record at all.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-doctor-aws-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#,
+    );
+    let (path, here, marker) = planted_aws_before_the_stand_in(&scratch);
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(&scratch.path, &here, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !marker.exists(),
+        "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not the one asked: {stdout}{stderr}"
     );
 }
 
@@ -3826,6 +4004,291 @@ fn an_accept_edits_run_refuses_a_command() {
     assert!(
         !made("cli-running-accept-run", "--accept-edits"),
         "an accepting-edits run ran a command"
+    );
+}
+
+/// The person's settings for `gateway`, with `permissions` as their `permissions` block.
+fn settings_with_rules(gateway: &Gateway, permissions: serde_json::Value) -> String {
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(gateway)).expect("the gateway's settings");
+    settings["permissions"] = permissions;
+    settings.to_string()
+}
+
+/// Runs `-p` in a project whose model writes `path`, with `rules` as the person's `permissions`
+/// block, and says whether the file was made.
+///
+/// No mode flag is given, so a file that lands is a rule's doing. The rules are in the person's own
+/// file, which is a layer whose `allow` entries are always in force (PERM-14).
+fn a_ruled_write_made_the_file(name: &str, rules: &serde_json::Value, path: &'static str) -> bool {
+    let gateway = a_gateway_writing(path, "hi");
+    let scratch = Scratch::new(name);
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(project.join(parent)).expect("a directory to write in");
+    }
+    let scratch = scratch.with_settings(&settings_with_rules(&gateway, rules.clone()));
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["-p", "write a file"],
+    );
+    let (_, stderr) = said(&output);
+    gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+    project.join(path).exists()
+}
+
+/// CLI-1: an `allow` rule in the person's settings lets a one-shot run write where the rule says,
+/// with no mode flag. The second run has the same rule and a write outside the directory it names,
+/// so the first file is the rule's doing and not a run that writes wherever it is asked to.
+#[test]
+fn a_one_shot_run_writes_where_an_allow_rule_lets_it_and_nowhere_else() {
+    let inside = serde_json::json!({"allow": ["Edit(allowed/**)"]});
+    assert!(
+        a_ruled_write_made_the_file("cli-running-rule-write-inside", &inside, "allowed/out.txt"),
+        "an allow rule did not let a one-shot run write where it names"
+    );
+    assert!(
+        !a_ruled_write_made_the_file("cli-running-rule-write-outside", &inside, "other/out.txt"),
+        "a rule naming one directory let a write land in another"
+    );
+}
+
+/// CLI-1: an absolute `allow` rule lets a one-shot run write in a directory `--add-dir` opened,
+/// where a file is named by its full path, and a file in a second added directory the rule does not
+/// name is refused. A run that wrote both would be writing wherever it reaches.
+#[test]
+fn a_one_shot_run_writes_in_an_added_directory_an_absolute_rule_names() {
+    let made = |name: &str, named: &str| {
+        let scratch = Scratch::new(name);
+        let project = scratch.path.join("project");
+        let work = scratch.path.join("work");
+        let other = scratch.path.join("other");
+        for directory in [&project, &work, &other] {
+            std::fs::create_dir_all(directory).expect("a directory");
+        }
+        let work = work.canonicalize().expect("the work directory's own name");
+        let other = other
+            .canonicalize()
+            .expect("the other directory's own name");
+        let target = match named {
+            "work" => work.join("out.txt"),
+            _ => other.join("out.txt"),
+        };
+        let path: &'static str = Box::leak(target.display().to_string().into_boxed_str());
+        let gateway = a_gateway_writing(path, "hi");
+        let rule = format!("Edit(/{}/**)", work.display());
+        let scratch = scratch.with_settings(&settings_with_rules(
+            &gateway,
+            serde_json::json!({"allow": [rule]}),
+        ));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            AT_A_GATEWAY,
+            &[
+                "--add-dir",
+                work.to_str().expect("a path in UTF-8"),
+                "--add-dir",
+                other.to_str().expect("a path in UTF-8"),
+                "-p",
+                "write a file",
+            ],
+        );
+        let (_, stderr) = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+        target.exists()
+    };
+    assert!(
+        made("cli-running-rule-added-named", "work"),
+        "an absolute allow rule did not let a one-shot run write in the added directory it names"
+    );
+    assert!(
+        !made("cli-running-rule-added-other", "other"),
+        "a rule naming one added directory let a write land in another"
+    );
+}
+
+/// CLI-1, PERM-9: a rule covering a protected path does not let a one-shot run write it, as no rule
+/// does in a session. The first run is the same rule over an ordinary file, so the refusal is the
+/// protected name's and not a rule that answers nothing.
+#[test]
+fn a_one_shot_run_refuses_a_protected_write_an_allow_rule_covers() {
+    let everything = serde_json::json!({"allow": ["Edit(**)"]});
+    assert!(
+        a_ruled_write_made_the_file("cli-running-rule-protected-control", &everything, "out.txt"),
+        "the control did not write, so the refusal below says nothing"
+    );
+    assert!(
+        !a_ruled_write_made_the_file(
+            "cli-running-rule-protected",
+            &everything,
+            ".husky/pre-commit"
+        ),
+        "an allow rule let a one-shot run write a hook"
+    );
+}
+
+/// CLI-1, PERM-2: a deny rule over a path outranks an allow rule covering it in a one-shot run, as
+/// it does in a session. The allow rule on its own lets a write through, which
+/// `a_one_shot_run_refuses_a_protected_write_an_allow_rule_covers` shows for the same rule.
+#[test]
+fn a_deny_rule_outranks_an_allow_rule_in_a_one_shot_run() {
+    let both = serde_json::json!({"allow": ["Edit(**)"], "deny": ["Edit(secret.txt)"]});
+    assert!(
+        !a_ruled_write_made_the_file("cli-running-rule-denied", &both, "secret.txt"),
+        "an allow rule outranked a deny rule in a one-shot run"
+    );
+}
+
+/// Runs `-p --trust-workspace` in a project `arrange` lays out, whose model writes `path`, with
+/// `rules` as the person's `permissions` block, and returns the scratch, which removes the project
+/// when it is dropped, beside the project.
+///
+/// The workspace is trusted, so the trust map does not put a write to any name in it, and what
+/// refuses a write is the check that a rule allows it under every name it has (CLI-1, PERM-7).
+fn a_trusted_ruled_write(
+    name: &str,
+    rules: &serde_json::Value,
+    path: &'static str,
+    arrange: impl FnOnce(&Path),
+) -> (Scratch, PathBuf) {
+    let gateway = a_gateway_writing(path, "hi");
+    let scratch = Scratch::new(name);
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("allowed")).expect("the allowed directory");
+    std::fs::create_dir_all(project.join("other")).expect("a directory the rule does not name");
+    arrange(&project);
+    let scratch = scratch.with_settings(&settings_with_rules(&gateway, rules.clone()));
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--trust-workspace", "-p", "write a file"],
+    );
+    let (_, stderr) = said(&output);
+    gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+    (scratch, project)
+}
+
+/// CLI-1, PERM-7: in a trusted workspace, an allow rule over the name a write gives does not let a
+/// one-shot run write the file a link at that name leads to, where no rule allows that name. The
+/// first run writes a plain file under the same rule and flags, so the refusal is the link's and
+/// not a trusted run that writes nothing.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_does_not_write_through_a_link_to_a_name_no_rule_allows() {
+    let rules = serde_json::json!({"allow": ["Edit(allowed/**)"]});
+    let (_control_scratch, control) = a_trusted_ruled_write(
+        "cli-running-rule-link-control",
+        &rules,
+        "allowed/out.txt",
+        |_| {},
+    );
+    assert_eq!(
+        std::fs::read_to_string(control.join("allowed/out.txt")).ok(),
+        Some("hi".to_string()),
+        "the control did not write, so the refusal below says nothing"
+    );
+    let (_scratch, project) =
+        a_trusted_ruled_write("cli-running-rule-link", &rules, "allowed/link", |project| {
+            std::fs::write(project.join("other/target"), "kept\n")
+                .expect("the file the link leads to");
+            std::os::unix::fs::symlink("../other/target", project.join("allowed/link"))
+                .expect("a link out of the allowed directory");
+        });
+    assert_eq!(
+        std::fs::read_to_string(project.join("other/target")).expect("the target"),
+        "kept\n",
+        "an allow rule over a link's name let a one-shot run write where the link leads"
+    );
+    assert!(
+        project
+            .join("allowed/link")
+            .symlink_metadata()
+            .expect("the link")
+            .file_type()
+            .is_symlink(),
+        "the link was replaced by the write"
+    );
+}
+
+/// CLI-1, PERM-7: in a trusted workspace, an allow rule over one name of a file with a hard link
+/// does not let a one-shot run write it, where no rule allows its other name.
+/// `a_one_shot_run_does_not_write_through_a_link_to_a_name_no_rule_allows` shows the same rule and
+/// flags letting a plain write through.
+#[test]
+fn a_one_shot_run_does_not_write_a_file_whose_other_name_no_rule_allows() {
+    let rules = serde_json::json!({"allow": ["Edit(allowed/**)"]});
+    let (_scratch, project) = a_trusted_ruled_write(
+        "cli-running-rule-hard-link",
+        &rules,
+        "allowed/a",
+        |project| {
+            std::fs::write(project.join("other/b"), "kept\n").expect("the file's other name");
+            std::fs::hard_link(project.join("other/b"), project.join("allowed/a"))
+                .expect("a second name in the allowed directory");
+        },
+    );
+    for name in ["allowed/a", "other/b"] {
+        assert_eq!(
+            std::fs::read_to_string(project.join(name)).expect("the file"),
+            "kept\n",
+            "an allow rule over one name of a file let a one-shot run write it ({name} changed)"
+        );
+    }
+}
+
+/// CLI-1: an `allow` rule for a program lets a one-shot run start it with no mode flag, and a rule
+/// for another program does not. The workspace is not trusted, so a confined line in it is asked
+/// about (RUN-5) and the file is the rule's doing.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_runs_a_program_an_allow_rule_names_and_refuses_another() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let made = |name: &str, rule: &str| {
+        let gateway = a_gateway_asking_to_run("touch made.txt");
+        let scratch = Scratch::new(name).with_settings(&settings_with_rules(
+            &gateway,
+            serde_json::json!({"allow": [rule]}),
+        ));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &["-p", "make a file"],
+        );
+        let (_, stderr) = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+        project.join("made.txt").exists()
+    };
+    assert!(
+        made("cli-running-rule-run", "Bash(touch *)"),
+        "an allow rule did not let a one-shot run start the program it names"
+    );
+    assert!(
+        !made("cli-running-rule-run-other", "Bash(mkdir *)"),
+        "a rule for one program let a one-shot run start another"
     );
 }
 
@@ -6430,7 +6893,7 @@ fn a_configured_git_identity_reaches_only_the_matching_run_stage() {
         )
         .expect("make fake git executable");
         let project = scratch.path.join("project");
-        std::fs::create_dir_all(&project).expect("a project");
+        std::fs::create_dir_all(project.join(".git")).expect("a project that is a checkout");
         let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
         let mut environment = AT_A_GATEWAY.to_vec();
         environment.push(("PATH", &path));
@@ -6512,7 +6975,7 @@ fn a_key_chosen_at_a_run_prompt_reaches_the_matching_run_stage() {
         )
         .expect("make fake git executable");
         let project = scratch.path.join("project");
-        std::fs::create_dir_all(&project).expect("a project");
+        std::fs::create_dir_all(project.join(".git")).expect("a project that is a checkout");
         let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
         let mut environment = AT_A_GATEWAY.to_vec();
         environment.push(("PATH", &path));
@@ -9435,6 +9898,7 @@ fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
     ]);
 
+    std::fs::create_dir_all(scratch.path.join("checkout/.git")).expect("a checkout");
     let output = bravebot_started_in(
         &scratch.path,
         &scratch.path.join("checkout"),
@@ -11477,7 +11941,8 @@ fn a_first_run_with_ollama_running_offers_to_import_it() {
     let before = &transcript[..question];
     for shown in [
         format!("Ollama is running at http://{ollama}, serving models bravebot can use."),
-        format!("provider.ollama, reached at http://{ollama}/v1"),
+        format!("provider.ollama, reached at http://{ollama}/api"),
+        r#""npm":"ollama-ai-provider-v2""#.to_string(),
         r#"model: "ollama/qwen3-coder:30b""#.to_string(),
     ] {
         assert!(
@@ -12195,7 +12660,18 @@ fn a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_count
 /// request when the run trusts the file, and a reference to them takes their place when it does
 /// not.
 fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathBuf) {
-    let gateway = a_gateway(r#"["tools"]"#, |body| {
+    let gateway = a_gateway_whose_model_reads(|| "notes.md".to_string());
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    (gateway, scratch, cwd)
+}
+
+/// A gateway whose model, asked to read the notes, reads the path `path` gives it and then says it
+/// is done, and answers any other prompt with a plain reply.
+fn a_gateway_whose_model_reads(path: impl Fn() -> String + Send + 'static) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
         if !body.contains("read the notes") {
             return answered("hello")(body);
         }
@@ -12207,7 +12683,7 @@ fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathB
                 "index":0,"delta":{"role":"assistant","tool_calls":[{
                     "index":0,"id":"call-1","type":"function","function":{
                         "name":"read_file",
-                        "arguments":serde_json::json!({"path": "notes.md"}).to_string()}}]},
+                        "arguments":serde_json::json!({"path": path()}).to_string()}}]},
                 "finish_reason":"tool_calls"}]}),
         };
         let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
@@ -12215,12 +12691,39 @@ fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathB
             "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
         )
+    })
+}
+
+/// A project with a directory beside it for `--add-dir` to open, holding `notes.md`, and a
+/// gateway whose model reads `read`, a name under that directory, by its full path.
+///
+/// Returns the directory beside the project as the command line names it. The gateway is made
+/// before the scratch, which names the directory, so the path is handed to it once it exists.
+fn a_directory_beside_whose_notes_the_model_reads(
+    name: &str,
+    read: &str,
+) -> (Gateway, Scratch, PathBuf, PathBuf) {
+    let path = Arc::new(std::sync::OnceLock::<String>::new());
+    let given = Arc::clone(&path);
+    let gateway = a_gateway_whose_model_reads(move || {
+        given
+            .get()
+            .cloned()
+            .expect("the path is set before the run")
     });
     let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
     let cwd = scratch.path.join("project");
     std::fs::create_dir_all(&cwd).expect("create the project");
-    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
-    (gateway, scratch, cwd)
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&beside).expect("create the directory beside");
+    std::fs::write(beside.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    let full = beside
+        .canonicalize()
+        .expect("the directory beside")
+        .join(read);
+    path.set(full.display().to_string())
+        .expect("the path is set once");
+    (gateway, scratch, cwd, beside)
 }
 
 /// Whether the planner was handed the words of the file: a request carrying a tool result that
@@ -12373,6 +12876,49 @@ fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
     );
 }
 
+/// CLI-1: in a one-shot run that trusts its workspace, an `allow` rule over a file lets an edit of it
+/// land, and a rule over another file does not. The trust map alone refuses the same edit
+/// (`a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`), so the
+/// edit that lands is the rule's doing.
+#[test]
+fn a_one_shot_run_applies_an_edit_an_allow_rule_covers_and_refuses_one_it_does_not() {
+    let edited = |name: &str, rule: &str| {
+        let (gateway, scratch, cwd) = a_project_whose_notes_the_model_changes(
+            name,
+            "edit_file",
+            serde_json::json!({
+                "path": "notes.md",
+                "old_text": "THE-WORDS-IN-THE-PROJECT-NOTES",
+                "new_text": "THE-PLANNERS-WORDS",
+            }),
+        );
+        let scratch = scratch.with_settings(&settings_with_rules(
+            &gateway,
+            serde_json::json!({"allow": [rule]}),
+        ));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "-p", "change the notes"],
+        );
+        let (_, stderr) = said(&output);
+        assert!(
+            !requests(&gateway).is_empty(),
+            "the run reached no gateway: {stderr}"
+        );
+        std::fs::read_to_string(cwd.join("notes.md")).expect("the notes") == "THE-PLANNERS-WORDS"
+    };
+    assert!(
+        edited("cli-running-rule-edit", "Edit(notes.md)"),
+        "an allow rule did not let a one-shot run apply the edit it covers"
+    );
+    assert!(
+        !edited("cli-running-rule-edit-other", "Edit(other.md)"),
+        "a rule over another file let a one-shot run apply an edit"
+    );
+}
+
 /// A project whose model answers `change the notes` with one call to `tool`, and then says it is
 /// done, so the file on disk is the only thing that says whether the call was applied.
 fn a_project_whose_notes_the_model_changes(
@@ -12482,6 +13028,204 @@ fn a_run_without_the_workspace_flag_reads_a_project_file_quarantined() {
     assert!(
         !the_planner_saw_the_notes(&gateway),
         "an untrusted file reached the planner as its own words"
+    );
+}
+
+/// CLI-11, TRUST-26. A run that trusts its working directory trusts the directories `--add-dir`
+/// opened as well, so a file in one reaches the planner as its own words, and no answer is kept
+/// for later runs. Rejects a run that trusted the working directory alone and quarantined the file.
+#[test]
+fn a_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted() {
+    let (gateway, scratch, cwd, beside) =
+        a_directory_beside_whose_notes_the_model_reads("cli-running-trust-flag-added", "notes.md");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the file in the added directory did not reach the planner"
+    );
+    assert!(
+        !scratch.path.join(".bravebot").join("trusted").exists(),
+        "the flag kept an answer for later runs"
+    );
+}
+
+/// CLI-11, the control: without the flag the run trusts its working directory no more than it
+/// trusts the directory beside it, and the file there is read quarantined.
+#[test]
+fn a_run_without_the_workspace_flag_reads_a_file_in_an_added_directory_quarantined() {
+    let (gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-trust-flag-absent-added",
+        "notes.md",
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "a file in an added directory reached the planner from a run that trusts nothing"
+    );
+}
+
+/// CLI-11, TRUST-26. A run carrying on an earlier session builds its map from that session's
+/// record, and the directories the command line opened are trusted with the working directory
+/// there too. Rejects a continued run that added the working directory's rule and left the added
+/// directories out.
+#[test]
+fn a_continued_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted() {
+    let (gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-trust-flag-continued-added",
+        "notes.md",
+    );
+    let earlier = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--json", "-p", "hello"],
+    );
+    let (stdout, stderr) = said(&earlier);
+    assert!(earlier.status.success(), "{stderr}");
+    let session = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let _ = requests(&gateway);
+
+    let continued = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "--resume",
+            &session,
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&continued);
+    assert!(continued.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the continued run did not trust the directory the command line opened"
+    );
+}
+
+/// CLI-11, REFER-3. Only a directory the command line named is trusted with the working directory.
+/// A reference a settings file declares is opened the same way and records no trust, so a file in
+/// it is read quarantined in a run that trusts its added directories. Rejects a run that vouched for
+/// every directory its workspace holds.
+#[test]
+fn a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_added_directory() {
+    let path = Arc::new(std::sync::OnceLock::<String>::new());
+    let given = Arc::clone(&path);
+    let gateway = a_gateway_whose_model_reads(move || {
+        given
+            .get()
+            .cloned()
+            .expect("the path is set before the run")
+    });
+    let scratch = Scratch::new("cli-running-trust-flag-added-reference");
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&beside).expect("create the directory beside");
+    let referenced = scratch.path.join("referenced");
+    std::fs::create_dir_all(&referenced).expect("create the referenced directory");
+    std::fs::write(
+        referenced.join("notes.md"),
+        "THE-WORDS-IN-THE-PROJECT-NOTES",
+    )
+    .expect("write the referenced notes");
+    let referenced = referenced.canonicalize().expect("the referenced directory");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("the settings are JSON");
+    settings["references"] = serde_json::json!({"docs": referenced.display().to_string()});
+    let scratch = scratch.with_settings(&settings.to_string());
+    path.set(referenced.join("notes.md").display().to_string())
+        .expect("the path is set once");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "a reference was trusted with the directory the command line opened"
+    );
+}
+
+/// CLI-11, TRUST-10. The rule recorded for an added directory is about the directory as it was
+/// opened, so a link inside it that leads out of it carries none of its trust: the file the link
+/// reaches is not given to the planner as its own words. Rejects trust decided by the name as the
+/// model typed it rather than by where it leads.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_a_trusted_added_directory_does_not_reach_the_planner() {
+    let (gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-trust-flag-added-link",
+        "out/notes.md",
+    );
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create the directory the link leads to");
+    std::fs::write(elsewhere.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES")
+        .expect("write the notes the link leads to");
+    std::os::unix::fs::symlink(&elsewhere, beside.join("out")).expect("link out of the directory");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "read the notes",
+        ],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "a file reached through a link out of the added directory reached the planner: {stderr}"
     );
 }
 
@@ -13909,6 +14653,82 @@ fn a_one_shot_run_records_its_timing_and_when_it_began() {
     assert_eq!(continued["timing"]["1"], record["timing"]["1"]);
     assert!(continued["timing"]["2"]["wall_ms"].as_u64().unwrap() >= 1200);
     assert_eq!(continued["started"], record["started"]);
+}
+
+/// HOST-4: a record in a host's sessions root is neither listed by `sessions list` nor continued by
+/// `--resume` in the terminal on the same home, and the terminal leaves it as it was.
+///
+/// The host keeps a project's records under `<root>/<key>/`, the layout of the home's `sessions`
+/// directory, so the record here is the terminal's own, moved to a root the host could be given.
+/// The root is inside the state directory, so a terminal that looked for records anywhere in it, and
+/// not only in `sessions`, would fail. The terminal lists the record before the move, so the record
+/// is one it can read. That the host writes nothing to the home's `sessions` directory is the
+/// desktop test's to show; this test does not run the host.
+#[test]
+fn the_terminal_does_not_list_or_continue_a_record_in_a_hosts_sessions_root() {
+    let gateway = a_gateway("[]", |_| usage_reply(None, "done", 12, 5));
+    let scratch = Scratch::new("terminal-host-root").with_settings(&settings_for(&gateway));
+    let project = a_checkout_of_its_own_under(&scratch.path);
+    let first = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--json", "-p", "answer"],
+    );
+    let (stdout, stderr) = said(&first);
+    assert!(first.status.success(), "{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let listed = |what: &str| {
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &[],
+            &["sessions", "list", "--json"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{what}: {stderr}");
+        stdout
+    };
+    assert!(
+        listed("before the move").contains(&id),
+        "the terminal did not list its own record"
+    );
+
+    let host_root = scratch.path.join(".bravebot/host-sessions");
+    std::fs::rename(scratch.path.join(".bravebot/sessions"), &host_root)
+        .expect("move the records to the host's root");
+    let record = std::fs::read_dir(&host_root)
+        .expect("the host's root")
+        .map(|entry| entry.unwrap().path().join(format!("{id}.json")))
+        .find(|path| path.is_file())
+        .expect("the record in the host's root");
+    let before = std::fs::read(&record).unwrap();
+
+    let after = listed("after the move");
+    assert!(
+        !after.contains(&id),
+        "the terminal listed the host's record: {after}"
+    );
+    let resumed = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--resume", &id, "-p", "again"],
+    );
+    let (_, stderr) = said(&resumed);
+    assert!(
+        !resumed.status.success(),
+        "the terminal continued the host's record"
+    );
+    assert!(
+        stderr.contains(&format!("no session {id} in this directory")),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read(&record).unwrap(),
+        before,
+        "the host's record changed"
+    );
 }
 
 /// Set the modification time of every file in `directory` named `<stem>.<anything>` to `days` ago.
@@ -17746,6 +18566,7 @@ fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
         .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["--json", "-p", "summarise what was piped"])
+        .current_dir(a_checkout_of_its_own_under(&scratch.path))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -20625,6 +21446,58 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
             permissions_check(&scratch, &checkout, unmatched),
             ["decision: no rule matches, so the ordinary gates decide"],
             "{unmatched:?}"
+        );
+    }
+}
+
+/// CLI-30 and PERM-1: the report reads a host in every spelling a fetch reads it in. A rule written
+/// with a trailing dot or in brackets, and a URL carrying an address inside IPv6 or as one number,
+/// are decided by the rule that names the same host, so the report says `deny` where a session
+/// refuses. The failure this rejects is a host compared with the rule as spelled.
+#[test]
+fn permissions_check_decides_a_host_in_any_spelling_as_a_session_does() {
+    let scratch = Scratch::new("cli-running-permissions-check-host-spellings").with_settings(
+        r#"{"permissions": {"deny": [
+            "WebFetch(domain:127.0.0.1)",
+            "WebFetch(domain:example.org.)",
+            "WebFetch(domain:[::1])"
+        ]}}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
+    let home = scratch.settings().display().to_string();
+
+    for (url, rule) in [
+        (
+            "http://[::ffff:127.0.0.1]:8080/m",
+            "WebFetch(domain:127.0.0.1)",
+        ),
+        ("http://[::ffff:7f00:1]/m", "WebFetch(domain:127.0.0.1)"),
+        ("http://2130706433/m", "WebFetch(domain:127.0.0.1)"),
+        ("http://127.0.0.1./m", "WebFetch(domain:127.0.0.1)"),
+        ("https://example.org/", "WebFetch(domain:example.org.)"),
+        (
+            "https://Docs.EXAMPLE.org./x",
+            "WebFetch(domain:example.org.)",
+        ),
+        ("http://[::1]:8080/", "WebFetch(domain:[::1])"),
+        ("http://[0:0:0:0:0:0:0:1]/", "WebFetch(domain:[::1])"),
+    ] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, &["WebFetch", url]),
+            [
+                "decision: deny".to_string(),
+                format!("rule: {rule}"),
+                format!("file: {home}"),
+            ],
+            "{url}"
+        );
+    }
+    for unmatched in ["http://127.0.0.2/", "https://notexample.org/"] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, &["WebFetch", unmatched]),
+            ["decision: no rule matches, so the ordinary gates decide"],
+            "{unmatched}"
         );
     }
 }

@@ -37,6 +37,7 @@ fr:command-lsp
 fr:command-outputs
 fr:command-sessions
 fr:command-unfinished
+fr:commit-message-untrusted
 fr:configured-start-heading
 fr:doctor-embeddings
 fr:doctor-embeddings-answered
@@ -116,6 +117,8 @@ fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use
 fr:run-allow-and-remember-explained
+fr:run-write-lands-on
+fr:run-write-protected
 fr:schedule-already-paused
 fr:schedule-cleared
 fr:schedule-not-paused

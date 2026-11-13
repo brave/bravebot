@@ -1567,7 +1567,10 @@ Still open:
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
   held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
-  that is not UTF-8 written `\xNN`, for a client to draw in place of them. `shownDirectory` spells
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them. A `shownWrites` entry for a
+  file that a link leads elsewhere also says where it lands, and one for a protected path says so, in
+  the words the terminal draws. `protected` is true where a file the line writes is a protected path;
+  `canBeRemembered` is then false, and a client does not answer such a request for the person. `shownDirectory` spells
   `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
   by ` -> ` where they differ.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
@@ -1728,7 +1731,8 @@ Still open:
   what it runs. `digest` is what an approval binds to. `lines` is the question as the agent
   words it, one string per line, for a front end that draws the question as text.
 - `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
-  `arguments` (one line each) and `description`, which is the server's own text. `refused`
+  `arguments` (one line each), `description`, which is the server's own text, and `read_only`,
+  set where the server marks the tool read-only with its `readOnlyHint`. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
 - `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
   `mayStand`, which says whether the third answer can be recorded, and `askedForPrivateArguments`,

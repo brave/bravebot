@@ -1068,6 +1068,12 @@ credential location, since `/add-dir` refuses to open one ([SANDBOX-18](sandboxi
 and `request_path` refuses to lend one ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A read of a
 file there is offered the drop alone, a write is offered the unconfined line alone where the
 session accepts one, and a name for the directory itself is offered nothing.
+A `run` line's redirection refused for leaving the workspace is given the remedy a write of the
+same path is given, chosen from where the destination lands, and once that directory is opened the
+same line as typed writes the file. Where the path as the line wrote it, with each `..` taken out,
+is inside the workspace or an opened directory, a link carried it out and it is offered nothing.
+Where nobody can be asked in the run, a remedy that opens a directory is given as none
+([CMDLINE-5](tools/command-line.md#CMDLINE-5)).
 A climb that lands inside the root stays refused even where a directory holding the root is open,
 since the relative spelling reaches the file. It does not leave the workspace, and the refusal does
 not say it does, whether the path is typed relative or from the top of the file system. It says the
@@ -1169,6 +1175,16 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_rewind_removes_a_created_file_since_replaced_by_a_link_without_following_it`
 `verified-by: bravebot_tui::undo_tests::undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_carry_outside`
 `verified-by: bravebot_agent::turn::a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_workspace`
+`verified-by: bravebot_agent::workspace::a_redirection_outside_is_offered_the_directory_the_file_tools_offer`
+`verified-by: bravebot_agent::workspace::a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts`
+`verified-by: bravebot_agent::workspace::a_redirection_into_a_credential_location_is_offered_no_directory`
+`verified-by: bravebot_agent::workspace::a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened`
+`verified-by: bravebot_agent::workspace::a_redirection_outside_where_reads_stay_inside_is_offered_no_directory`
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
+`verified-by: bravebot_agent::tools::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
 
 <a id="TRUST-11"></a>
 ### TRUST-11: the map does not govern `~/.bravebot`
@@ -1538,9 +1554,16 @@ describes.
 
 On Windows `TEMP` and `TMP` for a stage are the exception, where the session has a directory of its
 own: they are handed over naming a `temp` directory inside it, made as the session opens, and the stage is granted that
-directory in place of the account's temporary directory. On the Windows runner the stage's `set TEMP`
-showed the container's own `AC\Temp` instead, so whether a container's `TEMP` follows the one handed
-over is not settled; the test only shows that it is not the account's. A grant there is an entry written onto every
+directory in place of the account's temporary directory. A container's `TEMP` does not follow the
+one handed over. In a stage on the Windows runner, `set TEMP` prints
+`C:\Users\runneradmin\AppData\Local\Packages\<profile>\AC\Temp`, the container's own directory,
+while the `temp` directory handed over is elsewhere (under `D:\a\_temp\confine`).
+`a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts` therefore asserts that the
+`TEMP` and `TMP` a stage sees are set and are not the account's temporary directory, writes in the
+session's `temp` directory, and is refused a write in the account's; it does not assert that
+`TEMP` names the session's `temp` directory. A program that writes to `%TEMP%` in a
+container writes inside the container's own `AC\Temp`, which is not the directory the session
+holds. A grant there is an entry written onto every
 file beneath the directory as the stage starts, and the account's temporary directory holds the
 files of every program the account runs, so granting it costs time proportional to what other
 programs left and writes entries onto files that are not the session's. A `TEMP` or `TMP` the line
@@ -1980,11 +2003,13 @@ the file would still say they had vouched for it.
 ## Trusting the directory of a run nobody is watching
 
 <a id="TRUST-26"></a>
-### TRUST-26: `--trust-workspace` gives a one-shot run the map a yes to the startup question writes
+### TRUST-26: `--trust-workspace` gives a one-shot run the map a yes to the startup question writes, with the directories `--add-dir` opens
 
 `--trust-workspace` on the command line of a one-shot run starts it from the rule a yes writes
-([TRUST-7](#TRUST-7)): the working directory and everything beneath it, and nothing else. The
-directories `--add-dir` opens stay vouched for by nothing ([CLI-11](cli.md#CLI-11)), and nothing is
+([TRUST-7](#TRUST-7)): the working directory and everything beneath it. Each directory `--add-dir`
+opens is trusted with it, by the rule `/add-dir` records ([TRUST-9](#TRUST-9)), as in any one-shot
+run whose map trusts its working directory, a run a kept answer trusts ([TRUST-23](#TRUST-23))
+included ([CLI-11](cli.md#CLI-11)). Nothing else is trusted, and nothing is
 written: no line is added under `~/.bravebot/trusted`. A run carrying on an earlier session
 ([CLI-25](cli.md#CLI-25)) keeps the map that session recorded and adds the rule to it. Given twice
 it is given once.
@@ -2006,6 +2031,8 @@ an answer in their place: it is the answer, given before the run and for the one
 `verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record`
 `verified-by: bravebot_cli::running::a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted`
 `verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_project_file_quarantined`
+`verified-by: bravebot_cli::main::a_trusted_run_trusts_the_directories_the_command_line_opened_and_nothing_beside_them`
+`verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted`
 
 ## What a killed session leaves
 

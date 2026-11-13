@@ -13,6 +13,12 @@
 //! declaration asking every call puts, the mode and the egress gate decide it here as they do
 //! there. This module adds nothing to that decision and takes none of it.
 //!
+//! A tool its server marks read-only, and that the list the person vouched for says so of, may
+//! also be called by a read step. The read is the same call, with the same literal arguments,
+//! the same routing and the same question; it is a fetch rather than an action, so it comes
+//! before every act, and what the tool answers is quarantined in the slot the step names, where
+//! a transform and an answer can use it as they use anything else a fetch read.
+//!
 //! The lists those tools are on are put to the person before anything is planned, as the start of
 //! a turn puts them ([`Servers::settle`]), so a plan started in a session no turn has run in can
 //! name a tool at once.
@@ -23,6 +29,7 @@ use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::manifest::{self, Manifest, Step};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+use bravebot_core::slot::{SlotId, SlotStore};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
@@ -139,6 +146,20 @@ impl Servers {
         self.offer.is_some()
     }
 
+    /// The servers of a run that is offered `offer`, for a test of what the planner is told.
+    #[cfg(test)]
+    pub(crate) fn offering(offer: crate::mcp::Offer) -> Self {
+        Self { offer: Some(offer) }
+    }
+
+    /// Whether any offered tool is marked read-only, which decides whether the planner is told a
+    /// read is a step.
+    pub(crate) fn any_read_only(&self) -> bool {
+        self.offer
+            .as_ref()
+            .is_some_and(|offer| offer.callable().iter().any(|tool| tool.read_only))
+    }
+
     /// The tools a plan may call, one per line: `alias:tool`, then each argument by name, `*` after
     /// a required one, and its type where the list gave one.
     pub(crate) fn listing(&self) -> String {
@@ -159,10 +180,11 @@ impl Servers {
                 })
                 .collect();
             lines.push_str(&format!(
-                "  {}:{} ({})\n",
+                "  {}:{} ({}){}\n",
                 tool.alias,
                 tool.tool,
-                arguments.join(", ")
+                arguments.join(", "),
+                if tool.read_only { " read-only" } else { "" }
             ));
         }
         lines
@@ -177,7 +199,15 @@ impl Servers {
                  required). A call is an action, so it comes after every read and transform. What \
                  it returns is shown to the person as the call answers, so a task that asks only \
                  to see a tool's answer is done by the call. It fills no slot, so no later step \
-                 can read, transform or answer with what it returned.\n{}",
+                 can read, transform or answer with what it returned.{}
+{}",
+                match self.any_read_only() {
+                    true =>
+                        " A tool marked read-only may instead be called by a SERVER_READ \
+                             step, which is a read: it puts what the tool returns in its \
+                             out_slot, for a TRANSFORM or an ANSWER to use.",
+                    false => "",
+                },
                 self.listing()
             ),
         }
@@ -187,20 +217,21 @@ impl Servers {
     pub(crate) fn grants(plan: &Manifest) -> Vec<Capability> {
         plan.steps()
             .iter()
-            .filter(|step| step.tool() == manifest::MCP_CALL)
+            .filter(|step| manifest::is_server_call(step.tool()))
             .map(|step| Capability::McpCall(ServerAlias::new(step.text("server"))))
             .collect()
     }
 
     /// Hold every call in `plan` to the list a person vouched for, before the plan is put to
     /// anybody: the tool is on the list, the arguments are a JSON object, each name in it is an
-    /// argument the tool lists, and each argument it requires is there.
+    /// argument the tool lists, and each argument it requires is there. A read names a tool the
+    /// list marks read-only.
     ///
     /// Read from the plan, which is trusted, and compared with a list a person vouched for. Nothing
     /// a server answered takes part.
     pub(crate) fn check(&self, plan: &Manifest) -> Result<(), String> {
         for (index, step) in plan.steps().iter().enumerate() {
-            if step.tool() != manifest::MCP_CALL {
+            if !manifest::is_server_call(step.tool()) {
                 continue;
             }
             let number = index + 1;
@@ -220,6 +251,11 @@ impl Servers {
                     tools.join(", ")
                 ));
             };
+            if step.tool() == manifest::MCP_READ && !tool.read_only {
+                return Err(format!(
+                    "step {number}: {name} is not marked read-only, so only SERVER_CALL may call it"
+                ));
+            }
             let arguments = arguments_of(step).map_err(|_| {
                 format!("step {number}: the arguments of {name} must be a JSON object")
             })?;
@@ -252,7 +288,7 @@ impl Servers {
         plan.steps()
             .iter()
             .enumerate()
-            .filter(|(_, step)| step.tool() == manifest::MCP_CALL)
+            .filter(|(_, step)| manifest::is_server_call(step.tool()))
             .filter_map(|(index, step)| {
                 arguments_of(step)
                     .ok()
@@ -271,6 +307,12 @@ impl Servers {
     /// else, and a reply this client could not use is noted as that and draws nothing. None of them
     /// decides whether a later step runs: the steps were fixed before the server was reached, and
     /// what a server returns is not what changes them.
+    ///
+    /// A read is given the slot its step names, and what the tool answered goes there instead,
+    /// quarantined as anything a fetch reads is. Whatever reply arrived fills it, so a read goes
+    /// on or ends by whether a reply arrived and never by which kind (MANIFEST-15): a failure the
+    /// tool reported is drawn in the margin and its words fill the slot, and a reply this client
+    /// could not use fills it with this process's own sentence saying so.
     #[expect(
         clippy::too_many_arguments,
         reason = "forwarded to `mcp::call`, which takes the same list"
@@ -284,6 +326,7 @@ impl Servers {
         alias: &str,
         word: &str,
         step: &Step,
+        into: Option<(SlotId, &mut SlotStore)>,
     ) -> Result<String, String> {
         let name = format!("{alias}:{word}");
         let Some(offer) = &self.offer else {
@@ -291,7 +334,7 @@ impl Servers {
         };
         let arguments = arguments_of(step)
             .map_err(|_| format!("the arguments of {name} must be a JSON object"))?;
-        let (text, origin, left_out) = match crate::mcp::call(
+        let (text, origin, left_out, failed) = match crate::mcp::call(
             policy,
             offer,
             egress,
@@ -306,26 +349,59 @@ impl Servers {
                 output.text,
                 crate::mcp::origin_of_reply(&name, false),
                 output.pictures.len() + output.left_out,
+                false,
             ),
-            crate::mcp::Called::Failed(text) => (text, crate::mcp::origin_of_reply(&name, true), 0),
-            // Nothing of the reply is kept, so there is nothing to draw, and the run goes on.
+            crate::mcp::Called::Failed(text) => {
+                (text, crate::mcp::origin_of_reply(&name, true), 0, true)
+            }
+            // Nothing of the reply is kept, so there is nothing to draw, and a read's slot holds
+            // this process's own words that the reply could not be used.
             crate::mcp::Called::Unusable(_) => {
+                if let Some((slot, slots)) = into {
+                    let said = bravebot_core::value::Labelled::trusted(format!(
+                        "{name} replied, and its reply could not be used"
+                    ));
+                    policy
+                        .quarantine(step.tool(), slot.clone(), &name, &said, slots)
+                        .map_err(|d| d.to_string())?;
+                    return Ok(format!(
+                        "{name} failed: its reply could not be used, which is what {slot} holds"
+                    ));
+                }
                 return Ok(format!("{name} failed: its reply could not be used"));
             }
             crate::mcp::Called::Problem(problem) => return Err(problem),
         };
-        let shown = crate::turn::preview_for(policy, manifest::MCP_CALL, &text);
-        reporter.quarantined(Shown {
-            origin,
-            reach: Reach::NoModel,
-            label: text.label().to_string(),
-            lines: shown.lines,
-            preview: shown.preview,
-        });
-        Ok(format!(
-            "{name} replied; {} not shown",
-            crate::tools::tally(left_out, "picture or part", "pictures or parts")
-        ))
+        let parts = crate::tools::tally(left_out, "picture or part", "pictures or parts");
+        match into {
+            Some((slot, slots)) if !failed => {
+                policy
+                    .quarantine(step.tool(), slot.clone(), &name, &text, slots)
+                    .map_err(|d| d.to_string())?;
+                Ok(format!("{name} replied into {slot}; {parts} left out"))
+            }
+            into => {
+                let shown = crate::turn::preview_for(policy, step.tool(), &text);
+                reporter.quarantined(Shown {
+                    origin,
+                    reach: Reach::NoModel,
+                    label: text.label().to_string(),
+                    lines: shown.lines,
+                    preview: shown.preview,
+                });
+                match into {
+                    None => Ok(format!("{name} replied; {parts} not shown")),
+                    Some((slot, slots)) => {
+                        policy
+                            .quarantine(step.tool(), slot.clone(), &name, &text, slots)
+                            .map_err(|d| d.to_string())?;
+                        Ok(format!(
+                            "{name} reported a failure, shown above, and its words are in {slot}"
+                        ))
+                    }
+                }
+            }
+        }
     }
 }
 

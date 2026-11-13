@@ -108,6 +108,7 @@ fn resolve_all(
                 ExecError::NotStarted {
                     program: stage.program.clone(),
                     detail: "not found".to_string(),
+                    before: exec::StartedBefore::Nothing,
                 }
             })
         })
@@ -3095,6 +3096,68 @@ fn a_link_pointed_elsewhere_after_approval_is_refused() {
     );
 }
 
+/// SANDBOX-17, RUN-13: a program that could not be started carries what the line had started
+/// before it, read off the processes exec spawned: nothing for the first program, an earlier part
+/// for one after `&&`, and earlier stages for one after `|`. The regressions it rejects are a
+/// position that is not recorded, so a lone program is told the line may have run in part, and a
+/// position counted from the plan's shape rather than from what started.
+#[cfg(unix)]
+#[test]
+fn a_program_that_could_not_be_started_says_what_of_the_line_had_started() {
+    let scratch = Scratch::new("not-started-before");
+    // Executable, so the line compiles, and its interpreter is missing, so the start fails.
+    script(&scratch.path, "bad", "#!/bravebot-no-such-interpreter\n");
+    for (line, expected) in [
+        ("./bad", exec::StartedBefore::Nothing),
+        ("true && ./bad", exec::StartedBefore::EarlierPart),
+        ("echo a | ./bad", exec::StartedBefore::EarlierStages),
+    ] {
+        let plan = bravebot_agent::cmdline::compile(line, &scratch.path, None, &mut |_, _| Ok(()))
+            .expect("the line compiles");
+        match past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None)) {
+            Err(ExecError::NotStarted {
+                program, before, ..
+            }) => {
+                assert_eq!(program, "./bad", "{line}");
+                assert_eq!(before, expected, "{line}");
+            }
+            other => panic!("{line}: expected NotStarted, got {other:?}"),
+        }
+    }
+}
+
+/// SANDBOX-17, RUN-2: a link repointed after approval, in the part of a line after `&&`, is
+/// refused with the earlier part recorded as started. The regression it rejects is the position
+/// dropped where the start paths are checked again, so the planner is told nothing of the line
+/// started when `true` did.
+#[cfg(unix)]
+#[test]
+fn a_repointed_link_after_an_earlier_part_records_that_the_part_had_started() {
+    let scratch = Scratch::new("started-as-repointed-after-a-part");
+    let approved = script(&scratch.path, "approved.sh", "#!/bin/sh\necho approved\n");
+    let other = script(&scratch.path, "other.sh", "#!/bin/sh\ntouch other-ran\n");
+    link(&scratch.path, "tool", &approved);
+
+    let plan =
+        bravebot_agent::cmdline::compile("true && ./tool", &scratch.path, None, &mut |_, _| Ok(()))
+            .expect("the line compiles");
+    link(&scratch.path, "tool", &other);
+
+    let refused = past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None));
+    assert!(
+        matches!(
+            &refused,
+            Err(ExecError::NotStarted { program, before, .. })
+                if program == "./tool" && *before == exec::StartedBefore::EarlierPart
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        !scratch.path.join("other-ran").exists(),
+        "the file the link now leads to ran"
+    );
+}
+
 /// RUN-2: the same holds of a line left running, and pointed back it is started by the link.
 #[cfg(unix)]
 #[test]
@@ -3153,6 +3216,7 @@ fn expanding(program: &std::path::Path, args: &[&str], expansions: Vec<Expansion
         resolved: program.to_path_buf(),
         started_as: program.to_path_buf(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions,
         routes: Vec::new(),

@@ -47,6 +47,10 @@ pub struct Watching {
     /// reading: coming back into the list puts the highlight where they left it, and the way out
     /// is a row rather than a position nothing else can name.
     pub on_session: bool,
+    /// Whether the row on the screen was opened from the list, which is then where the way back
+    /// leads. A row the view opened straight onto, for an answer or a click on a delegate's block,
+    /// was reached without the list, and the way back from it leaves the mode.
+    pub from_list: bool,
 }
 
 /// Which of the two lists the view is over.
@@ -335,6 +339,9 @@ impl Session {
     /// opened around: the scroller is drawn in front of this view, so an answer under one is on
     /// no screen at all, and a search left open below would take the letters that walk this list.
     ///
+    /// The row is not opened from the list, so the way back leaves the mode for where the person
+    /// was, and does not show them a list they did not ask for.
+    ///
     /// The turn's own view is remembered only where this view was not already open, the way
     /// [`Session::back_to_the_tail`] guards on the same question: while it is open `scroll` is an
     /// offset into a watched row's lines, and the offset the transcript comes back on is the one
@@ -353,6 +360,7 @@ impl Session {
             at,
             listing: false,
             on_session: false,
+            from_list: false,
         });
     }
 
@@ -526,6 +534,7 @@ impl Session {
             at,
             listing,
             on_session: false,
+            from_list: false,
         });
         true
     }
@@ -613,20 +622,21 @@ impl Session {
     pub fn open_watched(&mut self) {
         if let Some(watching) = &mut self.watching {
             watching.listing = false;
+            watching.from_list = true;
             self.scroll = 0;
         }
     }
 
     /// Go back to the list from one row's lines.
     ///
-    /// `false` where there is only one row: there is no list behind it, and the key that would
-    /// have gone back is the key that closes.
+    /// `false` where there is no list behind it: there is only one row, or the row was not opened
+    /// from the list. The key that would have gone back is then the key that closes.
     pub fn list_delegates(&mut self) -> bool {
         if self.watchable().len() < 2 {
             return false;
         }
         match &mut self.watching {
-            Some(watching) if !watching.listing => {
+            Some(watching) if !watching.listing && watching.from_list => {
                 watching.listing = true;
                 watching.on_session = false;
                 self.scroll = 0;

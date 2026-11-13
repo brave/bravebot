@@ -37,7 +37,7 @@ The fields of `Settings`, which are what a settings file can end up setting: {se
 
 For each field, and for each name in the `env` table:
 
-**Which layers can set it.** Follow the field from `layered_since` to the merge rule BACKEND-24 states
+**Which layers can set it.** Follow the field from `Settings::layered` to the merge rule BACKEND-24 states
 for it. A name that resolves to the closest layer can be set by a project or local file.
 
 **What it decides.** A host, a region, a proxy, a certificate bundle, a profile, a model, or a path
@@ -57,10 +57,10 @@ and a path in a sandbox list are each printed back by `doctor`, `-p` and `--plai
 before the trust question. Trace each string from the file to the writer and report one that reaches
 a terminal with its control characters.
 
-**Whether the file is the person's.** A file the command line names is the person's act, and it is
-read after the others only when it sits outside the checkout. `layered_since` takes the directory the
-session started in as well as the current one. Check that a named file inside the checkout is treated
-as the checkout's.
+**Whether the file is the person's.** A file the command line names is the person's act wherever it
+sits, the checkout's own file included (PERM-14), so a finding that only says a named file inside the
+checkout is obeyed is a Known cost and not a defect. Check that the project and local files read as
+found layers, and not named, are still treated as the checkout's.
 
 ### What is not this lane
 

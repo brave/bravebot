@@ -118,10 +118,11 @@ pub enum Named {
     VetContent,
     RequestPath,
     Search,
+    SpawnAgent,
 }
 
 impl Named {
-    const ALL: [Named; 11] = [
+    const ALL: [Named; 12] = [
         Named::Run,
         Named::ReadOutput,
         Named::ReadFile,
@@ -133,6 +134,7 @@ impl Named {
         Named::VetContent,
         Named::RequestPath,
         Named::Search,
+        Named::SpawnAgent,
     ];
 
     /// The name the tool is offered under. `run` is read as [`Running::on`] reads it, so it has
@@ -150,6 +152,7 @@ impl Named {
             Named::VetContent => Some("vet_content"),
             Named::RequestPath => Some("request_path"),
             Named::Search => Some("search"),
+            Named::SpawnAgent => Some("spawn_agent"),
         }
     }
 
@@ -324,6 +327,28 @@ fn spawn_agent_lacks(beside: &dyn Fn(&str) -> bool) -> String {
     format!(
         " A delegate cannot call {named}, so do work that needs {needs} yourself, before you \
          delegate or instead of delegating.{whole}"
+    )
+}
+
+/// What `spawn_agent` says about output the planner may not read: a delegate is quarantined as the
+/// planner is (DELEGATE-1), so delegating a run whose output the planner may not read does not make
+/// it readable. It names `spawn_processor` only where `beside` says it is on the list, and points to
+/// vouching for the command, which names no tool. It starts with a space, to sit after the sentence
+/// before it.
+///
+/// Without it the description's build example reads as a way round the quarantine, and a planner
+/// holding a reference to a run's output started a delegate to run the command again, which got the
+/// same reference and could not read it either.
+fn spawn_agent_quarantined(beside: &dyn Fn(&str) -> bool) -> String {
+    let instead = if beside("spawn_processor") {
+        " Give its reference to spawn_processor for a bounded question about it instead, or have \
+         a person vouch for the command."
+    } else {
+        " Have a person vouch for the command instead."
+    };
+    format!(
+        " A delegate is quarantined exactly as you are, so delegating a run whose output you may \
+         not read does not make that output readable.{instead}"
     )
 }
 
@@ -532,6 +557,26 @@ fn run_read_description(beside: &dyn Fn(&str) -> bool) -> String {
     }
 }
 
+/// The description of `job_output`'s `read` argument, naming `read_output` only where `beside`
+/// says it is on the list, for the reason [`run_read_description`] does.
+fn job_output_read_description(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("read_output") {
+        "Ask to read what the job printed in this result. Where read_output would hand it to you \
+         without asking the user, or would hand it back at once, it comes back here as text you \
+         can read, and there is no read_output call to make. Where it would be kept back, it \
+         still comes back as a reference. Output too long for one result still comes back as a \
+         reference, with its size, and read_output is not held to that size. Everywhere else \
+         this changes nothing, and output you may not read still comes back as a reference. The \
+         account of the job's end that the turn gives you follows your latest look's read. \
+         Defaults to false."
+            .to_string()
+    } else {
+        "Ask to read what the job printed in this result. This changes nothing in this turn: \
+         output you may not read comes back as a reference. Defaults to false."
+            .to_string()
+    }
+}
+
 /// The paragraph of the `read_file` description on pictures and PDFs, naming `spawn_processor`
 /// only where `beside` says it is on the list.
 fn read_file_pictures(beside: &dyn Fn(&str) -> bool) -> String {
@@ -674,13 +719,28 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
             "fetch_url" => state_fetch_url_beside(tool, &beside),
-            "job_output" => tool.function.description = job_output_description(&beside),
+            "search" | "list_files" => remove_read_without_vet_content(tool, &beside),
+            "job_output" => {
+                tool.function.description = job_output_description(&beside);
+                if let Some(read) = tool
+                    .function
+                    .parameters
+                    .pointer_mut("/properties/read/description")
+                {
+                    *read = json!(job_output_read_description(&beside));
+                }
+            }
             "spawn_agent" => {
-                tool.function.description = tool.function.description.replacen(
-                    &spawn_agent_lacks(&|_| true),
-                    &spawn_agent_lacks(&beside),
-                    1,
-                );
+                for (full, narrowed) in [
+                    (spawn_agent_lacks(&|_| true), spawn_agent_lacks(&beside)),
+                    (
+                        spawn_agent_quarantined(&|_| true),
+                        spawn_agent_quarantined(&beside),
+                    ),
+                ] {
+                    tool.function.description =
+                        tool.function.description.replacen(&full, &narrowed, 1);
+                }
             }
             "run" => state_run_beside(tool, &beside),
             "read_file" => {
@@ -738,8 +798,29 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
 /// [`state_what_is_beside`] for `fetch_url`.
 fn state_fetch_url_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
     tool.function.description = fetch_url_description(beside);
-    // `read` asks for the release `vet_content` makes, so a list without it has nothing for the
-    // argument to ask.
+    remove_read_without_vet_content(tool, beside);
+}
+
+/// What `read` says on `search`: the release `vet_content` makes, asked for in the result of the
+/// walk. Planner-facing, so it is English in the code and not in a catalog (localization.md). It
+/// says nothing of who answers or whether a check is made (VET-5).
+const READ_A_WALK: &str = "Ask to have a result that would come back quarantined released in \
+                           this result, as vet_content would release it, so there is no \
+                           vet_content call to make. Where it would be kept back, or it is too \
+                           long for one result, it still comes back as a reference. Defaults to \
+                           false.";
+
+/// What `read` says on `list_files`: [`READ_A_WALK`] for a listing, which comes back kept back as
+/// one reference or as one per entry depending on who answers vet_content (LIST-2).
+const READ_A_LISTING: &str = "Ask to have a listing that would come back quarantined released in \
+                              this result, as vet_content would release it, so there is no \
+                              vet_content call to make. Where it would be kept back, or it is \
+                              too long for one result, it still comes back quarantined, as \
+                              references. Defaults to false.";
+
+/// `read` asks for the release `vet_content` makes, so a list without it has nothing for the
+/// argument to ask.
+fn remove_read_without_vet_content(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
     if !beside("vet_content")
         && let Some(properties) = tool
             .function
@@ -975,15 +1056,22 @@ fn table(
                     },
                     "depth": {
                         "type": "integer",
-                        "description": "Optional number of directory levels to descend. 1 \
-                                        lists this directory and no deeper, naming each \
-                                        subdirectory it stopped at so you can see where the \
-                                        tree continues: with a trailing / where you are shown \
-                                        the names, and as a reference that says it is a \
-                                        directory where they are quarantined. Omit it to walk \
-                                        the whole tree, which in a large project is thousands \
-                                        of paths.",
+                        "description": format!(
+                            "Optional number of directory levels to descend. 1 lists this \
+                             directory and no deeper, naming each subdirectory it stopped at so \
+                             you can see where the tree continues: with a trailing / where you \
+                             are shown the names, and as a reference that says it is a \
+                             directory where they are quarantined. A directory with more than \
+                             {per} files gives {per} of them and says how many it left out; list \
+                             it with no depth to see the rest. Omit it to walk the whole tree, \
+                             which in a large project is thousands of paths.",
+                            per = crate::workspace::MAX_FILES_PER_DIRECTORY
+                        ),
                         "minimum": 1
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": READ_A_LISTING
                     }
                 },
                 "required": ["directory"]
@@ -1242,6 +1330,10 @@ fn table(
                                         where something occurs without paying for the lines; \
                                         they ignore offset and context and are not held to the \
                                         match cap."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": READ_A_WALK
                     }
                 },
                 "required": ["pattern"]
@@ -1837,6 +1929,10 @@ fn table(
                                         one answer. If the job is still running at the bound, \
                                         you are told so. Defaults to false, which returns at \
                                         the job's next output."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": job_output_read_description(&|_| true)
                     }
                 },
                 "required": ["job"]
@@ -1914,7 +2010,8 @@ fn table(
                 "Hand a whole sub-task to a second agent and get back one report. It has its own \
                  context, so everything it reads stays with it and only what it says at the end \
                  reaches you. That is what this is for: running a build reads the whole log, and \
-                 asking a delegate to run the build tells you what failed. Use it when finding \
+                 asking a delegate to run a build whose output you may read tells you what \
+                 failed.{quarantined} Use it when finding \
                  something out would cost you more context than the answer is worth, or when a \
                  sub-task is separable enough to describe in a paragraph. It cannot ask the user \
                  anything, so give it everything it needs in the task. It may hand parts of that \
@@ -1924,7 +2021,8 @@ fn table(
                  user for approval, so this saves you context and never an approval.\
                  {lacks} Do not use it for something one read would answer: it is a whole second \
                  agent and costs like one.",
-                lacks = spawn_agent_lacks(&|_| true)
+                lacks = spawn_agent_lacks(&|_| true),
+                quarantined = spawn_agent_quarantined(&|_| true)
             ),
             json!({
                 "type": "object",
@@ -2007,6 +2105,11 @@ fn table(
                                         each. It can only lower the \
                                         bound the delegate's definition sets. Leave it out to \
                                         set none."
+                    },
+                    "wake_after": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": wake_after_description(true)
                     }
                 },
                 "required": ["kind", "task"]
@@ -2327,8 +2430,35 @@ pub fn for_delegate(
         // The kinds this delegate's own capabilities reach, so a checker is not offered a worker
         // it could only start narrowed to what it holds itself (DELEGATE-32).
         offer_kinds(&mut tools, &delegates.offered_to(capabilities));
+        // A typed line never ends a delegate's wait (DELEGATE-17), so its `wake_after` does not
+        // say one does.
+        if let Some(wake_after) = tools
+            .iter_mut()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .and_then(|spawn| spawn.function.parameters.get_mut("properties"))
+            .and_then(|properties| properties.get_mut("wake_after"))
+        {
+            wake_after["description"] = json!(wake_after_description(false));
+        }
     }
     tools
+}
+
+/// What `spawn_agent`'s `wake_after` is told (DELEGATE-17). `typed_lines_wake` is false for a
+/// delegate's list, whose wait no typed line ends.
+fn wake_after_description(typed_lines_wake: bool) -> String {
+    let also = match typed_lines_wake {
+        true => " A line from the user still wakes you, and so does another call's count.",
+        false => " Another call's count still wakes you.",
+    };
+    format!(
+        "Optional. How many of this call's delegates have to end before you are asked again, \
+         once you end a round with them working. Left out it is 1: you are asked again as each \
+         one reports. A figure at or above the number of delegates the call starts means all of \
+         them. Use it when you need the reports together, such as a batch whose results you \
+         compare or merge, so the turn does not ask you once per report to name what is still \
+         outstanding.{also}"
+    )
 }
 
 /// The tools a turn offers its planner, with the kinds of delegate this turn resolved.
@@ -2654,21 +2784,25 @@ pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call,
 /// so the description names them only where it would. The sentences that name `request_path` are
 /// written only where `tools` holds it: a `--tools run` turn or a definition that leaves it out is
-/// not told of a tool it cannot call, including that the tool is refused (TOOL-6).
+/// not told of a tool it cannot call, including that the tool is refused (TOOL-6). `nobody_to_ask`
+/// says nobody can be asked in this run (CLI-1), and then the description names no route only a
+/// person takes, as the sentence after a failed step does not (SANDBOX-19).
 pub fn state_confinement(
     tools: &mut [Tool],
     confine_runs: bool,
     sandbox: bravebot_sandbox::SandboxMode,
     requests_offered: bool,
+    nobody_to_ask: bool,
 ) {
     let request_path_listed = tools
         .iter()
         .any(|tool| tool.function.name == "request_path");
-    let Some(stated) = crate::confine::stated_in_the_description(
+    let Some(stated) = crate::confine::stated_in_the_description_for(
         confine_runs,
         sandbox,
         requests_offered,
         request_path_listed,
+        crate::confine::Askable::nobody_when(nobody_to_ask),
     ) else {
         return;
     };

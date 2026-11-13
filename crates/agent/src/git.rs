@@ -3886,12 +3886,7 @@ mod tests {
             commit(&repo, &[("f.txt", one)]);
             write(&repo, "f.txt", "");
             write(&repo, "mod", "a file where a submodule was\n");
-            // A socket path must fit in sun_path, which the scratch directory's path does not.
-            // nosemgrep: rust.lang.security.temp-dir.temp-dir
-            let short = std::env::temp_dir().join(format!("bb{}.sock", std::process::id()));
-            let _ = std::fs::remove_file(&short);
-            let listener = std::os::unix::net::UnixListener::bind(&short).expect("socket");
-            std::fs::rename(&short, repo.root.join("sock")).expect("socket moved");
+            let listener = crate::testutil::socket_standing_at(&repo.root.join("sock"));
             index(
                 &repo,
                 &[

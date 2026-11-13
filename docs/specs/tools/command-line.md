@@ -284,6 +284,18 @@ person and never spelled into a sentence for the planner. That holds for a file 
 line could not open as well ([CMDLINE-17](#CMDLINE-17)): it is named once, under the directory as
 typed.
 
+**A name a pattern matched is a path only where the program reads it as one.** The compiled plan
+records which arguments a pattern produced. Such an argument counts toward the proof of
+[CMDLINE-8](#CMDLINE-8) only in a position where the audited program reads it as a file, and then
+the trust map's answer for that path is its label. In any other position, such as an instruction
+operand like `basename`'s or grep's pattern, an option, or an option's value, the program may print
+the name, and no path in the read set answers for it. The step is then not read-proven, so the line
+is asked about and its output is untrusted. `basename incoming/*` asks and its output is
+quarantined; `basename 'incoming/*'` passes the pattern as written and keeps the proof road; and
+`cat incoming/*` takes its label from what the map says about `incoming/`. A matched name starting
+with `-`, such as a file called `--format=x` matched by `stat -c %s *`, is read as an option and
+refuses the proof the same way.
+
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
 
@@ -344,6 +356,13 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_delegate_resolves_a_tilde_against_the_home_its_parent_did`
 `verified-by: bravebot_tui::app::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
 `verified-by: bravebot_ui_bridge::retention::worker::a_tilde_in_a_desktop_run_line_stands_for_the_home_directory`
+`verified-by: bravebot_agent::cmdline::each_argument_records_whether_a_pattern_matched_it`
+`verified-by: bravebot_core::command::a_matched_list_of_another_length_marks_every_argument`
+`verified-by: bravebot_core::policy::a_name_a_pattern_matched_in_an_unvouched_directory_is_not_proven_by_basename`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_the_program_does_not_read_as_a_file_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_in_an_option_position_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_path_the_program_reads_stays_proven`
+`verified-by: bravebot_agent::turn::a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined`
 
 <a id="CMDLINE-5"></a>
 ### CMDLINE-5: a redirection target is a write destination and takes the write gates
@@ -371,6 +390,44 @@ that is outside every opened directory is asked about under the name it was writ
 ([TRUST-18](../trust-map.md#TRUST-18)). When the line is refused for leaving the workspace in a
 session that would accept the request, the refusal says that `unconfined` is the argument that
 makes the write possible.
+
+**What a refused destination is told.** A destination refused for leaving the workspace is given
+the remedy a file tool's write to the same path is given ([TRUST-10](../trust-map.md#TRUST-10)),
+chosen from where the destination lands: the directory it is in, or the directory itself, to open
+with `/add-dir`, with the warning when that directory holds the working directory. It is given no
+directory where `permissions.readsStayInWorkspace` holds, where the directory is or lies inside a
+credential location, for the stores, where the path climbs with `..` above the top of the file
+system, where it lands on a name that is not UTF-8, and where the path as the line wrote it, with
+each `..` taken out, is inside the workspace or an opened directory, which means a link carried it
+out. A destination in a directory the remedy names is let through once that directory is opened.
+It names no `request_path`, whose grant a redirection does not pass. Where nobody can be asked in
+the run ([CLI-1](../cli.md#CLI-1)), a remedy that opens a directory is given as none, and the
+planner is told to say in its reply which path the work needs. The `unconfined` sentence above is
+said with every remedy, a credential location's included, where the session accepts that argument
+and only there. The trail records the remedy the planner was told. The choice reads the line's
+path, the file system and the session's settings, never a byte a file or a program holds.
+
+A redirection inside a shell's command string, as in `sh -c 'echo hi >> file'`, is not a
+destination of the line: the confined shell opens it, and the sandbox refuses it outside the
+directories the stage writes. The driver holds no path for it, so the sentence after such a failed
+step ([SANDBOX-19](../sandboxing.md#SANDBOX-19)) names none and says to write the redirection on the
+`run` line itself.
+
+`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
+`verified-by: bravebot_agent::tools::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
+`verified-by: bravebot_agent::workspace::a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened`
+`verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
+`verified-by: bravebot_agent::workspace::a_redirection_outside_is_offered_the_directory_the_file_tools_offer`
+`verified-by: bravebot_agent::workspace::a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts`
+`verified-by: bravebot_agent::workspace::a_redirection_into_a_credential_location_is_offered_no_directory`
+`verified-by: bravebot_agent::workspace::a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing`
+`verified-by: bravebot_agent::workspace::a_redirection_outside_where_reads_stay_inside_is_offered_no_directory`
+`verified-by: bravebot_agent::tools::a_redirection_outside_is_given_the_open_remedy_and_one_into_credentials_the_credential_remedy`
+`verified-by: bravebot_agent::tools::a_refused_redirection_writes_its_file_once_the_directory_it_names_is_added`
+`verified-by: bravebot_agent::tools::read_file_and_a_redirection_of_the_same_outside_path_are_offered_the_same_remedy`
 
 **Where the permission mode reaches a path.** While the mode that answers every permission question
 is in force ([MODE-4](../permission-modes.md#MODE-4)), a destination in a directory outside the
@@ -579,7 +636,11 @@ directory, the checkout holding it (a session begun in a subdirectory has the `b
 and, for a delegate working in a checkout, the working directory the checkout was made from
 (see [checkouts](../checkouts.md)). The checkout is the nearest of the directory and its ancestors
 that holds a `.git`, found as [SANDBOX-30](../sandboxing.md#SANDBOX-30) finds the one it leaves out
-of the search for programs. The agent computes the set from the directories the person opened and
+of the search for programs. Only the nearest is taken, because every ancestor with a `.git` would
+also take in an outer repository that merely contains the checkout, such as the repository a
+submodule is part of or a dotfiles repository at the home directory, and every program under it
+would then be outside the proof. A directory with no `.git` above it, or one marked by `.hg` or
+`.jj` only, has no checkout and only the directory itself is in the set. The agent computes the set from the directories the person opened and
 hands it to the policy as it hands the root. The test is made against the path the driver resolved
 and will execute rather than against the spelling that reached it: those are two values, and only
 the first says where the file is. An assignment decides what a program loads and
@@ -596,7 +657,10 @@ read-proven, since its operands and the map's rules would be spelled relative to
 A plan with no steps is not read-proven either: the answer to what it read is that there was no
 proof.
 
-The plan's read set is those operand paths, glob-expanded. The output's first label is the meet of
+The plan's read set is those operand paths, glob-expanded. A name a pattern matched belongs to it
+only where the program reads that name as a file. A step holding a pattern-produced word anywhere
+else, in an instruction operand, an option or an option's value, is not read-proven
+([CMDLINE-4](#CMDLINE-4)). The output's first label is the meet of
 the labels over the read set and over stdin, which is the ordinary rule for a derived value,
 applied to a process, and is not a relabel and grants nothing.
 
@@ -684,6 +748,11 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::a_line_bsd_and_gnu_read_different_files_from_still_asks`
 `verified-by: bravebot_core::policy::a_line_reading_a_refused_file_called_dash_still_asks`
+`verified-by: bravebot_core::policy::a_name_a_pattern_matched_in_an_unvouched_directory_is_not_proven_by_basename`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_the_program_does_not_read_as_a_file_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_word_in_an_option_position_is_not_proven`
+`verified-by: bravebot_core::policy::a_pattern_produced_path_the_program_reads_stays_proven`
+`verified-by: bravebot_agent::turn::a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined`
 `verified-by: bravebot_core::policy::a_recursive_search_takes_its_label_from_the_whole_subtree`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::an_environment_assignment_leaves_a_step_unproven`
@@ -872,6 +941,14 @@ a carried directory that no longer exists. A link in a tree nobody vouched for c
 leads to ([LABEL-3](../labels.md#LABEL-3), [CMDLINE-4](#CMDLINE-4)). The auto mode's classifier is a
 model, and is shown the same spelling ([AUTO-5](../auto-mode.md#AUTO-5)).
 
+A program named by a relative path that is not there is refused, and the refusal says where the path
+was looked for: in the directory as told above, or at the workspace root. Where the call named no
+directory and the line would have run in one an earlier call named, it says the directory was carried
+from that call and that passing `directory` changes it. At the root it says to pass `directory` to
+look elsewhere. A bare name is looked for on `$PATH` and an absolute path names its own place, so
+their refusals name no directory. What decides the sentence is the planner's line and whether this
+call named a directory, and nothing read from the tree.
+
 The carrying lasts a turn. It is not written into the session record, so the next turn starts at the
 root again. That is short of what this clause describes, and is left to the change that gives a
 session somewhere to keep one ([RUN-9](run.md#RUN-9)).
@@ -897,6 +974,11 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 `verified-by: bravebot_agent::cmdline::a_word_that_only_looks_like_a_shell_builtin_is_not_refused`
 `verified-by: bravebot_agent::turn::a_directory_removed_during_the_approval_is_reported_as_removed`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
+`verified-by: bravebot_agent::turn::a_program_named_by_a_relative_path_that_is_not_found_says_where_it_was_looked_for`
+`verified-by: bravebot_agent::turn::a_bare_name_or_an_absolute_path_that_is_not_found_names_no_directory`
+`verified-by: bravebot_agent::turn::a_relative_program_not_found_in_a_carried_directory_is_told_as_typed`
+`verified-by: bravebot_agent::turn::a_relative_program_not_found_in_a_link_to_the_root_is_told_as_typed`
+`verified-by: bravebot_agent::turn::a_relative_program_not_found_inside_a_substitution_says_where_it_was_looked_for`
 
 <a id="CMDLINE-13"></a>
 ### CMDLINE-13: a call may name its own deadline, under a ceiling
@@ -1251,7 +1333,15 @@ nothing until you have opened that file.
   checkout at `/` does the same for every program, and the system's `/usr/bin` is then under it.
   Only the nearest checkout is taken, so an outer repository that contains the checkout adds
   nothing. A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not in
-  the set. The cost is a prompt for a call that would have been fine, which is the right direction.
+  the set, and neither is a checkout in a layout with no `.git` above the directory: there only the
+  directory itself is. A program kept in a checkout of that kind is judged as any other program is,
+  by the trust map and the system's directories. The cost is a prompt for a call that would have been fine, which is the right direction.
+- **A toolchain's install and cache directories are not in the set.** A `~/.cargo/bin` or
+  `~/.rustup` that lies outside every directory the set lists is a directory a person installed
+  into, so a program resolved there is honoured as a `$PATH` directory outside the set is. An install
+  is read and never written by a confined stage ([SANDBOX-15](../sandboxing.md#SANDBOX-15)), and a
+  cache is not searched for programs. Where such a directory lies under a checkout that holds a
+  `.git`, or is a directory a stage was granted to write, it is in the set for that reason.
 - **A proof is about paths, and the trust map answers about names.** A symlink inside a vouched-for
   directory pointing at a file outside it is a name the map covers and bytes it never saw, so a
   read-proven line reading through one comes back trusted. The table refuses the recursion flag that

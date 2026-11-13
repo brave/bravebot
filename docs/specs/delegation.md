@@ -56,6 +56,11 @@ capabilities and it holds no untrusted content. Content it may not read is quara
 handed a reference, exactly as its parent would be, so there is no point in the run where
 untrusted bytes and a capability are in the same context.
 
+The planner is told this where it would otherwise delegate to get past a quarantine: the
+`spawn_agent` description and a quarantined run result say that a delegate is quarantined exactly
+as the planner is, so delegating a run whose output the planner may not read does not make that
+output readable ([AGENT-1](tools/spawn-agent.md#AGENT-1), [RUN-14](tools/run.md#RUN-14)).
+
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_only_the_tools_its_capabilities_reach`
 `verified-by: bravebot_agent::turn::what_a_delegate_could_not_read_is_quarantined_from_it_too`
 
@@ -813,17 +818,23 @@ nobody watched.
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it
 
 A turn does not answer while something it started is still working. Where the planner answers
-first, the turn waits until a delegate ends, a line the person typed is waiting, or the turn is
-stopped. It then puts the reports of every delegate that has ended in front of the planner, and the
+first, the turn waits until enough of a `spawn_agent` call's delegates have ended, a line the
+person typed is waiting, or the turn is stopped. Enough is the call's `wake_after`, 1 where the call
+left it out, and all of the call's delegates where it is at or above their number; each call holds
+its own count, and the first call to reach its count wakes the turn. It then puts the reports of
+every delegate that has ended, of any call, in front of the planner, and the
 planner answers again while the others keep working, knowing what came back. A planner with
 nothing to do with one report ends its round again naming what is outstanding, and the turn waits
-for the next delegate to end. The turn does not end until the last one has. A turn that has run out
-of tool calls waits for every delegate, and answers without being asked again.
+again until a call reaches its count, a line is waiting, or the turn is stopped. The turn does not
+end until the last one has. A turn that has run out of tool calls waits for every delegate, and
+answers without being asked again.
 
-What wakes the turn is a count and a flag the driver holds: how many delegates have ended, and
-whether a line is waiting to be read. It does not depend on what a report says, so a report held
-out as a reference wakes the turn exactly as one in words does. A delegate ending wakes the turn
-once, because its report is taken when it wakes the turn and it is not outstanding after that. A
+What wakes the turn is a count and a flag the driver holds: how many of each call's delegates have
+ended against the count that call set, and whether a line is waiting to be read. A delegate's end
+is counted for its call whether its report was taken by that call's wake or another's. It does not
+depend on what a report says, so a report held
+out as a reference wakes the turn exactly as one in words does. A delegate ending wakes the turn at
+most once, because its report is taken when it wakes the turn and it is not outstanding after that. A
 line wakes the turn once, and a line the turn does not take does not wake the waits after it. A
 delegate is never woken by a typed line, which was aimed at the turn the person is watching
 ([INPUT-10](terminal-input.md#INPUT-10)). Stopping the turn waits for every delegate to end, as
@@ -838,9 +849,14 @@ with one line naming what is outstanding, and the turn waits and asks again. The
 while a delegate works is reported to the interface as text between calls, as the text that comes
 with a tool call is, so it stays in the transcript when the next round starts. Only the answer that
 ends the turn is the reply. While the turn waits for a delegate the interface is told which one,
-and the terminal client names it beside the spinner. Every delegate still working is named, since
-the wait ends at whichever of them is first. There is no option on `spawn_agent` to wait for all of
-a batch before the planner is asked again, so no argument for a person to approve.
+and the terminal client names it beside the spinner. Every delegate the turn has not yet taken
+back is named, since the end of any of them can be the one that brings its call to its count. A
+delegate that has ended stays named until a wake takes its report, so under a `wake_after` above 1
+the row keeps naming the delegates of the call that have ended until the call reaches its count.
+The count `wake_after` sets is the planner's own
+argument and names no routing field, carries no untrusted content and decides only when the planner
+is asked again, so it is not an argument for a person to approve
+([AGENT-3](tools/spawn-agent.md#AGENT-3)).
 
 [background-sessions.md](background-sessions.md) proposes a session whose process outlives the
 terminal, which nothing yet builds. It changes nothing here: the turn in such a session still does
@@ -857,10 +873,19 @@ front of them for a turn they were told had finished.
 `verified-by: bravebot_agent::turn::a_turn_out_of_tool_calls_waits_for_its_delegate_and_is_not_asked_again`
 `verified-by: bravebot_agent::turn::a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_ends`
 `verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
+`verified-by: bravebot_agent::turn::a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_last_ends`
+`verified-by: bravebot_agent::turn::a_batch_that_asked_to_wake_after_all_of_it_costs_the_planner_one_request_during_the_wait`
+`verified-by: bravebot_agent::turn::a_call_asking_to_wake_after_two_of_three_is_asked_again_at_the_second_end_and_not_the_first`
+`verified-by: bravebot_agent::turn::a_wait_for_all_of_a_calls_delegates_is_not_a_round_against_the_rounds_limit`
+`verified-by: bravebot_agent::turn::a_turn_out_of_tool_calls_waits_for_a_whole_batch_and_is_not_asked_again`
+`verified-by: bravebot_agent::tools::the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count`
+`verified-by: bravebot_agent::turn::a_typed_line_wakes_a_turn_waiting_for_all_of_a_calls_delegates`
+`verified-by: bravebot_agent::turn::a_call_waiting_for_all_of_its_delegates_counts_each_end_whatever_its_label`
 `verified-by: bravebot_agent::turn::a_typed_line_wakes_a_persons_wait_once_and_a_delegates_never`
 `verified-by: bravebot_agent::turn::a_wake_is_not_a_round_against_the_rounds_limit`
 `verified-by: bravebot_agent::turn::each_waiting_answer_stays_in_the_transcript_even_when_it_repeats`
 `verified-by: bravebot_agent::turn::a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_line`
+`verified-by: bravebot_agent::turn::a_stop_ends_a_wait_for_all_of_a_calls_delegates`
 `verified-by: bravebot_tui::state::a_turn_waiting_on_several_delegates_names_each_until_it_reports`
 `verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
 `verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
@@ -1550,3 +1575,12 @@ held at the start.
   delegate that figure is the harness's own time and is read as such, and on one that delegated it
   is not. Charging the rest to the parent's tool or stalled figures would put seconds there that
   the parent did not spend there, which is the double count the partition exists to avoid.
+
+- **Delegates that end close together but not inside one poll wake the planner once each.**
+  [DELEGATE-17](#DELEGATE-17) wakes the turn when a call reaches its `wake_after`, so a call left
+  at the default of 1 costs a request per report even where the reports arrive a second apart. A
+  window that held a wake for a short time to join the ends that follow was considered and is not
+  built. It would be a timer the driver holds and would read no report, so it would not break the
+  rule, but it delays every report by the window, including the one a planner was waiting on to
+  act, and the planner that knows its reports are needed together can already say so with
+  `wake_after`. The cost is left with the default.

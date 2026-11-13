@@ -4,7 +4,7 @@
 //! short, how a command was run, and the size of what it printed. None reads the content that was
 //! quarantined, which is why they can live apart from the presentation of it in `one_turn`.
 
-use super::{ReadOutputIs, STOP_BEING_ASKED};
+use super::{NOT_SHOWN_THIS_TURN, ReadOutputIs, STOP_BEING_ASKED};
 use crate::tools::{Beside, Named};
 use crate::workspace::Paging;
 
@@ -39,6 +39,50 @@ pub(super) fn capped_note(tool: &str, incomplete: bool, paging: Option<Paging>) 
     } else {
         String::new()
     }
+}
+
+/// What a quarantined listing says about a cap, beside its references for the reason `capped_note`
+/// is. `at_the_cap` is whether the listing holds as many entries as the cap over the whole walk
+/// allows, and `cut` is each directory the per-directory cap cut, as its reference and how many of
+/// its files were left out (LIST-5). References and numbers, never a name.
+pub(super) fn listing_capped_note(
+    incomplete: bool,
+    at_the_cap: bool,
+    cut: &[(String, usize)],
+) -> String {
+    if !incomplete {
+        return String::new();
+    }
+    let mut said = String::new();
+    if cut.is_empty() || at_the_cap {
+        said.push_str(
+            " The listing stopped at that many entries and is incomplete: list a subdirectory to \
+             see the rest.",
+        );
+    }
+    if !cut.is_empty() {
+        let each: Vec<String> = cut
+            .iter()
+            .map(|(reference, left_out)| {
+                format!(
+                    "{} of [{reference}]",
+                    crate::tools::tally(*left_out, "file", "files")
+                )
+            })
+            .collect();
+        said.push_str(&format!(
+            " The listing took at most {} files from any one directory and is incomplete. Not \
+             listed: {}. Each of those references is a directory the walk entered and cut, not \
+             one it stopped at, and the files left out are in it. No argument takes a reference \
+             to a directory, so to see the rest of one, list it by its name with no depth if you \
+             know the name; otherwise list the directory you named with no depth, which walks the \
+             whole tree up to {} entries.",
+            crate::workspace::MAX_FILES_PER_DIRECTORY,
+            each.join(", "),
+            crate::workspace::MAX_ENTRIES
+        ));
+    }
+    said
 }
 
 /// What a result says about the symbolic links its walk did not enter, written beside the reference
@@ -123,10 +167,12 @@ pub(super) fn left_out_note(left_out: usize) -> String {
 /// so the call does not read as a quarantined result with no
 /// explanation, and without saying why.
 ///
-/// `read` is an argument of run alone, so it is offered on a run's
-/// result and not on a job's. It is not offered again where it was
-/// asked for: the output was then too long for one result, which is
-/// said, or its release was refused, which read_output reports.
+/// `read` is an argument of run and of job_output. A result is pointed
+/// at it only on a run's, where the sentence names run's own call; a
+/// look at a job is not told to pass it. It is not offered again where
+/// it was asked for: the output was then too long for one result, which
+/// is said on a run's result and on a job's alike, or its release was
+/// refused, which read_output reports.
 ///
 /// Too long is said with where the rest is. Told only that, a planner
 /// took read_output's result to be held to the same size and ran a
@@ -135,21 +181,36 @@ pub(super) fn left_out_note(left_out: usize) -> String {
 ///
 /// A turn whose list lacks `read_output` has nothing to be pointed at, and none of the sentences
 /// that name it, or that lean on a release it makes, is said to it (TOOL-6). What is left is the
-/// statement that the quarantine is about the command, the vouching sentence where it applies,
-/// which names no tool, `spawn_processor` as the way to work with the output where the list holds
-/// it, and `read_file` where the list holds it. The same holds for `read_file`:
-/// its sentence is said only to a list that holds it.
+/// statement that the quarantine is about the command, the vouching sentence where a person is
+/// asked about runs and no record stops the asking, which names no tool, `spawn_processor` as the
+/// way to work with the output where the list holds it, and `read_file` where the list holds it.
+/// The same holds for `read_file`: its sentence is said only to a list that holds it.
 ///
-/// `printed_by` is whether a command produced the result, `bytes` is the size of what it printed
-/// where that is known, `cap` is the largest result a run may hold, and `beside` is which of the
-/// tools named here the turn's list holds.
+/// That list is told `read_output_is` as `Asked` whatever the mode, so the vouching sentence there
+/// is decided by `runs_asked` instead: where the mode answers runs, no prompt is drawn and a run
+/// it approved vouches for nothing (MODE-4), so the sentence is left out as the other arms leave
+/// it out, and the result says that what was printed cannot be shown in this turn, in words that
+/// name no mode (MODE-3).
+///
+/// A list that holds `spawn_agent` is told in every arm that a delegate is quarantined as it is, so
+/// delegating the run does not make what it printed readable (DELEGATE-1). The sentence names no
+/// other tool, since the reference's own description names `spawn_processor` wherever the list
+/// holds it. It says nothing about vouching, so the arms that leave the vouching sentence out
+/// still leave it out.
+///
+/// `printed_by` is whether a command produced the result, `runs_asked` is whether a person is
+/// asked about a run in the mode as it stands, `bytes` is the size of what it printed where that
+/// is known, `cap` is the largest result a run may hold, and `beside` is which of the tools named
+/// here the turn's list holds.
 #[expect(
     clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
     reason = "the facts of the result, the mode's answer and the list's tools are separate inputs"
 )]
 pub(super) fn run_advice(
     printed_by: bool,
     covered_by_record: bool,
+    runs_asked: bool,
     read_output_is: ReadOutputIs,
     beside: Beside,
     tool: &str,
@@ -162,9 +223,13 @@ pub(super) fn run_advice(
     } else {
         ""
     };
-    // A run that asked to read, where the mode or a check answers, already gets the size sentence
-    // in the arm for that case.
-    let costs = if tool == "run" && read_asked && read_output_is != ReadOutputIs::Asked {
+    let delegate = delegate_note(beside);
+    // A run or a look at a job that asked to read, where the mode or a check answers, already gets
+    // the size sentence in the arm for that case, so it is not told twice.
+    let costs = if read_asked
+        && (tool == "run" || tool == "job_output")
+        && read_output_is != ReadOutputIs::Asked
+    {
         String::new()
     } else {
         crate::tools::read_output_cost(bytes, cap, beside)
@@ -174,29 +239,27 @@ pub(super) fn run_advice(
         // Whatever the mode says, a list without `read_output` has no release for a `read` to make
         // early and nothing to call for a look at the output.
         (true, _, _) if !beside.holds(Named::ReadOutput) => {
-            let vouching = if covered_by_record {
-                String::new()
-            } else {
-                format!(" {STOP_BEING_ASKED}")
-            };
+            // That list is told `Asked` whatever the mode, so `read_output_is` adds nothing here.
+            let vouching = vouching(runs_asked, ReadOutputIs::Asked, beside, covered_by_record)
+                .map(|sentence| format!(" {sentence}"))
+                .unwrap_or_default();
             let processor = if beside.holds(Named::SpawnProcessor) {
                 " To work with what it printed, give the reference to spawn_processor."
             } else {
                 ""
             };
             format!(
-                "\n\nThis is about the command rather than about what it printed.{vouching}{processor}{read_file}"
+                "\n\nThis is about the command rather than about what it printed.{vouching}{delegate}{processor}{read_file}"
             )
         }
         (true, _, ReadOutputIs::Unasked) => {
-            let in_the_result = match (tool == "run", read_asked) {
-                (false, _) => "",
-                (true, false) => {
+            let in_the_result = match (tool, read_asked) {
+                ("run", false) => {
                     " To have what a command prints come back in \
                          the result that ran it, call run with read: \
                          true."
                 }
-                (true, true) if bytes.is_none_or(|bytes| bytes > cap) => {
+                ("run" | "job_output", true) if bytes.is_none_or(|bytes| bytes > cap) => {
                     " It is longer than a run's result may hold, so \
                          it was left out of this one. read_output is not \
                          held to that size and hands back all of it. To \
@@ -205,17 +268,18 @@ pub(super) fn run_advice(
                          100 or grep, stdin_ref set to the reference, \
                          and read: true."
                 }
-                (true, true) => "",
+                _ => "",
             };
             format!(
                 "\n\nThis is about the command rather than about what \
                  it printed, and it is not the end of the road. To see \
                  this one, call read_output with the \
-                 reference.{in_the_result}{costs}{read_file}"
+                 reference.{in_the_result}{costs}{delegate}{read_file}"
             )
         }
         (true, _, ReadOutputIs::ByACheck) => {
-            let not_returned = match (tool == "run" && read_asked, bytes) {
+            let not_returned = match ((tool == "run" || tool == "job_output") && read_asked, bytes)
+            {
                 (false, _) => "",
                 (true, Some(bytes)) if bytes <= cap => {
                     " Your read: true did not return it in this \
@@ -235,21 +299,59 @@ pub(super) fn run_advice(
                 "\n\nThis is about the command rather than about \
                  what it printed, and it is not the end of the road. \
                  To see this one, call read_output with the \
-                 reference.{not_returned}{costs}{read_file}"
+                 reference.{not_returned}{costs}{delegate}{read_file}"
             )
         }
         (true, true, ReadOutputIs::Asked) => format!(
             "\n\nThis is about the command rather \
              than about what it printed, and it is not the end of the \
              road. To see this one, call read_output with the \
-             reference.{costs}{read_file}"
+             reference.{costs}{delegate}{read_file}"
         ),
         (true, false, ReadOutputIs::Asked) => format!(
             "\n\nThis is about the command rather \
              than about what it printed, and it is not the end of the \
              road. To see this one, call read_output with the \
-             reference.{costs} {STOP_BEING_ASKED}{read_file}"
+             reference.{costs} {STOP_BEING_ASKED}{delegate}{read_file}"
         ),
+    }
+}
+
+/// The sentence a quarantined run's or job's result says about vouching, or `None`.
+///
+/// Where a person is asked about runs and about reading what they printed, and no record already
+/// stops the asking for this line, it says how to stop being asked. Where the mode answers runs and
+/// the list lacks `read_output`, no prompt is drawn and no vouch stops it, so it says the output
+/// cannot be shown in this turn, naming no mode (MODE-3, MODE-4). Elsewhere it says nothing.
+/// `run_advice` and the account of a finished job both take it from here.
+pub(super) fn vouching(
+    runs_asked: bool,
+    read_output_is: ReadOutputIs,
+    beside: Beside,
+    covered_by_record: bool,
+) -> Option<&'static str> {
+    match (runs_asked, read_output_is, covered_by_record) {
+        (false, _, _) if !beside.holds(Named::ReadOutput) => Some(NOT_SHOWN_THIS_TURN),
+        (true, ReadOutputIs::Asked, false) => Some(STOP_BEING_ASKED),
+        _ => None,
+    }
+}
+
+/// What a quarantined result a command produced says about delegating the run: a delegate gets the
+/// same reference and cannot read it either (DELEGATE-1), so a list that could start one is told
+/// that before it reruns the command through one. A run's result and the account of an ended job
+/// both say it (RUN-14).
+///
+/// Said only where the list holds `spawn_agent` (TOOL-6). It names no other tool: the reference's
+/// own description names `spawn_processor` wherever the list holds it. It starts with a space, to
+/// sit after the sentence before it.
+pub(super) fn delegate_note(beside: Beside) -> &'static str {
+    match beside.holds(Named::SpawnAgent) {
+        false => "",
+        true => {
+            " A delegate is quarantined exactly as you are, so delegating this run does not make \
+             what it printed readable."
+        }
     }
 }
 
@@ -316,6 +418,7 @@ mod tests {
         run_advice(
             printed_by,
             covered_by_record,
+            true,
             read_output_is,
             Beside::every(),
             tool,
@@ -325,6 +428,8 @@ mod tests {
         )
     }
     const ABOUT: &str = "\n\nThis is about the command rather than about what it printed, and it is not the end of the road. To see this one, call read_output with the reference.";
+    /// What a list holding `spawn_agent` is told about delegating the run, whatever else it holds.
+    const DELEGATE: &str = " A delegate is quarantined exactly as you are, so delegating this run does not make what it printed readable.";
 
     #[test]
     fn a_cut_short_result_with_an_offset_names_the_offset() {
@@ -361,6 +466,36 @@ mod tests {
         assert!(
             capped_note("search", true, Some(Paging::PastTheEnd { found: 3 }))
                 .contains("stopped at a cap")
+        );
+    }
+
+    /// LIST-5: a quarantined listing cut per directory names each cut directory's reference with
+    /// how many of its files were left out. The regressions it rejects: the whole-walk wording
+    /// ("stopped at that many entries") for a listing that stopped at no such cap, a count dropped
+    /// or paired with the wrong reference, and the sentence said for a complete listing.
+    #[test]
+    fn a_listing_cut_per_directory_names_each_reference_with_what_it_left_out() {
+        let cut = [("ref:7".to_string(), 1_801), ("ref:8".to_string(), 1)];
+        let said = listing_capped_note(true, false, &cut);
+        assert_eq!(
+            said,
+            " The listing took at most 200 files from any one directory and is incomplete. Not \
+             listed: 1801 files of [ref:7], 1 file of [ref:8]. Each of those references is a \
+             directory the walk entered and cut, not one it stopped at, and the files left out \
+             are in it. No argument takes a reference to a directory, so to see the rest of one, \
+             list it by its name with no depth if you know the name; otherwise list the directory \
+             you named with no depth, which walks the whole tree up to 2000 entries."
+        );
+        assert_eq!(listing_capped_note(false, false, &[]), "");
+        assert_eq!(
+            listing_capped_note(true, false, &[]),
+            " The listing stopped at that many entries and is incomplete: list a subdirectory to \
+             see the rest."
+        );
+        let both = listing_capped_note(true, true, &cut);
+        assert!(
+            both.contains("stopped at that many entries") && both.contains("1 file of [ref:8]"),
+            "a listing cut both ways did not say both: {both}"
         );
     }
 
@@ -406,7 +541,7 @@ mod tests {
         assert_eq!(
             told,
             format!(
-                "{ABOUT} To have what a command prints come back in the result that ran it, call run with read: true. To read a file, use read_file."
+                "{ABOUT} To have what a command prints come back in the result that ran it, call run with read: true.{DELEGATE} To read a file, use read_file."
             )
         );
         // Not a run: nothing about `read`.
@@ -420,14 +555,14 @@ mod tests {
                 Some(1),
                 10
             ),
-            format!("{ABOUT} To read a file, use read_file.")
+            format!("{ABOUT}{DELEGATE} To read a file, use read_file.")
         );
     }
 
     #[test]
     fn an_unasked_run_read_but_too_long_says_where_the_rest_is() {
         let long = format!(
-            "{ABOUT} It is longer than a run's result may hold, so it was left out of this one. read_output is not held to that size and hands back all of it. To see part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true. To read a file, use read_file."
+            "{ABOUT} It is longer than a run's result may hold, so it was left out of this one. read_output is not held to that size and hands back all of it. To see part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true.{DELEGATE} To read a file, use read_file."
         );
         assert_eq!(
             advice(
@@ -457,27 +592,22 @@ mod tests {
                 Some(10),
                 10
             ),
-            format!("{ABOUT} To read a file, use read_file.")
+            format!("{ABOUT}{DELEGATE} To read a file, use read_file.")
         );
     }
 
+    /// A look at a job that asked to read is told so as a run is: `job_output` takes `read` too.
     #[test]
-    fn a_check_answering_says_the_output_was_not_returned_only_for_a_run_that_asked() {
-        assert_eq!(
-            advice(
-                true,
-                false,
-                ReadOutputIs::ByACheck,
-                "run",
-                true,
-                Some(1),
-                10
-            ),
-            format!(
-                "{ABOUT} Your read: true did not return it in this result, so read_output is the way to see it. To read a file, use read_file."
-            )
-        );
-        for (tool, asked) in [("run", false), ("job_output", true)] {
+    fn a_check_answering_says_the_output_was_not_returned_only_for_a_run_or_a_look_that_asked() {
+        for tool in ["run", "job_output"] {
+            assert_eq!(
+                advice(true, false, ReadOutputIs::ByACheck, tool, true, Some(1), 10),
+                format!(
+                    "{ABOUT} Your read: true did not return it in this result, so read_output is the way to see it.{DELEGATE} To read a file, use read_file."
+                )
+            );
+        }
+        for (tool, asked) in [("run", false), ("job_output", false)] {
             assert_eq!(
                 advice(
                     true,
@@ -488,7 +618,7 @@ mod tests {
                     Some(1),
                     10
                 ),
-                format!("{ABOUT} To read a file, use read_file.")
+                format!("{ABOUT}{DELEGATE} To read a file, use read_file.")
             );
         }
     }
@@ -496,7 +626,7 @@ mod tests {
     #[test]
     fn a_check_answering_says_where_the_rest_is_for_output_past_the_cap() {
         let long = format!(
-            "{ABOUT} It is longer than a run's result may hold, so it was left out of this one. read_output is not held to that size and is the way to see all of it. To see part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true. To read a file, use read_file."
+            "{ABOUT} It is longer than a run's result may hold, so it was left out of this one. read_output is not held to that size and is the way to see all of it. To see part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true.{DELEGATE} To read a file, use read_file."
         );
         for bytes in [Some(11), None] {
             assert_eq!(
@@ -510,12 +640,12 @@ mod tests {
     fn a_person_asked_hears_about_vouching_only_where_no_record_stops_the_asking() {
         assert_eq!(
             advice(true, true, ReadOutputIs::Asked, "run", false, None, 10),
-            format!("{ABOUT} To read a file, use read_file.")
+            format!("{ABOUT}{DELEGATE} To read a file, use read_file.")
         );
         assert_eq!(
             advice(true, false, ReadOutputIs::Asked, "run", false, None, 10),
             format!(
-                "{ABOUT} To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on. To read a file, use read_file."
+                "{ABOUT} To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on.{DELEGATE} To read a file, use read_file."
             )
         );
     }
@@ -579,10 +709,44 @@ mod tests {
         }
     }
 
+    /// RUN-21 and RUN-22 for `job_output`: a look that asked to read past the cap is told it is
+    /// longer than a result may hold, where the rest is, and the cost once, wherever the mode or a
+    /// check answers. The sentence is chosen by the tool's name and the size the slot states.
+    /// The regression it rejects is the sentence keyed on `run` alone, which left an unscreened
+    /// bypass look with no word of why its `read` returned nothing.
+    #[test]
+    fn a_job_look_that_asked_to_read_past_the_cap_is_told_why_once() {
+        for is in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            let text = advice(true, true, is, "job_output", true, Some(400_000), 10);
+            assert!(
+                text.contains("It is longer than a run's result may hold"),
+                "{is:?}: {text}"
+            );
+            assert!(!text.contains("bytes of it"), "{is:?}: {text}");
+            assert_eq!(text.matches("tail -n 100").count(), 1, "{is:?}: {text}");
+            assert!(
+                !text.contains("call run with read: true."),
+                "{is:?}: {text}"
+            );
+        }
+        // Within the cap and not asked: nothing about read on a job's result.
+        let text = advice(
+            true,
+            true,
+            ReadOutputIs::Unasked,
+            "job_output",
+            false,
+            Some(1),
+            10,
+        );
+        assert!(!text.contains("read: true"), "{text}");
+    }
+
     /// The regression it rejects: the filter half said to a list that cannot call `run`.
     #[test]
     fn the_filter_is_offered_only_where_the_list_holds_run() {
         let text = run_advice(
+            true,
             true,
             true,
             ReadOutputIs::Asked,
@@ -667,6 +831,7 @@ mod tests {
             ("read_file", Named::ReadFile),
             ("read_git", Named::ReadGit),
             ("spawn_processor", Named::SpawnProcessor),
+            ("spawn_agent", Named::SpawnAgent),
         ]
         .into_iter()
         .filter(|(name, _)| names.contains(name))
@@ -688,9 +853,22 @@ mod tests {
                 (true, "run", true, Some(11)),
                 (false, "job_output", false, None),
             ] {
-                let text = run_advice(true, record, is, Beside::every(), tool, asked, bytes, 10);
+                let text = run_advice(
+                    true,
+                    record,
+                    true,
+                    is,
+                    Beside::every(),
+                    tool,
+                    asked,
+                    bytes,
+                    10,
+                );
                 assert!(text.starts_with(ABOUT), "{is:?}: {text}");
-                assert!(text.ends_with(" To read a file, use read_file."), "{text}");
+                assert!(
+                    text.ends_with(&format!("{DELEGATE} To read a file, use read_file.")),
+                    "{text}"
+                );
             }
         }
     }
@@ -715,6 +893,7 @@ mod tests {
                 let text = run_advice(
                     true,
                     record,
+                    true,
                     is,
                     without(&["read_output"]),
                     tool,
@@ -744,6 +923,7 @@ mod tests {
             run_advice(
                 true,
                 false,
+                true,
                 ReadOutputIs::Asked,
                 beside,
                 "run",
@@ -751,12 +931,15 @@ mod tests {
                 None,
                 10
             ),
-            "\n\nThis is about the command rather than about what it printed. To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on. To read a file, use read_file."
+            format!(
+                "\n\nThis is about the command rather than about what it printed. To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on.{DELEGATE} To read a file, use read_file."
+            )
         );
         assert_eq!(
             run_advice(
                 true,
                 true,
+                true,
                 ReadOutputIs::Asked,
                 beside,
                 "run",
@@ -764,7 +947,57 @@ mod tests {
                 None,
                 10
             ),
-            "\n\nThis is about the command rather than about what it printed. To read a file, use read_file."
+            format!(
+                "\n\nThis is about the command rather than about what it printed.{DELEGATE} To read a file, use read_file."
+            )
+        );
+    }
+
+    /// The fault (brave/bravebot#3982): a list without `read_output`, where the mode answers runs,
+    /// is told a vouch would stop the asking, though nobody is asked and a run the mode approved
+    /// vouches for nothing. That list is told `Asked` as who answers a read whatever the mode, so
+    /// every record state and both tools are checked with it, and the sentence that takes its place
+    /// names no mode.
+    #[test]
+    fn a_list_without_read_output_is_not_told_of_vouching_where_the_mode_answers_runs() {
+        let beside = without(&["read_output", "spawn_processor"]);
+        for record in [false, true] {
+            for tool in ["run", "job_output"] {
+                assert_eq!(
+                    run_advice(
+                        true,
+                        record,
+                        false,
+                        ReadOutputIs::Asked,
+                        beside,
+                        tool,
+                        false,
+                        None,
+                        10
+                    ),
+                    format!(
+                        "\n\nThis is about the command rather than about what it printed. What it printed cannot be shown to you in this turn.{DELEGATE} To read a file, use read_file."
+                    ),
+                    "{tool}, record {record}"
+                );
+            }
+        }
+        let with_processor = run_advice(
+            true,
+            false,
+            false,
+            ReadOutputIs::Asked,
+            without(&["read_output", "read_file"]),
+            "run",
+            true,
+            Some(1),
+            10,
+        );
+        assert_eq!(
+            with_processor,
+            format!(
+                "\n\nThis is about the command rather than about what it printed. What it printed cannot be shown to you in this turn.{DELEGATE} To work with what it printed, give the reference to spawn_processor."
+            )
         );
     }
 
@@ -773,6 +1006,7 @@ mod tests {
     #[test]
     fn a_list_without_read_output_is_pointed_at_spawn_processor_only_where_it_holds_it() {
         let with = run_advice(
+            true,
             true,
             true,
             ReadOutputIs::Asked,
@@ -784,9 +1018,12 @@ mod tests {
         );
         assert_eq!(
             with,
-            "\n\nThis is about the command rather than about what it printed. To work with what it printed, give the reference to spawn_processor."
+            format!(
+                "\n\nThis is about the command rather than about what it printed.{DELEGATE} To work with what it printed, give the reference to spawn_processor."
+            )
         );
         let without_it = run_advice(
+            true,
             true,
             true,
             ReadOutputIs::Asked,
@@ -808,7 +1045,7 @@ mod tests {
             ReadOutputIs::ByACheck,
             ReadOutputIs::Asked,
         ] {
-            let text = run_advice(true, true, is, beside, "run", false, Some(1), 10);
+            let text = run_advice(true, true, true, is, beside, "run", false, Some(1), 10);
             assert!(!text.contains("read_file"), "{is:?}: {text}");
             assert!(
                 text.contains("call read_output with the reference"),
@@ -819,6 +1056,7 @@ mod tests {
             run_advice(
                 true,
                 true,
+                true,
                 ReadOutputIs::Asked,
                 beside,
                 "run",
@@ -826,11 +1064,12 @@ mod tests {
                 None,
                 10
             ),
-            ABOUT
+            format!("{ABOUT}{DELEGATE}")
         );
         let neither = without(&["read_output", "read_file", "spawn_processor"]);
         assert_eq!(
             run_advice(
+                true,
                 true,
                 true,
                 ReadOutputIs::Asked,
@@ -840,8 +1079,107 @@ mod tests {
                 None,
                 10
             ),
+            format!("\n\nThis is about the command rather than about what it printed.{DELEGATE}")
+        );
+        assert_eq!(
+            run_advice(
+                true,
+                true,
+                true,
+                ReadOutputIs::Asked,
+                neither.without(Named::SpawnAgent),
+                "run",
+                false,
+                None,
+                10
+            ),
             "\n\nThis is about the command rather than about what it printed."
         );
+    }
+
+    /// brave/bravebot#3986. The regression it rejects: a quarantined run's advice silent about
+    /// delegating, so a planner holding a reference it may not read starts a delegate to run the
+    /// command again, and the delegate gets the same reference. Every arm says it, and none of them
+    /// gains a vouching sentence it did not have (RUN-14) or a word naming the mode.
+    #[test]
+    fn a_quarantined_run_says_a_delegate_cannot_read_what_it_printed_either() {
+        for is in [
+            ReadOutputIs::Unasked,
+            ReadOutputIs::ByACheck,
+            ReadOutputIs::Asked,
+        ] {
+            for record in [false, true] {
+                for (tool, asked, bytes) in [
+                    ("run", false, Some(1)),
+                    ("run", true, Some(11)),
+                    ("job_output", false, None),
+                ] {
+                    let text = advice(true, record, is, tool, asked, bytes, 10);
+                    assert!(text.contains(DELEGATE), "{is:?} {record}: {text}");
+                    // The reference's description names `spawn_processor`; the sentence does not
+                    // say it again.
+                    assert!(
+                        !text.contains("bounded question"),
+                        "{is:?} {record}: {text}"
+                    );
+                    let vouches = !record && is == ReadOutputIs::Asked;
+                    assert_eq!(text.contains("vouch"), vouches, "{is:?} {record}: {text}");
+                    for word in ["mode", "bypass", "bypassed", "screening", "check"] {
+                        assert!(
+                            !text
+                                .split(|c: char| !c.is_ascii_alphanumeric())
+                                .any(|w| w == word),
+                            "{word} in {is:?} {record}: {text}"
+                        );
+                    }
+                }
+            }
+            let short = run_advice(
+                true,
+                false,
+                true,
+                is,
+                without(&["read_output"]),
+                "run",
+                false,
+                None,
+                10,
+            );
+            assert!(short.contains(DELEGATE), "{is:?}: {short}");
+            assert_eq!(short.matches("spawn_processor").count(), 1, "{short}");
+        }
+    }
+
+    /// TOOL-6. The regression it rejects: the delegate sentence said to a list that cannot start a
+    /// delegate, or naming `spawn_processor` to a list without it.
+    #[test]
+    fn the_delegate_sentence_follows_the_list() {
+        for is in [
+            ReadOutputIs::Unasked,
+            ReadOutputIs::ByACheck,
+            ReadOutputIs::Asked,
+        ] {
+            for beside in [
+                without(&["spawn_agent"]),
+                without(&["spawn_agent", "read_output"]),
+            ] {
+                let text = run_advice(true, false, true, is, beside, "run", false, Some(1), 10);
+                assert!(!text.contains("delegat"), "{is:?}: {text}");
+            }
+            let text = run_advice(
+                true,
+                false,
+                true,
+                is,
+                without(&["spawn_processor"]),
+                "run",
+                false,
+                Some(1),
+                10,
+            );
+            assert!(text.contains(DELEGATE), "{is:?}: {text}");
+            assert!(!text.contains("spawn_processor"), "{is:?}: {text}");
+        }
     }
 
     /// The fault: the history sentence is said to a list that lacks `read_git`.
@@ -858,6 +1196,7 @@ mod tests {
             run_advice(
                 false,
                 false,
+                true,
                 ReadOutputIs::Asked,
                 without(&["read_output", "read_file"]),
                 "read_file",

@@ -87,6 +87,24 @@ pub(super) fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     hand_back(out, enhanced_keys(), disable_raw_mode)
 }
 
+/// Leave the interface for good: hand the terminal back, then tell herdr the run has left its pane
+/// ([HERDR-12](../../../../docs/specs/herdr.md#HERDR-12)).
+///
+/// Only the end of `run` comes here, through `end_the_run`. An editor, a viewer and a stop hand the
+/// terminal back with [`hand_back_terminal`] and take it again, and the run is still in the pane
+/// through all of them.
+///
+/// Told how to hand the terminal back, so that a test can leave without a tty. herdr is told whether
+/// or not the terminal could be handed back, since the run is leaving anyway.
+pub(super) fn leave<W: Write>(
+    out: &mut W,
+    hand_back: impl FnOnce(&mut W) -> io::Result<()>,
+) -> io::Result<()> {
+    let handed_back = hand_back(out);
+    crate::herdr::release();
+    handed_back
+}
+
 /// [`hand_back_terminal`], told whether disambiguated keys were pushed and how to leave raw mode, so
 /// that a test can read the order they happen in.
 ///

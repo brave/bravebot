@@ -259,10 +259,12 @@ A directory that *holds* the project is **not** refused, and its rule covers the
 it covers everything else in that tree. Vouching for a directory is a standing statement about the
 place, and the project is in it, so there is nothing to except.
 
-**The command-line [`--add-dir`](../reference/cli.md#--add-dir-path) grants only the first half.** A
-one-shot run can reach the directory and vouches for nothing in it, since the gesture behind the
-trusted half is a person typing the path in a session where they have already answered for the
-directory they are working in, and a run nobody is watching has answered nothing.
+**The command-line [`--add-dir`](../reference/cli.md#--add-dir-path) grants the trusted half only
+where the run trusts its working directory.** The gesture behind that half is a person naming the
+path where they have already answered for the directory they are working in. A one-shot run given
+`--trust-workspace`, or one a kept answer trusts, has that answer, so the directories its command
+line opens are trusted with the working directory. A run that trusts nothing can reach the directory
+and vouches for nothing in it.
 
 **A refusal for a path outside the project says what to open.** When a file tool is given an absolute
 path outside the project and every directory you opened, the refusal tells the model to ask you to

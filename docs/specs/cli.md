@@ -57,45 +57,59 @@ it does not take.
 ## Clauses
 
 <a id="CLI-1"></a>
-### CLI-1: where nobody can be asked, nothing is approved
+### CLI-1: where nobody can be asked, what no rule allows is refused
 
-Effects are refused rather than applied unseen, and the planner's own questions are declined
-rather than answered on the user's behalf. A rule written in advance that refuses, or that forces
-an ask, holds here as it does in a session; one that allows does not, since what it answers is a
-prompt and there is nobody to prompt.
+Effects are refused rather than applied unseen unless a rule or a flag allows them, and the
+planner's own questions are declined rather than answered on the user's behalf. The rules a settings
+file wrote hold here as they hold in a session, read from the same layers
+([PERM-14](permissions.md#PERM-14)): a `deny` rule refuses, an `ask` rule puts a question nobody is
+there to answer, so the effect is refused, and an `allow` rule lets the effect go ahead unasked. An
+`allow` rule a checkout's file proposed is in force only where the workspace's record already holds
+the person's grant of it ([PERM-15](permissions.md#PERM-15)), since nobody is there to grant one. A
+rule answers only what a rule answers in a session, so a question
+[PERM-9](permissions.md#PERM-9) puts whatever the rules say is refused here. A write the trust map
+alone would let through is still put, and so refused: the map a run holds was written by its own
+command line, and it vouches for the tree's files and never for a write the planner composed. An
+`allow` rule lets a write go ahead only where a rule allows it under every name the write is judged
+under ([PERM-7](permissions.md#PERM-7)): the name given, the name it lands on once links are
+followed, and each other name of a file with a hard link. A write through a link to a name no rule
+allows, or to a file with another name no rule allows, is put, and so refused.
 
-`--dangerously-skip-permissions`, `--accept-edits` and `--auto` are the three ways a run nobody is
-watching may write, and each is the person's own instruction rather than a default: what they
-select, and what they cost, is [permission-modes.md](permission-modes.md) and
-[auto-mode.md](auto-mode.md). The first answers every question; the second answers the write prompt
-and no other, so a run, a fetch and a write the credential scan found a value in are still refused,
-because nobody can be asked. The third answers the write prompt the same way, and a run the sandbox
-confines and the first question about a URL when a classifier says to allow it, and refuses anything
-the classifier does not allow. The three are refused in pairs, and `--accept-edits` and `--auto` are
-refused where the line starts no one-shot run, since a session has the mode key for the same thing. The planner's questions are declined in both modes, because they are not
-permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
-which picks among the choices the planner offered, and on a channel the person vouched for may
-answer in words (CLI-36). With `--approve-input-lines` as well, that program is also put each
-write, run and fetch, and approves or declines that one call (CLI-36).
+`--dangerously-skip-permissions`, `--accept-edits` and `--auto` approve more than the rules do, and
+each is the person's own instruction rather than a default: what they select, and what they cost, is
+[permission-modes.md](permission-modes.md) and [auto-mode.md](auto-mode.md). The first answers every
+question; the second answers the write prompt and no other, so a run and a fetch no rule allows, and
+a write the credential scan found a value in, are still refused, because nobody can be asked. The
+third answers the write prompt the same way, and a run the sandbox confines and the first question
+about a URL when a classifier says to allow it, and refuses anything the classifier does not allow.
+The three are refused in pairs, and `--accept-edits` and `--auto` are refused where the line starts
+no one-shot run, since a session has the mode key for the same thing. The planner's questions are
+declined in both modes, because they are not permissions. A run given `--input-format lines` puts
+them to the program sending its lines instead, which picks among the choices the planner offered,
+and on a channel the person vouched for may answer in words (CLI-36). With `--approve-input-lines`
+as well, that program is also put each write, run and fetch no rule answered, and approves or
+declines that one call (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
-somebody typed is not a guess, which is what makes it the only kind of thing that may lift the first
-half of this and nothing that may lift the second.
+somebody typed is not a guess, and neither is a rule somebody wrote, which is what makes those the
+things that may lift the first half of this and nothing that may lift the second.
 
-An allow rule is not a guess either, and that is not what disqualifies it. It says which prompts to
-stop raising, which is a decision about a session somebody is sitting in front of; read here it
-would say which effects may happen unwatched, and one line in a file in the home directory would
-do what the flag is named and warned about for. A record of command lines somebody asked to be
-remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
-reason.
+A rule says what the person wants done with one kind of effect, and it is written before the effect
+comes up, so whether anybody is watching when it does changes nothing about what it means. A run
+that read only the rules that refuse could do nothing the person had written down as wanted without
+a mode flag, and each mode flag approves far more than one rule does. Reading all three lists keeps
+the narrowest statement of what the person allowed in force. A checkout's file stays out of it,
+because a rule it wrote is the checkout's words until the person grants it, and a run nobody is
+watching cannot ask. A record of command lines somebody asked to be remembered past a session is not
+read here, for the reason [RUN-19](tools/run.md#RUN-19) gives.
 
 A trust answer is not an allow rule, though both are kept in the home directory. It approves no
 effect: it says which files are the person's own, so the planner may read them, and it covers one
 directory the person answered about. A run therefore opens trusting its working directory when the
 person typed `--trust-workspace` or kept an answer that settles a session there
 ([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
-answer. Writing stays refused without one of the flags above.
+answer. Writing stays refused unless a rule or one of the flags above allows it.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
@@ -106,8 +120,17 @@ answer. Writing stays refused without one of the flags above.
 `verified-by: bravebot_cli::main::the_accept_edits_flag_is_taken_out_and_belongs_to_a_one_shot_run`
 `verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
 `verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
-`verified-by: bravebot_cli::main::an_allow_rule_decides_nothing_for_a_run_nobody_is_watching`
-`verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
+`verified-by: bravebot_cli::main::an_allow_rule_decides_for_a_run_nobody_is_watching_as_it_does_in_a_session`
+`verified-by: bravebot_cli::main::a_rule_a_checkout_proposed_decides_in_a_one_shot_run_only_once_it_was_granted`
+`verified-by: bravebot_cli::main::a_tool_this_program_does_not_have_leaves_the_rest_of_the_file_in_force`
+`verified-by: bravebot_cli::running::a_one_shot_run_writes_where_an_allow_rule_lets_it_and_nowhere_else`
+`verified-by: bravebot_cli::running::a_one_shot_run_writes_in_an_added_directory_an_absolute_rule_names`
+`verified-by: bravebot_cli::running::a_one_shot_run_applies_an_edit_an_allow_rule_covers_and_refuses_one_it_does_not`
+`verified-by: bravebot_cli::running::a_one_shot_run_refuses_a_protected_write_an_allow_rule_covers`
+`verified-by: bravebot_cli::running::a_one_shot_run_does_not_write_through_a_link_to_a_name_no_rule_allows`
+`verified-by: bravebot_cli::running::a_one_shot_run_does_not_write_a_file_whose_other_name_no_rule_allows`
+`verified-by: bravebot_cli::running::a_deny_rule_outranks_an_allow_rule_in_a_one_shot_run`
+`verified-by: bravebot_cli::running::a_one_shot_run_runs_a_program_an_allow_rule_names_and_refuses_another`
 `verified-by: bravebot_cli::running::a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`
 
 <a id="CLI-2"></a>
@@ -565,7 +588,7 @@ against one.
 `verified-by: bravebot_cli::main::a_substitution_the_command_line_did_not_ask_for_is_reported_and_not_failed`
 
 <a id="CLI-11"></a>
-### CLI-11: `--add-dir` makes a directory reachable, and vouches for nothing
+### CLI-11: `--add-dir` makes a directory reachable, and trusted where the run trusts its working directory
 
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. The path may be relative, resolved against the working directory the same
@@ -576,22 +599,45 @@ left to the shell, which ordinarily expands it before this ever sees the path, a
 one is read as an ordinary directory component rather than as the home directory, since a second
 reading of it here is a second place for it to resolve apart from the shell's own. A path that is
 not absolute once resolved, does not exist, is not a directory, or is already inside the working
-one is refused by name and the run stops before the turn. The run's trust map holds nothing for
-it, so a file read there is read on the same footing as the project's own files without an answer
-about them: nothing vouched for it. `--trust-workspace` covers the working directory alone. A
-write there is refused as any other write in an unattended run is, and the flag in CLI-1 lifts
-that exactly as it does elsewhere, `--approve-input-lines` included.
+one is refused by name and the run stops before the turn.
+
+Where the map the run starts with trusts its working directory, through `--trust-workspace`
+([TRUST-26](trust-map.md#TRUST-26)), a kept answer ([TRUST-23](trust-map.md#TRUST-23)) or the
+session it carries on ([CLI-25](#CLI-25)), each directory this opens is trusted too, by the rule
+`/add-dir` records in a session ([TRUST-9](trust-map.md#TRUST-9)): a rule under the canonical path
+the directory was opened at, which covers the directory and what is beneath it and nothing beside or
+above it. A file read there reaches the planner as a file of the project does, and a link inside the
+directory that leads out of it is refused as in any added directory
+([TRUST-10](trust-map.md#TRUST-10)). Nothing is written under `~/.bravebot/trusted`. The session
+record keeps the rule with the rest of the map, as it keeps the working directory's, and a run that
+carries the session on reaches the directory only where its own command line opens it again
+([TRUST-10](trust-map.md#TRUST-10)). Where the map does not trust the working directory, nothing
+vouches for an added directory either, and a file read there is quarantined. A directory a settings
+file declares as a reference is opened the same way and is trusted by nothing
+([REFER-3](references.md#REFER-3)): only a directory the command line named is trusted with the
+working directory.
+
+The trust approves no effect. A write there is refused as any other write in an unattended run is,
+and the flag in CLI-1 lifts that exactly as it does elsewhere, `--approve-input-lines` included. A
+line that starts in an added directory is not run unasked because of it, since the person's trust
+lets a confined line through only where the line starts in the root the yes was given for
+([RUN-5](tools/run.md#RUN-5)). Where that clause reads the words of a line, a word naming a file in
+a trusted added directory counts as trusted, as it does after `/add-dir` in a session.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
 outside the working directory is otherwise refused whatever else is true, so without this the task
-cannot be done at all.
+cannot be done at all. A file the run reaches and does not trust is read only through a processor
+or a file named with `--file`, one file at a time, which a task reading another checkout cannot work
+with.
 
-Vouching is a separate grant, and it is the one an unattended run cannot make. The interactive
-command of the same name records that a person vouched for the directory, which it can do because a
-person typed it in a session whose map already holds their answer about the directory they are
-working in. A run nobody is watching holds no such answer unless the person gave one for its working
-directory (`--trust-workspace`, or a kept answer), so a rule trusting the tree named on the command
-line would leave it more trusted than the tree the run works in. Reaching a directory is what the work needs; trusting what is in it is not.
+The interactive command of the same name trusts its directory because a person typed it in a session
+whose map already holds their answer about the directory they work in. A run whose map trusts its
+working directory holds that answer too, typed as a flag or kept, and the directories named on the
+same command line are the person's own choice of what the run is to read beside it. A run whose map
+trusts nothing holds no such answer, and a rule trusting a directory named on its command line would
+leave that directory more trusted than the tree the run works in, so the run trusts neither. A
+reference is left out because a settings file names it for every run that reads the file, which is
+not a choice made for this run.
 
 Stopping rather than carrying on, because the two audiences differ: a session says the path was not
 opened and leaves the person to retype it, and a script that carried on would fail somewhere further
@@ -603,6 +649,14 @@ in, over a file it was told it could open.
 `verified-by: bravebot_cli::main::a_directory_the_command_line_named_is_reachable`
 `verified-by: bravebot_cli::main::a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory`
 `verified-by: bravebot_cli::main::a_directory_that_cannot_be_opened_stops_the_run`
+`verified-by: bravebot_cli::main::a_trusted_run_trusts_the_directories_the_command_line_opened_and_nothing_beside_them`
+`verified-by: bravebot_cli::main::an_untrusted_run_trusts_no_directory_the_command_line_opened`
+`verified-by: bravebot_cli::main::a_run_trusting_a_kept_answer_trusts_the_directories_the_command_line_opened`
+`verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted`
+`verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_file_in_an_added_directory_quarantined`
+`verified-by: bravebot_cli::running::a_continued_run_given_the_workspace_flag_reads_a_file_in_an_added_directory_as_trusted`
+`verified-by: bravebot_cli::running::a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_added_directory`
+`verified-by: bravebot_cli::running::a_link_out_of_a_trusted_added_directory_does_not_reach_the_planner`
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
 `verified-by: bravebot_agent::workspace::an_absolute_directory_name_is_not_joined_onto_a_root`
 `verified-by: bravebot_agent::workspace::a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
@@ -1850,6 +1904,7 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_reports_an_8_3_short_name_as_a_session_refuses_it`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
+`verified-by: bravebot_cli::running::permissions_check_decides_a_host_in_any_spelling_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
 `verified-by: bravebot_cli::running::permissions_check_prints_a_reason_only_from_the_persons_own_file`
@@ -2265,8 +2320,9 @@ and reads none of the words of `call`. The approval is for that one call. The ne
 new `permission` event with an id of its own, nothing is remembered for the series, and nothing is
 recorded in the trust map or the permission rules. It is declined when stdin closes or the turn is
 stopped while it waits, and a decline ends the run on the status for a refusal as it does in any
-run nobody can ask. A write to a protected path or to which the credential scan found a value, and
-a run that asks for credential scopes or to run unconfined, are not put: the program's yes does not
+run nobody can ask. A write to a protected path or to which the credential scan found a value, a run that redirects into
+a protected path, and a run that asks for credential scopes or to run unconfined, are not put: the
+program's yes does not
 stand in for what accepting edits also leaves refused. An `answer` to a `permission` holds
 positions and no words.
 
@@ -2422,6 +2478,7 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::one_shot::a_run_is_put_to_the_program_with_its_command_and_directory_and_runs_only_on_approval`
 `verified-by: bravebot_cli::one_shot::a_fetch_is_put_to_the_program_with_its_url_and_host_and_proceeds_only_on_approval`
 `verified-by: bravebot_cli::one_shot::a_write_to_a_protected_path_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::a_run_with_a_protected_destination_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::a_write_the_credential_scan_found_a_value_in_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::a_run_asking_for_scopes_or_to_run_unconfined_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::an_approving_program_cannot_answer_the_question_that_vouches_for_a_path`

@@ -1516,12 +1516,7 @@ fn program(request: &RunRequest) -> Vec<String> {
             binary: bravebot_agent::confirm::shown_binary(step),
         })
         .collect();
-    let writes: Vec<String> = request
-        .plan
-        .writes
-        .iter()
-        .map(|path| bravebot_agent::confirm::shown_path(path))
-        .collect();
+    let writes: Vec<String> = request.shown_writes();
     let confinement = request
         .confined
         .as_ref()
@@ -1657,6 +1652,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
                 name: &tool.name,
                 arguments: &tool.arguments,
                 description: tool.description.as_deref(),
+                read_only: tool.read_only,
             })
             .collect();
         let lines = bravebot_approval::tools_lines(&bravebot_approval::Tools {

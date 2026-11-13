@@ -206,7 +206,9 @@ The planner cannot see the permission mode and is not told it. The tool's descri
 exception as applying where the person has turned permission prompts off, and says the file tools
 reach a path outside the workspace there with no request. A file tool's refusal names `/add-dir`
 alone and does not send the planner to `request_path`: where the mode reaches a path the refusal is
-not given, and where it does not, a request for the path is refused as well. A skill that depends on
+not given, and where it does not, a request for the path is refused as well. A `run` line's
+redirection refused for leaving the workspace names `/add-dir` the same way and not `request_path`,
+whose grant a redirection does not pass ([CMDLINE-5](command-line.md#CMDLINE-5)). A skill that depends on
 the exception says the same and does not branch on the mode.
 
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
@@ -228,6 +230,7 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
+`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::leaving_bypass_with_the_key_ends_the_reach_to_a_sibling_directory`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_sibling_directory_is_read_and_not_written`

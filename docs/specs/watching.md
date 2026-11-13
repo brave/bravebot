@@ -265,9 +265,12 @@ at the last one and know that it is the last.
 ### WATCH-9: the view takes every key, and the way out is read against the nearest level
 
 Nothing falls through to the input box, and the box is not drawn, behind the list's panel or
-anywhere else. `q` and Escape go back to the
-list from a delegate, and close the mode from the list or where there is no list behind it.
-Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
+anywhere else. `q` and Escape go back to the list from a row that was opened from the list. They
+close the mode from the list and from a row with no list behind it, which is a row the view opened
+onto directly: an answer ([WATCH-19](#WATCH-19)), a click on a delegate's block
+([MOUSE-10](mouse.md#MOUSE-10), [MOUSE-23](mouse.md#MOUSE-23)), or the watch key where there was one
+row. That holds however many rows the list has, and the footer says `q closes` there rather than
+`q goes back`. Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
 before they reach the turn: the turn in flight goes on, and the press that reaches it is the next
 one. A summary, an aside and a goal check are read the same way, each being a request the view can
 be open over. So is a command line that waited in the queue, which begins as the turn ends with the
@@ -290,10 +293,19 @@ sent to a turn they are not looking at. A person stops the nearest thing, and so
 look at what a delegate was doing is not asking for the turn to end when they come back out;
 watching is also the mode most likely to be open while something is going wrong.
 
+**Why a row opened directly closes.** The way back returns a person to where they were before the
+row opened. A person handed a recap after being away, or one who clicked a delegate's block, was
+reading the conversation and never saw the list. Going back to the list would show them a screen
+they did not open, and they would need a second press to reach the conversation.
+
 `verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_a_delegate_is_watched`
 `verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open`
 `verified-by: bravebot_tui::app::q_goes_back_to_the_list_before_it_closes`
 `verified-by: bravebot_tui::app::q_closes_outright_where_there_is_no_list_to_go_back_to`
+`verified-by: bravebot_tui::app::the_way_back_from_an_answer_the_view_opened_by_itself_closes_it`
+`verified-by: bravebot_tui::app::an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back`
+`verified-by: bravebot_tui::app::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
+`verified-by: bravebot_tui::render::the_footer_says_q_closes_a_row_the_list_did_not_open`
 `verified-by: bravebot_tui::app::escape_leaves_the_view_the_way_q_does`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_a_single_request_does`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`

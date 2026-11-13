@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { connectDevRelay, RelayRefusedError, type DevRelay, type RelaySocket } from '../src/dev-relay/index.js'
-import type { AgentSession, Pending } from '../src/common/index.js'
+import { StaleActionError, UnknownSendError, type AgentClient, type AgentSession, type InstanceInfo, type Pending } from '../src/common/index.js'
 import { ModelStub, type PlannerStep } from './support/model-stub.js'
 import { hostBinary, isolatedEnvironment, until } from './support/rig.js'
 import { within } from './support/wait.js'
@@ -160,6 +160,96 @@ test('an app that gives the code drives the host through the relay: the workspac
   assert.equal((reply.data as { reply: string }).reply, 'written')
 })
 
+/** The text of each reply row the view holds, in order. */
+function replies(session: AgentSession): string[] {
+  return session.view.rows.filter((row) => row.kind === 'reply').map((row) => (row.data as { reply: string }).reply)
+}
+
+/** The host's listing once no session it holds is working. A turn's worker can still be returning after its view says completed. */
+async function settled(client: AgentClient, what: string): Promise<InstanceInfo> {
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    const info = await client.instance()
+    if (info.sessions.every((held) => !held.working)) return info
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+test('an app whose connection ended takes its session over through the next relay, holds what it had, and sends again', async () => {
+  const host = await startHost({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'second reply' }] })
+  const made = sockets()
+  const first = await connect(await host.launch(), made.open)
+  const session = await first.client.createSession({ workspace: host.project })
+  await session.answerTrust(false)
+  await until(session, 'trust to be recorded', (view) => view.status === 'idle')
+  await session.send('plan:first')
+  await until(session, 'the first turn to end', (view) => view.status === 'completed')
+  const before = await settled(first.client, 'the first turn\'s worker to return')
+  assert.deepEqual(before.sessions, [{ session: session.id, state: 'open', working: false, controlled: true }])
+
+  made.opened[0]!.close(1000, 'the phone lost its network')
+  await within(first.ended, 'the client to see its connection end')
+  assert.equal(session.view.ended?.reason, 'connection_lost')
+
+  host.child.stdin.write('launch\n')
+  const second = await connect(await host.launch(), made.open)
+  const after = await second.client.instance()
+  assert.equal(after.instance, before.instance, 'the host did not restart')
+  assert.deepEqual(after.sessions, [{ session: session.id, state: 'open', working: false, controlled: false }])
+
+  const taken = await second.client.attach(session.id)
+  assert.equal(taken.view.status, 'completed')
+  assert.equal(taken.view.ended, null)
+  assert.deepEqual(replies(taken), ['first reply'], 'the view starts from what the session holds')
+  assert.equal((await second.client.instance()).sessions[0]?.controlled, true)
+
+  await taken.send('plan:second')
+  await until(taken, 'the second reply', () => replies(taken).length === 2)
+  assert.deepEqual(replies(taken), ['first reply', 'second reply'])
+  assert.equal(session.view.ended?.reason, 'connection_lost', 'the old session object stays ended')
+})
+
+test('a send whose answer was lost with the connection is looked up after taking the session over, and is resent only when the host did not receive it', async () => {
+  const host = await startHost({ 'plan:once': [{ say: 'only reply' }], 'plan:again': [{ say: 'resent reply' }] })
+  const made = sockets()
+  const first = await connect(await host.launch(), (url) => {
+    const socket = made.open(url)
+    const send = socket.send.bind(socket)
+    socket.send = (data) => {
+      send(data)
+      if (data.includes('"turn.send"')) socket.close(1000, 'the phone lost its network after sending')
+    }
+    return socket
+  })
+  const session = await first.client.createSession({ workspace: host.project })
+  await session.answerTrust(false)
+  await until(session, 'trust to be recorded', (view) => view.status === 'idle')
+  const instance = (await first.client.instance()).instance
+  const lost = await session.send('plan:once').then(() => assert.fail('the send was answered'), (error: unknown) => error)
+  assert.ok(lost instanceof UnknownSendError, `the cut-off send failed with ${String(lost)}`)
+  await within(first.ended, 'the client to see its connection end')
+
+  host.child.stdin.write('launch\n')
+  const second = await connect(await host.launch(), made.open)
+  const listed = await second.client.instance()
+  assert.equal(listed.instance, instance, 'the host did not restart, so the session handle is the same session')
+  assert.deepEqual(listed.sessions.map((held) => held.session), [session.id])
+  const taken = await second.client.attach(session.id)
+  const status = await taken.messageStatus(lost.messageId)
+  assert.equal(status.state, 'accepted', 'the host received the send whose answer was lost')
+  await assert.rejects(taken.resend(lost.messageId, 'plan:once'), StaleActionError)
+  await until(taken, 'the reply to the send that reached the host', () => replies(taken).length === 1)
+  await settled(second.client, 'the turn\'s worker to return')
+  assert.deepEqual(replies(taken), ['only reply'], 'the accepted send ran once')
+
+  assert.deepEqual(await taken.messageStatus('never-sent'), { state: 'not_received' })
+  await taken.resend('never-sent', 'plan:again')
+  await until(taken, 'the resent reply', () => replies(taken).length === 2)
+  assert.deepEqual(replies(taken), ['only reply', 'resent reply'])
+  assert.equal((await taken.messageStatus('never-sent')).state, 'accepted')
+})
+
 test('a wrong code ends that relay and leaves the host running, and the next launch has a port and code of its own', async () => {
   const host = await startHost({})
   const first = await host.launch()
@@ -226,6 +316,73 @@ test('the host being killed before any app connects ends the relay, which then t
     10_000,
   )
   await assert.rejects(connect(launch, sockets().open), (error: unknown) => error instanceof RelayRefusedError && !error.wrongCode)
+})
+
+interface LoneRelay {
+  child: ChildProcessWithoutNullStreams
+  stderr(): string
+  exited: Promise<number | null>
+}
+
+const lone: LoneRelay[] = []
+after(() => {
+  for (const started of lone) if (started.child.exitCode === null) started.child.kill('SIGKILL')
+})
+
+/** A relay started without a host, its standard input left open, with the wait for the code set to `wait`. */
+function startRelay(wait: string): LoneRelay {
+  const child = spawn(process.execPath, [relay, '--workspace', realpathSync(tmpdir())], { env: { ...process.env, BRAVEBOT_DEV_RELAY_CODE_WAIT_MS: wait } })
+  let text = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk: string) => (text += chunk))
+  const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)))
+  const started = { child, stderr: () => text, exited }
+  lone.push(started)
+  return started
+}
+
+async function listening(started: LoneRelay): Promise<Launch> {
+  for (let waited = 0; waited < 10_000; waited += 20) {
+    const found = [...started.stderr().matchAll(LISTENING)][0]
+    if (found !== undefined) return { port: Number(found[1]), code: found[2]! }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  assert.fail(`the relay did not start listening: ${started.stderr()}`)
+}
+
+test('a connection that gives no code within the wait is closed, and the relay ends', async () => {
+  const started = startRelay('300')
+  const launch = await listening(started)
+  const socket = new WebSocket(`ws://127.0.0.1:${launch.port}`)
+  const closed = new Promise<{ code: number; reason: string }>((resolve) => socket.addEventListener('close', (event) => resolve({ code: event.code, reason: event.reason })))
+  assert.deepEqual(await within(closed, 'the relay to close the connection'), { code: 1002, reason: 'no code arrived' })
+  assert.equal(await within(started.exited, 'the relay to exit'), 1)
+  assert.match(started.stderr(), /dev-relay: no code arrived; the relay is ending\n/)
+})
+
+test('a connection that gives the code within the wait stays open after the wait has passed', async () => {
+  const started = startRelay('300')
+  const launch = await listening(started)
+  const socket = new WebSocket(`ws://127.0.0.1:${launch.port}`)
+  const greeted = new Promise<string>((resolve) => socket.addEventListener('message', (event) => resolve(String(event.data)), { once: true }))
+  let closed = false
+  socket.addEventListener('close', () => (closed = true))
+  await within(new Promise((resolve) => socket.addEventListener('open', resolve, { once: true })), 'the connection to open')
+  socket.send(launch.code)
+  assert.match(await within(greeted, 'the workspaces'), /"workspaces"/)
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  assert.equal(closed, false, 'the connection is still open')
+  assert.equal(started.child.exitCode, null, 'the relay is still running')
+  socket.close(1000, 'done')
+  assert.equal(await within(started.exited, 'the relay to exit'), 0)
+})
+
+test('a wait for the code that is not a whole number of milliseconds above 0 is refused at start', async () => {
+  for (const wait of ['0', '-5', '1.5', 'soon', '']) {
+    const started = startRelay(wait)
+    assert.equal(await within(started.exited, 'the relay to exit'), 2, `the wait ${JSON.stringify(wait)} was accepted`)
+    assert.match(started.stderr(), /BRAVEBOT_DEV_RELAY_CODE_WAIT_MS is a whole number of milliseconds above 0/)
+  }
 })
 
 test('a port or code that cannot be right is refused before anything is opened', async () => {

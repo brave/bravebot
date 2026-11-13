@@ -73,6 +73,7 @@ The host keeps every session record it reads, lists or writes under `--sessions-
 The root is chosen once, before the first record is read or written, and a second choice is refused and the host says which root is in force (`sessions::keep_in`). The directory the host was started in contributes no settings of its own to the process-wide answers (the network its programs keep, the lists of paths, the hosts a stage is held to): only the person's settings, the file named with `--settings` and the managed pin do.
 
 `verified-by: bravebot_ui_bridge::host_process::the_host_keeps_its_records_apart_from_a_windows`
+`verified-by: bravebot_cli::running::the_terminal_does_not_list_or_continue_a_record_in_a_hosts_sessions_root`
 `verified-by: bravebot_ui_bridge::host_process::an_existing_sessions_root_that_others_can_read_or_a_link_is_refused`
 `verified-by: bravebot_ui_bridge::host_process::a_closed_network_in_the_settings_the_host_was_started_on_reaches_its_turns`
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
@@ -149,7 +150,7 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 <a id="HOST-9"></a>
 ### HOST-9: a program the host starts holds no part of the channel
 
-The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A process that a hook or an approved command leaves running after it has exited, given the host's and the client's process ids and the waiting question, holds no socket of the channel, reaches neither end through a descriptor path or a connection, and does not change what the client reads; the waiting write lands only when the client approves it. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
+The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook or an MCP server that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A process that a hook or an approved command leaves running after it has exited, given the host's and the client's process ids and the waiting question, holds no socket of the channel, reaches neither end through a descriptor path or a connection, and does not change what the client reads; the waiting write lands only when the client approves it. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
 
 `verified-by: bravebot_ui_bridge::host_process::an_unconfined_hook_the_host_runs_holds_no_socket`
 `verified-by: bravebot_ui_bridge::control_boundary::a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel`
@@ -157,6 +158,7 @@ The host holds the near end of its client's channel while it runs the person's h
 `verified-by: bravebot_ui_bridge::host_process::a_program_handed_a_socket_lists_it`
 `verified-by: bravebot_ui_bridge::host_process::a_listing_of_either_system_shows_its_sockets`
 `verified-by: bravebot_ui_bridge::control_boundary::programs_a_host_starts_hold_no_end_of_the_channels_it_created`
+`verified-by: bravebot_ui_bridge::control_boundary::an_mcp_server_a_host_starts_holds_no_end_of_the_channels_it_created`
 
 <a id="HOST-10"></a>
 ### HOST-10: a question is put only to a client that can answer it
@@ -209,4 +211,11 @@ It listens on 127.0.0.1 only, on a port the system picks, and shows the port and
 
 The TypeScript client reaches the relay only through its `./dev-relay` export, which the package's main entry does not import. It refuses a port outside 1 to 65535 or a code that is not six digits before it opens anything, and reports a wrong code apart from a relay that could not be reached.
 
-`verified-by: by-construction (packages/agent-client/tests/dev-relay.test.ts starts a built bravebot-host with the relay as its client against a model service of its own, and checks that an app giving the code drives a session to an approved write that lands, that a wrong code ends that relay and leaves the host running and the next launch has a new port and code, that a second app cannot connect while the first is connected, that the app closing ends the relay and the host quitting ends the app's connection, and that a bad port or code opens nothing; packages/agent-client/tests/websocket.test.ts checks fragment reassembly, ping, and the close code for each frame the relay refuses; make check-agent-client runs both, and the Front end CI job runs that target)`
+`verified-by: by-construction (packages/agent-client/tests/dev-relay.test.ts starts a built bravebot-host with the relay as its client against a model service of its own, and checks that an app giving the code drives a session to an approved write that lands, that a wrong code ends that relay and leaves the host running and the next launch has a new port and code, that a connection giving no code within the wait is closed and ends the relay while one giving the code in time stays open past it, with the wait shortened by BRAVEBOT_DEV_RELAY_CODE_WAIT_MS for the test, that a second app cannot connect while the first is connected, that the app closing ends the relay and the host quitting ends the app's connection, and that a bad port or code opens nothing; packages/agent-client/tests/websocket.test.ts checks fragment reassembly, ping, and the close code for each frame the relay refuses; make check-agent-client runs both, and the Front end CI job runs that target)`
+
+<a id="HOST-13"></a>
+### HOST-13: the host can be found by no name
+
+The host listens on no TCP port, binds no UDP port, and binds no Unix socket to a path or, on Linux, to an abstract name. A program the host did not start therefore has no address to reach it by. The development relay of [HOST-12](#HOST-12) listens on loopback in a client process the host starts, not in the host. The test lists the sockets the host holds after it has served a turn, so a socket it opened and closed before then, or opens only on a later request, is not seen. On Linux the test does not count a Unix socket that is connected, since its peer is the only program that can reach it.
+
+`verified-by: bravebot_ui_bridge::host_process::a_host_serving_a_turn_has_no_socket_another_program_can_find`

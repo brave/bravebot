@@ -95,6 +95,10 @@ pub struct Reference {
     /// kept whole past a cap is read. Only a reference to such output names it. Set by the policy
     /// that made the reference.
     pub reading_offered: bool,
+    /// Whether the run this reference is made for is offered `read_file`, which is how an entry of
+    /// a listing labelled trusted is read through its reference. Set by the policy that made the
+    /// reference.
+    pub read_file_offered: bool,
 }
 
 impl Reference {
@@ -117,6 +121,7 @@ impl Reference {
             spawning_offered: true,
             writing_offered: true,
             reading_offered: true,
+            read_file_offered: true,
         }
     }
 
@@ -141,6 +146,12 @@ impl Reference {
     /// Say that the run this reference is made for is not offered `read_output`.
     pub fn without_reading(mut self) -> Self {
         self.reading_offered = false;
+        self
+    }
+
+    /// Say that the run this reference is made for is not offered `read_file`.
+    pub fn without_read_file(mut self) -> Self {
+        self.read_file_offered = false;
         self
     }
 
@@ -199,6 +210,7 @@ impl Reference {
             spawning_offered: true,
             writing_offered: true,
             reading_offered: true,
+            read_file_offered: true,
         }
     }
 
@@ -332,16 +344,27 @@ impl Reference {
 /// How the planner is told about the entries of a listing it may not read.
 ///
 /// What is the same for every entry is said once at the top: where they are from, and what a
-/// reference to a file and a reference to a directory is for. The lines below give each file its
-/// reference and label, and each run of directories that share a label as a count with the first
-/// and last reference. `describe` says the same words again for every entry, which a listing of a
-/// hundred entries pays for in every round after it.
+/// reference to a file and a reference to a directory is for. The lines below give each run of
+/// files, and each run of directories, that share a label as a count with the first and last
+/// reference, and a run of one as its reference alone. `describe` says the same words again for
+/// every entry, which a listing of a hundred entries pays for in every round after it.
 ///
 /// The references come from one call of `Policy::defer_entries`, so they share an origin and what
 /// the run is offered, and the first one speaks for all. Which are files and which are
 /// directories is each reference's `kind`, which the policy set from the position of the entry in
-/// the listing. A run is cut where the label changes, and a label is the policy's, not a fact read
-/// off a name. Nothing here is a name.
+/// the listing. A run is cut where the kind or the label changes, and a label is the policy's, not
+/// a fact read off a name. Nothing here is a name. A range relies on the references of one listing
+/// having consecutive slot ids, which the caller reserves in one loop before this is called. A
+/// debug assertion checks that from the slot ids alone.
+///
+/// A file's label decides which sentence covers it, one sentence for each class present and never
+/// one per entry. The label came from the trust map when the entry was reserved, so it is a fact
+/// the planner is already shown on the entry's line. A file labelled untrusted already is its
+/// reference, and read_file has nothing to add. A file labelled trusted is one the label lets the
+/// planner read, which read_file shows through its reference. Which entries are pictures would have
+/// to be read off the names, so the sentence says a picture still comes back as a reference instead
+/// of telling them apart. Where no file is labelled trusted, one sentence covers every file and
+/// names no label.
 ///
 /// Empty for no references.
 pub fn describe_listing(references: &[Reference]) -> String {
@@ -353,52 +376,104 @@ pub fn describe_listing(references: &[Reference]) -> String {
         "Each is {}. The lines below give each its reference, what it stands for and its label.",
         first.origin
     )];
-    if references.iter().any(|r| r.kind == Kind::File) {
+    let untrusted_files = references
+        .iter()
+        .any(|r| r.kind == Kind::File && !r.label.is_trusted());
+    let trusted_files = references
+        .iter()
+        .any(|r| r.kind == Kind::File && r.label.is_trusted());
+    if untrusted_files {
+        let lead = match trusted_files {
+            true => "A file labelled (U,...)",
+            false => "A file",
+        };
         notes.push(format!(
-            "A file: you will not be shown what it holds, and read_file has nothing to add: its \
+            "{lead}: you will not be shown what it holds, and read_file has nothing to add: its \
              reference already is the file.{}{}",
             first.file_moves(),
             first.vet_move()
         ));
     }
+    if trusted_files {
+        notes.push(match first.read_file_offered {
+            true => {
+                "A file labelled (T,...): its label lets you read it, so read_file shows you what \
+                     it holds when you name its reference as path_ref. A picture or a PDF still \
+                     comes back as a reference, and so does a file that is no longer trusted when \
+                     it is read."
+                    .to_string()
+            }
+            false => format!(
+                "A file labelled (T,...): its label lets you read it.{}",
+                first.file_moves()
+            ),
+        });
+    }
     if references.iter().any(|r| r.kind == Kind::Directory) {
         notes.push(
             "A directory: this listing stopped at it rather than at a file in it, so there is \
              nothing behind its reference to read, process or write. List the directory you \
-             named again with a greater depth to reach what is inside it. A range of references \
-             covers every reference from its first to its last."
+             named again with a greater depth to reach what is inside it."
                 .to_string(),
         );
     }
 
+    // A run is cut where the kind or the label changes, and both are fields the policy set, so
+    // nothing about a name decides where a line ends. A file's line carries no name, so files
+    // that share a label are told apart by their references alone, and a range keeps every one.
     let mut lines: Vec<String> = Vec::new();
+    let mut ranged = false;
     let mut at = 0;
     while at < references.len() {
         let start = &references[at];
         let mut end = at + 1;
-        // A file reference is passed to spawn_processor or as a path_ref, so each needs its own
-        // line. A directory reference has nothing behind it to act on, so a range loses nothing.
-        if start.kind == Kind::Directory {
-            while end < references.len()
-                && references[end].kind == Kind::Directory
-                && references[end].label == start.label
-            {
-                end += 1;
-            }
+        while end < references.len()
+            && references[end].kind == start.kind
+            && references[end].label == start.label
+        {
+            end += 1;
         }
+        // A range names its first and last reference and stands for every one between, so the ids
+        // it covers must be consecutive. Checked from the slot ids, which the driver minted.
+        debug_assert!(
+            (at + 1..end).all(|i| {
+                slot_number(&references[i].slot)
+                    .zip(slot_number(&references[i - 1].slot))
+                    .is_some_and(|(this, before)| this == before + 1)
+            }),
+            "a run of a listing's references skips a slot id"
+        );
         let last = &references[end - 1];
-        lines.push(match (start.kind, end - at) {
-            (Kind::Directory, 1) => format!("[{}] directory {}", start.slot, start.label),
-            (Kind::Directory, count) => format!(
-                "[{}] to [{}]: {count} directories {}",
+        let count = end - at;
+        ranged |= count > 1;
+        let (one, many) = match start.kind {
+            Kind::Directory => ("directory", "directories"),
+            _ => ("file", "files"),
+        };
+        lines.push(match count {
+            1 => format!("[{}] {one} {}", start.slot, start.label),
+            _ => format!(
+                "[{}] to [{}]: {count} {many} {}",
                 start.slot, last.slot, start.label
             ),
-            _ => format!("[{}] file {}", start.slot, start.label),
         });
         at = end;
     }
+    if ranged {
+        notes.push(
+            "A range of references covers every reference from its first to its last, each one \
+             what its line says, so every reference in a range of files is a file you can name \
+             on its own."
+                .to_string(),
+        );
+    }
 
     format!("{}\n\n{}", notes.join(" "), lines.join("\n"))
+}
+
+/// The number a slot id ends in, `7` for `ref:7`. Slot ids are minted by the driver.
+fn slot_number(slot: &crate::slot::SlotId) -> Option<u64> {
+    slot.as_str().rsplit_once(':')?.1.parse().ok()
 }
 
 impl fmt::Display for Reference {
@@ -891,15 +966,19 @@ mod tests {
             .collect()
     }
 
-    /// A listing says what its references are once, gives each file its own line and a run of
-    /// directories one line, and never hands a directory over as a file.
+    /// A listing says what its references are once, gives a run of files one line and a run of
+    /// directories another, and never hands a directory over as a file: the run of files ends
+    /// where the directories start.
     #[test]
-    fn a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories() {
+    fn a_listing_is_described_once_with_a_line_per_run_of_files_and_one_per_run_of_directories() {
         let described = describe_listing(&listing(2, 3));
         assert_eq!(described.matches("read_file has nothing to add").count(), 1);
         assert_eq!(described.matches("stopped at").count(), 1);
-        assert!(described.contains("[ref:1] file (U,priv)"), "{described}");
-        assert!(described.contains("[ref:2] file (U,priv)"), "{described}");
+        assert_eq!(described.matches("A range of references").count(), 1);
+        assert!(
+            described.contains("[ref:1] to [ref:2]: 2 files (U,priv)"),
+            "{described}"
+        );
         assert!(
             described.contains("[ref:3] to [ref:5]: 3 directories (U,priv)"),
             "{described}"
@@ -907,6 +986,107 @@ mod tests {
         for directory in ["[ref:3] file", "[ref:4] file", "[ref:5] file"] {
             assert!(!described.contains(directory), "{described}");
         }
+        assert!(!described.contains("to [ref:3]: 3 files"), "{described}");
+        assert!(!described.contains("to [ref:5]: 5 files"), "{described}");
+    }
+
+    /// Two thousand files nobody vouched for are one line, not one each: the result is sent
+    /// again every round, and a line per file made it about 40k characters.
+    #[test]
+    fn a_run_of_files_that_share_a_label_is_one_line_with_a_count() {
+        let described = describe_listing(&listing(2000, 0));
+        assert!(
+            described.contains("[ref:1] to [ref:2000]: 2000 files (U,priv)"),
+            "{described}"
+        );
+        assert!(!described.contains("] file ("), "{described}");
+        assert_eq!(described.lines().filter(|l| l.starts_with('[')).count(), 1);
+        assert!(
+            described.len() < 1_000,
+            "{} bytes: {described}",
+            described.len()
+        );
+        assert_eq!(
+            described.matches("A range of references").count(),
+            1,
+            "{described}"
+        );
+    }
+
+    /// Files and directories mixed in one listing are cut into a run at each change of kind, so no
+    /// range of files covers a directory and no range of directories covers a file.
+    #[test]
+    fn a_listing_that_mixes_files_and_directories_cuts_a_run_at_each_change_of_kind() {
+        let entry = |n: usize| {
+            Reference::unread(
+                SlotId::new(format!("ref:{n}")),
+                "an entry in \".\"",
+                None,
+                Label::untrusted_private(),
+            )
+        };
+        let references = vec![
+            entry(1),
+            entry(2),
+            entry(3).of_a_directory(),
+            entry(4),
+            entry(5).of_a_directory(),
+            entry(6).of_a_directory(),
+        ];
+        let described = describe_listing(&references);
+        let lines: Vec<&str> = described.lines().filter(|l| l.starts_with('[')).collect();
+        assert_eq!(
+            lines,
+            [
+                "[ref:1] to [ref:2]: 2 files (U,priv)",
+                "[ref:3] directory (U,priv)",
+                "[ref:4] file (U,priv)",
+                "[ref:5] to [ref:6]: 2 directories (U,priv)",
+            ],
+            "{described}"
+        );
+        assert_eq!(described.matches("read_file has nothing to add").count(), 1);
+        assert_eq!(described.matches("stopped at").count(), 1);
+        assert_eq!(described.matches("A range of references").count(), 1);
+    }
+
+    /// A run whose slot ids are not consecutive is caught in a debug build, since its range would
+    /// name a reference that is not in the listing.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "skips a slot id")]
+    fn a_run_of_references_that_skips_a_slot_id_is_caught() {
+        let mut references = listing(3, 0);
+        references[1].slot = SlotId::new("ref:9");
+        describe_listing(&references);
+    }
+
+    /// One file is a line of its own, not a range of one, and nothing promises a range.
+    #[test]
+    fn a_listing_of_one_file_is_one_line_and_mentions_no_range() {
+        let described = describe_listing(&listing(1, 0));
+        assert!(described.contains("[ref:1] file (U,priv)"), "{described}");
+        assert!(!described.contains(" to [ref:"), "{described}");
+        assert!(!described.contains("A range of references"), "{described}");
+    }
+
+    /// Files with different labels are not one run (LABEL-10): the line states the label of
+    /// every file it covers, so a vouched file between two unvouched ones splits the run.
+    #[test]
+    fn files_with_different_labels_are_not_counted_together() {
+        let mut entries = listing(5, 0);
+        entries[2].label = Label::trusted_private();
+        let described = describe_listing(&entries);
+        assert!(
+            described.contains("[ref:1] to [ref:2]: 2 files (U,priv)"),
+            "{described}"
+        );
+        assert!(described.contains("[ref:3] file (T,priv)"), "{described}");
+        assert!(
+            described.contains("[ref:4] to [ref:5]: 2 files (U,priv)"),
+            "{described}"
+        );
+        assert!(!described.contains("5 files"), "{described}");
     }
 
     /// One directory is a line of its own, not a range of one, and a listing with no files says
@@ -970,5 +1150,107 @@ mod tests {
     #[test]
     fn no_references_are_described_as_nothing() {
         assert_eq!(describe_listing(&[]), "");
+    }
+
+    /// A listing whose files carry different labels says what a file reference is for once per
+    /// label present. A file labelled untrusted already is its reference, so read_file has nothing
+    /// to add. A file labelled trusted is read with read_file through its reference. One sentence
+    /// for every file would tell the planner it cannot read the files a person vouched for, and it
+    /// guessed names until one read worked.
+    #[test]
+    fn a_mixed_listing_says_once_per_label_what_a_file_reference_is_for() {
+        let mut entries = listing(4, 2);
+        entries[0].label = Label::trusted_private();
+        entries[2].label = Label::trusted_private();
+        let described = describe_listing(&entries);
+        let header = described.split("\n\n").next().unwrap_or_default();
+        assert_eq!(
+            header.matches("read_file has nothing to add").count(),
+            1,
+            "{described}"
+        );
+        assert!(
+            header.contains(
+                "A file labelled (U,...): you will not be shown what it holds, and read_file has \
+                 nothing to add"
+            ),
+            "the untrusted sentence does not say which files it covers: {described}"
+        );
+        assert_eq!(
+            header
+                .matches(
+                    "read_file shows you what it holds when you name its reference as path_ref"
+                )
+                .count(),
+            1,
+            "{described}"
+        );
+        assert!(header.contains("A file labelled (T,...)"), "{described}");
+        // A trusted label is not always a person's vouch: the sentence says what the label allows.
+        assert!(
+            header.contains("A file labelled (T,...): its label lets you read it, so read_file"),
+            "{described}"
+        );
+        assert!(!header.contains("vouch"), "{described}");
+        assert!(header.contains("A picture or a PDF still"), "{described}");
+        assert!(described.contains("[ref:1] file (T,priv)"), "{described}");
+        assert!(described.contains("[ref:2] file (U,priv)"), "{described}");
+        assert!(
+            described.contains("[ref:5] to [ref:6]: 2 directories (U,priv)"),
+            "{described}"
+        );
+    }
+
+    /// A listing whose files are all labelled trusted says nothing about read_file having nothing
+    /// to add, and one whose files are all labelled untrusted has one file sentence naming no label.
+    #[test]
+    fn a_listing_of_one_label_says_only_that_labels_sentence() {
+        let mut trusted = listing(2, 1);
+        for entry in &mut trusted {
+            entry.label = Label::trusted_private();
+        }
+        let described = describe_listing(&trusted);
+        assert!(
+            !described.contains("read_file has nothing to add"),
+            "{described}"
+        );
+        assert!(
+            described.contains("name its reference as path_ref"),
+            "{described}"
+        );
+
+        assert_eq!(
+            describe_listing(&listing(1, 1)),
+            "Each is an entry in \".\". The lines below give each its reference, what it stands \
+             for and its label. A file: you will not be shown what it holds, and read_file has \
+             nothing to add: its reference already is the file. Give it to spawn_processor to \
+             work on, and name it as write_file's path_ref to put the result back. Where you have \
+             to read it yourself, vet_content is how to ask for it. A directory: this listing \
+             stopped at it rather than at a file in it, so there is nothing behind its reference \
+             to read, process or write. List the directory you named again with a greater depth \
+             to reach what is inside it.\n\n[ref:1] file (U,priv)\n[ref:2] directory (U,priv)"
+        );
+    }
+
+    /// A run that is not offered read_file is not sent to it for a trusted entry, and the moves it
+    /// is offered stay.
+    #[test]
+    fn a_trusted_entry_names_read_file_only_where_the_run_is_offered_it() {
+        let mut entries = listing(1, 0);
+        entries[0].label = Label::trusted_private();
+        let offered = describe_listing(&entries);
+        assert!(offered.contains("read_file shows you"), "{offered}");
+        let entries: Vec<Reference> = entries
+            .into_iter()
+            .map(Reference::without_read_file)
+            .collect();
+        let described = describe_listing(&entries);
+        assert!(!described.contains("read_file"), "{described}");
+        assert!(
+            described.contains("A file labelled (T,...): its label lets you read it. Give it"),
+            "{described}"
+        );
+        assert!(!described.contains("vouch"), "{described}");
+        assert!(described.contains("spawn_processor"), "{described}");
     }
 }

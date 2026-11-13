@@ -25,6 +25,7 @@ pub enum Toolchain {
     Go,
     Maven,
     Gradle,
+    Gh,
 }
 
 impl Toolchain {
@@ -45,6 +46,7 @@ impl Toolchain {
             "go" => Some(Self::Go),
             "mvn" => Some(Self::Maven),
             "gradle" => Some(Self::Gradle),
+            "gh" => Some(Self::Gh),
             _ if versioned(name, "python") || versioned(name, "pip") => Some(Self::Python),
             _ => None,
         }
@@ -65,7 +67,17 @@ impl Toolchain {
             Self::Cargo | Self::Go | Self::Maven | Self::Gradle => true,
             Self::Node => name != "node",
             Self::Python => versioned(name, "pip"),
+            Self::Gh => false,
         }
+    }
+
+    /// Whether a stage lent this toolchain's list by name keeps the network where the session
+    /// has closed it (SANDBOX-20, SANDBOX-26).
+    ///
+    /// gh's list is its cache alone. Whether a `gh` stage reaches the network is decided by the
+    /// operation its argv names, which is the remote scope (SANDBOX-16), so the list adds none.
+    pub fn lends_the_network(self) -> bool {
+        self != Self::Gh
     }
 
     /// The name a person and the planner know this toolchain by.
@@ -77,21 +89,15 @@ impl Toolchain {
             Self::Go => "go",
             Self::Maven => "maven",
             Self::Gradle => "gradle",
+            Self::Gh => "gh",
         }
     }
 
     /// The toolchain a person or the planner names by the word [`Toolchain::name`] gives.
     pub fn named(word: &str) -> Option<Self> {
-        [
-            Self::Cargo,
-            Self::Node,
-            Self::Python,
-            Self::Go,
-            Self::Maven,
-            Self::Gradle,
-        ]
-        .into_iter()
-        .find(|toolchain| toolchain.name() == word)
+        EVERY_TOOLCHAIN
+            .into_iter()
+            .find(|toolchain| toolchain.name() == word)
     }
 
     /// `policy` with this toolchain's list added to it, for the account whose home is `home`.
@@ -216,6 +222,7 @@ impl Toolchain {
             Self::Node => &[".nvm", ".asdf"],
             Self::Python => &[".pyenv", ".asdf"],
             Self::Go | Self::Maven | Self::Gradle => &[".asdf"],
+            Self::Gh => &[],
         }
     }
 
@@ -229,7 +236,7 @@ impl Toolchain {
     fn configurations(self) -> &'static [&'static str] {
         match self {
             Self::Cargo => &[".cargo/config.toml", ".cargo/config"],
-            Self::Node | Self::Python | Self::Go | Self::Maven | Self::Gradle => &[],
+            Self::Node | Self::Python | Self::Go | Self::Maven | Self::Gradle | Self::Gh => &[],
         }
     }
 
@@ -240,6 +247,11 @@ impl Toolchain {
     /// parent grants the token with it. Go and pip keep their caches where the platform keeps
     /// every program's, which on macOS is `~/Library/Caches`, and a row there names the one
     /// subdirectory for the same reason.
+    ///
+    /// gh keeps its HTTP cache and the logs `gh run view --log` downloads in `~/.cache/gh` on
+    /// Linux and on macOS alike, and in `%LOCALAPPDATA%\GitHub CLI` on Windows. Its login is in
+    /// `~/.config/gh/hosts.yml` or the system keychain, and nothing of it is in the cache, so the
+    /// directory is named whole.
     fn cache_directories(self, prelude: Prelude) -> &'static [&'static str] {
         match (self, prelude) {
             (Self::Cargo, _) => &[".cargo/registry", ".cargo/git"],
@@ -257,6 +269,8 @@ impl Toolchain {
             }
             (Self::Maven, _) => &[".m2/repository"],
             (Self::Gradle, _) => &[".gradle/caches", ".gradle/wrapper", ".gradle/native"],
+            (Self::Gh, Prelude::Linux | Prelude::MacOs) => &[".cache/gh"],
+            (Self::Gh, Prelude::Windows) => &["AppData/Local/GitHub CLI"],
         }
     }
 
@@ -265,18 +279,19 @@ impl Toolchain {
     fn cache_files(self) -> &'static [&'static str] {
         match self {
             Self::Cargo => &[".cargo/.package-cache"],
-            Self::Node | Self::Python | Self::Go | Self::Maven | Self::Gradle => &[],
+            Self::Node | Self::Python | Self::Go | Self::Maven | Self::Gradle | Self::Gh => &[],
         }
     }
 }
 
-const EVERY_TOOLCHAIN: [Toolchain; 6] = [
+pub const EVERY_TOOLCHAIN: [Toolchain; 7] = [
     Toolchain::Cargo,
     Toolchain::Node,
     Toolchain::Python,
     Toolchain::Go,
     Toolchain::Maven,
     Toolchain::Gradle,
+    Toolchain::Gh,
 ];
 
 /// The path a cache row at `name` is given, or `None` where the row is not given: the place the
@@ -407,6 +422,8 @@ mod tests {
             ("/usr/local/go/bin/go", Toolchain::Go),
             ("/usr/share/maven/bin/mvn", Toolchain::Maven),
             ("/opt/gradle/bin/gradle", Toolchain::Gradle),
+            ("/opt/homebrew/Cellar/gh/2.102.0/bin/gh", Toolchain::Gh),
+            ("/usr/bin/gh", Toolchain::Gh),
         ] {
             assert_eq!(
                 Toolchain::of(Path::new(resolved)),
@@ -429,6 +446,7 @@ mod tests {
             ("C:/Python312/Scripts/pip3.12.exe", Toolchain::Python, true),
             ("C:/Go/bin/go.exe", Toolchain::Go, true),
             ("C:/gradle/bin/gradle.com", Toolchain::Gradle, true),
+            ("C:/Program Files/GitHub CLI/gh.exe", Toolchain::Gh, false),
         ] {
             let path = Path::new(resolved);
             assert_eq!(Toolchain::of(path), Some(toolchain), "{resolved}");
@@ -460,11 +478,30 @@ mod tests {
             ("/usr/local/go/bin/go", true),
             ("/usr/share/maven/bin/mvn", true),
             ("/opt/gradle/bin/gradle", true),
+            ("/usr/bin/gh", false),
         ] {
             let path = Path::new(resolved);
             let toolchain = Toolchain::of(path).expect(resolved);
             assert_eq!(toolchain.fetches(path), fetches, "{resolved}");
         }
+    }
+
+    /// gh's list is its cache. Whether a `gh` stage keeps the network a closed session took is
+    /// the remote scope's question, asked of the operation its argv names (SANDBOX-16), so
+    /// neither a stage resolving to `gh` nor one that asked for `gh` by name is lent egress by
+    /// the list. The regression it rejects is a closed session reopened for every stage that
+    /// asked for gh's cache.
+    #[test]
+    fn ghs_list_lends_no_network() {
+        assert!(!Toolchain::Gh.fetches(Path::new("/usr/bin/gh")));
+        assert!(!Toolchain::Gh.lends_the_network());
+        for toolchain in EVERY_TOOLCHAIN
+            .into_iter()
+            .filter(|toolchain| *toolchain != Toolchain::Gh)
+        {
+            assert!(toolchain.lends_the_network(), "{toolchain:?}");
+        }
+        assert!(crate::hosts::registry_hosts(Toolchain::Gh).is_empty());
     }
 
     /// A list is reach a person never named, so a program gets one only where its file is one of
@@ -486,6 +523,8 @@ mod tests {
             "/usr/bin/gofmt",
             "/home/a-person/.cargo/bin/cargo-deny",
             "/workspace/gradlew",
+            "/usr/local/bin/gh-copilot",
+            "/usr/bin/ghc",
             "/",
         ] {
             assert_eq!(Toolchain::of(Path::new(resolved)), None, "{resolved}");
@@ -511,7 +550,9 @@ mod tests {
                     "/home/a-person/.config/pip/pip.conf",
                     "/home/a-person/.ssh/id_rsa",
                     "/home/a-person/.config/gh/hosts.yml",
-                    "/home/a-person/.cache/gh/token",
+                    // gh keeps no token in its cache directory, so `~/.cache/gh` is gh's own row
+                    // (https://github.com/cli/go-gh/blob/trunk/pkg/config/config.go).
+                    "/home/a-person/.cache/token",
                     "/home/a-person/Library/Caches/com.apple.keychain/token",
                 ] {
                     assert!(
@@ -519,6 +560,33 @@ mod tests {
                         "the {toolchain:?} list on {prelude:?} reaches {credential}"
                     );
                 }
+            }
+        }
+    }
+
+    /// gh's login is `~/.config/gh/hosts.yml`, or the macOS login keychain where gh stored it
+    /// there, and gh's list is its cache alone. The regression it rejects is a gh row that names
+    /// `~/.config/gh` or a directory holding it or the keychains, which hands every gh stage the
+    /// token whatever operation its argv names.
+    #[test]
+    fn ghs_list_reaches_no_gh_login_and_no_keychain() {
+        for prelude in EVERY_PLATFORM {
+            let gh = a_list(Toolchain::Gh, prelude);
+            for login in [
+                "/home/a-person/.config/gh",
+                "/home/a-person/.config/gh/hosts.yml",
+                "/home/a-person/.config/gh/config.yml",
+                "/home/a-person/Library/Keychains",
+                "/home/a-person/Library/Keychains/login.keychain-db",
+            ] {
+                assert!(
+                    !reaches(&gh, login),
+                    "the gh list on {prelude:?} reads {login}"
+                );
+                assert!(
+                    !writes(&gh, login),
+                    "the gh list on {prelude:?} writes {login}"
+                );
             }
         }
     }
@@ -627,6 +695,10 @@ mod tests {
                     Toolchain::Gradle,
                     "/home/a-person/.gradle/native/lib".to_owned(),
                 ),
+                (
+                    Toolchain::Gh,
+                    "/home/a-person/.cache/gh/run-log-1-2.zip".to_owned(),
+                ),
             ];
 
             for toolchain in EVERY_TOOLCHAIN {
@@ -658,6 +730,11 @@ mod tests {
             &pip_on_macos,
             "/home/a-person/Library/Caches/pip/http"
         ));
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let gh = a_list(Toolchain::Gh, prelude);
+            assert!(writes(&gh, "/home/a-person/.cache/gh/run-log-1-2.zip"));
+            assert!(!reaches(&gh, "/home/a-person/Library/Caches/gh/00"));
+        }
 
         let go_on_linux = a_list(Toolchain::Go, Prelude::Linux);
         assert!(writes(&go_on_linux, "/home/a-person/.cache/go-build/00"));
@@ -696,6 +773,10 @@ mod tests {
             (
                 Toolchain::Node,
                 "/home/a-person/AppData/Local/npm-cache/_cacache/index-v5",
+            ),
+            (
+                Toolchain::Gh,
+                "/home/a-person/AppData/Local/GitHub CLI/run-log-1-2.zip",
             ),
         ] {
             let on_windows = a_list(toolchain, Prelude::Windows);

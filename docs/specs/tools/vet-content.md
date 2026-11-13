@@ -19,8 +19,8 @@ carries an `expects`. The other two come with a read the planner made for its ow
 [read-output.md](read-output.md) and the vouch offer in [trust-map.md](../trust-map.md#TRUST-8).
 [CHECK-10](../vetting.md#CHECK-10) covers all three.
 
-A call to `fetch_url` or to a server's tool may also ask for this release in its own result, with
-`read: true`, so that the round a `vet_content` call would take is not spent
+A call to `fetch_url`, `search`, `list_files` or a server's tool may also ask for this release in its
+own result, with `read: true`, so that the round a `vet_content` call would take is not spent
 ([VET-6](#VET-6)).
 
 ## Clauses
@@ -365,19 +365,27 @@ never in a result, which a planner could aim at.
 `verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
 
 <a id="VET-6"></a>
-### VET-6: a fetch or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
+### VET-6: a fetch, a search, a listing or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
 
-`read: true` on a `fetch_url` call, or on a call to a server's tool, asks for what the call returned
-in the result that returned it. It is offered only on a list that holds `vet_content`, so a delegate
-and a definition that leaves the tool out are not offered it. A `read` given to `fetch_url` there is
-still checked to be a boolean and releases nothing, and one given to a server's tool is sent as
+`read: true` on a `fetch_url`, `search` or `list_files` call, or on a call to a server's tool, asks
+for what the call returned in the result that returned it. For `search` and `list_files` that is a
+result quarantined because the walk reached a path nobody vouched for
+([SEARCH-2](search.md#SEARCH-2), [LIST-2](list-files.md#LIST-2)); a result the planner may already
+read is shown as it would be without the argument. It is offered only on a list that holds `vet_content`, so a delegate
+and a definition that leaves the tool out are not offered it. A `read` given to `fetch_url`, `search` or `list_files` there
+is still checked to be a boolean and releases nothing, and one given to a server's tool is sent as
 written, since this process did not offer it. A server's tool is offered it only where the server
 lists no argument named `read` itself ([MCP-16](../mcp.md#MCP-16)).
 
-The content is quarantined as [FETCH-1](fetch-url.md#FETCH-1) or [MCP-1](../mcp.md#MCP-1) has it and
-then released by this tool's own path: the same check, where one is made, the same release of the
+The content is quarantined as [FETCH-1](fetch-url.md#FETCH-1), [SEARCH-2](search.md#SEARCH-2),
+[LIST-2](list-files.md#LIST-2) or [MCP-1](../mcp.md#MCP-1) has it and then released by this tool's
+own path: the same check, where one is made, the same release of the
 slot and the same promotion, so the label is the one a `vet_content` call on that slot gives it. The
-slot keeps its name and the result gives it beside the text. The trail entry is the one
+slot keeps its name and the result gives it beside the text. A listing that asks to read, where the
+mode or a check answers, is held as one slot with the listing as the planner would read it, rather
+than one reference per entry, so that one release covers it; where that release is not made the
+planner is given that one reference. Where a person answers `vet_content` the listing is handed over
+one reference per entry, as without `read`. The trail entry is the one
 [VET-3](#VET-3)'s release writes, crediting the mode where permissions are bypassed with no screening
 asked for ([MODE-4](../permission-modes.md#MODE-4)) and the check where auto-vetting is on and its
 word is `safe` ([CHECK-12](../vetting.md#CHECK-12)). The check is a model call like the one a
@@ -439,6 +447,14 @@ planner and takes no `read`.
 `verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_is_handed_the_page_where_the_check_finds_nothing`
 `verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_does_not_say_safe`
 `verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot_be_made`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_search_or_listing_that_does_not_ask_to_read_stays_quarantined_in_bypass`
+`verified-by: bravebot_agent::turn::a_screened_search_or_listing_that_asks_to_read_is_handed_it_where_the_check_finds_nothing`
+`verified-by: bravebot_agent::turn::asking_to_read_a_search_or_listing_changes_nothing_where_a_person_answers_for_it`
+`verified-by: bravebot_agent::turn::a_search_or_listing_whose_read_is_not_a_boolean_is_refused`
+`verified-by: bravebot_agent::turn::a_search_or_listing_that_finds_nothing_and_asks_to_read_is_handed_the_sentence_saying_so`
+`verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_notes`
+`verified-by: bravebot_agent::turn::a_search_or_listing_that_asks_to_read_more_than_one_result_may_hold_keeps_it_back`
 `verified-by: bravebot_agent::turn::asking_to_read_a_fetched_page_changes_nothing_where_a_person_still_answers_for_it`
 `verified-by: bravebot_agent::turn::a_fetch_asked_to_read_in_a_turn_without_vet_content_stays_a_reference`
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why`

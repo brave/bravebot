@@ -1,0 +1,25 @@
+[package]
+name = "bravebot-herdr"
+description = "Tells herdr, a terminal runtime a session may run inside, what the session is doing and how to resume it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The gate a connection is made under, so no program another thread starts inherits it.
+bravebot-sandbox = { path = "../sandbox" }
+serde_json = { workspace = true }
+
+# A Unix socket made in steps the standard library does in one: created and marked close-on-exec
+# under the gate, then connected outside it without blocking. rustix rather than libc so this crate
+# keeps forbidding unsafe code; it is already in the lock at this version, and `net` adds no crate.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["net"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

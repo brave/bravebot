@@ -13,8 +13,10 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Listing what is in a directory. `directory`, `pattern` and `depth` are routing; there are no
-content arguments. The result is the paths, or one reference per entry when the planner may not
-see them.
+content arguments. `read` is the planner's request, as `fetch_url`'s is, for a quarantined listing
+to be released in the result that returned it ([VET-6](vet-content.md#VET-6)); it names no path and
+decides no label. The result is the paths, or one reference per entry when the planner may not see
+them, or one reference for the listing when the call asked to read and the release was not made.
 
 ## Clauses
 
@@ -24,6 +26,11 @@ see them.
 A listing is trusted only if every file it touched is, each asked about under every name it has, as
 a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). A file can be named to read like an
 instruction, so the names are treated as content and not shown to the planner.
+
+A call with `read: true` has an untrusted listing released in the same result where the mode or a
+check answers `vet_content`, with the label and trail entry a `vet_content` call on it would give
+([VET-6](vet-content.md#VET-6)). The names then reach the planner as a trusted listing's do, with
+the same sentences about a cap, a pattern, a directory that could not be opened and links.
 
 **The same bytes come back from a language server, and [LSP-3](lsp.md#LSP-3) treats them the same
 way.** An answer naming a file nobody vouched for is quarantined whole, because a location is a name
@@ -35,11 +42,21 @@ would have typed a path, carries no position.
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
 `verified-by: bravebot_agent::workspace::a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted`
 `verified-by: bravebot_agent::workspace::a_listing_of_a_hard_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result`
 
 <a id="LIST-2"></a>
 ### LIST-2: a quarantined listing returns one reference per entry, not one for the listing
 
 The planner passes the reference where it would have typed a path, and is never told a filename.
+
+One case returns a single reference instead. A call with `read: true`, where the mode or a check
+answers `vet_content`, has the listing held as one slot, as the planner would read it, so that one
+release covers it ([VET-6](vet-content.md#VET-6)). Where that release is not made (a check that does
+not say `safe`, a slot past the output cap) the planner is given that one reference, with the cap,
+link and pattern sentences beside it. Where a person answers `vet_content`, `read` changes nothing
+and the listing comes back one reference per entry. Which shape a listing takes is decided by the
+planner's argument, the mode, the auto-vetting setting and whether `vet_content` is offered, never by
+what the listing holds.
 
 That covers what a call says about itself as well as what it returns. A tool asked to act on a
 reference reports its result, its refusal and its failure about the reference, never about the file
@@ -51,24 +68,56 @@ A symbolic link is not named either. The walk counts the links it meets and does
 result carries that count ([LIST-6](#LIST-6)).
 
 The result says once what its references are: where the entries are from, what a reference to a file
-is for, and what a reference to a directory is for. Each file then has a line of its own with its
-reference and label. The directories a bounded walk stopped at ([LIST-5](#LIST-5)) are given as a
-run, a count with the first and last reference and the label they share, and a directory whose label
-differs from its neighbour's starts a new run. Every reference in a run is a directory, and each is
-still a reference the planner can name. Which entries are files and which are directories comes from
-where the entry sits in the listing, never from its name. The header names only the tools the run is
-offered, as the description of a single reference does.
+is for, and what a reference to a directory is for. Files that sit next to each other and share a
+label are given as a run, a count with the first and last reference and the label they share, and a
+file on its own has a line with its reference and label. The directories a bounded walk stopped at
+([LIST-5](#LIST-5)) are given as runs the same way. A run is cut where the label changes and where
+files end and directories start, so a run never mixes the two. Where some line is a range, the
+header says once that every reference in a range is what its line says, and each is still a
+reference the planner can name.
+Which entries are files and which are directories comes from where the entry sits in the listing,
+never from its name. The header names only the tools the run is offered, as the description of a
+single reference does.
+
+What a reference to a file is for depends on the entry's label, which comes from the trust map when
+the entry is reserved and which the entry's line already shows. The header has one sentence for each
+label class among the listing's files, never one per entry. For files labelled untrusted it says
+that read_file has nothing to add, because the reference already is the file. For files labelled
+trusted it says that the label lets the planner read them, which is not always a person's vouch,
+and that read_file shows the file when the entry's reference is named as `path_ref`,
+and that a picture or a PDF still comes back as a reference ([READ-5](read-file.md#READ-5)), as
+does a file that is no longer trusted when it is read ([READ-1](read-file.md#READ-1)). That
+sentence names read_file only where the run is offered it. The driver does not work out which
+entries are pictures, because that would mean reading the names. Where no file is labelled
+trusted, one sentence covers every file and names no label.
 
 **Why.** One reference for the whole listing would leave the planner holding an address it cannot
 use, and it would guess globs to see which came back empty. Describing every entry in full repeats
 the same sentence for each one, and the result is sent again every round: at 110 entries that is
 about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
+A line per file costs the same way: 2000 files nobody vouched for were about 40k characters a
+round. A file's line carries no name, so files that share a label differ only in their references,
+and a range keeps every one of those.
+
+**Why the label.** A single sentence telling the planner read_file has nothing to add for every file
+leaves it unable to read a trusted file, since it holds a reference and no name, so it guesses names
+until a read works.
 
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
-`verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`
+`verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_run_of_files_and_one_per_run_of_directories`
+`verified-by: bravebot_core::reference::a_run_of_files_that_share_a_label_is_one_line_with_a_count`
+`verified-by: bravebot_core::reference::a_listing_of_one_file_is_one_line_and_mentions_no_range`
+`verified-by: bravebot_core::reference::files_with_different_labels_are_not_counted_together`
+`verified-by: bravebot_core::reference::a_listing_that_mixes_files_and_directories_cuts_a_run_at_each_change_of_kind`
+`verified-by: bravebot_core::reference::a_run_of_references_that_skips_a_slot_id_is_caught`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_of_many_files_gives_them_as_one_run`
 `verified-by: bravebot_core::reference::directories_with_different_labels_are_not_counted_together`
 `verified-by: bravebot_core::reference::the_header_of_a_listing_names_only_the_moves_the_run_is_offered`
 `verified-by: bravebot_core::reference::a_listing_of_one_directory_is_one_line_and_names_no_file_move`
+`verified-by: bravebot_core::reference::a_mixed_listing_says_once_per_label_what_a_file_reference_is_for`
+`verified-by: bravebot_core::reference::a_listing_of_one_label_says_only_that_labels_sentence`
+`verified-by: bravebot_core::reference::a_trusted_entry_names_read_file_only_where_the_run_is_offered_it`
+`verified-by: bravebot_agent::turn::a_trusted_entry_of_a_mixed_listing_is_read_through_its_reference`
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
@@ -80,6 +129,8 @@ about 32 KB (~8k tokens) a round, and one invitation per directory to list the s
 `verified-by: bravebot_agent::tools::a_read_by_reference_to_a_removed_file_does_not_name_the_file`
 `verified-by: bravebot_agent::workspace::a_listing_leaves_out_a_directory_it_cannot_open_and_says_so`
 `verified-by: bravebot_agent::tools::a_listing_that_cannot_open_a_directory_does_not_name_it`
+`verified-by: bravebot_agent::turn::asking_to_read_a_search_or_listing_changes_nothing_where_a_person_answers_for_it`
+`verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_says_so_and_keeps_its_notes`
 
 <a id="LIST-3"></a>
 ### LIST-3: the glob is literal and the matcher does not backtrack
@@ -128,11 +179,19 @@ Output is capped, and the cap is reported. Reported to the planner whether or no
 names, since a listing handed over as one reference per entry is exactly the case where a notice
 inside the body reaches nobody.
 
+A listing given a depth shares the cap across directories: it takes at most 200 files from any one
+directory ([LIST-5](#LIST-5)), and a listing that left files out that way is reported as truncated
+too.
+
 **Why.** Silence would let the planner conclude a file does not exist when the answer was cut off.
 
 `verified-by: bravebot_agent::workspace::a_listing_past_the_cap_reports_truncation`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
 `verified-by: bravebot_agent::workspace::a_listing_within_the_cap_reports_no_truncation`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_it_was_capped`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_cap_and_paging_notes`
+`verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes`
 
 <a id="LIST-5"></a>
 ### LIST-5: a listing walks the whole tree unless it is given a depth, and says where it stopped
@@ -149,8 +208,18 @@ answer might be rather than an answer.
 
 A quarantined listing names them the only way it names anything, as one of the references
 [LIST-2](#LIST-2) hands over per entry, and the result says which of them stand for a directory the
-walk stopped at, as a run with a count and its first and last reference. A reference standing for a
+walk stopped at, in runs given as [LIST-2](#LIST-2) gives them. A reference standing for a
 directory is refused where a path is expected, so the difference is enforced and not only stated.
+
+A bounded walk takes at most 200 files from any one directory, counted after the pattern and the
+permission rules. A directory with more is named in the result with how many of its files were left
+out, the way a directory the walk stopped at is named, and listing it with no depth shows the rest.
+The count comes from directory entries and no file's bytes. A walk with no depth is not held to this,
+since it asked for every file, and keeps only the cap of [LIST-4](#LIST-4). In a quarantined listing
+the directory is a directory reference after the ones the walk stopped at, and the count travels
+beside the references paired with that reference, as the link count of [LIST-6](#LIST-6) does. It
+is released with the entry count and adds no use of `declassify`, and the reference it is paired
+with is chosen by position, never by a name.
 
 **Why.** Without a bound the only listing on offer is every path at every depth, which in a real
 repository is thousands of them. That is paid for in the planner's context, again on every round
@@ -166,11 +235,21 @@ places. A reference standing for a directory while reading like a file is the ot
 it sends the planner to open bytes that are not there, and a write aimed at one asks a person to
 endorse a file over a directory they own.
 
+**Why the per-directory cap.** Without one, a walk in name order spends the whole cap on the first
+directory that holds thousands of files and lists no directory after it. Those entries are paid for
+in the planner's context on every round that resends them.
+
 `verified-by: bravebot_agent::workspace::a_listing_given_a_depth_descends_no_further_than_that`
 `verified-by: bravebot_agent::workspace::a_depth_limited_listing_names_the_directories_it_stopped_at`
 `verified-by: bravebot_agent::workspace::a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at`
 `verified-by: bravebot_agent::workspace::a_listing_with_no_depth_walks_the_whole_tree`
 `verified-by: bravebot_agent::workspace::a_depth_of_two_or_more_walks_that_many_levels_and_names_where_it_stopped`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
+`verified-by: bravebot_agent::workspace::an_unbounded_listing_takes_every_file_of_a_large_directory`
+`verified-by: bravebot_agent::workspace::a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name`
+`verified-by: bravebot_agent::tools::a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::sentences::a_listing_cut_per_directory_names_each_reference_with_what_it_left_out`
 `verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
 `verified-by: bravebot_core::policy::an_entry_that_is_a_directory_is_not_offered_as_a_file`
 `verified-by: bravebot_core::policy::a_directory_reference_is_refused_where_a_path_is_expected`

@@ -639,9 +639,9 @@ fn plan_rows(request: &RunRequest) -> Vec<Line<'static>> {
             format!("  {}", t!(run_writes)),
             Style::default().fg(theme::running()),
         )));
-        for path in &request.plan.writes {
+        for shown in request.shown_writes() {
             lines.push(Line::from(Span::styled(
-                format!("       {}", bravebot_agent::confirm::shown_path(path)),
+                format!("       {shown}"),
                 Style::default()
                     .fg(theme::text())
                     .add_modifier(Modifier::BOLD),
@@ -1184,6 +1184,7 @@ mod tests {
             resolved: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),
@@ -1215,6 +1216,8 @@ mod tests {
                 stdin: None,
             },
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -1439,6 +1442,46 @@ mod tests {
             "{drawn}"
         );
         assert!(!drawn.contains("hooks"), "{drawn}");
+    }
+
+    /// PERM-9: the run prompt draws the file a link leads a written name to beside the name, and
+    /// marks a protected destination, so `notes.txt` is not drawn alone when it is the hook.
+    /// Rejects a prompt that draws only the name, one that marks a plain write, and one that
+    /// marks a write the driver did not find protected.
+    #[test]
+    fn the_run_prompt_draws_where_a_written_link_lands_and_marks_a_protected_path() {
+        let screen = |destinations: Vec<bravebot_agent::confirm::RunDestination>| {
+            let mut request = a_run(false);
+            request.plan.writes = vec!["notes.txt".into()];
+            request.destinations = destinations;
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let plain = screen(Vec::new());
+        assert!(plain.contains("notes.txt"), "{plain}");
+        assert!(!plain.contains("lands on"), "{plain}");
+        assert!(!plain.contains("protected path"), "{plain}");
+
+        let linked = screen(vec![bravebot_agent::confirm::RunDestination {
+            written: "notes.txt".into(),
+            lands_on: Some(".git/hooks/pre-commit".into()),
+            protected: true,
+        }]);
+        assert!(linked.contains("notes.txt (lands on"), "{linked}");
+        assert!(linked.contains(".git/hooks/pre-commit"), "{linked}");
+        assert!(linked.contains("protected path"), "{linked}");
+
+        let unprotected_link = screen(vec![bravebot_agent::confirm::RunDestination {
+            written: "notes.txt".into(),
+            lands_on: Some("elsewhere.txt".into()),
+            protected: false,
+        }]);
+        assert!(unprotected_link.contains("lands on"), "{unprotected_link}");
+        assert!(
+            !unprotected_link.contains("protected path"),
+            "{unprotected_link}"
+        );
     }
 
     /// PROMPT-1: the run prompt draws a file the line writes, and a directory it is confined to,
@@ -1950,6 +1993,7 @@ mod tests {
             resolved: std::path::PathBuf::from("/bin/cat"),
             started_as: std::path::PathBuf::from("/bin/cat"),
             args: Vec::new(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdin {
@@ -1974,6 +2018,8 @@ mod tests {
                 stdin: None,
             },
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -2071,6 +2117,7 @@ mod tests {
             resolved: std::path::PathBuf::from("/usr/bin/git"),
             started_as: std::path::PathBuf::from("/usr/bin/git"),
             args: vec!["log".to_string()],
+            matched: Vec::new(),
             environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
             expansions: Vec::new(),
             routes: Vec::new(),
@@ -2094,6 +2141,8 @@ mod tests {
             record: None,
             pattern: None,
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -2238,6 +2287,7 @@ mod tests {
             resolved: std::path::PathBuf::from("/bin/sh"),
             started_as: std::path::PathBuf::from("/bin/sh"),
             args: vec!["check.sh".to_string()],
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdout {
@@ -2262,6 +2312,8 @@ mod tests {
             record: None,
             pattern: None,
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -2571,6 +2623,7 @@ mod tests {
                 resolved: "/usr/bin/gh".into(),
                 started_as: "/usr/bin/gh".into(),
                 args: vec!["-R".to_string(), "a/b".to_string(), "pr".to_string()],
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),

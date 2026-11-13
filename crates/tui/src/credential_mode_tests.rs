@@ -27,7 +27,6 @@ fn opening_answers(
     let sources = RuleSources {
         state: Some(state.to_path_buf()),
         named: None,
-        left: vec![root.to_path_buf()],
         managed: bravebot_config::Managed::default(),
     };
     let settings = sources.settings(root);

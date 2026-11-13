@@ -564,7 +564,9 @@ A program named rather than given as a path is looked for only in `PATH` entries
 write, and a file that is a link into such a directory is not taken
 ([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). Those entries include the checkout holding a
 directory the session was opened on, added or moved to, the nearest of it and its ancestors with a
-`.git`, so a session opened below a checkout's root does not search the checkout's `bin`. The digest holds the
+`.git`, so a session opened below a checkout's root does not search the checkout's `bin`. A server
+started by a command that opens no session has the directory the command ran in and its checkout
+left out as well ([SANDBOX-30](sandboxing.md#SANDBOX-30)). The digest holds the
 name, so an approval of the name must not start a file a confined stage wrote into an activated
 virtualenv's `bin`, a `node_modules/.bin` or the `bin` of the checkout ahead of the installation the
 person was shown. A name found only in such a directory is not found, as for any absent program.
@@ -787,11 +789,10 @@ or `mcp-approved`, is left as it is rather than written over with the one answer
 
 The plain interface asks the question as a line answered yes or no, and its yes is answer 1: a line
 has room for one answer, and the one that stops asking outlives the session. A one-shot run has
-nobody to ask, so a call there that would ask is refused. An `allow` rule decides nothing there, as
-it decides nothing for any tool in a one-shot run, and answer 2 still does: it was given at this
-question and names one tool in one project, where an `allow` rule is a line of a file that can name
-every server. For a server declared to ask every call answer 2 decides nothing there either, and
-the call is refused ([SERVERS-21](#SERVERS-21)). A delegate's call is put to the person as the
+nobody to ask, so a call there that would ask is refused. An `allow` rule decides a call there as it
+does in a session, as it decides every tool in a one-shot run ([CLI-1](cli.md#CLI-1)), and answer 2
+still does too. For a server declared to ask every call neither decides anything there, and the call
+is refused ([SERVERS-21](#SERVERS-21)). A delegate's call is put to the person as the
 turn's own is, after the same rules and standing answers
 ([DELEGATE-10](delegation.md#DELEGATE-10)), except a call to a server declared to ask every call,
 which is refused with nobody asked, since a delegate's task came from a planner and not from the
@@ -923,7 +924,8 @@ primitive, and the tool surface the planner sees must be decided by names people
 **How it is built.** Listing a server's tools returns one list, labelled untrusted, that the client
 drew from the server's reply and keeps nothing else of. Per tool it holds the word, the description,
 and each argument as its name, its type, the values it may take where it names at most sixteen, and
-whether it is required. An argument's own description is dropped: nobody reads it at the list, and
+whether it is required, and whether the server marks the tool read-only with MCP's `readOnlyHint`
+annotation, the one annotation it keeps. An argument's own description is dropped: nobody reads it at the list, and
 it would still reach the planner. In a description, each control character but a line break, and
 each character that reorders or hides text, is made a space, and it is cut at 1024 characters.
 
@@ -938,7 +940,8 @@ resources or prompts need not have it, and any other failure of the method fails
 
 That list is put to the person at the start of the first turn they ask for, or of the first plan run
 ([MANIFEST-15](manifest.md#MANIFEST-15)), whole. It shows each
-tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
+tool's name as `alias:tool`, its arguments, that it is read-only as the server says where the
+server marks it so, and every row of its description behind the margin with
 none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
 as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
 drawn above the list. The checks of every list to be put are made at the same time, no more than
@@ -987,6 +990,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::a_description_is_blanked_and_cut`
 `verified-by: bravebot_mcp::protocol::a_character_nobody_sees_is_blanked`
 `verified-by: bravebot_mcp::protocol::an_argument_is_its_name_type_and_whether_it_is_required`
+`verified-by: bravebot_mcp::protocol::a_tool_its_server_marks_read_only_is_drawn_as_one_and_no_other`
+`verified-by: bravebot_approval::lib::a_tool_the_server_marks_read_only_says_so_and_no_other_does`
 `verified-by: bravebot_mcp::protocol::the_list_is_the_same_whatever_order_the_server_sent`
 `verified-by: bravebot_mcp::protocol::a_long_list_is_capped_and_the_rest_counted`
 `verified-by: bravebot_mcp::protocol::a_server_without_the_method_lists_no_tool`
@@ -1947,7 +1952,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [mcp.md](mcp.md) | front matter, `documented-by: none (internal: no settings key wires up a server yet, so there is nothing a reader can configure)` | Replaced. There is now something a reader configures, so the spec names the reference page and stops describing itself as internal. **Applied** with the declaration. |
 | [mcp.md](mcp.md) | [MCP-9](mcp.md#MCP-9)'s known cost, that a server needing a variable does not work, "left to whatever names variables for a server when servers are reachable from something (issue #83)" | Discharged by [SERVERS-10](#SERVERS-10). The cost paragraph becomes a pointer rather than an open cost. **Applied** with the launch that hands the named variables over, and the clause now also says the launch hands over those and no others. |
 | [mcp.md](mcp.md) | [MCP-1](mcp.md#MCP-1), what a server returns is untrusted | Extended, not amended. A description and an input schema join a result as content from outside, which is [SERVERS-8](#SERVERS-8). The clause's reasoning already covers them; the wording says "a tool result". |
-| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface, and `bravebot-cli` is the crate that reaches the client, so its row lists `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. `bravebot-agent` reaches it too, to offer a started server's tools and call them, so its row lists `mcp` as well, and `bravebot-mcp` lists `config` for the one rule of what a tool's word may be. |
+| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface. `bravebot-agent` is the crate that reaches the client, to start a server, offer its tools and call them, so its row lists `mcp`. `bravebot-cli` starts the servers through `bravebot-agent` and names no part of `bravebot-mcp`, so its row does not list `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. `bravebot-tui` and `bravebot-ui-bridge` list `mcp` for their tests only, and `bravebot-mcp` lists `config` for the one rule of what a tool's word may be. |
 | [backends.md](backends.md) | [BACKEND-1](backends.md#BACKEND-1), a settings file may name a destination and never a permission, and none of them names a command to run | **Unchanged and reaffirmed.** [SERVERS-1](#SERVERS-1) exists so this clause does not have to move. A reviewer should read any future proposal to put a declaration in a settings layer as a proposal to amend this. |
 | [backends.md](backends.md) | [BACKEND-38](backends.md#BACKEND-38), the managed file pins the names that decide where a request goes, and "every other name in the file decides nothing" | Extended by two names that are not destinations, `mcp.allow` and `mcp.deny`, which keep a server from starting and add none, for [SERVERS-12](#SERVERS-12)'s reason. **Applied**. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |

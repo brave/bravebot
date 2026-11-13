@@ -1742,6 +1742,24 @@ pub const MAX_DIRECTORIES: usize = 4096;
 ///
 /// `directory` is where the command will run, which is what a relative pattern is relative to.
 pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<String>, Refused> {
+    Ok(expand_marked(word, directory, home)?
+        .into_iter()
+        .map(|(argument, _)| argument)
+        .collect())
+}
+
+/// [`expand`], with each argument paired with whether a pattern matched it on disk.
+///
+/// `true` only for a name [`walk`] found. A word with no pattern, an option carrying its value and
+/// a pattern that matched nothing and is passed through as written are `false`. Decided from
+/// whether the walk matched, never from the names it returned ([CMDLINE-4]).
+///
+/// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+fn expand_marked(
+    word: &Word,
+    directory: &Path,
+    home: Option<&Path>,
+) -> Result<Vec<(String, bool)>, Refused> {
     let refused = |reason| Refused {
         span: word.span,
         text: render(&word.pieces),
@@ -1775,17 +1793,17 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
             // exist yet, and a pattern-free word must not be judged against what is on disk.
             // An option's value is the program's to match, so `--include=*.md` is no more a list
             // of files than `--include=foo` is.
-            out.push(render(&candidate));
+            out.push((render(&candidate), false));
             continue;
         }
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
             // As a shell without failglob does, so `find . -name *.md` reaches `find` as written
             // when no file here matches. The plan shows the word the program receives.
-            out.push(render(&candidate));
+            out.push((render(&candidate), false));
             continue;
         }
-        out.extend(matched);
+        out.extend(matched.into_iter().map(|name| (name, true)));
     }
 
     if out.len() > MAX_ARGUMENTS {
@@ -2483,8 +2501,9 @@ impl Compiler<'_, '_> {
         }
 
         let mut args = Vec::new();
+        let mut matched = Vec::new();
         for operand in &command.words[1..] {
-            for expanded in expand(operand, self.directory, self.home)? {
+            for (expanded, from_a_pattern) in expand_marked(operand, self.directory, self.home)? {
                 // An operand naming the terminal device, judged after expansion so that a pattern
                 // or a `~` working out to the device is caught as the plain spelling is. The
                 // operand is quoted back rather than the program, since the program is usually an
@@ -2498,7 +2517,12 @@ impl Compiler<'_, '_> {
                     .into());
                 }
                 args.push(expanded);
+                matched.push(from_a_pattern);
             }
+        }
+        // Empty where no pattern matched, which is what a step built anywhere else holds.
+        if !matched.contains(&true) {
+            matched.clear();
         }
 
         // The argv is final here and the name has not been looked up yet, which is the one point
@@ -2543,6 +2567,7 @@ impl Compiler<'_, '_> {
             resolved,
             started_as,
             args,
+            matched,
             environment,
             expansions,
             routes,
@@ -4061,6 +4086,40 @@ mod tests {
             Stopped::Compile(refused) => refused,
             Stopped::Rule(denial) => panic!("`{line}` was refused by a rule: {denial}"),
         }
+    }
+
+    /// Each argument of a compiled step records whether a pattern produced it, from whether the
+    /// pattern matched on disk. The proof that a line reads only vouched files depends on it, since
+    /// a name a pattern matched is text out of a directory listing ([CMDLINE-4]). The wrong
+    /// implementation marks nothing, marks a quoted pattern, marks a pattern passed through because
+    /// it matched nothing, or loses which argument is which.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    #[test]
+    fn each_argument_records_whether_a_pattern_matched_it() {
+        let tree = Tree::new("marked");
+        tree.executable("bin/cmd").file("a.rs").file("b.rs");
+        let plan = compiled("./bin/cmd -n *.rs '*.rs' *.zzz a.rs", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["-n", "a.rs", "b.rs", "*.rs", "*.zzz", "a.rs"]);
+        assert_eq!(step.matched, [false, true, true, false, false, false]);
+        assert_eq!(
+            (0..step.args.len())
+                .map(|index| step.from_a_pattern(index))
+                .collect::<Vec<_>>(),
+            [false, true, true, false, false, false]
+        );
+
+        // A line no pattern of which matched anything holds no record at all, as a step built
+        // anywhere else does.
+        let plan = compiled("./bin/cmd '*.rs' *.zzz a.rs", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert!(step.matched.is_empty(), "{:?}", step.matched);
+        assert!((0..step.args.len()).all(|index| !step.from_a_pattern(index)));
     }
 
     /// Outside bypass mode every spelling of a computed assignment value is the refusal it always
