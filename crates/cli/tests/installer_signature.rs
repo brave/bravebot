@@ -394,6 +394,9 @@ struct Install<'a> {
     authenticode: (&'static str, &'static str),
     /// What the script is given after its name, as a person writes `sh -s 1.2.3`.
     arguments: Vec<&'static str>,
+    /// Variables set for the installer besides the ones every run sets, as a person sets one in
+    /// front of `sh`.
+    environment: Vec<(&'static str, &'static str)>,
 }
 
 /// What an install left behind.
@@ -430,6 +433,7 @@ impl<'a> Install<'a> {
             absent: Vec::new(),
             authenticode: ("Valid", "Brave Software, Inc."),
             arguments: Vec::new(),
+            environment: Vec::new(),
         }
     }
 
@@ -442,6 +446,11 @@ impl<'a> Install<'a> {
 
     fn with_arguments(mut self, arguments: &[&'static str]) -> Self {
         self.arguments = arguments.to_vec();
+        self
+    }
+
+    fn with_environment(mut self, name: &'static str, value: &'static str) -> Self {
+        self.environment.push((name, value));
         self
     }
 
@@ -573,7 +582,7 @@ impl<'a> Install<'a> {
                 (command, destination)
             }
         };
-        let output = command
+        command
             .env("PATH", &path)
             .env("HOME", &home)
             .env_remove("BRAVEBOT_HOME")
@@ -581,9 +590,11 @@ impl<'a> Install<'a> {
             .env("GNUPGHOME", &own_keyring)
             .env("REQUESTS", &requests)
             .env("FAKE_AUTH_STATUS", self.authenticode.0)
-            .env("FAKE_AUTH_SIGNER", self.authenticode.1)
-            .output()
-            .expect("run the installer");
+            .env("FAKE_AUTH_SIGNER", self.authenticode.1);
+        for (name, value) in &self.environment {
+            command.env(name, value);
+        }
+        let output = command.output().expect("run the installer");
 
         let entries = |directory: &Path| -> Vec<PathBuf> {
             std::fs::read_dir(directory)
@@ -952,48 +963,201 @@ fn a_linux_checksum_with_no_signature_installs_nothing() {
     }
 }
 
-/// Whether `gpg` is installed is a property of the machine, which nobody changing a release
-/// controls, so its absence is no reason for the install script to refuse. It is said, since the
-/// install is then on the checksum alone. Nothing but the binary and its checksum is served, so a
-/// script that fetched the signature anyway would fail here.
+/// The variable a person sets to have `install.sh` install on a machine without `gpg`.
+const ALLOW_MISSING_GPG: &str = "BRAVEBOT_ALLOW_MISSING_GPG";
+
+/// A machine without `gpg` is where a replaced release would install: the binary and its checksum
+/// are uploaded to the same place, so a substituted binary served beside its own checksum passes
+/// the checksum check, and the signature is the one part of the release that whoever replaced it
+/// cannot make. So the script refuses there before it downloads anything, as it does on a Mac
+/// without `codesign`, and says how to get gpg and which variable installs without it. Only `1`
+/// sets that variable, since it turns a check off, and the other values here are refused alike.
 #[test]
-fn without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs() {
+fn without_gpg_a_linux_install_is_refused_before_anything_is_downloaded() {
     let Some((tools, release)) = setup() else {
         return;
     };
-    let install = Install::new(tools, release, "no-gpg").without_gpg();
+    for value in [None, Some(""), Some("0"), Some("true")] {
+        let mut install = Install::new(tools, release, "no-gpg").without_gpg();
+        if let Some(value) = value {
+            install = install.with_environment(ALLOW_MISSING_GPG, value);
+        }
+        let outcome = install.run(
+            Installer::Script,
+            &[
+                ("bravebot-linux-arm64", &release.substitute),
+                ("bravebot-linux-arm64.sha256", &release.substitute_checksum),
+            ],
+        );
+        assert_refused(Installer::Script, &outcome, "gpg not found");
+        let output = outcome.output.to_lowercase();
+        assert!(
+            output.contains("install gnupg") && output.contains("apt install gpg"),
+            "{value:?}: the refusal does not say how to install gpg: {}",
+            outcome.output
+        );
+        assert!(
+            outcome
+                .output
+                .contains(&format!("| {ALLOW_MISSING_GPG}=1 sh")),
+            "{value:?}: the refusal does not give the line that installs without gpg: {}",
+            outcome.output
+        );
+        assert_eq!(
+            outcome.requests,
+            Vec::<String>::new(),
+            "{value:?}: the script downloaded before refusing"
+        );
+    }
+}
+
+/// The variable is for a person who cannot install `gpg`, and the install it allows rests on the
+/// checksum alone, so the script says so each time. It changes nothing about where the script
+/// downloads from: the same tag's binary and checksum, and not the signature, which nothing would
+/// check. The signature is served, so a script that still asked for it would show the request.
+/// The checksum is then the one check left, so a binary that does not match it is still refused.
+#[test]
+fn without_gpg_the_override_installs_on_the_checksum_alone_and_says_so() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let files: [(&str, &[u8]); 3] = [
+        ("bravebot-linux-arm64", &release.binary),
+        ("bravebot-linux-arm64.sha256", &release.checksum),
+        ("bravebot-linux-arm64.sha256.asc", &release.signature),
+    ];
+    let download = "https://github.com/brave/bravebot/releases/download";
+    let cases: [(&[&'static str], Vec<String>); 2] = [
+        (
+            &[],
+            vec![
+                "https://api.github.com/repos/brave/bravebot/releases/latest".to_owned(),
+                format!("{download}/v0.0.0/bravebot-linux-arm64"),
+                format!("{download}/v0.0.0/bravebot-linux-arm64.sha256"),
+            ],
+        ),
+        (
+            &["1.2.3"],
+            vec![
+                format!("{download}/v1.2.3/bravebot-linux-arm64"),
+                format!("{download}/v1.2.3/bravebot-linux-arm64.sha256"),
+            ],
+        ),
+    ];
+    for (arguments, expected) in cases {
+        let install = Install::new(tools, release, "no-gpg-allowed")
+            .without_gpg()
+            .with_environment(ALLOW_MISSING_GPG, "1")
+            .with_arguments(arguments);
+        let outcome = install.run(Installer::Script, &files);
+        assert_installed(Installer::Script, &outcome, &release.binary);
+        assert!(
+            outcome
+                .output
+                .contains(&format!("{ALLOW_MISSING_GPG}=1 is set"))
+                && outcome
+                    .output
+                    .contains("signature on bravebot-linux-arm64.sha256 was not checked"),
+            "{arguments:?}: the script did not say the signature was not checked: {}",
+            outcome.output
+        );
+        assert_eq!(
+            outcome.requests, expected,
+            "{arguments:?}: the variable changed what the script downloaded"
+        );
+    }
+
+    let install = Install::new(tools, release, "no-gpg-allowed-mismatch")
+        .without_gpg()
+        .with_environment(ALLOW_MISSING_GPG, "1");
+    let outcome = install.run(
+        Installer::Script,
+        &[
+            ("bravebot-linux-arm64", &release.substitute),
+            ("bravebot-linux-arm64.sha256", &release.checksum),
+        ],
+    );
+    assert_refused(Installer::Script, &outcome, "checksum mismatch");
+}
+
+/// The variable is for a machine where the signature cannot be checked, and turns nothing off
+/// where it can. A person who set it once, for example in a shell profile, and installed `gpg`
+/// later still has every release checked, so a signature deleted from the release, and the
+/// release's own signature over a checksum somebody replaced, are still refused with it set.
+#[test]
+fn with_gpg_the_override_does_not_let_a_missing_or_wrong_signature_install() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let unsigned: [(&str, &[u8]); 2] = [
+        ("bravebot-linux-arm64", &release.binary),
+        ("bravebot-linux-arm64.sha256", &release.checksum),
+    ];
+    let replaced: [(&str, &[u8]); 3] = [
+        ("bravebot-linux-arm64", &release.substitute),
+        ("bravebot-linux-arm64.sha256", &release.substitute_checksum),
+        ("bravebot-linux-arm64.sha256.asc", &release.signature),
+    ];
+    for (files, because) in [
+        (&unsigned[..], "checksum signature"),
+        (&replaced[..], "signature verification failed"),
+    ] {
+        let install =
+            Install::new(tools, release, "gpg-allowed").with_environment(ALLOW_MISSING_GPG, "1");
+        let outcome = install.run(Installer::Script, files);
+        assert_refused(Installer::Script, &outcome, because);
+    }
+}
+
+/// Where `gpg` is on the `PATH` the variable is not read, so a signed release installs with it set
+/// as it does without it, and the script does not warn that the signature was not checked.
+#[test]
+fn with_gpg_the_override_installs_a_signed_release_without_a_warning() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let install =
+        Install::new(tools, release, "gpg-allowed-signed").with_environment(ALLOW_MISSING_GPG, "1");
     let outcome = install.run(
         Installer::Script,
         &[
             ("bravebot-linux-arm64", &release.binary),
             ("bravebot-linux-arm64.sha256", &release.checksum),
+            ("bravebot-linux-arm64.sha256.asc", &release.signature),
         ],
     );
     assert_installed(Installer::Script, &outcome, &release.binary);
     assert!(
-        outcome.output.contains("skipping signature verification"),
-        "the script did not say it skipped the check: {}",
+        !outcome.output.contains("was not checked"),
+        "the script warned that a signature it checked was not checked: {}",
         outcome.output
     );
 }
 
 /// The package script runs on a runner the workflow chose, which has `gpg`, so a machine without
 /// it is not one to package a binary on unchecked: skipping would let a missing tool turn the
-/// check off for a build whose release somebody replaced.
+/// check off for a build whose release somebody replaced. The variable that lets `install.sh`
+/// install without gpg is a person's choice for their own machine, and the package script does not
+/// read it, so it refuses with that variable set too.
 #[test]
 fn a_linux_package_is_not_built_without_gpg() {
     let Some((tools, release)) = setup() else {
         return;
     };
-    let install = Install::new(tools, release, "no-gpg-package").without_gpg();
-    let outcome = install.run(
-        Installer::Npm,
-        &[
-            ("bravebot-linux-arm64", &release.binary),
-            ("bravebot-linux-arm64.sha256", &release.checksum),
-        ],
-    );
-    assert_refused(Installer::Npm, &outcome, "gpg could not be run");
+    for allowed in [false, true] {
+        let mut install = Install::new(tools, release, "no-gpg-package").without_gpg();
+        if allowed {
+            install = install.with_environment(ALLOW_MISSING_GPG, "1");
+        }
+        let outcome = install.run(
+            Installer::Npm,
+            &[
+                ("bravebot-linux-arm64", &release.binary),
+                ("bravebot-linux-arm64.sha256", &release.checksum),
+            ],
+        );
+        assert_refused(Installer::Npm, &outcome, "gpg could not be run");
+    }
 }
 
 /// A macOS binary as the stand-in tools read one: signed by `team` and notarized, or neither.
@@ -1071,14 +1235,17 @@ fn install_on_windows(
 
 /// Nothing is published beside a macOS or Windows checksum, so an installer that asked for a
 /// signature there would fail every install. A binary that is signed by Brave and notarized
-/// installs, and leaves nothing beside the executable.
+/// installs, and leaves nothing beside the executable. A Mac needs no `gpg`, which macOS does not
+/// ship, so none is on the `PATH` here.
 #[test]
 fn a_darwin_binary_signed_by_brave_and_notarized_installs() {
     let Some((tools, release)) = setup() else {
         return;
     };
     let binary = mac_binary(Some(BRAVE_TEAM), true);
-    for (installer, outcome) in install_on_darwin(tools, release, "mac-good", &binary, |i| i) {
+    for (installer, outcome) in
+        install_on_darwin(tools, release, "mac-good", &binary, |i| i.without_gpg())
+    {
         assert_installed(installer, &outcome, &binary);
     }
 }
