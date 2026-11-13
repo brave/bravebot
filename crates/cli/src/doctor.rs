@@ -1960,13 +1960,17 @@ pub(crate) fn fact(name: impl AsRef<str>, value: impl AsRef<str>) {
 /// A file that was read is named even where nothing in it could be pinned, because the alternative
 /// leaves whoever wrote it with no way to tell a file this program never found from one holding
 /// names it may not honour.
+///
+/// A `retrieval` value that cannot be the pin is reported on a line of its own, since the file is
+/// then named as pinning nothing or as pinning other names, and neither says that a pin somebody
+/// wrote is not in force (RETRIEVE-23).
 pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
     let Some(path) = managed.path() else {
         return Vec::new();
     };
     let path = progress::printable_path(path);
     let pinned: Vec<&str> = managed.pinned().collect();
-    vec![aligned(
+    let mut lines = vec![aligned(
         t!(doctor_managed),
         match pinned.is_empty() {
             true => t!(doctor_managed_nothing, path = &path),
@@ -1977,7 +1981,15 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
             ),
         },
         FACT,
-    )]
+    )];
+    if managed.retrieval_unreadable() {
+        lines.push(aligned(
+            t!(doctor_settings_ignored),
+            t!(doctor_managed_retrieval_unreadable, path = &path),
+            FACT,
+        ));
+    }
+    lines
 }
 
 /// Whether a file created under the state directory is reachable only by the account that owns it.
@@ -3208,6 +3220,43 @@ mod tests {
             !lines[0].contains("https://approved.example"),
             "the value is printed, and on some machines that is a credential: {lines:?}"
         );
+    }
+
+    /// A managed file whose `retrieval` cannot be the pin is reported beside the file's own line,
+    /// and one whose `retrieval` is a pin or says nothing about the switch is not. A quoted
+    /// `"false"`, a bare `false` and a `null` all leave retrieval to the person's own file, so
+    /// without the line an administrator who wrote one has no way to learn it is not in force
+    /// (RETRIEVE-23).
+    ///
+    /// Rejects reading the value as absence in silence, and a line for a value that is a pin.
+    #[test]
+    fn doctor_reports_a_managed_retrieval_value_that_pins_nothing() {
+        let scratch = Scratch::new("doctor-managed-retrieval");
+        let path = scratch.path.join("managed.json");
+        let said = t!(
+            doctor_managed_retrieval_unreadable,
+            path = path.display().to_string()
+        )
+        .to_string();
+        for (text, reported) in [
+            (r#"{"retrieval": {"enabled": "false"}}"#, true),
+            (r#"{"retrieval": false}"#, true),
+            (r#"{"retrieval": {"enabled": null}}"#, true),
+            (r#"{"retrieval": {"enabled": false}}"#, false),
+            (r#"{"retrieval": {"enabled": true}}"#, false),
+            (r#"{"retrieval": {}}"#, false),
+            ("{}", false),
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+
+            let lines = managed_layer(&Managed::at(&path));
+
+            assert_eq!(
+                lines.iter().any(|line| line.contains(&said)),
+                reported,
+                "{text}: {lines:?}"
+            );
+        }
     }
 
     /// The case every machine without an administrator is in. A report listing every place a file

@@ -347,8 +347,15 @@ pub struct Managed {
     /// choosing for them, and turning retrieval off sends nothing anywhere. Only `false` is a pin.
     /// `true` is not read, since this layer cannot turn on what the person turned off, and
     /// retrieval on would send a person's conversation to another service on a choice that is not
-    /// theirs. A value that is not a boolean is absence, as it is in the person's own file.
+    /// theirs. A value that is not a boolean is absence, as it is in the person's own file, and
+    /// `retrieval_unreadable` carries it to `doctor`.
     turned_off: Vec<&'static str>,
+    /// Whether `retrieval` was written as something that cannot hold the pin, for `doctor` to report
+    /// for the reason `narrowing_unreadable` is (RETRIEVE-23).
+    ///
+    /// That is a value that is not a block, or a block whose `enabled` is not a boolean. A block
+    /// with no `enabled` is not this: it says nothing about the switch.
+    retrieval_unreadable: bool,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -420,6 +427,13 @@ impl Managed {
             .filter(|(_, value)| *value == Some(&serde_json::Value::Bool(false)))
             .map(|(key, _)| key)
             .collect(),
+            retrieval_unreadable: match root.get("retrieval") {
+                None => false,
+                Some(serde_json::Value::Object(block)) => block
+                    .get("enabled")
+                    .is_some_and(|enabled| !enabled.is_boolean()),
+                Some(_) => true,
+            },
             rules: crate::settings::managed_rules(&root),
             hosts,
             hosts_unreadable,
@@ -556,6 +570,12 @@ impl Managed {
     /// (RETRIEVE-23).
     pub fn retrieval_off(&self) -> bool {
         self.turned_off.contains(&RETRIEVAL_KEY)
+    }
+
+    /// Whether the file wrote `retrieval` as something other than a block holding a boolean
+    /// `enabled`, which pins nothing (RETRIEVE-23).
+    pub fn retrieval_unreadable(&self) -> bool {
+        self.retrieval_unreadable
     }
 
     /// The keys it named as something other than a boolean, which are absence.
@@ -1035,7 +1055,9 @@ mod tests {
     }
 
     /// RETRIEVE-23: `retrieval.enabled: false` is a pin and is named among them. `true` and a value
-    /// that is not a boolean pin nothing, so the layer can only turn retrieval off.
+    /// that is not a boolean pin nothing, so the layer can only turn retrieval off. A value that
+    /// cannot be the pin is carried out to be reported, and one that can be, or that names nothing
+    /// about the switch, is not.
     #[test]
     fn a_managed_retrieval_false_is_a_pin_and_nothing_else_is() {
         let off = scratch(
@@ -1043,16 +1065,20 @@ mod tests {
             r#"{"retrieval": {"enabled": false}}"#,
         );
         assert!(off.retrieval_off());
+        assert!(!off.retrieval_unreadable());
         assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["retrieval.enabled"]);
-        for (name, text) in [
-            ("on", r#"{"retrieval": {"enabled": true}}"#),
-            ("quoted", r#"{"retrieval": {"enabled": "false"}}"#),
-            ("bare", r#"{"retrieval": false}"#),
-            ("absent", "{}"),
+        for (name, text, unreadable) in [
+            ("on", r#"{"retrieval": {"enabled": true}}"#, false),
+            ("quoted", r#"{"retrieval": {"enabled": "false"}}"#, true),
+            ("null", r#"{"retrieval": {"enabled": null}}"#, true),
+            ("bare", r#"{"retrieval": false}"#, true),
+            ("blockless", r#"{"retrieval": {}}"#, false),
+            ("absent", "{}", false),
         ] {
             let managed = scratch(&format!("managed-retrieval-{name}"), text);
             assert!(!managed.retrieval_off(), "{text}");
             assert!(managed.is_empty(), "{text}");
+            assert_eq!(managed.retrieval_unreadable(), unreadable, "{text}");
         }
     }
 

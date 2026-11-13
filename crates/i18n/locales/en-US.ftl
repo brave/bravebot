@@ -821,6 +821,10 @@ doctor-settings-network-unreadable =
     run.network in { $path } is neither open nor closed, so it is read as absent
 doctor-managed-network-unreadable =
     run.network in { $path } is neither open nor closed, so the network is closed
+# The managed file's retrieval pin is a block whose enabled is false. Anything else there is read
+# as absent, so retrieval is left to the person's own file and nothing else would say so.
+doctor-managed-retrieval-unreadable =
+    retrieval in { $path } is not a block with a boolean enabled, so it is read as absent and pins nothing
 doctor-sandbox-filesystem = sandbox filesystem
 # The key is allowRead, denyRead, allowWrite or denyWrite, the path is as written, and the source is
 # the file that wrote it or the command line.
