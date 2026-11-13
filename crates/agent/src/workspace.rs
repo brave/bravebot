@@ -1638,7 +1638,7 @@ impl Workspace {
         let bytes = self
             .resolve(relative)
             .ok()
-            .and_then(|resolved| std::fs::read(resolved).ok());
+            .and_then(|resolved| read_regular(&resolved, usize::MAX));
         let other_encoding = bytes.as_deref().is_some_and(|bytes| {
             std::str::from_utf8(bytes).is_err() && decode_text(bytes.to_vec()).is_some()
         });
@@ -2096,6 +2096,23 @@ impl Workspace {
             self.mark_rewind_gap(CoverageGap::Scratch);
             return;
         }
+        // The guard is held to look and to push, and not across the read: a read that waits
+        // would keep `take_backups` waiting with it.
+        let room = {
+            let Ok(backups) = self.backups.lock() else {
+                self.mark_rewind_gap(CoverageGap::BackupUnavailable);
+                return;
+            };
+            if backups.iter().any(|backup| backup.path == resolved) {
+                return;
+            }
+            MAX_REWIND_BYTES.saturating_sub(bytes_held(&backups))
+        };
+
+        #[cfg(test)]
+        self.hold_while_backing_up(resolved);
+        let mut was = kept(resolved, room);
+
         let Ok(mut backups) = self.backups.lock() else {
             self.mark_rewind_gap(CoverageGap::BackupUnavailable);
             return;
@@ -2103,22 +2120,16 @@ impl Workspace {
         if backups.iter().any(|backup| backup.path == resolved) {
             return;
         }
-
-        let held: usize = backups
-            .iter()
-            .map(|backup| match &backup.was {
-                Before::Bytes(bytes) => bytes.len(),
-                Before::Nothing | Before::NotKept => 0,
-            })
-            .sum();
-        let room = MAX_REWIND_BYTES.saturating_sub(held);
-
-        #[cfg(test)]
-        self.hold_while_backing_up(resolved);
+        // Another backup may have been taken while this one was read, so the room it was read
+        // for may be gone.
+        let room = MAX_REWIND_BYTES.saturating_sub(bytes_held(&backups));
+        if matches!(&was, Before::Bytes(bytes) if bytes.len() > room) {
+            was = Before::NotKept;
+        }
         backups.push(Backup {
             captured_trust,
             path: resolved.to_path_buf(),
-            was: kept(resolved, room),
+            was,
             kept: kept_store,
         });
     }
@@ -2359,11 +2370,39 @@ pub(crate) fn kept(resolved: &Path, room: usize) -> Before {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Before::Nothing,
         Err(_) => Before::NotKept,
         Ok(found) if found.len() as usize > room => Before::NotKept,
-        Ok(_) => match std::fs::read(resolved) {
-            Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
-            _ => Before::NotKept,
+        Ok(_) => match read_regular(resolved, room) {
+            Some(bytes) => Before::Bytes(bytes),
+            None => Before::NotKept,
         },
     }
+}
+
+/// What a regular file holds, or `None` where the path is not one, cannot be read, or holds more
+/// than `most` bytes.
+///
+/// Opened by [`crate::recall::store::open_regular`], so a pipe at the path, or one put there since
+/// the name was resolved, is refused and never waited on for a writer. The writer would be this
+/// process, which opens a destination only after its pre-image has been read. The kind is the
+/// file system's answer about the open file and no byte decides it.
+fn read_regular(path: &Path, most: usize) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = crate::recall::store::open_regular(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(most).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= most).then_some(bytes)
+}
+
+/// The bytes the backups taken so far hold, which is what the budget is spent on.
+fn bytes_held(backups: &[Backup]) -> usize {
+    backups
+        .iter()
+        .map(|backup| match &backup.was {
+            Before::Bytes(bytes) => bytes.len(),
+            Before::Nothing | Before::NotKept => 0,
+        })
+        .sum()
 }
 
 /// What a line left at a destination it opened, as text, up to `room` bytes.
@@ -2378,8 +2417,8 @@ pub(crate) fn left_at(resolved: &Path, room: usize) -> Option<String> {
     if found.len() as usize > room {
         return None;
     }
-    let bytes = std::fs::read(resolved).ok()?;
-    (bytes.len() <= room).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    let bytes = read_regular(resolved, room)?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The label a workspace read produces, exposed for callers that need to reason about
@@ -7895,6 +7934,164 @@ mod tests {
         let path = directory.join("left");
         std::fs::write(&path, bytes).expect("destination");
         path
+    }
+
+    /// A named pipe at `path`, and a reader holding it open without waiting, so that a writer's open
+    /// returns at once. `None` where `mkfifo` is not installed. The reader gives a read of the
+    /// pipe nothing to wait for either: an open for reading waits for a writer, and none comes.
+    #[cfg(unix)]
+    fn a_pipe_at(path: &Path) -> Option<std::fs::File> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let made = std::process::Command::new("mkfifo").arg(path).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is not installed, so a pipe is not tried");
+            return None;
+        }
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+            .open(path)
+            .ok()
+    }
+
+    /// A pipe where a write or a redirection is about to land has no pre-image to keep or to scan,
+    /// and reading for one does not wait for a writer. Opened for reading a pipe blocks until one
+    /// comes, and the writer would be this process, which opens the destination after the read.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_at_a_destination_has_no_pre_image_and_is_not_waited_on() {
+        let root = crate::testutil::scratch_dir("pipe-pre-image");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let path = root.join("out");
+        let Some(_reader) = a_pipe_at(&path) else {
+            return;
+        };
+        let (sender, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send((kept(&path, 1024), left_at(&path, 1024)));
+        });
+
+        let (before, after) = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a pre-image read waited on a pipe for a writer");
+
+        assert_eq!(before, Before::NotKept);
+        assert_eq!(after, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The list of backups is not held while the file a write replaces is read, so the end of the
+    /// turn, which takes the list, never waits on a read. A read that waits, such as one of a
+    /// pipe, would otherwise keep the turn from ending.
+    #[test]
+    fn the_backup_list_is_not_held_while_the_replaced_file_is_read() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let root = crate::testutil::scratch_dir("bravebot-backup-list-free");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let entered = Arc::new(Mutex::new(Vec::new()));
+        {
+            let backups = Arc::clone(&workspace.backups);
+            let entered = entered.clone();
+            workspace.hold_backup_reads(move |_| {
+                entered.lock().unwrap().push(backups.try_lock().is_ok());
+            });
+        }
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority);
+
+        let written = workspace.write(
+            &mut policy,
+            &Labelled::trusted("shared.txt".to_string()),
+            &Labelled::new("replacement".to_string(), Label::trusted_public()),
+        );
+
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(
+            *entered.lock().unwrap(),
+            [true],
+            "the backup list was held while the file was read, or the file was not read"
+        );
+        assert_eq!(workspace.take_backups().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write over a pipe returns, keeps nothing of what the pipe held, and leaves the
+    /// file-authority boundary free for the next capture. The reader the test holds is what lets
+    /// the write itself open the pipe, so a wait that is left can only be the pre-image's.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_over_a_pipe_keeps_no_backup_and_leaves_the_boundary_free() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let root = crate::testutil::scratch_dir("bravebot-write-over-pipe");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        let Some(_reader) = a_pipe_at(&root.join("out")) else {
+            return;
+        };
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let (sender, answer) = std::sync::mpsc::channel();
+        {
+            let (workspace, authority) = (workspace.clone(), authority.clone());
+            std::thread::spawn(move || {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(authority);
+                let written = workspace.write(
+                    &mut policy,
+                    &Labelled::trusted("out".to_string()),
+                    &Labelled::new("replacement".to_string(), Label::trusted_public()),
+                );
+                let _ = sender.send(written.is_ok());
+            });
+        }
+
+        let written = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a write over a pipe waited for a writer to read what it replaced");
+
+        assert!(written, "the write over the pipe failed");
+        let backups = workspace.take_backups();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].was, Before::NotKept);
+        let (entered, can_enter) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(authority.capture());
+            let _ = entered.send(());
+        });
+        assert!(
+            can_enter.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the boundary was still held after the write returned"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// CRED-11: a destination the line removed or never created has nothing to scan, and the scan

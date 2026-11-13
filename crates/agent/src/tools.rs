@@ -35654,6 +35654,147 @@ mod tests {
             });
         }
 
+        /// A pipe named `out` in a fresh workspace, with a reader holding it open without waiting so
+        /// that a writer's open returns at once. Then `tool` is dispatched with `arguments` on a
+        /// thread. Says whether the call returned, and whether the exclusive boundary could then be
+        /// taken, each within ten seconds, and whether a program ran. `vouch_the_script` writes
+        /// `gen.sh` and vouches for it, which is what makes a line running it trusted and so makes
+        /// the scan of its destinations read them. `None` where `mkfifo` is not installed.
+        ///
+        /// A read of the pipe for the file it would replace waits for a writer, and the writer is
+        /// the call itself, which opens the destination only after that read. So a call that
+        /// returns here did not wait on it, and a boundary that is free is not held by a read that
+        /// is still waiting.
+        #[cfg(unix)]
+        fn over_a_pipe(
+            name: &str,
+            tool: &'static str,
+            arguments: Value,
+            capabilities: &'static [Capability],
+            vouch_the_script: bool,
+            confirmer: impl Confirmer + Send + 'static,
+        ) -> Option<(bool, bool, bool)> {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let (scratch, workspace) = fixture(name);
+            let pipe = scratch.path.join("out");
+            let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+            if !made.is_ok_and(|status| status.success()) {
+                eprintln!("mkfifo is not installed, so a pipe is not tried");
+                return None;
+            }
+            let _reader = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+                .open(&pipe)
+                .expect("a reader on the pipe");
+            let root = scratch.path.canonicalize().expect("the tree exists");
+            let vouched = if vouch_the_script {
+                use std::os::unix::fs::PermissionsExt as _;
+                let script = root.join("gen.sh");
+                std::fs::write(&script, "#!/bin/sh\necho x\n").expect("a script");
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .expect("executable");
+                bravebot_core::programs::TrustedPrograms::from_iter([
+                    bravebot_core::programs::Command::new(script, Vec::new(), root.clone()),
+                ])
+            } else {
+                bravebot_core::programs::TrustedPrograms::new()
+            };
+            let authority = bravebot_core::file_authority::FileAuthority::new({
+                let mut store = TrustStore::new(workspace.root());
+                store.trust(".");
+                store
+            });
+            let (returned, answer) = std::sync::mpsc::channel();
+            {
+                let authority = authority.clone();
+                std::thread::spawn(move || {
+                    let mut confirmer = confirmer;
+                    let mut sink = RecordingSink::new();
+                    let mut routing = Routing::new();
+                    routing.insert_trusted("task", "write over a pipe");
+                    let mut policy = Policy::begin(
+                        routing,
+                        ReleasePlan::new(),
+                        CapabilitySet::from_iter(capabilities.iter().cloned()),
+                        &mut sink,
+                    )
+                    .expect("policy")
+                    .with_file_authority(authority)
+                    .with_root(&root)
+                    .with_programs(vouched);
+                    let output = with_tools(&workspace, |tools| {
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut confirmer,
+                            &mut crate::report::IgnoreReports,
+                            &call(tool, arguments),
+                        )
+                    });
+                    let _ = returned.send(output.ran_a_program);
+                });
+            }
+            let answered = answer.recv_timeout(Duration::from_secs(10));
+            let (call_returned, ran) = (answered.is_ok(), answered.unwrap_or(false));
+            let (entered, can_enter) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                drop(authority.capture());
+                let _ = entered.send(());
+            });
+            let boundary_free = can_enter.recv_timeout(Duration::from_secs(10)).is_ok();
+            Some((call_returned, boundary_free, ran))
+        }
+
+        /// The regression it rejects: a `write_file` whose destination is a pipe reading it for
+        /// the diff a person approves, inside the shared boundary, and waiting for a writer that
+        /// is this very call. The next effect then waits behind that boundary, and so does every
+        /// file tool after it.
+        #[cfg(unix)]
+        #[test]
+        fn a_write_file_over_a_pipe_returns_and_leaves_the_boundary_free() {
+            let Some((returned, free, _)) = over_a_pipe(
+                "write-over-pipe",
+                "write_file",
+                json!({"path": "out", "contents": "replacement\n"}),
+                &[Capability::FileRead, Capability::FileWrite],
+                false,
+                crate::confirm::ApproveWrites,
+            ) else {
+                return;
+            };
+            assert!(returned, "a write_file over a pipe waited for a writer");
+            assert!(free, "the boundary was still held after the write returned");
+        }
+
+        /// The regression it rejects: a `run` redirecting into a pipe reading the destination for
+        /// the scan of what the line leaves, inside the exclusive boundary, so that every file tool
+        /// waits for a writer that is the line itself.
+        #[cfg(unix)]
+        #[test]
+        fn a_run_redirecting_into_a_pipe_returns_and_leaves_the_boundary_free() {
+            let Some((returned, free, ran)) = over_a_pipe(
+                "redirect-into-pipe",
+                "run",
+                json!({"command": "./gen.sh > out"}),
+                &[
+                    Capability::ShellExec,
+                    Capability::FileRead,
+                    Capability::FileWrite,
+                ],
+                true,
+                crate::confirm::ApproveRuns,
+            ) else {
+                return;
+            };
+            assert!(
+                returned,
+                "a run redirecting into a pipe waited for a writer"
+            );
+            assert!(ran, "the line did not run, so no destination was read");
+            assert!(free, "the boundary was still held after the line returned");
+        }
+
         /// The regression it rejects: using a read after the planner's context met something
         /// untrusted, which the call it answers would have been refused under.
         #[test]

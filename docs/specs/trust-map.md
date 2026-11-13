@@ -468,6 +468,14 @@ then reads each file and measures that file's label inside one shared boundary. 
 holds it exclusive for the revision check, the trust lookup and reserving the path, and reads the
 file for its backup after that, while the path is reserved and reads as untrusted.
 
+A read of what a destination holds before it is replaced, for a write's preview and backup and for
+the scan of what a `run` redirection leaves, opens the path without waiting for a writer and keeps
+the bytes only of a regular file. A pipe at the destination has no pre-image: the preview shows an
+empty file, the backup is not kept and the scan passes the destination over. The writer a pipe's
+reader would wait for is the write or the line itself, which opens the destination after that read,
+so a read that waited would never return, and would keep every capture waiting with it. The list
+of backups is not held while the file is read.
+
 The preview a `write_file` shows, and a vouch's, hold it shared. The label check at the start of a
 `run` line holds it shared for the revision read and the map lookup only: the line's gates read no
 file and run before the boundary, and the line's trail entry is written after it. A `read_file`
@@ -559,6 +567,11 @@ only on this host, since the file system here does not hold such a name.
 `verified-by: bravebot_agent::tools::a_write_file_peek_does_not_wait_for_a_reader_holding_the_boundary`
 `verified-by: bravebot_agent::tools::a_run_label_check_does_not_wait_for_a_reader_holding_the_boundary`
 `verified-by: bravebot_agent::workspace::the_backup_read_does_not_hold_the_exclusive_boundary`
+`verified-by: bravebot_agent::workspace::the_backup_list_is_not_held_while_the_replaced_file_is_read`
+`verified-by: bravebot_agent::workspace::a_pipe_at_a_destination_has_no_pre_image_and_is_not_waited_on`
+`verified-by: bravebot_agent::workspace::a_write_over_a_pipe_keeps_no_backup_and_leaves_the_boundary_free`
+`verified-by: bravebot_agent::tools::a_write_file_over_a_pipe_returns_and_leaves_the_boundary_free`
+`verified-by: bravebot_agent::tools::a_run_redirecting_into_a_pipe_returns_and_leaves_the_boundary_free`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`

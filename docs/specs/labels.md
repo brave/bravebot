@@ -20,7 +20,7 @@ guards:
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 17
+      - crates/agent/src/workspace.rs: 19
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 44
       - crates/aichat/src/anthropic.rs: 6
@@ -81,7 +81,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 10
-      - crates/agent/src/workspace.rs: 17
+      - crates/agent/src/workspace.rs: 19
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
