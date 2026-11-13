@@ -17,7 +17,7 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, ToolCall, Usage};
 use crate::{
-    BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key, log_retry,
+    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, learned_key, log_retry,
     pause_before_retry, read_in_background, remember, remembered, reply_bound,
     worth_another_attempt_or_report,
 };
@@ -28,7 +28,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_net::{Egress, EgressError, Request};
+use bravebot_net::{Egress, Request};
 use protocol::{Decoded, LineDecoder, Response};
 use serde_json::Value;
 use std::time::Duration;
@@ -394,36 +394,21 @@ impl<'a> OllamaChatClient<'a> {
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = LineDecoder::default();
         let mut reply = Reply::default();
         // One envelope, arriving in lines, so it is authorised once rather than once a line.
         let decoding = policy.decode_transport("ollama chat stream", Label::untrusted_public());
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // A read that fails once the reply has begun is the reply stopping.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(ChatError::Incomplete);
-                }
-                Ok(Err(error)) => return Err(error.into()),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(ChatError::Cancelled);
-                    }
-                    continue;
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::Failed(error) => return Err(error.into()),
+                Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
-            began = true;
-
-            if self.pace.cancelled() {
-                return Err(ChatError::Cancelled);
-            }
 
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();

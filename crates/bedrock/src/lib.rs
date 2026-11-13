@@ -28,9 +28,9 @@ use bravebot_aichat::ATTEMPTS;
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff, pause_after_failure,
-    rate_limit_backoff, rate_limit_without_wait, read_in_background, reply_bound,
-    retryable_within_ceiling,
+    Arrived, Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff,
+    pause_after_failure, rate_limit_backoff, rate_limit_without_wait, read_in_background,
+    reply_bound, retryable_within_ceiling,
 };
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
@@ -746,42 +746,21 @@ impl<'a> BedrockClient<'a> {
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = FrameDecoder::new();
         let mut reply = Reply::default();
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("converse stream", Label::untrusted_public());
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // A read that fails once the reply has begun is the reply stopping, whatever the
-                // socket reported: the request plainly got through.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(self.stopped_part_way(request));
-                }
-                // A reply cut at its deadline among them: asked for again, it runs as long.
-                Ok(Err(e)) => return Err(e.into()),
-                // Nothing has arrived yet, which is the only chance to look at anything while a
-                // reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(BedrockError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a dead
-                // connection leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(self.stopped_part_way(request)),
+                Arrived::Failed(e) => return Err(e.into()),
+                Arrived::Cancelled => return Err(BedrockError::Cancelled),
             };
-            began = true;
-
-            if self.pace.cancelled() {
-                return Err(BedrockError::Cancelled);
-            }
 
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();
@@ -1182,9 +1161,6 @@ const TRANSIENT_REPORTS: [&str; 4] = [
 
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
-
-/// How often a reply that has not started arriving looks up to see whether it should stop.
-const WAKE: Duration = Duration::from_millis(50);
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///

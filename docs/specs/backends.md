@@ -2431,6 +2431,7 @@ or an address. The flag and the wait are for the person only and are not given t
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure`
+`verified-by: bravebot_aichat::lib::a_body_read_in_the_background_says_what_arrived_and_whether_it_began`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
 `verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`

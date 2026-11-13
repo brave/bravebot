@@ -27,7 +27,7 @@ guards:
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
       - crates/aichat/src/responses.rs: 4
-      - crates/aichat/src/lib.rs: 7
+      - crates/aichat/src/lib.rs: 8
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2

@@ -1028,7 +1028,7 @@ impl<'a> AichatClient<'a> {
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut accumulated = StreamAccumulator::new();
@@ -1036,39 +1036,15 @@ impl<'a> AichatClient<'a> {
         let mut malformed = false;
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("chat stream", Label::untrusted_public());
-        // Whether any of the body has arrived, which is a fact about the connection and not about
-        // what the body said.
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // The request got through: part of the answer is here. Reported as a connection
-                // failure, the turn said so to a person whose model had been writing for minutes.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(ChatError::Incomplete);
-                }
-                Ok(Err(e)) => return Err(e.into()),
-                // Nothing has arrived yet, which is the whole point of waiting with a limit: it
-                // is the only chance to look at anything while a reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(ChatError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a
-                // connection that died leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::Failed(e) => return Err(e.into()),
+                Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
-            began = true;
-
-            // A stream is read and nothing else, so there is nothing part written to leave behind
-            // by stopping here, and the caller is throwing the reply away regardless.
-            if self.pace.cancelled() {
-                return Err(ChatError::Cancelled);
-            }
 
             // The SSE envelope is transport structure, like the JSON envelope in `complete`: the
             // bytes are taken out to find where events begin and end, and the reply that comes out
@@ -1351,10 +1327,8 @@ const WAKE: Duration = Duration::from_millis(50);
 ///
 /// The channel holds at most 16 pieces, so a server faster than the decoder cannot pile a whole
 /// reply into it. The decoder has never been the slow end, so the bound is small. The thread stops
-/// when the body ends, when a read fails, or when the receiver is dropped.
-pub fn read_in_background(
-    stream: bravebot_net::Streamed<'static>,
-) -> std::sync::mpsc::Receiver<Result<Option<Labelled<Vec<u8>>>, EgressError>> {
+/// when the body ends, when a read fails, or when the [`Arriving`] it returns is dropped.
+pub fn read_in_background(stream: bravebot_net::Streamed<'static>) -> Arriving {
     const CHUNKS_AHEAD: usize = 16;
 
     let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
@@ -1376,7 +1350,77 @@ pub fn read_in_background(
             }
         }
     });
-    arriving
+    Arriving {
+        receiver: arriving,
+        began: false,
+    }
+}
+
+/// What [`Arriving::next`] found on a streamed body.
+pub enum Arrived {
+    /// A piece of the body, unopened and under the label it arrived with.
+    Piece(Labelled<Vec<u8>>),
+    /// The body ended, or the reader is gone without saying so.
+    Ended,
+    /// A read failed after some of the body had arrived.
+    StoppedPartWay,
+    /// A read failed before any of the body arrived, or failed with something other than a
+    /// transport error.
+    Failed(EgressError),
+    /// The turn was stopped.
+    Cancelled,
+}
+
+/// A streamed body being read by [`read_in_background`], taken a piece at a time with
+/// [`Arriving::next`].
+pub struct Arriving {
+    receiver: std::sync::mpsc::Receiver<Result<Option<Labelled<Vec<u8>>>, EgressError>>,
+    /// Whether any of the body has arrived, which is a fact about the connection and not about
+    /// what the body said.
+    began: bool,
+}
+
+impl Arriving {
+    /// Wait for the next piece of the body, looking up every [`WAKE`] to see whether `pace` says
+    /// the turn was stopped.
+    ///
+    /// A piece is handed on unopened: this neither decodes it nor reads its label.
+    pub fn next(&mut self, pace: &Pace) -> Arrived {
+        loop {
+            match self.receiver.recv_timeout(WAKE) {
+                Ok(Ok(Some(piece))) => {
+                    self.began = true;
+                    // A stream is read and nothing else, so there is nothing part written to
+                    // leave behind by stopping here, and the caller is throwing the reply away
+                    // regardless.
+                    if pace.cancelled() {
+                        return Arrived::Cancelled;
+                    }
+                    return Arrived::Piece(piece);
+                }
+                Ok(Ok(None)) => return Arrived::Ended,
+                // A read that fails once the reply has begun is the reply stopping, whatever the
+                // socket reported: the request got through and part of the answer is here.
+                // Reported as a connection failure, the turn said so to a person whose model had
+                // been writing for minutes.
+                Ok(Err(EgressError::Transport { .. })) if self.began => {
+                    return Arrived::StoppedPartWay;
+                }
+                // A reply cut at its deadline among them: asked for again, it runs as long.
+                Ok(Err(error)) => return Arrived::Failed(error),
+                // Nothing has arrived yet, which is the whole point of waiting with a limit: it is
+                // the only chance to look at anything while a reply is still being waited for.
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if pace.cancelled() {
+                        return Arrived::Cancelled;
+                    }
+                }
+                // The reader is gone without having said the body ended, which is the silence a
+                // connection that died leaves, and the caller answers it as one.
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Arrived::Ended,
+            }
+        }
+    }
 }
 
 impl Driven for AichatClient<'_> {
@@ -2637,6 +2681,110 @@ mod tests {
             backoff(Duration::from_secs(90), 1),
             LONGEST_PAUSE,
             "a base above the cap is held to it"
+        );
+    }
+
+    /// BACKEND-37: a read that fails once any of the body arrived is a reply that stopped part
+    /// way, and one that fails before anything arrived stays the failure it was. Every streaming
+    /// client takes its body through [`Arriving::next`], so this pins each of its answers once.
+    #[test]
+    fn a_body_read_in_the_background_says_what_arrived_and_whether_it_began() {
+        type Read = Result<Option<Labelled<Vec<u8>>>, EgressError>;
+
+        fn arriving(
+            results: Vec<Read>,
+            hang_up: bool,
+        ) -> (Arriving, Option<std::sync::mpsc::SyncSender<Read>>) {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(results.len().max(1));
+            for result in results {
+                sender.send(result).expect("queued");
+            }
+            let arriving = Arriving {
+                receiver,
+                began: false,
+            };
+            // The sender is kept for as long as the caller holds it, so an empty channel is a
+            // reader still waiting rather than one that is gone.
+            (arriving, (!hang_up).then_some(sender))
+        }
+        fn piece() -> Read {
+            Ok(Some(Labelled::new(
+                b"x".to_vec(),
+                Label::untrusted_public(),
+            )))
+        }
+        fn cut() -> Read {
+            Err(EgressError::Transport {
+                url: "https://example.invalid".into(),
+                detail: "reset".into(),
+                transient: true,
+            })
+        }
+        let going = Pace::new(Duration::ZERO);
+
+        let (mut began, _keep) = arriving(vec![piece(), cut()], false);
+        assert!(matches!(began.next(&going), Arrived::Piece(_)));
+        assert!(
+            matches!(began.next(&going), Arrived::StoppedPartWay),
+            "a transport failure after a piece is a reply that stopped part way"
+        );
+
+        let (mut never, _keep) = arriving(vec![cut()], false);
+        assert!(
+            matches!(
+                never.next(&going),
+                Arrived::Failed(EgressError::Transport { .. })
+            ),
+            "a transport failure before any piece is still a transport failure"
+        );
+
+        let (mut late, _keep) = arriving(
+            vec![
+                piece(),
+                Err(EgressError::OutOfTime {
+                    url: "https://example.invalid".into(),
+                }),
+            ],
+            false,
+        );
+        assert!(matches!(late.next(&going), Arrived::Piece(_)));
+        assert!(
+            matches!(
+                late.next(&going),
+                Arrived::Failed(EgressError::OutOfTime { .. })
+            ),
+            "a failure other than a transport one is handed on even after the body began"
+        );
+
+        let (mut ended, _keep) = arriving(vec![piece(), Ok(None)], false);
+        assert!(matches!(ended.next(&going), Arrived::Piece(_)));
+        assert!(matches!(ended.next(&going), Arrived::Ended));
+
+        let (mut gone, _gone) = arriving(vec![], true);
+        assert!(
+            matches!(gone.next(&going), Arrived::Ended),
+            "a reader gone without a word is an end the caller answers"
+        );
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let stopped = Pace {
+            cancel: Some(cancel.clone()),
+            backoff: Duration::ZERO,
+        };
+        cancel.cancel();
+        let (mut quiet, _keep) = arriving(vec![], false);
+        assert!(
+            matches!(quiet.next(&stopped), Arrived::Cancelled),
+            "a stop is noticed while nothing arrives"
+        );
+        let (mut after, _keep) = arriving(vec![piece(), cut()], false);
+        assert!(
+            matches!(after.next(&stopped), Arrived::Cancelled),
+            "a piece that arrives after a stop is not handed on"
+        );
+        assert!(
+            after.began,
+            "the piece that arrived after the stop still counts as the body beginning"
         );
     }
 }
