@@ -65,6 +65,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [backends.md](backends.md) | `BACKEND` | 73 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 19 | shortening a long conversation into a summary of itself, in the request only |
+| [retrieval.md](retrieval.md) | `RETRIEVE` | 23 | retrieving earlier excerpts of a long bot conversation instead of summarising it: the setting, what is embedded, the file the vectors are kept in, the request a retrieving turn sends, and what an administrator may pin |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
 | [triggers.md](triggers.md) | `TRIGGER` | 11 | `bravebot trigger`: a prompt registered under a name and an event, the loopback listener that starts it for a signed delivery, and what it is given and allowed |
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |

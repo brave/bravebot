@@ -694,6 +694,8 @@ doctor-settings-network-unreadable =
     run.network dans { $path } n'est ni open ni closed, donc il est lu comme absent
 doctor-managed-network-unreadable =
     run.network dans { $path } n'est ni open ni closed, donc le réseau est fermé
+doctor-managed-retrieval-unreadable =
+    retrieval dans { $path } n'est pas un bloc dont enabled est un booléen, donc il est lu comme absent et n'épingle rien
 doctor-sandbox-filesystem = système de fichiers du bac à sable
 doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
 doctor-sandbox-filesystem-refused = { $key } { $path } n'est pas appliqué : { $reason } ({ $source })
