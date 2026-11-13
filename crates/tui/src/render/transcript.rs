@@ -2140,18 +2140,17 @@ fn lay_out_with_entries(
         ));
     }
     laid.rows = at;
-    // The scroller over the session's own transcript, and not over a request or a delegate's view,
-    // neither of which holds a prompt the person typed.
-    let rows = (session.scrolling()
-        && !session.viewing_request()
-        && is_the_transcript(session, session.viewed()))
-    .then(|| EntryRows {
-        begins: entries
-            .iter()
-            .map(|&line| usize::from(starts[line]))
-            .collect(),
-        tail: usize::from(starts[tail]),
-    });
+    // The scroller over the session's own transcript, and not over a delegate's view, which holds
+    // the delegate's lines and no prompt the person typed. A request's lines are drawn with no
+    // entries, so no entry holds a row of one and nothing is pinned above it.
+    let rows =
+        (session.scrolling() && is_the_transcript(session, session.viewed())).then(|| EntryRows {
+            begins: entries
+                .iter()
+                .map(|&line| usize::from(starts[line]))
+                .collect(),
+            tail: usize::from(starts[tail]),
+        });
     (lines, laid, rows)
 }
 

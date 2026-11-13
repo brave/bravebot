@@ -359,3 +359,85 @@ fn the_scroller_pages_by_the_rows_under_the_prompt_and_reaches_the_last_row() {
     assert_eq!(session.rows_below(), 0);
     assert_eq!(session.top_row(), window.top);
 }
+
+/// Whether the frame just drawn put no prompt above the view: none recorded, the transcript's window
+/// beginning at the first row of its pane, and no row of the screen holding `prompt`.
+fn nothing_pinned(
+    session: &Session,
+    buffer: &ratatui::buffer::Buffer,
+    pane_top: u16,
+    prompt: &str,
+) {
+    let window = session.laid.window.expect("a transcript was drawn");
+    assert!(
+        session.laid.rows > window.area.height,
+        "the view fits its pane, so nothing could be pinned:\n{}",
+        screen(buffer)
+    );
+    assert_eq!(session.laid.pinned, None, "{}", screen(buffer));
+    assert_eq!(window.area.y, pane_top, "{}", screen(buffer));
+    assert_eq!(rows_holding(buffer, prompt), 0, "{}", screen(buffer));
+}
+
+/// VIEW-44. Rejects: a prompt drawn above a delegate's view, at rest or in the scroller, and above a
+/// request `/request` opened, none of which holds a prompt the person typed. Each view is longer than
+/// its pane. The session's transcript is a prompt and entries that are not, so a delegate's view read
+/// against the session's entries finds that prompt above whatever row is at its top. A request's
+/// lines are drawn with no entries, so its part holds that no entry is found above a row of one.
+#[test]
+fn no_prompt_is_drawn_above_a_delegates_view_or_a_request() {
+    use bravebot_agent::report::{Activity, DelegateId, Delegation};
+    let mut session = Session::new("none");
+    session
+        .transcript
+        .push(Entry::user("the session's question"));
+    for n in 0..80 {
+        session
+            .transcript
+            .push(Entry::assistant(format!("a short answer {n}"), Vec::new()));
+    }
+    let id = DelegateId::nth(1);
+    session.delegate_started(Delegation {
+        stop: Default::default(),
+        id,
+        kind: "reader".to_string(),
+        task: "find the parser".to_string(),
+    });
+    session.reporting_for(Some(id));
+    for n in 0..40 {
+        let file = format!("file{n}.rs");
+        session.start_activity(Activity::running("Read", &file));
+        session.finish_activity(Activity::running("Read", &file).done("1 line"));
+    }
+    session.reporting_for(None);
+    assert!(session.watch(), "nothing to watch");
+    assert!(session.watching_a_delegate(), "no delegate's view opened");
+
+    // Under the two rows that name the delegate and what it was asked.
+    drawn(&mut session);
+    let at_rest = drawn(&mut session);
+    nothing_pinned(&session, &at_rest, 2, "the session's question");
+
+    session.open_scroller();
+    drawn(&mut session);
+    let scroller = drawn(&mut session);
+    nothing_pinned(&session, &scroller, 0, "the session's question");
+
+    let mut session = two_long_turns();
+    session.set_last_request(bravebot_agent::request_view::RequestView {
+        model: "m".to_string(),
+        spans: (0..40)
+            .map(|n| bravebot_agent::request_view::Span {
+                role: "user",
+                provenance: bravebot_agent::request_view::Provenance::Typed,
+                text: format!("span {n} of the request"),
+            })
+            .collect(),
+        tools: vec!["read_file".to_string()],
+        tools_bytes: 0,
+    });
+    session.show_request();
+    drawn(&mut session);
+    let request = drawn(&mut session);
+    nothing_pinned(&session, &request, 0, "question");
+}

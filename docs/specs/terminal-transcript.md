@@ -1535,6 +1535,7 @@ layout's row geometry, so the row holds no bytes of a reply, a result or a note.
 `verified-by: bravebot_tui::app::tests::pinned::the_prompt_of_the_turn_at_the_top_of_the_view_is_drawn_above_it`
 `verified-by: bravebot_tui::app::tests::pinned::a_reply_still_arriving_has_the_prompt_that_asked_for_it_drawn_above_it`
 `verified-by: bravebot_tui::app::tests::pinned::what_a_shell_command_printed_has_no_prompt_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::no_prompt_is_drawn_above_a_delegates_view_or_a_request`
 `verified-by: bravebot_tui::app::tests::pinned::the_prompt_above_the_view_is_drawn_in_the_ink_of_the_prompt`
 `verified-by: bravebot_tui::app::tests::pinned::a_selection_never_begins_on_the_prompt_drawn_above_the_view_or_takes_its_words`
 `verified-by: bravebot_tui::app::tests::pinned::the_scrollbar_runs_beside_the_rows_under_the_prompt_and_reaches_the_end_at_the_tail`
