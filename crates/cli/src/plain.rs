@@ -143,6 +143,23 @@ fn refused_model(config: &Config, model: Option<&str>) -> Option<String> {
     Some(crate::model::managed_refusal(model, file, why))
 }
 
+/// Ends a background process whose model the machine-level layer refuses, and says why to the
+/// session's own output (BACKEND-48). A process that is not hosted is checked where it starts, in
+/// [`crate::import::before_the_session`], so this ends nothing for it.
+fn end_a_hosted_start_on_a_refused_model<R: BufRead, W: Write>(
+    hosted: bool,
+    config: &Config,
+    model: Option<&str>,
+    asking: &mut Prompting<R, W>,
+) -> Option<ExitCode> {
+    if !hosted {
+        return None;
+    }
+    let refusal = refused_model(config, model)?;
+    asking.say(&refusal);
+    Some(fail(Ending::Configuration, refusal))
+}
+
 /// Whether the vetting prompts are answered from a safe verdict, given what the three routes
 /// resolved to (`bravebot_session::store::auto_vetting`). Never in a background session, where only
 /// the mode the person chose answers in their absence (BG-8): the flag is refused there and the
@@ -289,9 +306,10 @@ fn run(
     // settled on is checked here, before anything is asked of it. It cannot offer an import, so
     // it ends. Said to the session's own output as well, since that is what a terminal that
     // attaches is shown: the process has no stderr.
-    if hosted && let Some(refusal) = refused_model(&config, model.as_deref()) {
-        asking.say(&refusal);
-        return fail(Ending::Configuration, refusal);
+    if let Some(ended) =
+        end_a_hosted_start_on_a_refused_model(hosted, &config, model.as_deref(), &mut asking)
+    {
+        return ended;
     }
 
     say_the_opening(
@@ -1976,11 +1994,13 @@ mod tests {
     /// BACKEND-48: a background process started again settles on a model and ends where the
     /// machine-level layer refuses it, naming the file that refused, for each way the model is
     /// settled: the configured default, and a recorded pick that is in force. A model the layer
-    /// allows ends nothing.
+    /// allows ends nothing, and a start that is not hosted is left to the check made where it
+    /// starts.
     ///
     /// The faults it rejects are checking the configured default whatever the pick is (a refused
     /// pick would be requested), checking the pick and not the default (a refused default would be
-    /// requested), and ending a start whose model the layer allows.
+    /// requested), ending a start whose model the layer allows, not ending a hosted start at all or
+    /// ending it without saying why to the session's output, and ending a start that is not hosted.
     #[test]
     fn a_hosted_start_on_a_model_the_managed_layer_refuses_is_ended() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2035,6 +2055,36 @@ mod tests {
         let (config, _) = layered("allow-none.json", r#"{"models": {"allow": []}}"#);
         assert!(refused_model(&config, None).is_some());
         assert!(refused_model(&config, Some("a-pick")).is_some());
+
+        // What `run` does with that: a hosted start ends with the configuration ending and says the
+        // refusal to the session's own output, and a start that is not hosted ends nothing here.
+        let (config, file) = layered("hosted-deny.json", r#"{"models": {"deny": ["a-pick"]}}"#);
+        let mut hosted = Prompting::new(std::io::empty(), Vec::new());
+        let ended =
+            end_a_hosted_start_on_a_refused_model(true, &config, Some("a-pick"), &mut hosted);
+        assert_eq!(ended, Some(Ending::Configuration.code()));
+        let said = String::from_utf8(hosted.output).expect("what was written is text");
+        assert!(said.contains(&file.display().to_string()), "{said}");
+        assert!(said.contains("a-pick"), "{said}");
+
+        let mut foreground = Prompting::new(std::io::empty(), Vec::new());
+        let ended =
+            end_a_hosted_start_on_a_refused_model(false, &config, Some("a-pick"), &mut foreground);
+        assert_eq!(ended, None, "a start that is not hosted was ended here");
+        assert!(
+            foreground.output.is_empty(),
+            "a start that is not hosted said a refusal"
+        );
+
+        let mut allowed = Prompting::new(std::io::empty(), Vec::new());
+        let ended = end_a_hosted_start_on_a_refused_model(
+            true,
+            &config,
+            Some("an-allowed-pick"),
+            &mut allowed,
+        );
+        assert_eq!(ended, None, "a hosted start on an allowed model was ended");
+        assert!(allowed.output.is_empty());
     }
 
     /// BG-8: a recorded choice or a settings key for automatic vetting answers a foreground session's
