@@ -91,9 +91,9 @@ Left: <what is left of #103, and what it waits on>.
 
 An item that is blocked and has no commits gets no closing line and the same sentence.
 
-Work an item needs in another repository is done there and linked here in one sentence, as
-[Work in another repository](SKILL.md#work-in-another-repository) says. It is not a `Left:`
-sentence, and the body does not describe what that repository should do.
+Work an item needs in another repository is done there and its pull request is linked here in one
+sentence, as [Work in another repository](SKILL.md#work-in-another-repository) says. It is not a
+`Left:` sentence, and the body does not describe what that repository should do.
 
 ## The dependency callout
 

@@ -12,7 +12,7 @@ description:
   Triggers on: /implement-issues <issues or query>, work through this label, one pull request for
   these issues, implement all of these.'
 argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>, then optionally a line that starts with Notes:'
-allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
+allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr create --repo *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
 ---
 
 # Implement a list of issues in one pull request
@@ -700,28 +700,34 @@ run or do, and the pull request here names it only by a link.
    one exists and its files can be read, the row is worked there.
 2. **Work it there.** Make a branch and worktree in that clone from its default branch as fetched
    now. Read and follow that repository's own rules for commits, tests, checks and the pull request
-   body, and its own account rules (`~/.bravebot/AGENTS.md` names the identity and the remote for
-   each repository). Run its checks, demonstrate each new test failing on the fault it rejects, as
-   step 4 says, and open the pull request there. The row is `met` by that pull request, and the
-   ledger records its link.
-3. **File it there where it cannot be worked.** Where there is no clone, or its files cannot be
-   read, file an issue in that repository saying what to change, after searching its open and
-   closed issues for the same work. The row's evidence is that issue's link. Do not mark it
-   `blocked` in bravebot, and file no bravebot issue for it.
+   body. Take the account and the remote from that repository's own rules or from the clone's git
+   configuration, and from the person's `~/.bravebot/AGENTS.md` only where it has an entry for
+   that repository. Where none of them names an account and a remote that can push there, do not
+   guess one: file the issue as step 3 says. Run its checks, demonstrate each new test failing on
+   the fault it rejects, as step 4 says, and open the pull request there. The row is `met` by that
+   pull request, and the ledger records its link.
+3. **Hand it to the person where it cannot be worked.** Where there is no clone, its files cannot be
+   read, or step 2 finds no account to push with, the run files nothing in that repository and
+   nothing in bravebot. The report gives the repository, a draft title and a draft body saying what
+   to change there, for the person to file or work. issue-poster files only on brave/bravebot, and
+   no skill here files an issue itself, so the person is the one who files it. The row is
+   `unmet`, never `blocked`, and the report names it under that heading with the draft.
 4. **Close the item.** An issue here whose rows are all `met`, counting the other repository's pull
-   request or issue as above, gets `Closes`. Its entry under `## The problem` links the pull request
-   or issue in the other repository in one sentence. Where the issue here was filed only for the
-   other repository's work, it has no bravebot rows left once that pull request or issue exists, so
-   it is closed with a comment linking it rather than worked here.
+   request as above, gets `Closes`. Its entry under `## The problem` links that pull request in one
+   sentence. Where the issue here was filed only for the other repository's work, it has no
+   bravebot rows left once that pull request exists, so it is closed with a comment linking it
+   rather than worked here.
 
 The pull request in the other repository is reviewed by that repository's own process. Step 8's
 review loop is for the pull request here.
 
 ## Follow-up issues
 
-This skill files an issue only for a defect: behaviour that is wrong on `main` today, and that no
-open issue and no Known costs entry covers. It files nothing else. Each issue is work for a person
-to triage, so a run files few.
+This skill files an issue on brave/bravebot only for a defect: behaviour that is wrong on `main`
+today, and that no open issue and no Known costs entry covers. It files nothing else, and nothing
+in another repository: [Work in another repository](#work-in-another-repository) opens a pull
+request there or leaves a draft for the person. Each issue is work for a person to triage, so a
+run files few.
 
 - A defect the specs accept is a Known costs entry in the spec that governs it, added in the commit
   that leaves it, and the body cites the entry. No issue is filed beside it.
@@ -735,7 +741,7 @@ to triage, so a run files few.
   look for more. The orchestrator files it only if this list says to.
 - A test that also fails on the parent commit (step 6, item 9) is a defect and is filed.
 
-A run files at most three issues, each through the [issue-poster](../../agents/issue-poster.md)
+A run files at most three bravebot issues, each through the [issue-poster](../../agents/issue-poster.md)
 definition, which finds an existing issue first. The defects past three are left out of the body and
 listed in the report with a draft title for each, for the person to pick from.
 
@@ -752,8 +758,9 @@ this order:
   (each with what is missing);
 - one line per item: closed by the pull request, already fixed (with the test added), `Part of`,
   skipped (with the pull request that covers it or why it is closed), or blocked (with its cause);
-- the pull requests and issues opened in other repositories
-  ([Work in another repository](#work-in-another-repository)), each with its link;
+- the pull requests opened in other repositories
+  ([Work in another repository](#work-in-another-repository)), each with its link, and each row
+  left for the person there, with its repository and draft;
 - the commits on the branch: the count, and each one beyond the first of its item with what it is
   (a dependency or a refactor) and what it changes;
 - the decisions to confirm, numbered as in the body;
