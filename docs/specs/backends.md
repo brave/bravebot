@@ -1341,7 +1341,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `tui.mouse`, `tui.contextMenu` | the same as `updateCheck`, each key apart: a project or local layer may turn mouse capture or the right-click menu off and may not turn it back on over the person's `false` |
 | `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
 | `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
-| anything else | the closest layer that set it wins |
+| anything else | the closest layer that set it wins, in either direction. The keys that are in neither table are the ones whose value changes no destination, spend, program environment, request that sends the conversation, or terminal input the person turned off, for example `effort` ([BACKEND-43](#BACKEND-43)), `editorMode`, `terminalTitle`, `notificationMethod`, `maxRunningDelegates` ([DELEGATE-7](delegation.md#DELEGATE-7)), `awaySummaryIdleSeconds`, `tui.wheelRows` ([SCROLL-3](scroller.md#SCROLL-3)), `search.maxFiles`, `search.maxSeconds` ([SEARCH-9](tools/search.md#SEARCH-9)), `run.maxOutput` ([RUN-21](tools/run.md#RUN-21)), `run.defaultSeconds`, `run.maxSeconds` ([RUN-23](tools/run.md#RUN-23)) and `download.maxBytes` ([DOWNLOAD-4](tools/download-url.md#DOWNLOAD-4)). A key moves into a table when it is found to decide one of those, and the table row and this one change together |
 
 The keys of the rows above that a layer may not name are read from one table, so `doctor` and
 the desktop settings view each name every file that carried one, and a key added to the table is
@@ -1558,6 +1558,7 @@ with it.
 `verified-by: bravebot_ui_bridge::settings::a_checkout_limit_that_widens_the_persons_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::the_narrow_only_table_keys_are_unique_and_not_home_only`
 `verified-by: bravebot_config::settings::every_narrow_only_key_keeps_the_persons_value_against_a_wider_one`
+`verified-by: bravebot_config::settings::a_key_in_neither_table_is_decided_by_the_closest_layer_in_either_direction`
 `verified-by: bravebot_config::settings::a_checkout_may_turn_the_update_check_off_and_not_on`
 `verified-by: bravebot_cli::doctor::a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored`

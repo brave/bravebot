@@ -2434,7 +2434,10 @@ An entry in `run.scrubEnv` may hold `*`, standing for any run of characters incl
 by it. An entry holding neither character is an exact name and is compared as one. A pattern
 matching a variable already withheld leaves it withheld once. A pattern matching nothing withholds
 nothing, while an exact name is withheld whether this process holds the variable or not. `*` and `?`
-are the whole of the syntax: there is no character class and no brace group.
+are the whole of the syntax: there is no character class and no brace group. A pattern is read from
+the person's own settings and `--settings` only, as every other entry is ([RUN-12](#RUN-12),
+[BACKEND-24](../backends.md#BACKEND-24)): a project or local layer's list is not read, so a checkout
+cannot add a pattern, and none of its patterns is shown by `doctor`.
 
 What a pattern selects is read from the names this process holds when a stage is built, since a
 pattern is a way of naming variables and the names it stands for are not known until there are
@@ -2472,6 +2475,7 @@ went out of date without saying so.
 `verified-by: bravebot_config::scrub::a_pattern_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
+`verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 
 <a id="RUN-29"></a>
 ### RUN-29: the description points text made from an output at the processor

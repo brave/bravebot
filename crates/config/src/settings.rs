@@ -8518,6 +8518,119 @@ mod tests {
         }
     }
 
+    /// BACKEND-24, "anything else": a key that is in neither table is decided by the closest layer,
+    /// whichever way it moves the value, and nothing is reported for it. Each case writes the
+    /// person's value in the home layer and the opposite direction in the project layer, so a key
+    /// that was moved into a table without its spec row being written fails here.
+    #[test]
+    fn a_key_in_neither_table_is_decided_by_the_closest_layer_in_either_direction() {
+        struct Case {
+            key: &'static str,
+            read: fn(&Settings) -> String,
+            person: &'static str,
+            checkout: &'static str,
+        }
+        let cases = [
+            Case {
+                key: "effort",
+                read: |settings| format!("{:?}", settings.effort()),
+                person: r#""low""#,
+                checkout: r#""max""#,
+            },
+            Case {
+                key: "editorMode",
+                read: |settings| format!("{:?}", settings.editor_mode()),
+                person: r#""emacs""#,
+                checkout: r#""vim""#,
+            },
+            Case {
+                key: "terminalTitle",
+                read: |settings| format!("{:?}", settings.terminal_title()),
+                person: "false",
+                checkout: "true",
+            },
+            Case {
+                key: "notificationMethod",
+                read: |settings| format!("{:?}", settings.notification_method()),
+                person: r#""off""#,
+                checkout: r#""osc9""#,
+            },
+            Case {
+                key: "maxRunningDelegates",
+                read: |settings| format!("{:?}", settings.max_running_delegates()),
+                person: "12",
+                checkout: "100",
+            },
+            Case {
+                key: "awaySummaryIdleSeconds",
+                read: |settings| format!("{:?}", settings.away_summary_idle_seconds()),
+                person: "90",
+                checkout: "600",
+            },
+            Case {
+                key: "tui.wheelRows",
+                read: |settings| format!("{:?}", settings.wheel_rows()),
+                person: "5",
+                checkout: "8",
+            },
+            Case {
+                key: "search.maxFiles",
+                read: |settings| format!("{:?}", settings.search().files),
+                person: "500000",
+                checkout: "900000",
+            },
+            Case {
+                key: "run.maxOutput",
+                read: |settings| format!("{:?}", settings.run_output_cap()),
+                person: "32768",
+                checkout: "65536",
+            },
+            Case {
+                key: "run.maxSeconds",
+                read: |settings| format!("{:?}", settings.run_deadlines().ceiling),
+                person: "900",
+                checkout: "1800",
+            },
+        ];
+        for case in cases {
+            let key = case.key;
+            assert!(
+                !Settings::home_only_keys().any(|listed| listed == key),
+                "{key} is in HOME_ONLY, so BACKEND-24's anything-else row no longer covers it"
+            );
+            assert!(
+                !Settings::narrow_only_keys().any(|listed| listed == key),
+                "{key} is in NARROW_ONLY, so BACKEND-24's anything-else row no longer covers it"
+            );
+            let object = |value: &str| match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": {value}}}}}"#),
+                None => format!(r#"{{"{key}": {value}}}"#),
+            };
+            let person_alone = Layers::new(&format!("anything-else-{key}-person"))
+                .global(&object(case.person))
+                .read();
+            for local in [false, true] {
+                let layers = Layers::new(&format!("anything-else-{key}-{local}"))
+                    .global(&object(case.person));
+                let settings = if local {
+                    layers.local(&object(case.checkout)).read()
+                } else {
+                    layers.project(&object(case.checkout)).read()
+                };
+                assert_ne!(
+                    (case.read)(&settings),
+                    (case.read)(&person_alone),
+                    "{key}: the checkout's value did not win, local={local}"
+                );
+                assert_eq!(
+                    settings.not_obeyed_all().count(),
+                    0,
+                    "{key}: a value the closest layer decides was reported, local={local}"
+                );
+            }
+        }
+    }
+
     /// UPDATE-11, BACKEND-24: a project or local layer may turn the update check off and may not
     /// turn it on over a person who turned it off, and the file that tried is reported. A
     /// person who stated nothing, or `true`, is not held to `false`, and the file `--settings`

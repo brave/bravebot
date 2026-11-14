@@ -323,7 +323,8 @@ one thing leaves everything else in force:
 | `git.identities` | your own file and the file `--settings` names, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
 | `askIdleSeconds` | your own file and the file `--settings` names; a project or local file's is ignored and reported |
 | `limit` | your own file and the file `--settings` names; a project or local file may state one where you stated none, or lower yours in the same unit, and a value that removes yours, raises it or counts in the other unit is ignored and reported |
-| anything else | the closest file that set it wins |
+| `updateCheck`, `deepLinks`, `suggestions`, `awaySummaryEnabled`, `tui.mouse`, `tui.contextMenu`, `deferMcpToolsAbove`, `promptCacheTtl` | your own file and the file `--settings` names decide them as they do `limit`: a project or local file may only move the key the safer way (turn the check, links, suggestions, the recap, the mouse or the menu off, lower the deferral size, ask for the `5m` cache lifetime) and a value that moves it the other way is ignored and reported |
+| anything else | the closest file that set it wins, in either direction: for example `effort`, `editorMode`, `terminalTitle`, `maxRunningDelegates`, `tui.wheelRows`, `search.maxFiles`, `run.maxOutput`, `run.maxSeconds` and `download.maxBytes` |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
 list under `permissions` as something other than an array, sets nothing there: the broader files'

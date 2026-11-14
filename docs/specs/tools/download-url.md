@@ -104,8 +104,11 @@ not a whole count are absence, and the nearest layer that names one wins. Where 
 the cap is 100 MiB. A body over the cap is not saved and the planner is told which setting names
 the limit; a body exactly at it is saved whole.
 
-**Why.** The cap is a disk budget and so a person's to set. Half a file is worse than none, so the
-body is read to the cap plus one byte to tell the two cases apart.
+**Why.** The cap is a disk budget. It is in neither table of [BACKEND-24](../backends.md#BACKEND-24),
+so the closest layer that names one wins in either direction, and a project or local file may raise
+it above what the person's own file names. Whether a checkout may raise it is an open decision for
+a person (issue #4160, row B13). Half a file is worse than none, so the body is read to the cap
+plus one byte to tell the two cases apart.
 
 `verified-by: bravebot_config::settings::a_settings_file_names_the_most_a_download_may_write`
 `verified-by: bravebot_net::lib::a_stream_raised_or_lowered_is_cut_at_the_figure_it_was_given`
