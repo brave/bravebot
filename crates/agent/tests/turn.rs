@@ -33704,6 +33704,67 @@ fn a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed
     );
 }
 
+/// The result a planner is sent after a turn that confines runs under `mode`, opened on `root`,
+/// runs the line `command`.
+#[cfg(unix)]
+fn result_of_running_line(
+    root: &std::path::Path,
+    command: &str,
+    mode: bravebot_sandbox::SandboxMode,
+) -> String {
+    let (_, second) = requests_for_one_run_at(root, command, mode);
+    message_from(&second, "Result of run").to_string()
+}
+
+/// RUN-13: the issue's own shape. The producer is ended by SIGPIPE when `head` has read what it
+/// wanted, and the planner is told the run exited 0 with the step that stopped, and is given no
+/// confinement paragraph for a result that is complete. The fault it rejects is the step named as
+/// killed, which says `It failed` beside the three lines `head` asked for.
+#[test]
+#[cfg(unix)]
+fn a_step_closed_by_head_is_told_as_an_ending_that_exited_zero() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-status-sigpipe");
+    let result = result_of_running_line(
+        &scratch.path,
+        "yes | head -n 3",
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+    );
+    assert!(
+        result.contains("It exited 0. Step 1 stopped because the next step closed its input."),
+        "{result}"
+    );
+    assert!(!result.contains("It failed"), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+}
+
+/// RUN-13: a step killed by SIGKILL beside a `head` that exited 0, and a step ended by SIGPIPE
+/// with no later step that exited 0, are still told as failures. The fault it rejects is every
+/// killed step forgiven once a later step exits 0.
+#[test]
+#[cfg(unix)]
+fn a_step_killed_beside_head_is_still_told_as_a_failure() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-status-sigkill-beside-head");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let killed = a_stub_named(&scratch.path, "killed", "stub-killed", "kill -9 $$");
+    let result = result_of_running_line(
+        &scratch.path,
+        &format!("{} | head -n 1", killed.display()),
+        mode,
+    );
+    assert!(result.contains("It failed: step 1 was killed"), "{result}");
+    assert!(!result.contains("It exited 0."), "{result}");
+
+    let piped = a_stub_named(&scratch.path, "piped", "stub-piped", "kill -13 $$");
+    let result = result_of_running_line(&scratch.path, &piped.display().to_string(), mode);
+    assert!(result.contains("It failed: step 1 was killed"), "{result}");
+}
+
 /// The exit status is structure rather than content, so it is told even where none of the bytes
 /// can be: a planner holding a reference to output it may not read still has to know whether the
 /// program worked.

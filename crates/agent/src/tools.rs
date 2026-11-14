@@ -1487,7 +1487,11 @@ impl Jobs {
             } else if job.stop_asked() {
                 crate::report::Outcome::StoppedByTheUser(job.stop_for_the_person())
             } else if job.running.ended() {
-                how_it_ended(job.running.codes(), job.confinement.as_deref())
+                how_it_ended(
+                    job.running.codes(),
+                    &job.running.closed(),
+                    job.confinement.as_deref(),
+                )
             } else {
                 continue;
             };
@@ -1580,7 +1584,11 @@ impl Jobs {
             let event = if job.running.steps_exited() {
                 crate::report::JobEvent::Ended {
                     name,
-                    outcome: how_it_ended(job.running.codes(), job.confinement.as_deref()),
+                    outcome: how_it_ended(
+                        job.running.codes(),
+                        &job.running.closed(),
+                        job.confinement.as_deref(),
+                    ),
                 }
             } else if job.stop.is_requested() {
                 let ran_for = job.running.ran_for();
@@ -1674,28 +1682,42 @@ fn write_it_yourself(beside: Beside) -> &'static str {
 /// than succeeded where a step did not exit zero, because a planner that waited for a build and was
 /// told it exited 0 reports a red build as green, and where the output is quarantined that sentence
 /// is the only account of it the planner ever gets.
-fn how_it_ended(codes: &[Option<i32>], confinement: Option<&str>) -> crate::report::Outcome {
-    let failed = failed_steps(codes);
-    if failed.is_empty() {
-        crate::report::Outcome::Succeeded
-    } else {
+fn how_it_ended(
+    codes: &[Option<i32>],
+    closed: &[bool],
+    confinement: Option<&str>,
+) -> crate::report::Outcome {
+    let failed = failed_steps(codes, closed);
+    if !failed.is_empty() {
         crate::report::Outcome::Failed {
             detail: failed,
             confinement: confinement.map(str::to_string),
         }
+    } else if closed.iter().any(|closed| *closed) {
+        crate::report::Outcome::Closed {
+            steps: closed
+                .iter()
+                .enumerate()
+                .filter(|(_, closed)| **closed)
+                .map(|(at, _)| at + 1)
+                .collect(),
+        }
+    } else {
+        crate::report::Outcome::Succeeded
     }
 }
 
 /// The steps that did not exit zero, each numbered from 1 by its place among the steps that ran,
-/// joined by commas.
+/// joined by commas. A step ended by `SIGPIPE` after a later step of its pipeline exited zero is
+/// not one of them (RUN-13): `closed` marks it.
 ///
-/// Read off the exit codes alone, so no byte of what the steps printed reaches it. Empty where
-/// every step exited zero.
-fn failed_steps(codes: &[Option<i32>]) -> String {
+/// Read off the exit codes and the pipeline layout alone, so no byte of what the steps printed
+/// reaches it. Empty where every step exited zero or was closed by a later step.
+fn failed_steps(codes: &[Option<i32>], closed: &[bool]) -> String {
     codes
         .iter()
         .enumerate()
-        .filter(|(_, code)| **code != Some(0))
+        .filter(|(at, code)| **code != Some(0) && !closed.get(*at).copied().unwrap_or(false))
         .map(|(at, code)| match code {
             Some(code) => format!("step {} exited {code}", at + 1),
             None => format!("step {} was killed", at + 1),
@@ -12402,9 +12424,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // modification time, so the mark reads it as changed and it is counted. Whether the line ended well does not enter into it: a line that failed halfway has
     // still left what it got to.
     let changed_a_file = tree_before.differs_now();
-    if ran.as_ref().is_ok_and(|ran| {
-        ran.ended_well && ran.stopped.is_none() && ran.codes.iter().all(|code| *code == Some(0))
-    }) {
+    if ran
+        .as_ref()
+        .is_ok_and(|ran| ran.ended_well && ran.succeeded())
+    {
         let refused: std::collections::BTreeSet<&str> = left
             .refused_at
             .iter()
@@ -12467,10 +12490,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
 
             // A line with a sandbox that did not exit zero earns one request for a line with none.
             // Read off the exit codes and whether the deadline stopped it, not off what it printed.
-            if confinement.is_some()
-                && ran.stopped.is_none()
-                && ran.codes.iter().any(|code| *code != Some(0))
-            {
+            if confinement.is_some() && ran.stopped.is_none() && !ran.stages_ended_well() {
                 tools.confined_failures.note();
             }
 
@@ -12502,7 +12522,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     confinement
                         .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
                 });
-                how_it_ended(&ran.codes, confinement.as_deref())
+                how_it_ended(&ran.codes, &ran.closed, confinement.as_deref())
             };
             let lines = text.lines().count();
             let mut note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
@@ -13336,7 +13356,11 @@ fn job_output<S: Sink, R: Reporter>(
     let outcome = if let Some(after) = job.stopped_by_the_person {
         crate::report::Outcome::StoppedByTheUser(after)
     } else if ended {
-        how_it_ended(job.running.codes(), job.confinement.as_deref())
+        how_it_ended(
+            job.running.codes(),
+            &job.running.closed(),
+            job.confinement.as_deref(),
+        )
     } else if kill {
         crate::report::Outcome::Stopped(ran_for)
     } else {
@@ -17373,10 +17397,32 @@ mod tests {
     #[test]
     fn each_failed_step_is_named_by_its_place_and_how_it_ended() {
         assert_eq!(
-            failed_steps(&[Some(2), Some(0), None]),
+            failed_steps(&[Some(2), Some(0), None], &[false, false, false]),
             "step 1 exited 2, step 3 was killed"
         );
-        assert_eq!(failed_steps(&[Some(0), Some(0)]), "");
+        assert_eq!(failed_steps(&[Some(0), Some(0)], &[false, false]), "");
+    }
+
+    /// RUN-13: a step `SIGPIPE` ended because a later step closed its input is not named as a
+    /// failure, and the line is told as ended normally with that step's place. A step killed some
+    /// other way beside it is still named. The faults rejected are `closed` ignored, so the step
+    /// is named, and `closed` applied to every killed step, so the other kill is hidden.
+    #[test]
+    fn a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is() {
+        let closed = [true, false, false];
+        assert_eq!(failed_steps(&[None, Some(0), Some(0)], &closed), "");
+        assert_eq!(
+            failed_steps(&[None, None, Some(0)], &closed),
+            "step 2 was killed"
+        );
+        assert!(matches!(
+            how_it_ended(&[None, Some(0)], &[true, false], None),
+            crate::report::Outcome::Closed { steps } if steps == [1]
+        ));
+        assert!(matches!(
+            how_it_ended(&[None, None], &[false, false], None),
+            crate::report::Outcome::Failed { .. }
+        ));
     }
 
     /// A task list is written by the planner, which has only reference names, and read by the

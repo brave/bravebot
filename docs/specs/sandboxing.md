@@ -2111,7 +2111,8 @@ two never say different things. The description
 reads that fact as each turn starts and this sentence reads it when the result is composed. The
 sentence is the same words for exit 1 and exit 2.
 A result whose steps all
-exited zero carries no such sentence. The sentence is composed from the same two decisions the
+exited zero carries no such sentence, and neither does one whose only step that did not exit zero is
+one [RUN-13](tools/run.md#RUN-13) counts as closed: a step ended by `SIGPIPE` behind a step that exited 0. The sentence is composed from the same two decisions the
 policy is ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
 
 A line refused before its program started, because the program could not be confined or could not
@@ -4042,7 +4043,7 @@ none to add to.
   failed git step in a linked worktree or a submodule, which says the git line can be run again
   with the argument, in the same sessions ([SANDBOX-19](#SANDBOX-19)).
 - **Accepted after a failure.** The driver accepts the request only while a line has run with the
-  sandbox in this turn and exited non-zero, or a line whose program the platform could not confine
+  sandbox in this turn and exited non-zero (a step [RUN-13](tools/run.md#RUN-13) counts as closed is not a failure here), or a line whose program the platform could not confine
   ([SANDBOX-17](#SANDBOX-17)) was refused, in the foreground or the background, and each such
   failure earns one request: accepting one spends it, so a request the person declines, or a plan
   the policy then refuses, leaves it. Where that refusal is a closed `run.network` the platform

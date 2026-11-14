@@ -563,7 +563,11 @@ printed nothing.
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
 [its deadline](#a-line-has-a-deadline) and was stopped. This holds for lines joined with `;` or `||`
-too: a later step that succeeds does not hide an earlier failure. It is said for quarantined output too,
+too: a later step that succeeds does not hide an earlier failure. A step that `SIGPIPE` ended because
+a later step of the same pipeline closed its input and exited zero, as `producer | head` does, is
+not a failure: the result says the run exited 0 and that the step stopped because the next step
+closed its input. Any other signal, and `SIGPIPE` with no later step that exited zero, is still
+reported as a failure. It is said for quarantined output too,
 where the planner holds a reference it may not read. The verdict is read off the processes and the
 clock, never out of a byte the program printed, so it is structure exactly as a line count is and
 puts nothing in the planner's context that a program chose.

@@ -637,6 +637,10 @@ pub struct Shown {
 pub enum Outcome {
     /// Every stage exited zero, or a line with branches did what it was told.
     Succeeded,
+    /// Every stage exited zero except the listed ones, which `SIGPIPE` ended because a later stage
+    /// of the same pipeline had closed its input and exited zero, as `producer | head` does
+    /// (RUN-13). Reported as a success with the places of those stages, numbered from 1.
+    Closed { steps: Vec<usize> },
     /// A stage exited non-zero or was killed, named as the driver names them.
     Failed {
         detail: String,
@@ -683,6 +687,20 @@ fn seconds(duration: std::time::Duration) -> String {
     crate::tools::tally(duration.as_secs() as usize, "second", "seconds")
 }
 
+/// The places of the steps `SIGPIPE` ended, as the start of a sentence: "Step 1 stopped" or
+/// "Steps 1, 3 stopped".
+fn stopped_steps(steps: &[usize]) -> String {
+    let places = steps
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match steps {
+        [_] => format!("Step {places} stopped"),
+        _ => format!("Steps {places} stopped"),
+    }
+}
+
 impl Outcome {
     /// How the caller is told it ended.
     ///
@@ -693,6 +711,10 @@ impl Outcome {
     pub fn describe(&self) -> String {
         match self {
             Self::Succeeded => "It exited 0.".to_string(),
+            Self::Closed { steps } => format!(
+                "It exited 0. {} because the next step closed its input.",
+                stopped_steps(steps)
+            ),
             Self::Failed {
                 detail,
                 confinement: None,
@@ -760,7 +782,7 @@ impl Outcome {
                 seconds(*ran_for),
                 seconds(*waited)
             ),
-            Self::Succeeded => "succeeded".to_string(),
+            Self::Succeeded | Self::Closed { .. } => "succeeded".to_string(),
             Self::Failed { detail, .. } => detail.clone(),
         }
     }

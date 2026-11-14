@@ -724,7 +724,7 @@ While a turn runs, the newest lines a running job has printed since the model la
 **A command's row says how the run ended**, with the same three marks a delegate's row carries: one
 for a run whose every step exited zero, one for a run a step failed, and the mark of work still going
 for a run stopped at [its deadline](../reference/run-tool.md#a-line-has-a-deadline). Opening
-the row says it in words beside the command, naming the step that failed and its code. A stopped run
+the row says it in words beside the command, naming the step that failed and its code. A step that `SIGPIPE` ended because the next step closed its input is not a failure. A stopped run
 keeps the working mark because that is what it was doing: a server told to serve a page prints as it
 goes and never exits, so a cross beside it would say something about the program that is not true.
 The verdict comes from the exit codes and the clock, never from a line the program printed.

@@ -284,6 +284,15 @@ pub struct Ran {
     pub stderr: String,
     /// The exit code of each stage, in order. `None` where a stage was killed by a signal.
     pub codes: Vec<Option<i32>>,
+    /// The signal that ended each stage, in order, where one did. `None` where a stage exited on its
+    /// own, and on a platform with no signals.
+    pub signals: Vec<Option<i32>>,
+    /// Whether each stage was ended by `SIGPIPE` because a later stage of the same pipeline had
+    /// closed its input and exited 0, which is what `producer | head` does to the producer. Such a
+    /// stage did what it was asked, so it is not a failure ([RUN-13]).
+    ///
+    /// [RUN-13]: ../../../docs/specs/tools/run.md
+    pub closed: Vec<bool>,
     /// How long the pipeline had run when the limit ran out and it was killed, or `None` if every
     /// stage exited on its own.
     ///
@@ -312,8 +321,57 @@ impl Ran {
         // A pipeline that had to be killed did not succeed, whatever its stages had managed to
         // report by then. Stages still running have no code at all, so this would be false in
         // most cases anyway; it is stated rather than relied on.
-        self.stopped.is_none() && self.codes.iter().all(|code| *code == Some(0))
+        self.stopped.is_none() && self.stages_ended_well()
     }
+
+    /// Whether every stage exited 0 or was closed by the stage after it (see [`Ran::closed`]).
+    ///
+    /// Read off the codes, the signals and the layout of the pipelines, so no byte a stage printed
+    /// reaches it. Says nothing about the deadline: [`Ran::succeeded`] adds that.
+    pub fn stages_ended_well(&self) -> bool {
+        all_ended_well(&self.codes, &self.closed)
+    }
+}
+
+/// The number of `SIGPIPE` on Linux and macOS, the Unix systems this ships for.
+const SIGPIPE: i32 = 13;
+
+/// The signal that ended a stage, where one did.
+fn signal_of(status: &ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
+/// Which stages of one pipeline were ended by `SIGPIPE` with a later stage of the same pipeline
+/// having exited 0.
+///
+/// A shell reports the last stage, so `producer | head` exits 0 although the producer died writing
+/// to a closed pipe. A stage ended by `SIGPIPE` with no later stage that exited 0 is not covered,
+/// and neither is a stage ended by any other signal. Read off the codes and signals alone.
+pub fn closed_by_the_next(codes: &[Option<i32>], signals: &[Option<i32>]) -> Vec<bool> {
+    let mut closed = vec![false; codes.len()];
+    let mut later_exited_zero = false;
+    for index in (0..codes.len()).rev() {
+        closed[index] = later_exited_zero && signals.get(index) == Some(&Some(SIGPIPE));
+        later_exited_zero |= codes[index] == Some(0);
+    }
+    closed
+}
+
+/// Whether every stage exited 0 or was closed by the stage after it.
+pub fn all_ended_well(codes: &[Option<i32>], closed: &[bool]) -> bool {
+    codes
+        .iter()
+        .zip(closed)
+        .all(|(code, closed)| *closed || *code == Some(0))
 }
 
 /// What a run printed, as the one text a reader gets.
@@ -687,6 +745,8 @@ struct Running<'a> {
     raw_stdout: Option<Vec<u8>>,
     stderr: String,
     codes: Vec<Option<i32>>,
+    signals: Vec<Option<i32>>,
+    closed: Vec<bool>,
     stopped: Option<Duration>,
     /// The directory this session was given, where it has one.
     scratch: Option<&'a std::path::Path>,
@@ -710,13 +770,16 @@ struct Running<'a> {
 /// Why a wait came back without an error.
 enum Ending {
     /// Every step is over, by exiting or by being stopped at the deadline.
-    Over(Vec<Option<i32>>),
+    Over(Ends),
     /// A person asked for the steps to go on without being waited for, and at least one is still
     /// running.
-    Handed {
-        codes: Vec<Option<i32>>,
-        finished: Vec<bool>,
-    },
+    Handed { ends: Ends, finished: Vec<bool> },
+}
+
+/// How each step of one pipeline ended: its exit code and the signal that ended it.
+struct Ends {
+    codes: Vec<Option<i32>>,
+    signals: Vec<Option<i32>>,
 }
 
 impl<'a> Running<'a> {
@@ -738,6 +801,8 @@ impl<'a> Running<'a> {
             raw_stdout: None,
             stderr: String::new(),
             codes: Vec::new(),
+            signals: Vec::new(),
+            closed: Vec::new(),
             stopped: None,
             scratch,
             stdin,
@@ -758,6 +823,8 @@ impl<'a> Running<'a> {
             stdout: self.stdout,
             stderr: self.stderr,
             codes: self.codes,
+            signals: self.signals,
+            closed: self.closed,
             stopped: self.stopped,
             ended_well,
         }
@@ -824,7 +891,14 @@ impl<'a> Running<'a> {
             return Err(ended_in("it ran out of time"));
         }
         if !well {
-            let detail = match inner.codes.iter().rev().find(|code| **code != Some(0)) {
+            let detail = match inner
+                .codes
+                .iter()
+                .zip(&inner.closed)
+                .rev()
+                .find(|(code, closed)| !**closed && **code != Some(0))
+                .map(|(code, _)| code)
+            {
                 Some(Some(code)) => format!("it exited with status {code}"),
                 Some(None) => "it was ended by a signal".to_string(),
                 None => "it failed".to_string(),
@@ -1039,8 +1113,8 @@ impl<'a> Running<'a> {
 
         // Offered only with a pipe for standard output, since that is the one a job reads from.
         let handoff = self.handoff.filter(|_| tail.is_some());
-        let (codes, tail) = match (self.wait(&mut children, handoff)?, tail) {
-            (Ending::Handed { codes, finished }, Some(stdout)) => {
+        let (ends, tail) = match (self.wait(&mut children, handoff)?, tail) {
+            (Ending::Handed { ends, finished }, Some(stdout)) => {
                 // Taken out of the guard in the one expression that hands them on, so there is
                 // no point at which its drop could kill them and nothing else holds them.
                 self.moved = Some(Moved {
@@ -1048,7 +1122,8 @@ impl<'a> Running<'a> {
                         children: std::mem::take(&mut children.0),
                         stdout,
                         stderr: std::mem::take(&mut draining),
-                        codes,
+                        codes: ends.codes,
+                        signals: ends.signals,
                         finished,
                         started: self.started,
                         exited: None,
@@ -1059,12 +1134,12 @@ impl<'a> Running<'a> {
             }
             // Not reached, since the token is offered only with a tail. Stopped as the deadline
             // stops a line, so nothing is left running behind a result that says it ended.
-            (Ending::Handed { codes, .. }, None) => {
+            (Ending::Handed { ends, .. }, None) => {
                 stop(&mut children.0);
                 self.stopped = Some(self.started.elapsed());
-                (codes, None)
+                (ends, None)
             }
-            (Ending::Over(codes), tail) => (codes, tail),
+            (Ending::Over(ends), tail) => (ends, tail),
         };
 
         // Collected once the steps are over, whether they ended on their own or were killed. The
@@ -1087,9 +1162,15 @@ impl<'a> Running<'a> {
         for drain in &draining {
             self.stderr.push_str(&drain.text());
         }
-        self.codes.extend(codes.iter().copied());
+        // Decided per pipeline, so a stage of one pipeline is never closed by a stage of another
+        // line part (`a | b ; c | d`).
+        let closed = closed_by_the_next(&ends.codes, &ends.signals);
+        let well = all_ended_well(&ends.codes, &closed);
+        self.codes.extend(ends.codes);
+        self.signals.extend(ends.signals);
+        self.closed.extend(closed);
 
-        Ok(self.stopped.is_none() && codes.iter().all(|code| *code == Some(0)))
+        Ok(self.stopped.is_none() && well)
     }
 
     /// Wait for every child, until they are done, the user says stop, the user says to stop
@@ -1100,6 +1181,7 @@ impl<'a> Running<'a> {
         handoff: Option<&Handoff>,
     ) -> Result<Ending, ExecError> {
         let mut codes = vec![None; children.len()];
+        let mut signals = vec![None; children.len()];
         let mut finished = vec![false; children.len()];
 
         loop {
@@ -1110,6 +1192,7 @@ impl<'a> Running<'a> {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         codes[index] = status.code();
+                        signals[index] = signal_of(&status);
                         finished[index] = true;
                     }
                     Ok(None) => {}
@@ -1119,7 +1202,7 @@ impl<'a> Running<'a> {
             }
 
             if finished.iter().all(|done| *done) {
-                return Ok(Ending::Over(codes));
+                return Ok(Ending::Over(Ends { codes, signals }));
             }
 
             // Both of these kill. Something still running is an effect in progress, and neither a
@@ -1131,13 +1214,16 @@ impl<'a> Running<'a> {
             // Before the deadline, so a press that arrived in time is not lost to a pass that
             // happens to land after it.
             if handoff.is_some_and(Handoff::is_requested) {
-                return Ok(Ending::Handed { codes, finished });
+                return Ok(Ending::Handed {
+                    ends: Ends { codes, signals },
+                    finished,
+                });
             }
             let waited = self.started.elapsed();
             if waited >= self.limit {
                 stop(children);
                 self.stopped = Some(waited);
-                return Ok(Ending::Over(codes));
+                return Ok(Ending::Over(Ends { codes, signals }));
             }
 
             std::thread::sleep(TICK);
@@ -1672,6 +1758,8 @@ pub struct Background {
     stderr: Vec<Drain>,
     /// The exit code of each step, filled in as they are collected.
     codes: Vec<Option<i32>>,
+    /// The signal that ended each step, filled in with `codes`.
+    signals: Vec<Option<i32>>,
     finished: Vec<bool>,
     started: Instant,
     /// When every step was first seen to have exited, which bounds the wait for the pipes.
@@ -1717,6 +1805,7 @@ impl Background {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     self.codes[index] = status.code();
+                    self.signals[index] = signal_of(&status);
                     self.finished[index] = true;
                 }
                 Ok(None) => {}
@@ -1812,6 +1901,17 @@ impl Background {
     /// The exit codes collected so far, for a step that has ended.
     pub fn codes(&self) -> &[Option<i32>] {
         &self.codes
+    }
+
+    /// The signals that ended the steps collected so far, in step order.
+    pub fn signals(&self) -> &[Option<i32>] {
+        &self.signals
+    }
+
+    /// Which steps were ended by `SIGPIPE` after a later step of the job exited 0 (see
+    /// [`Ran::closed`]).
+    pub fn closed(&self) -> Vec<bool> {
+        closed_by_the_next(&self.codes, &self.signals)
     }
 
     /// Kill every step, and keep what it printed.
@@ -2101,6 +2201,7 @@ pub fn start_steps_within(
         stdout: tail.expect("the last step's output is always collected"),
         stderr: draining,
         codes: vec![None; steps],
+        signals: vec![None; steps],
         finished: vec![false; steps],
         started: Instant::now(),
         exited: None,
