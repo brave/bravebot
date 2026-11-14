@@ -863,6 +863,12 @@ pub struct Session {
     /// own line by the two calls that take one from the box or the queue, and cleared by every turn
     /// that begins, so the next one is judged on its own. Read only while the turn runs.
     pub leave_word_sent: bool,
+    /// Whether the turn in flight began on a line the person typed that is a command which takes no
+    /// argument, followed by words (CMD-2).
+    ///
+    /// Such a line is a prompt, and the row under the box says so, since the person may have meant
+    /// the command. Set and cleared in the same places as `leave_word_sent`, from the same line.
+    pub command_sent_as_prompt: bool,
     /// Whether the key being answered arrived on its own rather than in a run with others.
     ///
     /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
@@ -1501,6 +1507,7 @@ impl Session {
             expandable_lines: 0,
             offered_to_leave: false,
             leave_word_sent: false,
+            command_sent_as_prompt: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
@@ -3388,6 +3395,7 @@ impl Session {
         // Read from the line as the box held it, which the person typed, and it decides only whether
         // the row under the box says the word went to the model (CMD-2).
         self.leave_word_sent = crate::command_table::is_a_lone_leave_word(&typed);
+        self.command_sent_as_prompt = crate::command_table::is_a_command_given_words(&typed);
         Some(begun)
     }
 
@@ -4106,6 +4114,7 @@ impl Session {
         // a goal sending the work back and a command's own prompt are not a lone word the person
         // typed, so the mark left by the last turn must not describe them.
         self.leave_word_sent = false;
+        self.command_sent_as_prompt = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -10306,6 +10315,146 @@ mod tests {
             s.send_queued().expect("the hurried prompts were not sent");
 
             assert_eq!(s.leave_word_sent, marked, "{lines:?}");
+        }
+    }
+
+    /// CMD-2. A line that is a command the table gives no argument, with words after it, is a prompt
+    /// and the turn it begins is marked, so the row under the box can say so. The bare command, a
+    /// command that takes an argument, a longer word and a prompt that only mentions a command are
+    /// not: a mark taken from any of them shows the note on a line that was never mistaken for a
+    /// command.
+    #[test]
+    fn a_turn_begun_on_a_command_given_words_is_marked_and_one_on_any_other_line_is_not() {
+        for line in ["/model gpt-5", "/undo the last change", "  /lsp  all  "] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line.trim()));
+            assert!(
+                s.command_sent_as_prompt,
+                "{line:?} began a turn with no mark"
+            );
+            assert!(!s.leave_word_sent, "{line:?} was marked as a leave word");
+        }
+        for line in [
+            "/model",
+            "/rename foo",
+            "/theme nord",
+            "/models gpt-5",
+            "/undone",
+            "why is /model slow",
+            "exit",
+        ] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line));
+            assert!(
+                !s.command_sent_as_prompt,
+                "{line:?} began a turn with a mark"
+            );
+        }
+    }
+
+    /// The mark belongs to the turn the line began, so the prompt after it is judged on its own.
+    #[test]
+    fn the_prompt_after_a_command_marked_turn_does_not_inherit_the_mark() {
+        let mut s = session();
+        for c in "/model gpt-5".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.command_sent_as_prompt, "the line was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        for c in "list the files".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+
+        assert!(
+            !s.command_sent_as_prompt,
+            "the next prompt inherited the mark"
+        );
+    }
+
+    /// A tick starts a turn on a prompt nobody typed in the box, so the mark from the turn before
+    /// is not about it.
+    #[test]
+    fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_command_mark() {
+        let mut s = session();
+        s.looping.start(a_loop_that_is_due());
+        for c in "/undo the last change".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.command_sent_as_prompt, "the line was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        assert!(s.loop_tick().is_some(), "the due tick was not sent");
+
+        assert!(
+            !s.command_sent_as_prompt,
+            "the tick's turn kept the line's mark"
+        );
+    }
+
+    /// A line typed while a turn runs is queued and sent when that turn ends, with nobody pressing
+    /// Enter for it, and its author is owed the same note as one who sent it at rest. It is not owed
+    /// one while the turn it waits behind is the one running. A command given words is queued as the
+    /// prompt it is (`command_typed` is `None` for it), not as a command.
+    #[test]
+    fn a_command_given_words_that_waited_in_the_queue_is_marked_when_its_turn_begins() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_prompts(&mut s, &["/model gpt-5"]);
+        assert!(
+            !s.command_sent_as_prompt,
+            "the running turn took the mark of a waiting line"
+        );
+        s.complete("done", Vec::new(), 0);
+
+        assert_eq!(s.send_queued().as_deref(), Some("/model gpt-5"));
+
+        assert!(
+            s.command_sent_as_prompt,
+            "the queued line began a turn with no mark"
+        );
+    }
+
+    /// Hurried prompts go as one turn, one to a line, so two lines sent together are a line that
+    /// holds more than the command and a note about one command would misdescribe it. A single
+    /// hurried line is still the line.
+    #[test]
+    fn command_lines_hurried_together_are_not_marked_and_one_hurried_alone_is() {
+        for (lines, marked) in [
+            (&["/model gpt-5", "/undo it"][..], false),
+            (&["/model gpt-5", "and then list the files"][..], false),
+            (&["/model gpt-5"][..], true),
+        ] {
+            let mut s = session();
+            s.type_char('a');
+            s.submit().expect("submitted");
+            queue_prompts(&mut s, lines);
+            assert!(s.hurry(), "there was a turn to stop and something waiting");
+            stop(&mut s, "a");
+
+            s.send_queued().expect("the hurried prompts were not sent");
+
+            assert_eq!(s.command_sent_as_prompt, marked, "{lines:?}");
+        }
+    }
+
+    /// Queue each line in `lines` behind a turn already running, as a prompt whatever it begins with.
+    fn queue_prompts(s: &mut Session, lines: &[&str]) {
+        for line in lines {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert!(s.queue(), "{line} was not queued");
         }
     }
 

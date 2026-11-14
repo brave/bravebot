@@ -429,8 +429,13 @@ impl Session {
             prompts.as_slice(),
             [only] if crate::command_table::is_a_lone_leave_word(only)
         );
+        let given_words = matches!(
+            prompts.as_slice(),
+            [only] if crate::command_table::is_a_command_given_words(only)
+        );
         let begun = self.begin_turn(prompts.join("\n"), (attached, pasted), recall);
         self.leave_word_sent = lone;
+        self.command_sent_as_prompt = given_words;
         Some(begun)
     }
 

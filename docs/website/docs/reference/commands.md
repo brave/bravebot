@@ -88,6 +88,11 @@ it takes appears dimly after the cursor until you start typing one.
 is sent at the first Enter like any other prompt, and while the turn it starts runs, the row under
 the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
 
+A command that takes no argument, typed with words after it, is a prompt too: `/model gpt-5` opens no
+picker, `/undo the last change` does not undo, and each is sent at the first Enter. While the turn
+it starts runs, the row under the box says that a prompt was sent, that Ctrl-C stops it and that the
+bare word runs the command.
+
 ## `/status`
 
 Reports everything the session knows about itself:
@@ -216,7 +221,8 @@ them. See [Choosing a model](../customize/model.md).
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
 
-`/model` takes no argument, so `/model foo` is a prompt. A [prompt file](#prompt-files) whose front
+`/model` takes no argument, so `/model foo` is a prompt, and the row under the box says so while its
+turn runs. A [prompt file](#prompt-files) whose front
 matter has a `model` key opens this picker with the cursor on that model, and leaves the file's text
 in the box.
 
@@ -1728,7 +1734,8 @@ Review $1 for races, with attention to $ARGUMENTS.
   its key or name. Nothing is chosen until you press Enter on a row, and Esc keeps the current
   model. A name the list lacks is said. Under `--agent` with a definition that names a model the
   picker does not open, as `/model` does not. A file with both `agent` and `model`, or a value of
-  more than one word, is refused. `/model <name>` stays a prompt.
+  more than one word, is refused. `/model <name>` stays a prompt, and the row under the box says so
+  while its turn runs.
 - Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
   and a file whose text begins with a command word or would run an MCP prompt is refused, so no file
   carries out a command.

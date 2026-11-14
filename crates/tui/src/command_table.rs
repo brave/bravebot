@@ -930,6 +930,20 @@ fn row_typed(line: &str) -> Option<Command> {
         })
 }
 
+/// Whether the line is a command that takes no argument, followed by words.
+///
+/// Such a line is a prompt (CMD-2): the table gives the command no argument, so what follows it is
+/// the person's own words and not something to carry out. Read off the table's argument column, the
+/// way [`command_typed`] reads it, so a command added there is covered without anybody having to
+/// remember to. The bare command is the command and a longer word is another word, so neither is
+/// this. Only the first word decides, and it decides only which note is drawn while the turn runs.
+pub(crate) fn is_a_command_given_words(line: &str) -> bool {
+    commands().into_iter().any(|command| {
+        command.argument.is_empty()
+            && argument_to(line, command.name).is_some_and(|words| !words.is_empty())
+    })
+}
+
 /// Whether the command a line is gets carried out as it is typed while a turn runs (CMD-8).
 ///
 /// Read off the table's column, and for the two words that both read and start, off the form the

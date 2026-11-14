@@ -318,6 +318,10 @@ key does not.
 line that is only one of them is sent at the first Enter, and while the turn it starts runs, the row
 beneath the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
 
+A command that takes no argument, typed with words after it, such as `/model gpt-5`, is also sent as
+a prompt at the first Enter, and while its turn runs the row beneath the box says that a prompt was
+sent, that Ctrl-C stops it and that the bare word runs the command.
+
 **A turn you asked to stop says so until it ends.** From the press, the working indicator reads
 "Stopping" ahead of whatever it would otherwise say. A turn ends only once every delegate it started
 has returned, which can take seconds, so while delegates are still running it reads "Stopping, waiting
