@@ -1475,6 +1475,130 @@ impl Confinement {
         }
     }
 
+    /// `policy` with a read row for each of `reaches`.
+    fn allow_reaches(
+        mut policy: SandboxPolicy,
+        reaches: impl IntoIterator<Item = Reach>,
+    ) -> SandboxPolicy {
+        for reach in reaches {
+            policy = policy.allow_read(reach.path);
+        }
+        policy
+    }
+
+    /// What a requested `scope` adds to a stage: its grant, the places it reads where the stage
+    /// does not read the machine, and the agent where the argv that signs would lend it.
+    fn lend_requested_scope(
+        &self,
+        policy: SandboxPolicy,
+        scope: Scope,
+        home: &Path,
+        place: &signing::Place,
+        socket: &Option<PathBuf>,
+        environment: &[(String, String)],
+    ) -> SandboxPolicy {
+        let mut policy = scope.grant(policy, home, self.state(), place);
+        if !self.reads_the_machine() {
+            policy = Self::allow_reaches(
+                policy,
+                requested_reach(scope, home, self.state(), environment),
+            );
+        }
+        // A request lends the agent where the argv that signs would: only to a
+        // person whose git signs with ssh.
+        match socket.clone() {
+            Some(socket) if self.lends_the_agent(scope) => policy.allow_write(socket),
+            _ => policy,
+        }
+    }
+
+    /// What the requests the plan carries for `step` add to a stage.
+    fn grant_requested(
+        &self,
+        step: &Step,
+        mut policy: SandboxPolicy,
+        home: &Path,
+        place: &signing::Place,
+        socket: &Option<PathBuf>,
+        environment: &[(String, String)],
+    ) -> SandboxPolicy {
+        // The places a variable names are those of every program the scope has, since a script
+        // wrapping `gh` is not `gh` and there is no program to key them on.
+        for request in self.requested_for(step) {
+            policy = match *request {
+                Requested::Scope(scope) if !self.lends(scope) => policy,
+                Requested::Loopback => policy.allow_loopback(),
+                // Lends nothing: it only has the prompt number the keys again.
+                Requested::SshKey => policy,
+                Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
+                Requested::Scope(scope) => {
+                    self.lend_requested_scope(policy, scope, home, place, socket, environment)
+                }
+            };
+        }
+        policy
+    }
+
+    /// What the reaches a person remembered for `step` add to a stage.
+    fn grant_remembered(
+        &self,
+        step: &Step,
+        mut policy: SandboxPolicy,
+        home: &Path,
+        place: &signing::Place,
+    ) -> SandboxPolicy {
+        for grant in self.granted(step) {
+            policy = match &grant.reached {
+                Reached::Scope(scope) if !self.lends(*scope) => policy,
+                Reached::Scope(scope) => scope.grant(policy, home, self.state(), place),
+                Reached::Directory(_) => match grant.directory(home, self.state()) {
+                    Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
+                    Some(path) => policy.allow_read(path),
+                    None => policy,
+                },
+            };
+        }
+        policy
+    }
+
+    /// `policy` with a write refusal for each read refusal inside one of its writable rows, where
+    /// a row was given without a request (`unasked_is_empty` is false) or on macOS, and for each
+    /// place under the home directory that runs code later, on macOS and Linux.
+    fn deny_writes_beneath_read_refusals(
+        &self,
+        mut policy: SandboxPolicy,
+        unasked_is_empty: bool,
+    ) -> SandboxPolicy {
+        // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
+        // row is a write refusal too: a row given without a request, or on macOS any row, a
+        // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
+        // a write would run code later, or loosen this profile, are refused beside them, on Linux
+        // as on macOS: a session on the home directory or above it holds a row over them, and a
+        // launcher the person starts later reads what a stage wrote there (SANDBOX-30).
+        let reads_refused_for_writes = !unasked_is_empty || self.prelude == Prelude::MacOs;
+        let refuses_persistence = matches!(self.prelude, Prelude::MacOs | Prelude::Linux);
+        if reads_refused_for_writes || refuses_persistence {
+            let mut refused = if reads_refused_for_writes {
+                policy.unreadable.clone()
+            } else {
+                Vec::new()
+            };
+            if let (true, Some(home)) = (refuses_persistence, self.home.as_deref()) {
+                refused.extend(persistence_locations(home));
+            }
+            for refused in refused {
+                let inside = policy
+                    .writable
+                    .iter()
+                    .any(|row| refused.starts_with(&row.path) && row.path != refused);
+                if inside && !policy.unwritable.contains(&refused) {
+                    policy = policy.deny_write(refused);
+                }
+            }
+        }
+        policy
+    }
+
     /// The policy one step runs under, started in `directory`.
     ///
     /// `environment` is the step's own, after the session's variables and the step's assignments
@@ -1571,9 +1695,10 @@ impl Confinement {
             if let Some(scope) = scope {
                 policy = scope.grant(policy, home, self.state(), &place);
                 if !self.reads_the_machine() {
-                    for reach in reaches(resolved, scope, home, self.state(), environment) {
-                        policy = policy.allow_read(reach.path);
-                    }
+                    policy = Self::allow_reaches(
+                        policy,
+                        reaches(resolved, scope, home, self.state(), environment),
+                    );
                 }
                 if let Some(key) = self.identified(step).as_ref().and_then(Identified::key) {
                     policy = policy.allow_read(key);
@@ -1584,44 +1709,8 @@ impl Confinement {
                     policy = policy.allow_write(socket);
                 }
             }
-            // The places a variable names are those of every program the scope has, since a script
-            // wrapping `gh` is not `gh` and there is no program to key them on.
-            for request in self.requested_for(step) {
-                policy = match *request {
-                    Requested::Scope(scope) if !self.lends(scope) => policy,
-                    Requested::Loopback => policy.allow_loopback(),
-                    // Lends nothing: it only has the prompt number the keys again.
-                    Requested::SshKey => policy,
-                    Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
-                    Requested::Scope(scope) => {
-                        let mut policy = scope.grant(policy, home, self.state(), &place);
-                        if !self.reads_the_machine() {
-                            for reach in requested_reach(scope, home, self.state(), environment) {
-                                policy = policy.allow_read(reach.path);
-                            }
-                        }
-                        // A request lends the agent where the argv that signs would: only to a
-                        // person whose git signs with ssh.
-                        match socket.clone() {
-                            Some(socket) if self.lends_the_agent(scope) => {
-                                policy.allow_write(socket)
-                            }
-                            _ => policy,
-                        }
-                    }
-                };
-            }
-            for grant in self.granted(step) {
-                policy = match &grant.reached {
-                    Reached::Scope(scope) if !self.lends(*scope) => policy,
-                    Reached::Scope(scope) => scope.grant(policy, home, self.state(), &place),
-                    Reached::Directory(_) => match grant.directory(home, self.state()) {
-                        Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
-                        Some(path) => policy.allow_read(path),
-                        None => policy,
-                    },
-                };
-            }
+            policy = self.grant_requested(step, policy, home, &place, &socket, environment);
+            policy = self.grant_remembered(step, policy, home, &place);
         }
 
         if !self.reads_the_machine() {
@@ -1683,33 +1772,7 @@ impl Confinement {
         {
             policy = policy.deny_write(self.temporary.clone());
         }
-        // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
-        // row is a write refusal too: a row given without a request, or on macOS any row, a
-        // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
-        // a write would run code later, or loosen this profile, are refused beside them, on Linux
-        // as on macOS: a session on the home directory or above it holds a row over them, and a
-        // launcher the person starts later reads what a stage wrote there (SANDBOX-30).
-        let reads_refused_for_writes = !unasked.is_empty() || self.prelude == Prelude::MacOs;
-        let refuses_persistence = matches!(self.prelude, Prelude::MacOs | Prelude::Linux);
-        if reads_refused_for_writes || refuses_persistence {
-            let mut refused = if reads_refused_for_writes {
-                policy.unreadable.clone()
-            } else {
-                Vec::new()
-            };
-            if let (true, Some(home)) = (refuses_persistence, self.home.as_deref()) {
-                refused.extend(persistence_locations(home));
-            }
-            for refused in refused {
-                let inside = policy
-                    .writable
-                    .iter()
-                    .any(|row| refused.starts_with(&row.path) && row.path != refused);
-                if inside && !policy.unwritable.contains(&refused) {
-                    policy = policy.deny_write(refused);
-                }
-            }
-        }
+        policy = self.deny_writes_beneath_read_refusals(policy, unasked.is_empty());
         let machine: Vec<PathBuf> = unasked
             .into_iter()
             .filter(|row| !held.contains(row))
