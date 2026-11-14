@@ -22,7 +22,10 @@ The editor draws the conversation and the agent runs it. The program is a projec
 session the desktop window uses, so the turn
 engine, the trust map and every question are the ones described in [prompting.md](prompting.md),
 [trust-map.md](trust-map.md) and [layering.md](layering.md), and this spec decides only what the
-protocol adds: where each message comes from, and what an answer is allowed to grant.
+protocol adds: where each message comes from, and what an answer is allowed to grant. The one
+thing it changes about a turn is the sentence in the system prompt naming the front end: a session
+an editor hosts says the person is using an editor that hosts it over this protocol, and not the
+desktop app ([INSTR-9](instructions.md#INSTR-9)).
 
 Before it reads a line the program settles the same process-wide sandbox answers `bravebot-rpc`
 does, the network its programs keep, the lists of paths a person wrote and the hosts a stage is held

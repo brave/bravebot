@@ -99237,6 +99237,55 @@ fn first_system_prompt(tag: &str, definition: Option<&str>, task: Task) -> Strin
     system_prompt_of(&received.recv().expect("a request"))
 }
 
+/// INSTR-9: the planner's system prompt says which front end the person is using, once, in the
+/// words of the front end the caller named, and says nothing about one where the caller named none.
+///
+/// Rejects: a prompt that carries no line, one that names the terminal for every caller, one that
+/// says the line for an unset front end, and one that repeats it.
+#[test]
+fn the_system_prompt_names_the_front_end_the_caller_named_and_none_otherwise() {
+    use bravebot_agent::FrontEnd;
+    for (tag, front_end, sentence) in [
+        (
+            "terminal",
+            Some(FrontEnd::Terminal),
+            "The person is using the terminal client.",
+        ),
+        (
+            "desktop",
+            Some(FrontEnd::Desktop),
+            "The person is using the desktop app.",
+        ),
+        (
+            "editor",
+            Some(FrontEnd::Editor),
+            "The person is using an editor that hosts this session over the Agent Client Protocol.",
+        ),
+        ("unset", None, ""),
+    ] {
+        let mut task = Task::new("LOOK-AT-THE-NOTES");
+        if let Some(front_end) = front_end {
+            task = task.in_front_end(front_end);
+        }
+        let system = first_system_prompt(tag, None, task);
+        match front_end {
+            Some(_) => assert_eq!(
+                system.matches(sentence).count(),
+                1,
+                "{tag}: the prompt does not carry the front end's sentence exactly once: {system}"
+            ),
+            None => assert!(
+                !system.contains("The person is using"),
+                "{tag}: the prompt names a front end nobody named: {system}"
+            ),
+        }
+        for other in ["terminal client", "desktop app", "Agent Client Protocol"] {
+            let named = front_end.is_some_and(|_| sentence.contains(other));
+            assert_eq!(system.contains(other), named, "{tag}: {other}: {system}");
+        }
+    }
+}
+
 /// TURN-16: what the planner is told about reading a quarantined reference follows the tools the
 /// turn is offered and whether anybody can answer it. `vet_content` is named exactly where it is
 /// offered, the three ways to lift the quarantine are named only to a run nobody answers, and `--vet`

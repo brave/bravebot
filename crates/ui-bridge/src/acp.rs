@@ -143,8 +143,9 @@ impl Acp {
             queued: Vec::new(),
         }));
         let heard = Arc::clone(&shared);
-        let bridge =
-            Bridge::new(Box::new(move |event| on_event(&heard, event))).with_settings(settings);
+        let bridge = Bridge::new(Box::new(move |event| on_event(&heard, event)))
+            .with_settings(settings)
+            .with_front_end(bravebot_agent::FrontEnd::Editor);
         Self { bridge, shared }
     }
 

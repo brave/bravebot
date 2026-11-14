@@ -661,6 +661,36 @@ fn a_slash_word_in_a_prompt_is_text() {
     assert!(requests.recv().unwrap().contains("/clear"));
 }
 
+/// INSTR-9: a session an editor hosts is told so, in the system prompt of the request its first
+/// prompt makes, and is not told it is in the desktop app or the terminal.
+///
+/// Rejects: an adapter that leaves the bridge's default front end in place, which says the desktop
+/// app, and one that says nothing.
+#[test]
+fn the_planner_is_told_an_editor_hosts_the_session() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("front-end-sentence");
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+    editor.response(prompt);
+    server.join().unwrap();
+    let sent: Value = serde_json::from_str(&requests.recv().unwrap()).unwrap();
+    let system = sent["messages"][0].to_string();
+    assert!(
+        system.contains(
+            "The person is using an editor that hosts this session over the Agent Client Protocol."
+        ),
+        "{system}"
+    );
+    assert!(!system.contains("desktop app"), "{system}");
+    assert!(!system.contains("terminal client"), "{system}");
+}
+
 /// What a model says is a string in a notification. A reply shaped like a protocol message is not
 /// read as one, so nothing is asked of the editor on its account.
 #[test]

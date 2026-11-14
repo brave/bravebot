@@ -2228,6 +2228,8 @@ impl RunSettings {
             .with_output_cap(self.output_cap)
             .with_download_cap(self.download_cap)
             .with_deadlines(self.deadlines)
+            // The planner is told it is talking to a person at this interface (INSTR-9).
+            .in_front_end(bravebot_agent::FrontEnd::Terminal)
             .with_confined_runs(true)
             .asking_about_unconfined(true)
             .with_sandbox_mode(session.live_sandbox_mode())
@@ -18499,6 +18501,16 @@ mod tests {
 
         session.clear();
         assert_eq!(session.spend_limit().credits(), 0);
+    }
+
+    /// INSTR-9: every task the terminal client builds names the terminal as the front end, so the
+    /// planner is told where the person is. Rejects a task built without it, and one that names
+    /// another front end.
+    #[test]
+    fn every_task_the_terminal_builds_names_the_terminal_front_end() {
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let task = run_settings.task("one", &Session::new("none"), &Permissions::new());
+        assert_eq!(task.front_end, Some(bravebot_agent::FrontEnd::Terminal));
     }
 
     /// CHATGPT-10: every turn of a session is built in the session, so the requests of all of them

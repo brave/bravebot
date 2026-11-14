@@ -71,17 +71,23 @@ impl Drop for Scratch {
 /// service holds no state of its own and answers the same way however the rounds are spread
 /// across connections.
 fn stub_service() -> String {
+    stub_service_recording(None)
+}
+
+/// [`stub_service`], which also sends each request body it is asked to answer down `record`.
+fn stub_service_recording(record: Option<mpsc::Sender<Value>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
     let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            std::thread::spawn(move || answer(stream));
+            let record = record.clone();
+            std::thread::spawn(move || answer(stream, record));
         }
     });
     endpoint
 }
 
-fn answer(mut stream: std::net::TcpStream) {
+fn answer(mut stream: std::net::TcpStream, record: Option<mpsc::Sender<Value>>) {
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
     let mut start = String::new();
     if reader.read_line(&mut start).unwrap_or(0) == 0 {
@@ -113,6 +119,9 @@ fn answer(mut stream: std::net::TcpStream) {
         )
     } else {
         let asked: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        if let Some(record) = &record {
+            let _ = record.send(asked.clone());
+        }
         let given = asked["messages"]
             .as_array()
             .map(|messages| messages.iter().filter(|m| m["role"] == "tool").count())
@@ -199,6 +208,57 @@ fn send(child: &mut Child, id: u64, method: &str, params: Value) {
     let stdin = child.stdin.as_mut().expect("the front end reads requests");
     writeln!(stdin, "{line}").expect("the request is written");
     stdin.flush().expect("the request is sent");
+}
+
+/// INSTR-9: a turn started in the desktop window says in its system prompt that the person is
+/// using the desktop app, and names neither the terminal client nor an editor.
+///
+/// Rejects: a bridge that names no front end, one that names the terminal for every caller, and
+/// one that names an editor for the window.
+#[test]
+fn a_desktop_turn_is_told_the_person_is_using_the_desktop_app() {
+    let scratch = Scratch::new("bridge-front-end-sentence");
+    let (sender, requests) = mpsc::channel();
+    let endpoint = stub_service_recording(Some(sender));
+    let mut child = front_end(&scratch.home(), &endpoint);
+    let said = lines(child.stdout.take().expect("the front end answers"));
+
+    send(
+        &mut child,
+        1,
+        "session.new",
+        json!({"directory": scratch.project().display().to_string()}),
+    );
+    let opened = until(&said, |message| message["id"] == 1);
+    let session = opened["ok"]["session"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no session was opened: {opened}"))
+        .to_string();
+    send(
+        &mut child,
+        2,
+        "trust.reply",
+        json!({"session": session, "trusted": true}),
+    );
+    until(&said, |message| message["id"] == 2);
+    send(
+        &mut child,
+        3,
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    let first = requests
+        .recv_timeout(PATIENCE)
+        .expect("the turn made a request");
+    let _ = child.kill();
+
+    let system = first["messages"][0].to_string();
+    assert!(
+        system.contains("The person is using the desktop app."),
+        "{system}"
+    );
+    assert!(!system.contains("terminal client"), "{system}");
+    assert!(!system.contains("Agent Client Protocol"), "{system}");
 }
 
 /// A turn in the desktop window keeps its tools past the round an unwatched run stops at.

@@ -8,6 +8,8 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/home.rs
   - crates/agent/src/styles.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/task.rs
   - crates/agent/src/workspace/touched.rs
 documented-by: docs/website/docs/customize/instructions.md
 ---
@@ -289,6 +291,14 @@ Where nothing installed can stand in, say what is missing and what provides it. 
 no language, package or variable. A session with no directory of its own is told none of this, and
 neither is a delegate.
 
+Which front end the person is using is said on the same terms, to the turn a person is watching and
+not to a delegate: one sentence naming the terminal client, the desktop app, or an editor that hosts
+the session over the Agent Client Protocol. The caller that builds the task says which, so what
+chooses the sentence is a value the driver holds from its own code, never a file, a tool result or
+a session record. A session resumed in another front end names the one now in use. A caller that
+says none, as a one-shot or goal run does, has nothing said about one, because a default would name
+a front end nobody is using.
+
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
 and the rest comes from the kernel and this process's own environment, which is the provenance
@@ -363,6 +373,10 @@ it is the planner's.
 `verified-by: bravebot_agent::turn::the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on`
 `verified-by: bravebot_agent::preamble::whether_the_jenkins_cli_is_installed_is_said_either_way_and_apart_from_the_github_cli`
 `verified-by: bravebot_agent::preamble::a_jenkins_build_is_sent_to_the_cli_only_where_the_probe_found_one`
+`verified-by: bravebot_agent::turn::the_system_prompt_names_the_front_end_the_caller_named_and_none_otherwise`
+`verified-by: bravebot_tui::app::every_task_the_terminal_builds_names_the_terminal_front_end`
+`verified-by: bravebot_ui_bridge::acp::the_planner_is_told_an_editor_hosts_the_session`
+`verified-by: bravebot_ui_bridge::rounds::a_desktop_turn_is_told_the_person_is_using_the_desktop_app`
 `verified-by: bravebot_agent::preamble::an_installed_jenkins_cli_says_what_to_do_when_it_is_not_logged_in`
 `verified-by: bravebot_agent::preamble::what_the_jenkins_cli_is_for_is_not_in_the_block_a_delegate_reads`
 `verified-by: bravebot_agent::turn::the_road_for_a_jenkins_build_goes_out_with_the_fact_it_rests_on`

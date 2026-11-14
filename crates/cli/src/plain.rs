@@ -1198,6 +1198,9 @@ impl Running<'_> {
             .with_output_cap(self.output_cap)
             .with_download_cap(self.download_cap)
             .with_deadlines(self.deadlines)
+            // A person is watching this session, so the planner is told it is at a terminal
+            // (INSTR-9). A one-shot or goal run is not given the line: nobody may be at it.
+            .in_front_end(bravebot_agent::FrontEnd::Terminal)
             .with_confined_runs(true)
             .asking_about_unconfined(true)
             .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
