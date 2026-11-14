@@ -763,7 +763,7 @@ the mode `workspace-write` reads these on purpose:
 | a shell, as it starts | `~/.bashrc`, `~/.zshrc`, `~/.zshenv`, `~/.profile`, `~/.bash_profile` |
 | `git`, `gh`, `glab` and `hub` | `~/.gitconfig`, `~/.git-credentials`, `~/.netrc`, `~/.config/gh`, `~/.config/glab-cli`, `~/.config/hub` |
 | a package manager | `~/.npmrc`, `~/.yarnrc.yml`, `~/.pypirc`, `~/.config/pip/pip.conf`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`, `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`, `~/.cache/huggingface/token` |
-| a client no scope covers, for a deploy, a cloud, a cluster or a secret | `~/.config/vercel`, `~/.config/netlify`, `~/.fly`, `~/.config/doctl`, `~/.supabase`, `~/.config/rclone`, `~/.config/containers`, `~/.config/helm`, `~/.terraformrc`, `~/.terraform.d`, `~/.pulumi`, `~/.vault-token`, `~/.config/op` |
+| a client no scope covers, for a deploy, a cloud, a cluster, a build server or a secret | `~/.config/vercel`, `~/.config/netlify`, `~/.fly`, `~/.config/doctl`, `~/.supabase`, `~/.config/rclone`, `~/.config/containers`, `~/.config/helm`, `~/.terraformrc`, `~/.terraform.d`, `~/.pulumi`, `~/.vault-token`, `~/.config/op`, `~/.config/jk`, `~/Library/Application Support/jk` |
 | a database client | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf` |
 | a build that signs | `~/.android/debug.keystore`, `~/Library/MobileDevice/Provisioning Profiles` |
 | a program handed a file of the person's own | `~/Downloads`, `~/Desktop` |
@@ -1038,7 +1038,13 @@ written. A cache is read and written, and is named as the directory or file it i
 through the directory holding it, so no list reaches the file a tool keeps its token in, the home
 directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. gh's row is `~/.cache/gh` on
 Linux and macOS and `~/AppData/Local/GitHub CLI` on Windows, and is added for a stage whose
-program resolved to `gh`. Each write row says what it
+program resolved to `gh`. jk's row is the one file `~/.config/jk/keychain.lock`, on macOS alone,
+added for a stage whose program resolved to `jk`: jk opens it for writing before it reads its token
+from the macOS login keychain and fails with `operation not permitted` where it cannot. jk takes no
+such lock elsewhere, and a backend that creates a row's file for every stage would create it, and the
+directory above it, on an account with no jk. Nothing else under
+`~/.config/jk` or `~/Library/Application Support/jk` is written, the context file and the file
+store the token is kept in where the keychain is not used among them. Each write row says what it
 names, so a backend that cannot name an absent path has the cache created as the directory or file
 the toolchain expects there. On macOS, which names an absent path, nothing is created ahead of
 time ([SANDBOX-11](#SANDBOX-11)): a stage creates its cache itself where the directory holding it
@@ -1055,10 +1061,12 @@ read, so `CARGO_HOME`,
 `GOCACHE` and `XDG_CACHE_HOME` move no row, whether the session's environment sets one or an
 assignment on the line does. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
-package managers, pip, go, mvn and gradle fetch, and `node`, `python3`, `gh` and a program no list
+package managers, pip, go, mvn and gradle fetch, and `node`, `python3`, `gh`, `jk` and a program no list
 knows do not. Whether a `gh` stage reaches the network is decided by the remote scope its argv
 names ([SANDBOX-16](#SANDBOX-16)), and gh's list is only its cache, so the list lends no egress
-whether the stage resolved to `gh` or asked for it by name ([SANDBOX-26](#SANDBOX-26)). `run` adds the list for each stage it starts where the machine is not read: on Windows
+whether the stage resolved to `gh` or asked for it by name ([SANDBOX-26](#SANDBOX-26)). The same holds
+for jk: its list is a lock file, a `jk` stage reaches a Jenkins server under the session's network
+setting, and no scope keys on it, as none does for `doctl` or `helm`. `run` adds the list for each stage it starts where the machine is not read: on Windows
 and under the mode `strict` ([SANDBOX-18](#SANDBOX-18), [SANDBOX-22](#SANDBOX-22)). Where the machine is read, which is the
 default on Linux and macOS, no stage brings a list, and every stage writes the caches of every
 toolchain instead ([SANDBOX-18](#SANDBOX-18)).
@@ -1101,6 +1109,9 @@ file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise mee
 `verified-by: bravebot_sandbox::toolchain::no_list_names_a_directory_that_holds_other_programs_files`
 `verified-by: bravebot_sandbox::toolchain::ghs_list_lends_no_network`
 `verified-by: bravebot_sandbox::toolchain::ghs_list_reaches_no_gh_login_and_no_keychain`
+`verified-by: bravebot_sandbox::toolchain::jks_list_lends_no_network`
+`verified-by: bravebot_sandbox::toolchain::jks_list_writes_its_lock_file_and_nothing_beside_it`
+`verified-by: bravebot_sandbox::macos::a_jk_stage_writes_its_lock_file_and_not_its_context_or_token_store`
 `verified-by: bravebot_agent::confine::where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache`
 `verified-by: bravebot_agent::confine::xdg_cache_home_moves_no_row_for_gh`
 
@@ -3596,7 +3607,7 @@ because the path it names is the one the person was protecting.
 ### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
 
 `run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
-`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `gh`, `loopback` and `ssh-key`. It is
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `gh`, `jk`, `loopback` and `ssh-key`. It is
 for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script
 that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
 that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
