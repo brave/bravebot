@@ -268,8 +268,11 @@ that file, creating the file where it is missing and leaving the rest of it as i
 `bravebot mcp disable weather` takes it out of each of the three files that asks for it, and says
 which; with `-s`, out of that one. The declaration and its approval stay, so `enable` puts it back
 without asking. A file that does not parse, or whose `mcp.request` is not a list, is left as it
-was, and so is a link in the checkout: where `.bravebot` or the file in it is a link, bravebot
-does not write through it. `~/.bravebot` itself may be a link, and is written through.
+was, and so is a link that leaves the checkout: where `.bravebot` or the file in it is a link to
+somewhere outside the checkout, to its `.git` or to nothing, bravebot does not write through it. A
+link to another file in the checkout, such as `.bravebot/settings.json` pointing at
+`agents/settings.json`, is written through and stays a link. `~/.bravebot` itself may be a link, and
+is written through.
 
 `settings.local.json` is yours alone by name only: add it to the checkout's `.gitignore` to keep it
 out of a commit. On macOS and Linux a file these commands write is readable by you alone, as the

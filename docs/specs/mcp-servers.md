@@ -347,8 +347,12 @@ somebody wrote there; a `request` that is `null` holds nothing to lose, and is r
 reads every file before it writes any, so one it cannot read leaves the alias in all of them rather
 than gone from some, and reads a file two scopes name once: run from the directory the state
 directory is in, the checkout's `.bravebot/settings.json` is the user's own. In a checkout, a link at
-`.bravebot` or at the file is refused and not followed: it arrived with the clone, so where it leads
-is the choice of whoever wrote the checkout. A file in the state directory is written through a link,
+`.bravebot` or at the file is refused and not followed where it leads outside the checkout: it
+arrived with the clone, so where it leads is the choice of whoever wrote the checkout, and it can
+name any file of the person's. A link that ends at a file inside the checkout is written through and
+stays a link, as the repository's own `.bravebot/settings.json` that points at `agents/settings.json`
+does. A link that ends in the checkout's `.git`, in the state directory where the checkout holds it,
+or at nothing is refused. A file in the state directory is written through a link,
 as an import writes it, whichever scope named it. The links are looked at again just before the
 write, so one made while the question waited is refused too.
 
@@ -360,6 +364,7 @@ write, so one made while the question waited is refused too.
 `verified-by: bravebot_cli::mcp::enable_adds_the_alias_once_and_keeps_the_rest_of_the_file`
 `verified-by: bravebot_cli::mcp::enable_leaves_a_settings_file_it_cannot_add_to_as_it_is`
 `verified-by: bravebot_cli::mcp::enable_writes_through_no_link_in_a_checkout`
+`verified-by: bravebot_cli::mcp::a_link_that_stays_in_the_checkout_is_written_through_and_one_that_leaves_it_is_not`
 `verified-by: bravebot_cli::mcp::disable_takes_the_request_out_of_each_file_that_holds_it`
 `verified-by: bravebot_cli::mcp::disable_writes_no_file_where_one_cannot_be_read`
 `verified-by: bravebot_cli::mcp::disable_where_the_state_directory_is_writes_its_file_once`
@@ -2020,9 +2025,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **A settings file `mcp` writes is rewritten whole.** `enable`, `disable` and an `add` that requests
   keep every value, and not the file's spacing or key order, for the reason
   [import.md](import.md)'s known cost gives.
-- **A checkout's link is not written through.** Where `.bravebot` in a checkout, or its settings
-  file, is a link, `enable` and `disable` refuse it, and the request is written by hand in the file
-  it leads to.
+- **A checkout's link that leaves the checkout is not written through.** Where `.bravebot` in a
+  checkout, or its settings file, is a link that ends outside the checkout, in its `.git` or at
+  nothing, `enable` and `disable` refuse it, and the request is written by hand in the file it
+  leads to.
 - **A file `mcp` writes in a checkout is the person's own.** On Unix it is written readable by its
   owner alone, as the state directory's files are, an existing one included, and a `.bravebot` it
   creates there is too, so a file other accounts on the machine read is set readable again by hand.
