@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  APPROVE_BUTTON,
   ASSISTANT_BUBBLE,
   BOT_GREETING,
   BOT_OPEN_BUTTON,
@@ -16,6 +17,8 @@ import {
   COMPOSER_INPUT,
   COMPOSER_NAME,
   COMPOSER_SEND,
+  CONFIRM_BUTTON,
+  REJECT_BUTTON,
   SIDEBAR_TAB,
   TRUST_APPROVE,
   approveTrust,
@@ -166,6 +169,19 @@ test('the send, name, reply, bot and trust constants name what the renderer draw
   assert.equal(BOT_OPEN_BUTTON, '.bot-open-button')
   assert.equal(BOT_GREETING, '[data-test="bot-greeting"]')
   assert.equal(TRUST_APPROVE, '[data-test="trust-approve"]')
+})
+
+test('the confirm card constants name the row and the buttons the renderer draws', () => {
+  const read = (file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', file), 'utf8')
+  // `Answers` draws the `confirm-actions` row by default, and the question card puts its buttons in one.
+  assert.match(read('Approval.tsx'), /className = 'confirm-actions'/)
+  assert.match(read('Approval.tsx'), /className = 'approve'/)
+  assert.match(read('Transcript.tsx'), /<div className="confirm-actions">\s[\s\S]*?className="reject"[\s\S]*?className="approve"/)
+  assert.equal(CONFIRM_BUTTON, '.confirm-actions leo-button')
+  assert.equal(APPROVE_BUTTON, '.confirm-actions .approve')
+  assert.equal(REJECT_BUTTON, '.confirm-actions .reject')
+  // A variant is the constant with a filter appended, so the filter shares the row's prefix.
+  assert.equal(`${APPROVE_BUTTON}:not(.always)`, '.confirm-actions .approve:not(.always)')
 })
 
 // The trust question's yes is held shut until the question has been read, so a driver that means to

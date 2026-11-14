@@ -6,7 +6,7 @@
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, openFirstSession } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, APPROVE_BUTTON, openFirstSession } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -69,7 +69,7 @@ if (await appears(page.locator('.confirm.run'), 120, 'the pipeline is put to the
   )
   await page.screenshot({ path: '/tmp/bravebot-ui/13-run-asked.png' })
 
-  await card.locator('.confirm-actions .approve:not(.always)').click()
+  await card.locator(`${APPROVE_BUTTON}:not(.always)`).click()
   await page.waitForTimeout(1200)
   check(
     (await card.locator('.decided.approve').textContent())?.includes('once') ?? false,
@@ -100,7 +100,7 @@ if (sawOutput) {
     `the bytes shown are all of them (${actual} lines, card says ${stated})`,
   )
   await page.screenshot({ path: '/tmp/bravebot-ui/14-output-asked.png' })
-  await card.locator('.confirm-actions .approve').click()
+  await card.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(1000)
 } else {
   console.log('  --   the planner did not ask to read the output this time')

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
-import { COMPOSER_NAME } from './drive-support.mjs'
+import { COMPOSER_NAME, APPROVE_BUTTON } from './drive-support.mjs'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
@@ -111,7 +111,7 @@ try {
         if (at >= furthest() - 1) break
       }
     })
-    await card.locator('.confirm-actions .approve:not([aria-disabled="true"])').waitFor()
+    await card.locator(`${APPROVE_BUTTON}:not([aria-disabled="true"])`).waitFor()
   }
   const hasFocus = (locator) => locator.evaluate(el => {
     if (el === document.activeElement) return true

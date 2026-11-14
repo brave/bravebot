@@ -32,6 +32,10 @@ export const TRUST_APPROVE = '[data-test="trust-approve"]'
  * reading a label through it reads empty text (#3659).
  */
 export const CONFIRM_BUTTON = '.confirm-actions leo-button'
+/** The yes of a question in a `.confirm-actions` row. Variants append to it, as in `${APPROVE_BUTTON}:not(.always)`. */
+export const APPROVE_BUTTON = '.confirm-actions .approve'
+/** The no of a question in a `.confirm-actions` row. */
+export const REJECT_BUTTON = '.confirm-actions .reject'
 
 /** The trust question, which is a dialog named "Project trust". */
 export const trustQuestion = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })

@@ -8,7 +8,7 @@
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, openFirstSession } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, APPROVE_BUTTON, openFirstSession } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -95,7 +95,7 @@ for (let at = 0; at < questions; at++) {
   } else {
     await block.locator('.typed input').fill('whatever you think best')
   }
-  await card.locator('.confirm-actions .approve').click()
+  await card.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(300)
 }
 await page.waitForTimeout(1200)
@@ -138,7 +138,7 @@ if (again) {
   const secondChoices = await second.locator('.choices .choice').count()
   if (secondChoices > 0) await second.locator('.choices .choice').first().click()
   else await second.locator('.typed input').first().fill('either is fine')
-  await second.locator('.confirm-actions .approve').click()
+  await second.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(1200)
   check(
     (await second.locator('.asked-answer').count()) > 0,

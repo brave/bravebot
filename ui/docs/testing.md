@@ -237,7 +237,8 @@ launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use 
 (`COMPOSER_INPUT`, `COMPOSER_IDLE`, and its accessible name `COMPOSER_NAME`), its send button
 (`COMPOSER_SEND`), the left column's tabs (`SIDEBAR_TAB`), an agent reply in the transcript
 (`ASSISTANT_BUBBLE`), a bot row's open button (`BOT_OPEN_BUTTON`), the greeting on a bot's page
-(`BOT_GREETING`) and the yes on a trust question (`TRUST_APPROVE`). A markup change to any of them
+(`BOT_GREETING`), the yes on a trust question (`TRUST_APPROVE`), and the answering buttons of a
+question in a `.confirm-actions` row (`CONFIRM_BUTTON`, `APPROVE_BUTTON` and `REJECT_BUTTON`). A markup change to any of them
 is made there and in the test that pins them to the renderer.
 
 It also exports the steps that open the first session: `openFirstSession(app, page, { settle })` skips the
