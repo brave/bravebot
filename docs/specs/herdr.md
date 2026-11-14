@@ -164,7 +164,9 @@ the pane does; nothing of it is written under `~/.bravebot` ([INCOG-3](incognito
 
 Once the session's record is on disk, the interface hands the reporter the session's id and the
 command `bravebot --resume <id>`, with the modes [HERDR-10](#HERDR-10) carries after it, and herdr
-is told them with the next state report ([HERDR-5](#HERDR-5)). The program is the plain name
+is told them with the next state report ([HERDR-5](#HERDR-5)). The record is written when the
+session's first prompt is sent, so a first turn that runs for hours has an id to hand over
+([PANEL-9](info-panel.md#PANEL-9)). The program is the plain name
 `bravebot`, as herdr types it into the pane's shell. The interface hands them over again on every
 pass of its loop, so a session that becomes another, as `/clear` and `/branch` make it, tells herdr
 the new id once the new record is written; an unchanged command is not sent again. An id that

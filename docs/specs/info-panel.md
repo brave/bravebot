@@ -30,7 +30,7 @@ is closed is proposed in [background-sessions.md](background-sessions.md) and no
 ### PANEL-1: the terminal's title names the session
 
 Once a session has a name, the terminal's title is `bravebot · {name}`. It follows the name: it is
-written when the name is first known (after the first turn, or at once on a resume or a `/rename`),
+written when the name is first known (when the first prompt is sent, or at once on a resume or a `/rename`),
 written again whenever the name changes, and set to the bare `bravebot` when the session loses its
 name, as a `/clear` does, rather than left naming the session before it. Nothing is written before a
 session has a name unless [PANEL-15](#PANEL-15) has a state to show, and nothing is written again
@@ -208,7 +208,9 @@ narrow for it.
    rows split after its last hyphen, since a lookup reads the whole id and a fragment finds
    nothing. It is there once the session has a record on disk, as the line printed when the
    session ends is ([SESSION-8](sessions.md#SESSION-8)), and follows a resume, `/branch` and
-   `/clear`. A new
+   `/clear`. The record is written when a session's first prompt is sent, and not only when its
+   turn ends, so the id is there for as long as a first turn runs, which can be hours. A session
+   with no prompt sent has none. A new
    name reaches an open panel on the next frame, not at the next key. A click on a row of the name
    puts `/rename` and the name in the box ([MOUSE-30](mouse.md#MOUSE-30)).
 2. **Model.** The model the person chose, one row cut from the left with an ellipsis where it is
@@ -260,6 +262,7 @@ whatever whoever made it chose.
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 `verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
+`verified-by: bravebot_tui::app::tests::herdr::sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
