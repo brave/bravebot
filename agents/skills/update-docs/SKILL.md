@@ -7,7 +7,7 @@ description:
   belongs on, records how far it got, and builds the site cleanly. Triggers on:
   update docs, /update-docs, sync docs with specs, docs drift.'
 argument-hint: '[rev-range] [dry-run]'
-allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(grep *), Bash(rg *), Read, Edit, Write
+allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(gh pr create *), Bash(grep *), Bash(rg *), Read, Edit, Write
 ---
 
 # Bring the Documentation Site Up to Date With Brave Bot
@@ -95,3 +95,17 @@ make -C docs/website check
 ```
 
 This must pass cleanly. `onBrokenLinks` and `onBrokenAnchors` throw errors on any broken link or reference.
+
+---
+
+## Opening the Pull Request
+
+A run that changed files ends by opening a pull request, without being asked. Do it in a new worktree cut from the current `upstream/main`, so the pull request holds only the documentation changes and no other work in the checkout.
+
+1. `git fetch upstream main`, then `git worktree add -b docs/update-through-<number> <path> upstream/main`, where `<number>` is the pull request number in the title of the commit recorded by `docs-ref.py set`.
+2. Copy the changed files into the worktree, including `docs/docs-updated-to-sha` and `docs/docs-deferred`. Leave out files the run did not write, such as `docs/maintenance-reviewed`.
+3. Commit as netzenbot, signed, with the netzenbot name, email and signing key set through environment overrides. The pre-push hook requires the author email `netzenbot@agentmail.to`. The commit title is `docs: bring the site up to the specs through #<number>`.
+4. Push to `origin`, which is netzenbot's fork, with `GIT_SSH_COMMAND` set to the netzenbot key. Never push to `upstream`.
+5. Open the pull request as netzenbot with `gh pr create --repo brave/bravebot --head netzenbot:<branch> --base main`. The body lists the pages changed, the commits deferred with their reasons, and that `make -C docs/website check` passed. It does not describe how the run went.
+
+A change to this skill is a separate pull request from its own worktree, never part of a documentation pull request.
