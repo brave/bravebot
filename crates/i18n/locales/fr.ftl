@@ -1491,6 +1491,10 @@ managed-denied =
 managed-host-unread =
     { $path }, que gère l'administrateur de cette machine, refuse des serveurs par hôte, et cette
     url écrit son hôte d'une façon qu'aucune entrée ne peut comparer
+managed-entry-unusable =
+    { $path }, que gère l'administrateur de cette machine, contient dans son { $list } une entrée
+    qui n'est ni un hôte ni une commande que cette version sait comparer, donc elle ne correspond
+    à aucun serveur : { $entry }
 servers-nobody-in-a-one-shot =
     { $alias } n'a pas été démarré : une exécution unique n'interroge personne, lancez donc
     bravebot mcp approve { $alias } dans un terminal

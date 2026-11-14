@@ -1486,8 +1486,14 @@ Without an `allow` list, every server not denied starts as it did. With one, a s
 is refused, and `"allow": []` refuses every server. A deny entry wins over an allow entry naming the
 same server. Only a list counts: a string, an object, `null` or anything else under either key
 decides nothing, and an empty `deny` denies nothing, which `doctor` does not report either. An entry
-in neither form, an alias among them, is skipped. In a deny list it denies nothing; in an allow list
-it allows nothing, so an allow list of nothing else still refuses every server. The layer has no
+in neither form, an alias among them, matches no server: in a deny list it denies nothing and in an
+allow list it allows nothing, so an allow list of nothing else still refuses every server. It is not
+skipped in silence. `doctor` and the session's opening lines name the file, the list and the entry as
+the file spelled it, as [PERM-11](permissions.md#PERM-11) names a permission rule it cannot read,
+and a deny list holding one is named among what the layer pins even where no entry in it was usable.
+An IPv6 address written without brackets is read as the bracketed one, since a url spells it no other
+way. A port, a scheme, a path and a name with a character outside ASCII letters, digits, `-` and `_`
+are not part of a host entry, so an entry written with one is such an entry. The layer has no
 field that could hold a declaration, an approval or a request, so an `mcp.request`, an
 `mcp.approve`, a server block or an `mcpServers` object in that file is read as nothing at all.
 
@@ -1526,7 +1532,10 @@ not to request it.
 `verified-by: bravebot_config::managed::without_an_allow_list_only_what_is_denied_is_refused`
 `verified-by: bravebot_config::managed::a_host_two_parsers_could_read_apart_matches_no_entry`
 `verified-by: bravebot_config::managed::a_list_that_is_not_a_list_decides_nothing`
-`verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped`
+`verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped_and_named`
+`verified-by: bravebot_config::managed::an_ipv6_address_without_brackets_names_the_bracketed_host`
+`verified-by: bravebot_agent::servers::a_managed_entry_that_cannot_be_used_is_named_as_a_session_opens`
+`verified-by: bravebot_cli::doctor::doctor_names_a_deny_list_whose_every_entry_was_unusable_as_pinned`
 `verified-by: bravebot_config::managed::a_server_declared_or_requested_here_is_read_as_nothing`
 `verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
 `verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`

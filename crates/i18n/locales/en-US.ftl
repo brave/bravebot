@@ -1780,6 +1780,10 @@ managed-denied =
 managed-host-unread =
     { $path }, which this machine's administrator manages, denies servers by host, and this url
     spells its host in a way no entry can be compared with
+# The list is mcp.allow or mcp.deny, and the entry is the file's own text for it.
+managed-entry-unusable =
+    { $path }, which this machine's administrator manages, has an entry in its { $list } that is
+    neither a host nor a command this build can match, so it matches no server: { $entry }
 servers-nobody-in-a-one-shot =
     { $alias } was not started: a one-shot run asks nobody, so run bravebot mcp approve { $alias }
     at a terminal
