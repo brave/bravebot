@@ -5,7 +5,8 @@
     pr-fix.py continue <pr>             stage the resolved files and carry on
     pr-fix.py ci <pr> [--wait]          the checks GitHub ran on the head, with the log of each failure;
                                         --wait polls until one fails or --wait-seconds N (default 540)
-                                        have passed since the script started, counting every poll
+                                        have passed since the script started, counting every poll, or
+                                        until the pull request is merged or closed
     pr-fix.py comments <pr>             the review threads and reviews still waiting on a change, each
                                         thread with the id `reply` takes
     pr-fix.py reply <pr> --body-file F [--thread ID]
@@ -301,7 +302,10 @@ def failure_log(link):
 
 
 def ci(pr, until):
-    """Report the checks on the head. With `until`, a `time.monotonic()` value, poll for them to settle until then."""
+    """Report the checks on the head. With `until`, a `time.monotonic()` value, poll for them to settle until then.
+
+    A pull request that is merged or closed while it waits ends the wait, since its checks no longer matter.
+    """
     tree = pr.tree
     if tree.is_dir() and rev("HEAD", tree) != pr.head_sha:
         print(f"{tree} is at {rev('HEAD', tree)[:8]} and GitHub tests {pr.head_sha[:8]}; "
@@ -314,9 +318,16 @@ def ci(pr, until):
         if failing or not running or left is None or left <= 0:
             break
         time.sleep(min(POLL_SECONDS, left))
-        rollup = json.loads(
-            run("gh", "pr", "view", str(pr.number), "--repo", BASE_REPO, "--json", "statusCheckRollup").stdout
-        ).get("statusCheckRollup") or []
+        try:
+            # A poll that hangs would outlast the deadline, so it gets only what is left of the wait.
+            view = json.loads(run(
+                "gh", "pr", "view", str(pr.number), "--repo", BASE_REPO, "--json", "state,url,statusCheckRollup",
+                timeout=max(until - time.monotonic(), 1),
+            ).stdout)
+        except subprocess.TimeoutExpired:
+            break
+        pr_worktree.refuse_unless_open(view)
+        rollup = view.get("statusCheckRollup") or []
     print(f"{len(passing)} passed, {len(failing)} failed, {len(pending)} pending")
     for name, link, verdict in failing:
         print(f"failed ({verdict.lower()}): {name} {link}")
