@@ -253,15 +253,9 @@ pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, Str
         // Taken whether or not this line declares anything we want. A continuation belongs to
         // the key above it however that key is spelled, and leaving one unconsumed is how a
         // wrapped sentence holding a colon becomes a key of its own.
-        let opened_at = indent_of(line);
-        let mut wrapped = Vec::new();
-        while let Some(next) = block.get(at) {
-            if !next.trim().is_empty() && indent_of(next) <= opened_at {
-                break;
-            }
-            wrapped.push(*next);
-            at += 1;
-        }
+        let end = continuation_end(&block, at);
+        let wrapped = block[at..end].to_vec();
+        at = end;
 
         let Some((key, first)) = line.split_once(':') else {
             continue;
@@ -306,6 +300,24 @@ pub(crate) fn frontmatter_lines(text: &str) -> Block<'_> {
 /// How many columns a line is indented by, which is what says whether it continues the one above.
 pub(crate) fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// The index one past the lines of `block` that continue the key on `block[at - 1]`.
+///
+/// A line continues the key above it when it is blank or indented deeper than the key's own line.
+/// `declarations` and the definition rewriters in `agents` all read a key's lines by this one rule.
+/// It looks only at whether a line is blank and how far it is indented, so it is the same for
+/// lines that keep their line ending and lines that do not.
+pub(crate) fn continuation_end(block: &[&str], at: usize) -> usize {
+    let opened_at = indent_of(block[at - 1]);
+    let mut end = at;
+    while let Some(next) = block.get(end) {
+        if !next.trim().is_empty() && indent_of(next) <= opened_at {
+            break;
+        }
+        end += 1;
+    }
+    end
 }
 
 /// One value, from what followed the colon and the lines indented under it.
@@ -2099,6 +2111,21 @@ mod tests {
         assert_eq!(literal.expect("parses").description, "one\n\ntwo");
         let folded = parse_frontmatter("---\nname: n\ndescription: >\n  one\n\n  two\n---\n");
         assert_eq!(folded.expect("parses").description, "one two");
+    }
+
+    /// The rule the reader and the rewriters share: blank lines and lines indented deeper than the
+    /// key continue it, a line at the key's own indent or shallower ends it, and so does the end of
+    /// the block. Lines that keep their line ending give the same answer.
+    #[test]
+    fn a_key_continues_over_blank_and_deeper_lines_and_stops_at_the_next_key() {
+        let block = ["a: >", "  one", "", "    two", "b: x", "  c", "d: y"];
+        assert_eq!(continuation_end(&block, 1), 4);
+        assert_eq!(continuation_end(&block, 5), 6);
+        assert_eq!(continuation_end(&block, 7), 7);
+        let kept = ["a:\n", "  one\n", "\n", "b:\n"];
+        assert_eq!(continuation_end(&kept, 1), 3);
+        let indented = ["  a: x\n", "  b: y\n", "    c\n"];
+        assert_eq!(continuation_end(&indented, 1), 1);
     }
 
     /// The planner already has the name and the description. Sending them again spends context
