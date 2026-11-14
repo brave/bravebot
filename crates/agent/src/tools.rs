@@ -1312,6 +1312,54 @@ impl Jobs {
             .collect()
     }
 
+    /// Whether `call` is a bounded wait on a job that is still running (TURN-9).
+    ///
+    /// True only for a `job_output` call whose arguments are JSON, whose `wait_seconds` is one
+    /// the tool accepts, which neither kills the job nor carries an `until_exit` or a `read` the
+    /// tool would refuse before it waits, and whose `job` names a job of this set that has not
+    /// been reported and whose steps have not exited. Every part is the planner's own tool name
+    /// and arguments, or the driver's own observation that the process is running, which is a
+    /// process fact like an exit status.
+    /// What the job printed is never read. The name is read through the gate every planner
+    /// argument is read through, so a context that gate denies leaves the call counted.
+    pub(crate) fn is_waited_on_while_running<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        call: &ToolCall,
+    ) -> bool {
+        if strip_namespace(&call.function.name) != "job_output" {
+            return false;
+        }
+        let Ok(arguments) = call.arguments() else {
+            return false;
+        };
+        let kill = arguments
+            .get("kill")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if kill {
+            return false;
+        }
+        if read_asked_of(&arguments).is_err() {
+            return false;
+        }
+        let Ok(Some(wait)) = wait_from(&arguments) else {
+            return false;
+        };
+        if until_exit_from(&arguments, Some(wait), kill).is_err() {
+            return false;
+        }
+        let Some(named) = argument(&arguments, "job") else {
+            return false;
+        };
+        let Ok(name) = policy.read_planner_argument("job_output", "job", &named) else {
+            return false;
+        };
+        self.running
+            .get_mut(&name)
+            .is_some_and(|job| !job.reported && !job.running.steps_exited())
+    }
+
     /// Take a background pipeline and hand back the name the planner will call it by, with the
     /// token that stops it.
     fn keep(
@@ -18639,7 +18687,10 @@ mod tests {
              until_exit: true, which waits for the job to end or for wait_seconds to run out and \
              returns what it printed since your last look in one answer. It is still a wait \
              inside this turn, so it cannot tell you about anything that happens after the turn \
-             ends, and the account of the job's start says whether it is killed then or kept."
+             ends, and the account of the job's start says whether it is killed then or kept. \
+             Repeated waits on a job that is still running are not held. The same job_output \
+             call without wait_seconds, or on a job that has ended, is held at the third in a \
+             row."
         );
         let run = description_of(&everything, "run");
         assert!(

@@ -88303,6 +88303,8 @@ mod spend_limit {
     pub(super) struct Replies {
         replies: std::collections::VecDeque<Vec<Answer>>,
         pub(super) asked: Vec<Asking>,
+        /// Whether a run is approved. Off, a run is refused as `ApproveWrites` refuses it.
+        approving_runs: bool,
     }
 
     impl Replies {
@@ -88310,7 +88312,14 @@ mod spend_limit {
             Self {
                 replies: replies.into(),
                 asked: Vec::new(),
+                approving_runs: false,
             }
+        }
+
+        /// Approves every run, which a test that needs a background job to start has to do.
+        pub(super) fn approving_runs(mut self) -> Self {
+            self.approving_runs = true;
+            self
         }
     }
 
@@ -88319,6 +88328,9 @@ mod spend_limit {
             ApproveWrites.confirm_write(request)
         }
         fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            if self.approving_runs {
+                return ApproveRuns.confirm_run(request);
+            }
             ApproveWrites.confirm_run(request)
         }
         fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
@@ -91856,7 +91868,7 @@ mod repeated_call {
         let workspace = Workspace::new(&scratch.path).expect("workspace");
         let (endpoint, received) = serve_sequence(script);
         let config = config_for(&endpoint);
-        let mut confirmer = Replies::new(replies);
+        let mut confirmer = Replies::new(replies).approving_runs();
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
         let mut sink = RecordingSink::new();
         let task = Task::new("look at a.txt");
@@ -91997,6 +92009,128 @@ mod repeated_call {
         let told = tool_results(ran.requests.last().unwrap());
         assert!(told.contains("5 times"), "{told}");
         assert_eq!(ran.trail.len(), 3, "{:?}", ran.trail);
+    }
+
+    fn start_a_job() -> String {
+        tool_request("run", r#"{"command":"sleep 30","background":true}"#)
+    }
+
+    fn wait_for_the_job() -> String {
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":1,"until_exit":true}"#,
+        )
+    }
+
+    /// TURN-9: identical bounded waits on a job that keeps running are never refused. Four of
+    /// them ask nothing and every one runs.
+    /// Rejects: counting every job_output (the third is refused and the planner is told so).
+    #[test]
+    fn four_identical_waits_on_a_running_job_ask_nothing_and_all_run() {
+        let ran = run(
+            "repeat-waits",
+            vec![
+                start_a_job(),
+                wait_for_the_job(),
+                wait_for_the_job(),
+                wait_for_the_job(),
+                wait_for_the_job(),
+                reply_with("done"),
+            ],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(
+            ran.asked.is_empty(),
+            "asked {} times, results: {told}",
+            ran.asked.len()
+        );
+        assert!(!told.contains("repetition limit reached"), "{told}");
+        assert!(ran.trail.is_empty(), "{:?}", ran.trail);
+        assert_eq!(ran.requests.len(), 6, "a round did not run");
+    }
+
+    /// TURN-9: the same identical look with no wait_seconds is still refused at the third, and the
+    /// refusal gives the route for a job.
+    /// Rejects: exempting job_output by tool name only.
+    #[test]
+    fn identical_looks_with_no_wait_are_still_held_at_the_third() {
+        let look = || tool_request("job_output", r#"{"job":"job:1"}"#);
+        let ran = run(
+            "repeat-looks",
+            vec![start_a_job(), look(), look(), look(), reply_with("done")],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(told.contains("repetition limit reached"), "{told}");
+        assert!(told.contains("same job_output call 3 times"), "{told}");
+        assert!(told.contains("message of its own"), "{told}");
+        assert!(told.contains("shell loop"), "{told}");
+    }
+
+    /// TURN-9: a kill is not a bounded wait, so identical kill calls are still refused at the
+    /// third.
+    /// Rejects: exempting a call because it carries wait_seconds without reading kill.
+    #[test]
+    fn identical_waits_that_kill_the_job_are_still_held_at_the_third() {
+        let kill = || {
+            tool_request(
+                "job_output",
+                r#"{"job":"job:1","wait_seconds":1,"kill":true}"#,
+            )
+        };
+        let ran = run(
+            "repeat-kills",
+            vec![start_a_job(), kill(), kill(), kill(), reply_with("done")],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(told.contains("repetition limit reached"), "{told}");
+    }
+
+    /// TURN-9: a wait on a job that has ended returns at once, so identical waits on it are
+    /// refused at the third. The first wait runs until the job ends, and the next three are waits
+    /// on a job that is gone.
+    /// Rejects: ignoring whether the job is still running.
+    #[test]
+    fn identical_waits_on_a_job_that_has_ended_are_held_at_the_third() {
+        let wait = || {
+            tool_request(
+                "job_output",
+                r#"{"job":"job:1","wait_seconds":1,"until_exit":true}"#,
+            )
+        };
+        let ran = run(
+            "repeat-ended",
+            vec![
+                tool_request("run", r#"{"command":"true","background":true}"#),
+                tool_request(
+                    "job_output",
+                    r#"{"job":"job:1","wait_seconds":5,"until_exit":true}"#,
+                ),
+                wait(),
+                wait(),
+                wait(),
+                reply_with("done"),
+            ],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(told.contains("repetition limit reached"), "{told}");
     }
 
     /// No permission mode lets a held call through or puts a question about it: bypass asks about

@@ -222,13 +222,16 @@ invented on your behalf is reported to the planner as your own words.
 **The same call three times running is refused**, in every mode, bypassing included. When the
 planner asks for a call whose tool and arguments equal those of the two calls before it, with no
 different call between them, it does not run, and nobody is asked: a task you started and left does
-not wait for you to come back to it. The planner is told the call was not run and to try another
-approach, and a note under the turn names the tool and the count. Each further identical call is
+not wait for you to come back to it. The planner is told the call was not run and what to do
+instead, and a note under the turn names the tool and the count. Each further identical call is
 refused in the same way. Only the tool name and the arguments are compared, never a result, so
 polling the same `read_output` or running the same test again with no edit between is refused at the
-third call, and a different call between two identical ones starts the count again. A call that
-differs by one argument each time is not caught. The trail records the round and the count, and
-nothing of the call. There is no setting for the number.
+third call, and a different call between two identical ones starts the count again. A `job_output`
+call that waits with `wait_seconds` for a background job that is still running is not refused,
+however often it is repeated. A `job_output` call with no `wait_seconds`, one that kills the job,
+and one on a job that has ended are refused like any other call. A call that differs by one argument
+each time is not caught. The trail records the round and the count, and nothing of the call. There
+is no setting for the number.
 
 ## In the desktop application
 

@@ -755,6 +755,12 @@ what the job printed since the previous look in one
 answer: where the output is quarantined, that is one reference to that slice, with its count of lines and the earlier references listed as above. `until_exit` with no
 `wait_seconds`, with `kill`, or with anything but `true` or `false`, is refused.
 
+The same call three times running is refused without asking, as for any tool. A `job_output` call that
+waits with `wait_seconds` for a job that is still running is the exception: it is not refused however
+often it is repeated. A call with no `wait_seconds`, a call that kills the job, and a call
+on a job that has ended are refused at the third. The refusal says that the end of a background
+job arrives in a message of its own and that a shell loop that sleeps is not a way to wait.
+
 Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
 A wait that was silently cut short would come back with silence, and silence carries no length: a
 caller that asked for ten minutes and got one would report the same nothing as ten minutes of nothing.
