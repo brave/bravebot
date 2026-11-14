@@ -240,6 +240,10 @@ launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use 
 (`BOT_GREETING`) and the yes on a trust question (`TRUST_APPROVE`). A markup change to any of them
 is made there and in the test that pins them to the renderer.
 
+It also exports the steps that open the first session: `openFirstSession(app, page, { settle })` skips the
+run when the profile has no session, clicks the first one and answers its trust question, and
+`sessionsOrSkip` and `approveTrustIfAsked` are its two halves for a driver that opens sessions another way.
+
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
 real profile (and so does `drive-turn`), which spends credits from whatever backend is configured.
 `drive-bot-turn` and `drive-bot-memory` send live model turns as well, from a scratch profile. `drive-columns`, `drive-panels`, `drive-tree` and

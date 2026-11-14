@@ -13,7 +13,7 @@
 // persisted layout with every other driver, so it puts the columns back before it leaves.
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, approveTrust, trustQuestion } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, approveTrustIfAsked } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -193,10 +193,7 @@ const hasSessions = (await page.locator('.session').count()) > 0
 if (hasSessions) {
   await page.locator('.session').first().click()
   await page.waitForTimeout(1200)
-  if (await page.locator('.trust').isVisible().catch(() => false)) {
-    await approveTrust(trustQuestion(page))
-    await page.waitForTimeout(500)
-  }
+  await approveTrustIfAsked(page, 500)
   let open = await readMenu()
   const openItem = (id) => open.flatMap((m) => m.items).find((i) => i.id === id)
   check(openItem('session.close').enabled === true, 'with a chat open, Close Chat lights up')

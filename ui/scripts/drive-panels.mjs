@@ -6,7 +6,7 @@
 // through heights between full and nothing. A collapse that jumps looks identical in
 // stills, so the height is sampled while it moves.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, sessionsOrSkip } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -15,12 +15,7 @@ const { check, problems } = checker()
 const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
-const sessions = await page.locator('.session').count()
-if (sessions === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
+const sessions = await sessionsOrSkip(app, page)
 
 // A run only exists where a turn made two calls in a row, so the sessions are tried in
 // order until one has one. Every session has the context panels, so the first will do for

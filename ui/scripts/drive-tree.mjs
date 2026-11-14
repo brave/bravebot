@@ -14,7 +14,7 @@
 // that step is in the manual pass.
 import { mkdirSync, symlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, openFirstSession } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -34,13 +34,7 @@ for (const side of ['left', 'right']) {
   }
 }
 
-if ((await page.locator('.session').count()) === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
-await page.locator('.session').first().click()
-await page.waitForTimeout(1600)
+await openFirstSession(app, page, { settle: 1600 })
 
 // The file tree lives on the Files tab of the context column, which opens on Overview, so the
 // run brings the tab forward. After the session is opened, because the tabs belong to a column

@@ -6,7 +6,7 @@
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, approveTrust, trustQuestion } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, openFirstSession } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -27,21 +27,9 @@ async function appears(locator, seconds, what) {
 const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
-if ((await page.locator('.session').count()) === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
-
-await page.locator('.session').first().click()
-await page.waitForTimeout(1500)
-
-// A session whose record kept no trust map asks again on open. Trusting is what lets the
-// turn get as far as wanting to run something.
-if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await approveTrust(trustQuestion(page))
-  await page.waitForTimeout(600)
-}
+// A session whose record kept no trust map asks again on open, and the helper trusts it. That is
+// what lets the turn get as far as wanting to run something.
+await openFirstSession(app, page)
 
 await page
   .locator(COMPOSER_INPUT)

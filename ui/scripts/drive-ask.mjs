@@ -8,7 +8,7 @@
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, approveTrust, trustQuestion } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, openFirstSession } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -17,18 +17,7 @@ const { check, problems } = checker()
 const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
-if ((await page.locator('.session').count()) === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
-
-await page.locator('.session').first().click()
-await page.waitForTimeout(1500)
-if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await approveTrust(trustQuestion(page))
-  await page.waitForTimeout(600)
-}
+await openFirstSession(app, page)
 
 await page.locator(COMPOSER_INPUT).fill(
   'I want to add a --json flag to this project. Do not write anything. First, in ONE ask_user ' +
