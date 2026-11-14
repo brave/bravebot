@@ -2644,7 +2644,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Lent rather than held, because the turn is not the only run that will want them. There is
     // one trail to record into, one screen to report to and one person to ask, however many
     // delegates this turn goes on to start, so each takes the lock for one call at a time.
-    let confirming = crate::shared::Lent::new(confirmer);
+    let confirming = crate::shared::Lent::confirming(confirmer);
     let reporting = crate::shared::Lent::new(reporter);
     let recording = crate::shared::Lent::new(sink);
     let confirmer = confirming.turn();

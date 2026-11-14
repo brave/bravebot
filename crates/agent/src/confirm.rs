@@ -2200,6 +2200,19 @@ pub trait Confirmer {
         true
     }
 
+    /// What this confirmer answers without a person, as a view that does not need the confirmer
+    /// itself, or `None` where it answers nothing in advance.
+    ///
+    /// Taken once by whoever lends the confirmer to several runs at once, so that a question the
+    /// mode answers is decided at once and only a question that reaches a person waits for the
+    /// one confirmer (DELEGATE-16). Not a question, and the other way to fail closed: `None` means
+    /// every question is put to the confirmer, which is what a confirmer that returns it did
+    /// before this existed. A confirmer that returns a view must answer the same questions the
+    /// same way itself, so the view and the confirmer cannot disagree.
+    fn answering_unasked(&self) -> Option<crate::permission_mode::Unasked> {
+        None
+    }
+
     /// Ask about a write. Implementations must default to refusal when they cannot ask.
     ///
     /// The answer carries whether to stop asking about what the scan found as well as whether to
@@ -3308,6 +3321,10 @@ impl<'a, C: Confirmer + ?Sized> Timed<'a, C> {
 }
 
 impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
+    fn answering_unasked(&self) -> Option<crate::permission_mode::Unasked> {
+        self.inner.answering_unasked()
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.timing(|inner| inner.confirm_write(request))
     }

@@ -79496,6 +79496,272 @@ fn a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
     assert!(questions.lock().unwrap().is_empty());
 }
 
+/// A person who has not answered `ask_user` yet. The question is announced on `entered`, and the
+/// answer is given when `release` is sent to. Every other question is refused and counted, so a
+/// count of zero says the mode answered all of them.
+struct SlowToAnswer {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    reached: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SlowToAnswer {
+    fn reached(&self) {
+        self.reached
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl bravebot_agent::confirm::Confirmer for SlowToAnswer {
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        self.reached();
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        self.reached();
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_write(
+        &mut self,
+        _request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::confirm::WriteDecision {
+        self.reached();
+        bravebot_agent::confirm::WriteDecision::reject()
+    }
+
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        self.reached();
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        self.reached();
+        bravebot_agent::confirm::RunDecision::reject()
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        let _ = self.entered.send(());
+        let _ = self
+            .release
+            .recv_timeout(std::time::Duration::from_secs(30));
+        Vec::new()
+    }
+
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// DELEGATE-16, MODE-9. A delegate's read that bypass answers is answered and recorded while the
+/// turn's own `ask_user` is still unanswered, which is the session the issue recorded: readers
+/// idled for as long as the person took. The planner puts a question to the person and a reader
+/// reads a flagged file in the same turn. The reader's second request to the model arrives only
+/// if its read returned, and it is watched for before the question is released. The regression it
+/// rejects is the delegate waiting for the one confirmer before the mode answers, which holds the
+/// reader until the release and fails the bounded wait.
+#[test]
+fn a_delegates_read_bypass_answers_is_not_held_behind_the_turns_open_question() {
+    let scratch = Scratch::new("delegate-read-open-question");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received, _) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-READ",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-THE-ENV"}"#),
+                    tool_request(
+                        "ask_user",
+                        r#"{"questions":[{"header":"Branch","question":"Which branch?","options":[{"label":"main"}]}]}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "READ-THE-ENV",
+                vec![
+                    tool_request("read_file", r#"{"path":".env"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "READ-THE-ENV",
+            after: "DELEGATE-THE-READ",
+            asked: 2,
+        },
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let reached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut person = SlowToAnswer {
+        entered: entered_tx,
+        release: release_rx,
+        reached: reached.clone(),
+    };
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut person, bravebot_agent::PermissionMode::Bypass, false);
+    let mut sink = RecordingSink::new();
+
+    let (progressed, _received) = thread::scope(|scope| {
+        let watching = scope.spawn(move || {
+            let mut progressed = false;
+            if entered_rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .is_ok()
+            {
+                // A body without the planner's task is the reader's. Its second one carries the
+                // result of the read, so it exists only once the read returned.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut readers = 0;
+                while readers < 2 {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    match received.recv_timeout(left) {
+                        Ok(body) if !body.contains("DELEGATE-THE-READ") => readers += 1,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                progressed = readers >= 2;
+            }
+            let _ = release_tx.send(());
+            (progressed, received)
+        });
+        turns::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("DELEGATE-THE-READ")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        watching.join().expect("watcher")
+    });
+
+    assert!(
+        progressed,
+        "the reader's read waited for the question the person had not answered"
+    );
+    assert_eq!(
+        exposure_approvals(&sink),
+        [
+            ".env: answered by bypass mode, nobody was asked, the planner may be given it despite the scan"
+        ]
+    );
+    assert_eq!(
+        reached.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a question the mode answered reached the person"
+    );
+}
+
 /// The `gate` entries of the trail whose text holds `needle`, in order.
 fn trail_entries(sink: &RecordingSink, wanted: &str, needle: &str) -> Vec<String> {
     sink.events()

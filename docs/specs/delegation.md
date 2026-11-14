@@ -807,12 +807,30 @@ However many runs are going, the confirmer, the reporter and the audit trail are
 each is taken for one call at a time. A delegate wanting a write approved while somebody is
 reading another delegate's diff waits for them to finish reading it.
 
+Only a question that reaches the person waits. A question the permission mode answers without one
+([MODE-9](permission-modes.md#MODE-9): a bypass or accept-edits approval, a plan-mode or
+read-only refusal) is answered when it is asked, without taking the confirmer, and is recorded as the
+mode's answer with the mode's name ([TRACE-7](trace.md#TRACE-7)). The mode is read at that moment
+and not when the confirmer was lent, so a mode chosen while another run's question is open decides
+the questions after it ([MODE-8](permission-modes.md#MODE-8)), and a question already queued is
+decided under the mode in force when its turn comes. A delegate the person has stopped
+([DELEGATE-25](#DELEGATE-25)) is refused before the mode is read, in every mode. A confirmer that
+answers nothing in advance is asked for every question, which is the safe default.
+
 **Why.** The alternative is two questions on one screen, which is a person answering neither
 properly, and two trails, which is a record with a hole in it exactly over the part of the turn
-nobody watched.
+nobody watched. A question nobody is asked has no screen to share, and queueing it behind a
+person's open question would hold a delegate idle for as long as the person takes to answer
+something unrelated to it.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::turn::one_trail_records_the_delegate_and_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_delegates_read_bypass_answers_is_not_held_behind_the_turns_open_question`
+`verified-by: bravebot_agent::shared::a_read_bypassing_approves_is_not_held_behind_another_delegates_open_question`
+`verified-by: bravebot_agent::shared::what_a_mode_answers_unasked_is_not_held_behind_an_open_question`
+`verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
+`verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
+`verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
 
 <a id="DELEGATE-17"></a>
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it
@@ -1293,6 +1311,7 @@ futility as the round limit and takes the same way out, which keeps what the del
 `verified-by: bravebot_agent::turn::a_stop_the_delegate_never_acted_on_is_not_reported_as_one`
 `verified-by: bravebot_agent::shared::a_stopped_delegates_question_is_declined_and_a_siblings_is_asked`
 `verified-by: bravebot_agent::shared::a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile`
+`verified-by: bravebot_agent::shared::a_stopped_delegate_is_refused_what_the_mode_would_have_approved`
 
 <a id="DELEGATE-27"></a>
 ### DELEGATE-27: a definition may name the effort its delegate asks for
