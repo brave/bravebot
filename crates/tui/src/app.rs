@@ -2456,6 +2456,177 @@ fn note_startup_input_lost(session: &mut Session, lost: usize) {
     }
 }
 
+/// What `run` settled for the session itself, apart from what it starts with: how it is confined,
+/// the sandbox, whether the permission rungs start in bypass, and the words of its turns.
+struct SessionBasis {
+    confinement: String,
+    sockets_with_a_path_reachable: bool,
+    sandbox: crate::sandbox_command::Sandboxed,
+    skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
+}
+
+/// The session `begin_session` opens on, built and configured from the settings and what the
+/// command line named, before any question is put to the person.
+fn new_session(
+    config: &mut Config,
+    settings: &bravebot_config::Settings,
+    workspace: &Workspace,
+    asked: &AskedFor,
+    servers: crate::state::Servers,
+    basis: SessionBasis,
+) -> Session {
+    let SessionBasis {
+        confinement,
+        sockets_with_a_path_reachable,
+        sandbox,
+        skip_permissions,
+        prompts,
+    } = basis;
+    // The one place persistence is turned on: history in ~/.bravebot outlives the session.
+    let mut session = Session::new(confinement)
+        .with_sockets_with_a_path_reachable(sockets_with_a_path_reachable)
+        .with_sandbox(sandbox)
+        .with_stored_history()
+        .in_workspace(workspace.root())
+        .on_tier(config)
+        .with_model_labels(config);
+    // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
+    // below is asked for, which is the window of whichever model this settles on. Not read at all
+    // where the command line named a model, so a pick set aside is not reported for a model that
+    // was never going to be asked for.
+    match &asked.model {
+        Some(name) => session.name_model(config.model_named(name)),
+        None => session.adopt_model(settings, config),
+    }
+    session.adopt_workspace(workspace);
+    session.adopt_repository(crate::issue_link::Repository::of(workspace.root()));
+    session.servers = servers;
+    // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
+    // asked there, so the question only settles it elsewhere.
+    session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
+    // The flag opens the session in bypass. The rung is on the ladder the key walks either way,
+    // unless a settings layer took it off (MODE-5).
+    if skip_permissions {
+        session = session.starting_in_bypass();
+    }
+    if bypass_is_unreachable(settings) {
+        session.make_bypass_unreachable();
+    }
+    // Before the first turn, and kept until the session ends: a resumed record stores none, so
+    // these are the words of the turns this process sends (CLI-19).
+    session = session.with_system_prompts(prompts);
+
+    // The model outlived the session that chose it, so the window that came with it has to be asked
+    // for again: it is reported by the listing and nowhere else, and nothing on disk remembers it.
+    // Asked on a thread of its own, so what the session opens on does not wait for a service: the
+    // loop adopts the answer on the pass it arrives, and a turn waits for it (BACKEND-64).
+    ask_for_the_budget_of_the_model_in_force(&mut session, config);
+    session
+}
+
+/// What `begin_session` reads off `start` before the match that consumes it.
+struct StartFacts {
+    /// The name the record carries, which is the person's own earlier `--agent`.
+    recorded: Option<String>,
+    /// The prompt the session sends as its first turn.
+    first_turn: Option<String>,
+    /// The text put in the box and not sent, with the sentence that says where it started.
+    prefill: Option<(String, Option<String>)>,
+    /// Whether the Sessions screen opens over the new session, and for which pull request.
+    choosing: Option<Option<String>>,
+}
+
+impl StartFacts {
+    fn of(start: &Start) -> Self {
+        StartFacts {
+            recorded: match start {
+                Start::Resuming(record) => record.agent.clone(),
+                _ => None,
+            },
+            first_turn: match start {
+                Start::Sending(prompt, _) => Some(prompt.clone()),
+                _ => None,
+            },
+            prefill: match start {
+                Start::Prefilling(text, note) => Some((text.clone(), note.clone())),
+                _ => None,
+            },
+            choosing: match start {
+                Start::Choose => Some(None),
+                Start::ChooseFromPr(wanted) => Some(Some(wanted.clone())),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// The notes said once the trust answer is in: a newer release, the crash report notice and why a
+/// server the checkout asked for is absent.
+fn say_startup_notes(
+    session: &mut Session,
+    settings: &bravebot_config::Settings,
+    absent: Vec<String>,
+) {
+    // After the trust answer, because that question is the first thing on the screen and an aside
+    // about a newer release does not come before it. Nothing is fetched here: the line is read off
+    // what an earlier launch wrote down, and the ask that answers the next launch runs behind the
+    // session rather than in front of it.
+    if let Some(newer) = bravebot_update::at_startup(settings.update_check()) {
+        session.note(newer);
+    }
+    // After the line about a release for the same reason, and said once: a build that sends crash
+    // reports tells the person on the first launch that does, with the two ways of stopping it.
+    if let Some(notice) = crate::crash_notice::at_startup() {
+        session.note(notice);
+    }
+    // Why a server this checkout asked for is not in the session, said where the person starts
+    // reading rather than on the plain terminal the screen is about to cover.
+    for note in absent {
+        session.note(note);
+    }
+}
+
+/// Put the directories the settings name to the person or open them, by how the trust map was
+/// settled, and open and vouch for the ones accepted.
+///
+/// `Err` is the person leaving at the question.
+fn open_requested_directories(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    workspace: &mut Workspace,
+    trust: &mut TrustStore,
+    whence: Whence,
+    settings: &bravebot_config::Settings,
+    stored: &bravebot_session::sessions::Handle,
+) -> Result<(), Ended> {
+    // After the startup question, and put rather than applied: naming a directory in a settings
+    // file asks for it instead of granting it, so one the person accepts is opened on the same
+    // terms as one typed at `/add-dir`, and one they decline is not opened at all.
+    let requested = named_directories(
+        whence,
+        bravebot_agent::permissions::additional_directories(settings),
+    );
+    let opening = match requested {
+        Named::Opening(names) => named_to_open(session, workspace, &names),
+        Named::Asking(names) => {
+            let paths = named_to_open(session, workspace, &names);
+            // Carried for the reason the working directory's own question carries it.
+            let mut carried = String::new();
+            let accepted = match crate::trust_prompt::ask_named(terminal, &paths, &mut carried) {
+                Some(accepted) => accepted,
+                None => return Err(left_behind(stored)),
+            };
+            if !carried.is_empty() {
+                session.paste_text(&carried);
+            }
+            accepted
+        }
+    };
+    open_named(session, workspace, trust, &opening);
+    Ok(())
+}
+
 /// Everything `event_loop` settles before its first pass: the session, a resumed record, the
 /// trust question, the scratch directory, the rules, the named directories and an addressed
 /// definition, in that order.
@@ -2479,6 +2650,13 @@ fn begin_session(
         skip_permissions,
         prompts,
     } = startup;
+    let basis = SessionBasis {
+        confinement,
+        sockets_with_a_path_reachable,
+        sandbox,
+        skip_permissions,
+        prompts,
+    };
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -2491,53 +2669,15 @@ fn begin_session(
     // `/cd` reads only the rules again, so the model and level settled from them stay as they are.
     let settings = bravebot_config::Settings::load();
 
-    // The one place persistence is turned on: history in ~/.bravebot outlives the session.
-    let mut session = Session::new(confinement)
-        .with_sockets_with_a_path_reachable(sockets_with_a_path_reachable)
-        .with_sandbox(sandbox)
-        .with_stored_history()
-        .in_workspace(workspace.root())
-        .on_tier(config)
-        .with_model_labels(config);
     // What the command line named for this session, which outranks the saved pick and is not
     // recorded (CLI-31). Read off `start` before the match below consumes it.
     let asked = match &start {
         Start::Sending(_, asked) => asked.clone(),
         _ => AskedFor::default(),
     };
-    // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
-    // below is asked for, which is the window of whichever model this settles on. Not read at all
-    // where the command line named a model, so a pick set aside is not reported for a model that
-    // was never going to be asked for.
-    match &asked.model {
-        Some(name) => session.name_model(config.model_named(name)),
-        None => session.adopt_model(&settings, config),
-    }
-    session.adopt_workspace(&workspace);
-    session.adopt_repository(crate::issue_link::Repository::of(workspace.root()));
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
-    session.servers = mcp_servers;
-    // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
-    // asked there, so the question only settles it elsewhere.
-    session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
-    // The flag opens the session in bypass. The rung is on the ladder the key walks either way,
-    // unless a settings layer took it off (MODE-5).
-    if skip_permissions {
-        session = session.starting_in_bypass();
-    }
-    if bypass_is_unreachable(&settings) {
-        session.make_bypass_unreachable();
-    }
-    // Before the first turn, and kept until the session ends: a resumed record stores none, so
-    // these are the words of the turns this process sends (CLI-19).
-    session = session.with_system_prompts(prompts);
-
-    // The model outlived the session that chose it, so the window that came with it has to be asked
-    // for again: it is reported by the listing and nowhere else, and nothing on disk remembers it.
-    // Asked on a thread of its own, so what the session opens on does not wait for a service: the
-    // loop adopts the answer on the pass it arrives, and a turn waits for it (BACKEND-64).
-    ask_for_the_budget_of_the_model_in_force(&mut session, config);
+    let mut session = new_session(config, &settings, &workspace, &asked, mcp_servers, basis);
 
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
@@ -2546,24 +2686,12 @@ fn begin_session(
     // because the set includes the checkout's definitions only when the person vouched for them.
     // The name the record carries is the person's own earlier `--agent`; `named` is the one typed
     // on this command line (ADDRESS-3).
-    let recorded = match &start {
-        Start::Resuming(record) => record.agent.clone(),
-        _ => None,
-    };
-    let first_turn = match &start {
-        Start::Sending(prompt, _) => Some(prompt.clone()),
-        _ => None,
-    };
-    let prefill = match &start {
-        Start::Prefilling(text, note) => Some((text.clone(), note.clone())),
-        _ => None,
-    };
-    // Whether the Sessions screen opens over the new session, and for which pull request.
-    let choosing = match &start {
-        Start::Choose => Some(None),
-        Start::ChooseFromPr(wanted) => Some(Some(wanted.clone())),
-        _ => None,
-    };
+    let StartFacts {
+        recorded,
+        first_turn,
+        prefill,
+        choosing,
+    } = StartFacts::of(&start);
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
@@ -2622,23 +2750,7 @@ fn begin_session(
         },
     );
 
-    // After the trust answer, because that question is the first thing on the screen and an aside
-    // about a newer release does not come before it. Nothing is fetched here: the line is read off
-    // what an earlier launch wrote down, and the ask that answers the next launch runs behind the
-    // session rather than in front of it.
-    if let Some(newer) = bravebot_update::at_startup(settings.update_check()) {
-        session.note(newer);
-    }
-    // After the line about a release for the same reason, and said once: a build that sends crash
-    // reports tells the person on the first launch that does, with the two ways of stopping it.
-    if let Some(notice) = crate::crash_notice::at_startup() {
-        session.note(notice);
-    }
-    // Why a server this checkout asked for is not in the session, said where the person starts
-    // reading rather than on the plain terminal the screen is about to cover.
-    for note in absent {
-        session.note(note);
-    }
+    say_startup_notes(&mut session, &settings, absent);
 
     adopt_settings(&mut session, &settings, asked.effort);
     // Beside the settings, with the workspace in hand: a style file reached through it is not read.
@@ -2677,30 +2789,15 @@ fn begin_session(
     // the first slot reaches it, since the one thing a person cannot read off the transcript is a
     // question that was never put. `/status` says it too, for the rest of the session.
     session.say_vetting_in_force();
-    // After the startup question, and put rather than applied: naming a directory in a settings
-    // file asks for it instead of granting it, so one the person accepts is opened on the same
-    // terms as one typed at `/add-dir`, and one they decline is not opened at all.
-    let requested = named_directories(
+    open_requested_directories(
+        terminal,
+        &mut session,
+        &mut workspace,
+        &mut trust,
         whence,
-        bravebot_agent::permissions::additional_directories(&settings),
-    );
-    let opening = match requested {
-        Named::Opening(names) => named_to_open(&mut session, &workspace, &names),
-        Named::Asking(names) => {
-            let paths = named_to_open(&mut session, &workspace, &names);
-            // Carried for the reason the working directory's own question carries it.
-            let mut carried = String::new();
-            let accepted = match crate::trust_prompt::ask_named(terminal, &paths, &mut carried) {
-                Some(accepted) => accepted,
-                None => return Err(left_behind(&stored)),
-            };
-            if !carried.is_empty() {
-                session.paste_text(&carried);
-            }
-            accepted
-        }
-    };
-    open_named(&mut session, &mut workspace, &mut trust, &opening);
+        &settings,
+        &stored,
+    )?;
     let answers = Answers::opening(
         trust,
         programs,
@@ -2825,99 +2922,17 @@ fn event_loop(
     let mut suggesting: Option<Suggesting> = None;
 
     loop {
-        // Every pass, so a hold goes as soon as the last turn ends and the loop stops, and one is
-        // taken for a loop's next tick before the wait for it begins.
-        session.keep_awake();
-        // Before the frame and before the next key, so what a slash offers is on the screen as the
-        // slash is, and Tab never reaches a list the frame did not show.
-        let reached = session.servers.session.clone();
-        session.settle_skills(|| {
-            let mut offered = crate::skills::resolved(
-                &workspace,
-                answers.trust.clone(),
-                answers.rules.permissions.clone(),
-            );
-            // Beside the skills and sorted among them by name. A prompt's word starts `mcp__` and
-            // an alias, so it never claims a word a command holds.
-            offered.extend(crate::skills::from_servers(reached.as_ref()));
-            offered
-        });
-        // The project's styles a `/style` could name, read where the trust map is in hand.
-        session.settle_styles(|| {
-            bravebot_agent::styles::offered_from_project(
-                &workspace,
-                bravebot_agent::home::directory().as_deref(),
-                answers.trust.clone(),
-                answers.rules.permissions.clone(),
-                &mut Trail::new(),
-            )
-        });
-        // The same for the sessions an `@` offers after the files.
-        session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
-        session.settle_definitions(|| {
-            definitions_offered(
-                &workspace,
-                answers.trust.clone(),
-                answers.rules.permissions.clone(),
-            )
-        });
-        // A picture decoded since the last pass is drawn on this one rather than at the next key.
-        needs_draw |= session.settle_previews();
-        // The rows of a model picker still being listed are drawn on the pass they arrive.
-        needs_draw |= session.settle_picking();
-        // The answer of a `/schedule run-now` is drawn on the pass it arrives.
-        needs_draw |= session.settle_schedule_runs();
-        // The window of the model the session opened on, asked for while the first frame was drawn
-        // (BACKEND-64).
-        needs_draw |= adopt_the_awaited_budget(&mut session, config, None);
-        // A target that was marked and is not now, as when a key or the terminal's being left ended
-        // it with no other answer that draws (MOUSE-51).
-        needs_draw |= session.take_the_hover_ended();
-        // A suggestion the box has stopped being empty for is dropped, and one whose request has
-        // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
-        session.settle_suggestion();
-        needs_draw |= take_suggestion(&mut session, &mut stored, &mut suggesting);
-        // A question asked beside a turn that has ended since, answered on the pass it arrives. Its
-        // row is in the record, so a session left after it resumes with the answer (CMD-8).
-        if settle_aside_between_turns(&mut session) {
-            let title = stored.title().to_string();
-            with_standing(
-                &session,
-                &conversation,
-                &answers.trust,
-                &answers.programs,
-                &workspace,
-                |standing| stored.save(&title, standing),
-            );
-            needs_draw = true;
-        }
-        // Before the frame rather than after it, so the first frame of an open panel names the
-        // session, and a name that changed by any path reaches the panel without waiting for a key.
-        needs_draw |= session.identify(
-            stored.title(),
-            crate::status::abbreviate(workspace.root()),
-            stored.branch(),
+        settle_between_frames(
+            &mut session,
+            config,
+            &workspace,
+            &mut stored,
+            &conversation,
+            &answers,
+            &mut suggesting,
+            watching.as_ref(),
+            &mut needs_draw,
         );
-        needs_draw |= name_the_id(&mut session, &stored);
-        // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
-        // and no report to wake the loop (MOUSE-37).
-        needs_draw |= session.scroll_toward_the_pointer(Instant::now());
-        needs_draw |= show_the_links(&mut session, &stored);
-
-        // A pick made while a turn ran that no loop of the turn was left to carry out, because the
-        // turn ended or another working loop began first.
-        if let Some(picked) = session.take_pick() {
-            carry_out_pick(&mut session, config, picked);
-            needs_draw = true;
-        }
-
-        // What a `file-changed` command said when it went wrong, which no turn is open to carry.
-        if let Some(watching) = &watching {
-            for said in watching.said() {
-                session.note(said);
-                needs_draw = true;
-            }
-        }
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped. Only a drag or a resize is waited out. A typed character
@@ -2940,106 +2955,26 @@ fn event_loop(
             return Ok(left_behind(&stored));
         }
 
-        // A loop's next tick, looked at before the interface settles down to wait for a key.
-        // Nobody is going to press anything to make it happen, so a tick taken only after input
-        // arrives would sit there until somebody typed something unrelated. It becomes an
-        // ordinary submission, because that is what it is: the line the person typed at `/loop`,
-        // sent again.
-        //
-        // While the Sessions screen is open the session starts nothing of its own: a loop's
-        // tick, a watch and the queue wait until it is left (SCREEN-1). Its list is read again on a
-        // timer, because nobody presses a key for a session elsewhere to change.
+        // While the Sessions screen is open the session starts nothing of its own. Its list is read
+        // again on a timer, because nobody presses a key for a session elsewhere to change.
         let showing_sessions = session.showing_sessions();
         if showing_sessions
             && sessions_screen::read_sessions_screen_if_due(&mut session, Instant::now())
         {
             needs_draw = true;
         }
-        let action = match (!showing_sessions).then(|| session.loop_tick()).flatten() {
-            Some(prompt) => Action::Submit(prompt),
-            // Then the watches, looked at here for the same reason and in the same pass: a
-            // filesystem change is the one event in this program that nobody presses a key for.
-            // Only one of the two can produce a turn, and a session holds only one kind at a
-            // time, so the order between them decides nothing.
-            None => match (!showing_sessions)
-                .then(|| {
-                    // The reach is derived again at each pass from the live mode, so a watch on a
-                    // path outside the workspace ends once the key leaves bypass (FSWATCH-7).
-                    let session_mode = session.live_permission_mode();
-                    session.watch_fired(Instant::now(), |path, under| {
-                        bravebot_agent::tools::look_at_a_watch(
-                            &workspace,
-                            &session_mode,
-                            &answers.trust,
-                            path,
-                            under,
-                        )
-                    })
-                })
-                .flatten()
-            {
-                Some(prompt) => Action::Submit(prompt),
-                // Then what the queue is holding, before the interface settles down to wait, for
-                // the reason a tick is looked at here.
-                // Then a click on a path that has waited to see whether it was the first of a
-                // double click, which nobody is going to press anything to carry out (MOUSE-42).
-                None => match (!showing_sessions)
-                    .then(|| {
-                        queued_or_recap(&mut session, Instant::now()).or_else(|| {
-                            session
-                                .take_the_click_due(Instant::now())
-                                .map(Action::Preview)
-                        })
-                    })
-                    .flatten()
-                {
-                    Some(action) => action,
-                    None => {
-                        if a_countdown_is_owed_a_frame(
-                            session.looping().is_some(),
-                            drawn_at.elapsed(),
-                        ) {
-                            needs_draw = true;
-                        }
-                        // The face on the opening screen blinks and glances without a key, and is
-                        // drawn again only when how it is held has changed.
-                        let opening = render::opening_screen(&session);
-                        let held = crate::avatar::look_now();
-                        if a_face_is_owed_a_frame(opening, held, face_held) {
-                            face_held = held;
-                            needs_draw = true;
-                        }
-                        let mut wait = wait_for_a_key(opening, crate::indicator::stilled());
-                        // And sooner while that is going on, for the next step of it.
-                        if session.pulling_at_an_edge() {
-                            wait = wait.min(select::EDGE_TICK);
-                        }
-                        // Short while a suggestion is on its way, so it is drawn as it arrives
-                        // rather than at the next key.
-                        if suggesting.is_some()
-                            || session.picking_is_loading()
-                            || session.aside_in_flight()
-                        {
-                            wait = wait.min(FRAME);
-                        }
-                        // And until a click that waits is due.
-                        if let Some(due) = session.the_click_due_in(Instant::now()) {
-                            wait = wait.min(due);
-                        }
-                        // And until the Sessions screen's list is to be read again (SCREEN-2).
-                        if let Some(sessions_screen) = session.sessions_screen() {
-                            wait = wait.min(sessions_screen.due_in(Instant::now()));
-                        }
-                        // Through the reader rather than the terminal, so a run is seen whole.
-                        if !input::poll(wait)? {
-                            continue;
-                        }
-                        let taken = input::read()?;
-                        took_input(&mut session, &taken);
-                        idle_action(&mut session, taken)
-                    }
-                },
-            },
+        let Some(action) = next_idle_action(
+            &mut session,
+            &workspace,
+            &answers.trust,
+            showing_sessions,
+            suggesting.is_some(),
+            drawn_at,
+            &mut face_held,
+            &mut needs_draw,
+        )?
+        else {
+            continue;
         };
 
         needs_draw |= !matches!(action, Action::None);
@@ -3210,6 +3145,216 @@ fn event_loop(
             }
         }
     }
+}
+
+/// What the loop settles on each pass before the frame is drawn: the lists a slash or an `@` offers,
+/// what arrived from a request or a thread since the last pass, the names a panel shows, and the
+/// notes of a command that went wrong. Each sets `needs_draw` where it changed what is on the screen.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the loop's own state, each part of which one of the steps reads or sets"
+)]
+fn settle_between_frames(
+    session: &mut Session,
+    config: &mut Config,
+    workspace: &Workspace,
+    stored: &mut bravebot_session::sessions::Handle,
+    conversation: &Conversation,
+    answers: &Answers,
+    suggesting: &mut Option<Suggesting>,
+    watching: Option<&bravebot_agent::hooks::Watching>,
+    needs_draw: &mut bool,
+) {
+    // Every pass, so a hold goes as soon as the last turn ends and the loop stops, and one is
+    // taken for a loop's next tick before the wait for it begins.
+    session.keep_awake();
+    // Before the frame and before the next key, so what a slash offers is on the screen as the
+    // slash is, and Tab never reaches a list the frame did not show.
+    let reached = session.servers.session.clone();
+    session.settle_skills(|| {
+        let mut offered = crate::skills::resolved(
+            workspace,
+            answers.trust.clone(),
+            answers.rules.permissions.clone(),
+        );
+        // Beside the skills and sorted among them by name. A prompt's word starts `mcp__` and
+        // an alias, so it never claims a word a command holds.
+        offered.extend(crate::skills::from_servers(reached.as_ref()));
+        offered
+    });
+    // The project's styles a `/style` could name, read where the trust map is in hand.
+    session.settle_styles(|| {
+        bravebot_agent::styles::offered_from_project(
+            workspace,
+            bravebot_agent::home::directory().as_deref(),
+            answers.trust.clone(),
+            answers.rules.permissions.clone(),
+            &mut Trail::new(),
+        )
+    });
+    // The same for the sessions an `@` offers after the files.
+    session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
+    session.settle_definitions(|| {
+        definitions_offered(
+            workspace,
+            answers.trust.clone(),
+            answers.rules.permissions.clone(),
+        )
+    });
+    // A picture decoded since the last pass is drawn on this one rather than at the next key.
+    *needs_draw |= session.settle_previews();
+    // The rows of a model picker still being listed are drawn on the pass they arrive.
+    *needs_draw |= session.settle_picking();
+    // The answer of a `/schedule run-now` is drawn on the pass it arrives.
+    *needs_draw |= session.settle_schedule_runs();
+    // The window of the model the session opened on, asked for while the first frame was drawn
+    // (BACKEND-64).
+    *needs_draw |= adopt_the_awaited_budget(session, config, None);
+    // A target that was marked and is not now, as when a key or the terminal's being left ended
+    // it with no other answer that draws (MOUSE-51).
+    *needs_draw |= session.take_the_hover_ended();
+    // A suggestion the box has stopped being empty for is dropped, and one whose request has
+    // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
+    session.settle_suggestion();
+    *needs_draw |= take_suggestion(session, stored, suggesting);
+    // A question asked beside a turn that has ended since, answered on the pass it arrives. Its
+    // row is in the record, so a session left after it resumes with the answer (CMD-8).
+    if settle_aside_between_turns(session) {
+        let title = stored.title().to_string();
+        with_standing(
+            session,
+            conversation,
+            &answers.trust,
+            &answers.programs,
+            workspace,
+            |standing| stored.save(&title, standing),
+        );
+        *needs_draw = true;
+    }
+    // Before the frame rather than after it, so the first frame of an open panel names the
+    // session, and a name that changed by any path reaches the panel without waiting for a key.
+    *needs_draw |= session.identify(
+        stored.title(),
+        crate::status::abbreviate(workspace.root()),
+        stored.branch(),
+    );
+    *needs_draw |= name_the_id(session, stored);
+    // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
+    // and no report to wake the loop (MOUSE-37).
+    *needs_draw |= session.scroll_toward_the_pointer(Instant::now());
+    *needs_draw |= show_the_links(session, stored);
+
+    // A pick made while a turn ran that no loop of the turn was left to carry out, because the
+    // turn ended or another working loop began first.
+    if let Some(picked) = session.take_pick() {
+        carry_out_pick(session, config, picked);
+        *needs_draw = true;
+    }
+
+    // What a `file-changed` command said when it went wrong, which no turn is open to carry.
+    if let Some(watching) = watching {
+        for said in watching.said() {
+            session.note(said);
+            *needs_draw = true;
+        }
+    }
+}
+
+/// The action the loop at rest takes next, and `Ok(None)` where nothing arrived and it is to go round
+/// again: a loop's tick, a watch that fired, what the queue holds or a click that waited, and
+/// otherwise what the person typed while the loop waited for it.
+///
+/// While the Sessions screen is open the session starts nothing of its own: a loop's tick, a watch
+/// and the queue wait until it is left (SCREEN-1), and the wait for a key still happens.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the loop's own state, each part of which one of the steps reads or sets"
+)]
+fn next_idle_action(
+    session: &mut Session,
+    workspace: &Workspace,
+    trust: &TrustStore,
+    showing_sessions: bool,
+    suggesting: bool,
+    drawn_at: Instant,
+    face_held: &mut crate::avatar::Look,
+    needs_draw: &mut bool,
+) -> io::Result<Option<Action>> {
+    if !showing_sessions {
+        // A loop's next tick, looked at before the interface settles down to wait for a key.
+        // Nobody is going to press anything to make it happen, so a tick taken only after input
+        // arrives would sit there until somebody typed something unrelated. It becomes an
+        // ordinary submission, because that is what it is: the line the person typed at `/loop`,
+        // sent again.
+        if let Some(prompt) = session.loop_tick() {
+            return Ok(Some(Action::Submit(prompt)));
+        }
+        // Then the watches, looked at here for the same reason and in the same pass: a
+        // filesystem change is the one event in this program that nobody presses a key for.
+        // Only one of the two can produce a turn, and a session holds only one kind at a
+        // time, so the order between them decides nothing.
+        //
+        // The reach is derived again at each pass from the live mode, so a watch on a path
+        // outside the workspace ends once the key leaves bypass (FSWATCH-7).
+        let session_mode = session.live_permission_mode();
+        if let Some(prompt) = session.watch_fired(Instant::now(), |path, under| {
+            bravebot_agent::tools::look_at_a_watch(workspace, &session_mode, trust, path, under)
+        }) {
+            return Ok(Some(Action::Submit(prompt)));
+        }
+        // Then what the queue is holding, before the interface settles down to wait, for
+        // the reason a tick is looked at here.
+        // Then a click on a path that has waited to see whether it was the first of a
+        // double click, which nobody is going to press anything to carry out (MOUSE-42).
+        if let Some(action) = queued_or_recap(session, Instant::now()).or_else(|| {
+            session
+                .take_the_click_due(Instant::now())
+                .map(Action::Preview)
+        }) {
+            return Ok(Some(action));
+        }
+    }
+    if a_countdown_is_owed_a_frame(session.looping().is_some(), drawn_at.elapsed()) {
+        *needs_draw = true;
+    }
+    // The face on the opening screen blinks and glances without a key, and is
+    // drawn again only when how it is held has changed.
+    let opening = render::opening_screen(session);
+    let held = crate::avatar::look_now();
+    if a_face_is_owed_a_frame(opening, held, *face_held) {
+        *face_held = held;
+        *needs_draw = true;
+    }
+    // Through the reader rather than the terminal, so a run is seen whole.
+    if !input::poll(wait_for_input(session, opening, suggesting))? {
+        return Ok(None);
+    }
+    let taken = input::read()?;
+    took_input(session, &taken);
+    Ok(Some(idle_action(session, taken)))
+}
+
+/// How long the loop at rest waits for a key before it goes round again.
+fn wait_for_input(session: &Session, opening: bool, suggesting: bool) -> Duration {
+    let mut wait = wait_for_a_key(opening, crate::indicator::stilled());
+    // And sooner while that is going on, for the next step of it.
+    if session.pulling_at_an_edge() {
+        wait = wait.min(select::EDGE_TICK);
+    }
+    // Short while a suggestion is on its way, so it is drawn as it arrives
+    // rather than at the next key.
+    if suggesting || session.picking_is_loading() || session.aside_in_flight() {
+        wait = wait.min(FRAME);
+    }
+    // And until a click that waits is due.
+    if let Some(due) = session.the_click_due_in(Instant::now()) {
+        wait = wait.min(due);
+    }
+    // And until the Sessions screen's list is to be read again (SCREEN-2).
+    if let Some(sessions_screen) = session.sessions_screen() {
+        wait = wait.min(sessions_screen.due_in(Instant::now()));
+    }
+    wait
 }
 
 /// A request for a follow-up suggestion that has gone out on a thread of its own (INPUT-43).
