@@ -202,7 +202,7 @@ pub(crate) fn status_word(status: Status) -> &'static str {
 pub(crate) fn status_in_words(status: Status, held: Option<Held>) -> String {
     match (status, held) {
         (Status::NeedsInput, Some(held)) => {
-            format!("{} ({})", status_word(status), held_word(held))
+            format!("{} ({})", status_word(status), held.label())
         }
         _ => status_word(status).to_string(),
     }
@@ -226,22 +226,6 @@ fn tab_word(tab: usize) -> &'static str {
         2 => t!(sessions_screen_tab_working),
         3 => t!(sessions_screen_tab_ready),
         _ => t!(sessions_screen_tab_inactive),
-    }
-}
-
-fn held_word(held: Held) -> &'static str {
-    match held {
-        Held::Write => t!(sessions_held_write),
-        Held::Run => t!(sessions_held_run),
-        Held::Read => t!(sessions_held_read),
-        Held::Fetch => t!(sessions_held_fetch),
-        Held::Server => t!(sessions_held_server),
-        Held::Vouch => t!(sessions_held_vouch),
-        Held::Tools => t!(sessions_held_tools),
-        Held::Move => t!(sessions_held_move),
-        Held::Manifest => t!(sessions_held_manifest),
-        Held::Question => t!(sessions_held_question),
-        Held::Message => t!(sessions_held_message),
     }
 }
 
@@ -932,7 +916,7 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
                 Style::default().fg(theme::fail()),
             )));
             lines.push(Line::from(Span::raw(match task.held {
-                Some(held) => t!(sessions_screen_details_waiting_for, kind = held_word(held)),
+                Some(held) => t!(sessions_screen_details_waiting_for, kind = held.label()),
                 None => t!(sessions_screen_details_waiting).to_string(),
             })));
             lines.push(Line::from(Span::styled(
