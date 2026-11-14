@@ -176,10 +176,10 @@ about each note. The labels follow
 Read `{work_dir}/drafts.json`: one entry per draft, with `id`, `title`, `labels` and `body_file`.
 For each entry in turn, up to 100 in a run, hand it to the
 [issue-poster](../../agents/issue-poster.md) definition with the title, the body file, the labels
-the entry names, the assignee only where the user named somebody, and this instruction: the issue
-is a finding nobody has read, so apply no `importance`, `urgency` or `size`; search the open and
-closed issues for the words of the title before posting, and post nothing when an issue already
-covers the problem. A `dry-run` run files nothing and records nothing.
+the entry names, the assignee `netzenbot` (or the login the user names instead), and this
+instruction: the issue is a finding nobody has read, so apply no `importance`, `urgency` or `size`;
+search the open and closed issues for the words of the title before posting, and post nothing when
+an issue already covers the problem. A `dry-run` run files nothing and records nothing.
 
 A missing label refuses the post and prints the `gh label create` line; creating a label is the
 user's call, so stop and tell them. Stop at a failure and print it.
