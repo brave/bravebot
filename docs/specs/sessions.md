@@ -1954,6 +1954,7 @@ share that is low for one turn is a different fault from one that is low for the
 `verified-by: bravebot_agent::turn::a_turn_counts_its_requests_and_what_they_wrote_and_read_out_of_the_cache`
 `verified-by: bravebot_agent::turn::a_summary_made_during_a_turn_is_counted_as_a_compaction_and_a_request`
 `verified-by: bravebot_agent::turn::a_turn_counts_the_requests_a_delegate_made`
+`verified-by: bravebot_agent::turn::a_delegate_taken_back_at_the_start_of_a_round_is_counted_once`
 `verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
 `verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
 `verified-by: bravebot_agent::turn::compaction_progress_survives_failure`

@@ -41,7 +41,6 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-    supports_keyboard_enhancement,
 };
 use std::io::{self, Write};
 use std::path::Path;
@@ -1909,7 +1908,7 @@ pub fn run(
     take_over_terminal(&mut stdout, mouse)?;
     // After the takeover, which has finished asking about the background, and before the first
     // event is read, so the reply to this question cannot be taken for a keystroke.
-    crate::preview::sense();
+    crate::preview::sense(terminal_answers_queries());
 
     // Handed back on the way out, because the terminal is already taken by the line above and a
     // failure here would otherwise return from a session that never started, leaving the person in
@@ -2468,6 +2467,15 @@ fn apply_the_command_line(
     }
 }
 
+/// Say, before the first prompt can be typed, that `lost` bytes typed while the terminal was asked
+/// about itself were not kept, where any were: a person who lost some of what they typed has to be
+/// told before they send what is left (INPUT-52).
+fn note_startup_input_lost(session: &mut Session, lost: usize) {
+    if lost > 0 {
+        session.note(t!(session_startup_input_lost));
+    }
+}
+
 /// Everything `event_loop` settles before its first pass: the session, a resumed record, the
 /// trust question, the scratch directory, the rules, the named directories and an addressed
 /// definition, in that order.
@@ -2683,6 +2691,7 @@ fn begin_session(
     if skip_permissions {
         session.note(t!(session_permissions_skipped));
     }
+    note_startup_input_lost(&mut session, crate::input::take_lost_at_startup());
     // And for the same reason again: a mode that stops a prompt appearing has to be said before
     // the first slot reaches it, since the one thing a person cannot read off the transcript is a
     // question that was never put. `/status` says it too, for the rest of the session.
@@ -45405,6 +45414,7 @@ mod tests {
     mod scrollbar;
     mod selection;
     mod standing;
+    mod startup_input;
     mod summoning;
     mod wide;
     mod wrapped;

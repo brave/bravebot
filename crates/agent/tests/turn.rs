@@ -50041,28 +50041,45 @@ fn a_turn_counts_what_its_delegates_read_out_of_the_cache() {
 }
 
 /// The turn was charged for a delegate's requests, so it counts them with its own.
+///
+/// The delegate's reply is held until the planner's second request, so the delegate is still
+/// working when the planner answers that round, the turn waits for it, and the planner is asked a
+/// third time. A delegate back before the second request is taken back at the start of that round
+/// instead, and the turn ends after two of the planner's requests. No whole turn here forces that
+/// order, because the stand-in server can hold only replies and the start of a round takes
+/// delegates back before its request is sent. The unit test
+/// `a_delegate_taken_back_at_the_start_of_a_round_is_counted_once` in `crates/agent/src/turn.rs`
+/// covers the collection that order goes through: it hands `collect_delegates` a delegate whose
+/// thread has ended, without waiting, and checks its request is added to the account once.
 #[test]
 fn a_turn_counts_the_requests_a_delegate_made() {
     let scratch = Scratch::new("delegate-requests");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_by_marker(vec![
-        (
-            "DELEGATE-SOMETHING",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
-                ),
-                reply_with("nothing to add while it works"),
-                reply_with("relayed"),
-            ],
-        ),
-        (
-            "SAY-SOMETHING-SHORT",
-            vec![reply_with_cache("REPORTED BACK", 1200, 30, 1100)],
-        ),
-    ]);
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-SOMETHING",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                    ),
+                    reply_with("nothing to add while it works"),
+                    reply_with("relayed"),
+                ],
+            ),
+            (
+                "SAY-SOMETHING-SHORT",
+                vec![reply_with_cache("REPORTED BACK", 1200, 30, 1100)],
+            ),
+        ],
+        Order::After {
+            held: "SAY-SOMETHING-SHORT",
+            after: "DELEGATE-SOMETHING",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -50077,6 +50094,23 @@ fn a_turn_counts_the_requests_a_delegate_made() {
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate's reply was not held until the planner's second request"
+    );
+    // A turn replays the task it handed out, so a planner's request holds both markers and a
+    // delegate's holds only its own.
+    let asked = every_request(&received);
+    let planner = asked
+        .iter()
+        .filter(|body| body.contains("DELEGATE-SOMETHING"))
+        .count();
+    assert_eq!(
+        (planner, asked.len() - planner),
+        (3, 1),
+        "the server was not asked three times by the planner and once by the delegate"
+    );
+    assert_eq!(outcome.reply_for_display(), "relayed");
     assert_eq!(
         outcome.timing.activity.requests, 4,
         "three of the planner's and the delegate's one"

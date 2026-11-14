@@ -6,8 +6,10 @@
 //!
 //! The binary is started in a session of its own with a pty as its standard input and a pipe as its
 //! standard output, so the picture query the interface makes at start-up has a terminal to read
-//! from. The first directory of `PATH` holds a `tmux` that records that it ran, as a directory a
-//! confined stage wrote in would, and the loader and shell variables it was given.
+//! from. The driver answers the keyboard query, since a terminal that answers nothing is not asked
+//! the picture query at all. The first directory of `PATH` holds a `tmux` that records that it
+//! ran, as a directory a confined stage wrote in would, and the loader and shell variables it was
+//! given.
 //!
 //! The query writes its questions wrapped for tmux (`ESC P tmux ;`) to standard output, so the run
 //! shows it reached the picker with tmux detected, and a marker left empty is not an interface that
@@ -34,26 +36,45 @@ use chatgpt_run::{Scratch, environment};
 use chatgpt_stand_in::StandIn;
 
 /// Starts the program it is given in a session of its own with a pty for its standard input, a pipe
-/// for its standard output and another for its standard error. Prints how it ended: its status, or
-/// `still running` where it had not ended a minute later and was killed. A second line holds what it
-/// wrote to standard output, in hexadecimal.
+/// for its standard output and nothing for its standard error. Once the program has written the
+/// keyboard query (`ESC [ ? u`), the pty is given a terminal's reply to it, flags then device
+/// attributes: the interface asks about graphics only where that query was answered (#3846). Prints
+/// how it ended: its status, or `still running` where it had not ended a minute later and was
+/// killed. A second line holds what it wrote to standard output, in hexadecimal.
 const DRIVER: &str = r#"
-import pty, subprocess, sys
+import os, pty, select, subprocess, sys, time
 
 master, slave = pty.openpty()
 child = subprocess.Popen(
     sys.argv[1:],
     stdin=slave,
     stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
     start_new_session=True,
 )
+out = b""
+answered = False
+deadline = time.monotonic() + 60
+ended = False
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([child.stdout], [], [], 0.1)
+    if ready:
+        chunk = os.read(child.stdout.fileno(), 65536)
+        if not chunk:
+            ended = True
+            break
+        out += chunk
+        if not answered and b"\x1b[?u" in out:
+            os.write(master, b"\x1b[?0u\x1b[?62c")
+            answered = True
 try:
-    out, _ = child.communicate(timeout=60)
+    if not ended:
+        raise subprocess.TimeoutExpired(sys.argv[1], 0)
+    child.wait(timeout=max(deadline - time.monotonic(), 1))
     print(child.returncode)
 except subprocess.TimeoutExpired:
     child.kill()
-    out, _ = child.communicate()
+    child.wait()
     print("still running")
 print(out.hex())
 "#;

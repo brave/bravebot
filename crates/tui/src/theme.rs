@@ -443,7 +443,8 @@ pub fn no_color() -> bool {
 /// After sensing, rebuilds the `brave` palette if that is what is in force, so primary matches.
 pub fn sense(out: &mut impl Write) {
     // Nothing is drawn in a shade picked for the background when nothing is drawn in a shade at
-    // all, and the question costs a round trip that swallows whatever was typed into it.
+    // all, and the question costs a round trip that holds whatever was typed into it until the
+    // first frame (INPUT-52).
     if no_color() {
         return;
     }
@@ -1053,41 +1054,73 @@ fn query_osc11(out: &mut impl Write) -> Option<bool> {
 
     let stdin = std::io::stdin();
     let deadline = Instant::now() + Duration::from_millis(80);
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 64];
-
-    while Instant::now() < deadline {
-        let remain = deadline.saturating_duration_since(Instant::now());
-        let timeout = Timespec::try_from(remain).unwrap_or(Timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        });
+    // poll/read on the tty itself, because crossterm drops OSC replies and a blocking read would
+    // hang on a terminal that never answers. What else is read is a key typed meanwhile, and it
+    // is handed to the event reader rather than dropped.
+    let read_some = |tmp: &mut [u8]| {
+        let remain = deadline.checked_duration_since(Instant::now())?;
+        let timeout = Timespec::try_from(remain).ok()?;
         let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
-        // poll/read on the tty itself, because crossterm drops OSC replies and a blocking
-        // read would hang on a terminal that never answers.
         if poll(&mut fds, Some(&timeout)).ok()? == 0 {
-            break;
+            return None;
         }
-        let n = rustix::io::read(&stdin, tmp.as_mut_slice()).ok()?;
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if osc_complete(&buf) {
-            return parse_osc11(&buf).map(light_from_rgb);
-        }
-        if buf.len() > 128 {
-            break;
-        }
-    }
-    None
+        rustix::io::read(&stdin, tmp).ok()
+    };
+    let mut typed = Vec::new();
+    let rgb = read_osc11_reply(read_some, &mut typed);
+    crate::input::hand_back(&typed);
+    rgb.map(light_from_rgb)
 }
 
+/// Read until the reply to the background query has arrived or `read_some` gives up, and parse
+/// it. Every byte read that is not part of the reply is appended to `typed`, in the order read.
+///
+/// `read_some` fills the slice it is given and says how much it read, or `None` once the wait is
+/// over. Separated from the terminal so a test can hand it keys around a reply.
+#[cfg(unix)]
+fn read_osc11_reply(
+    mut read_some: impl FnMut(&mut [u8]) -> Option<usize>,
+    typed: &mut Vec<u8>,
+) -> Option<Rgb> {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 64];
+    let reply = loop {
+        if let Some(reply) = osc11_reply(&buf) {
+            break Some(reply);
+        }
+        // A reply is well under this, so past it what is waiting is a paste and not an answer.
+        if buf.len() > 4096 {
+            break None;
+        }
+        match read_some(&mut tmp) {
+            Some(n) if n > 0 => buf.extend_from_slice(&tmp[..n]),
+            _ => break None,
+        }
+    };
+    let Some(reply) = reply else {
+        typed.extend_from_slice(&buf);
+        return None;
+    };
+    typed.extend_from_slice(&buf[..reply.start]);
+    typed.extend_from_slice(&buf[reply.end..]);
+    parse_osc11(&buf[reply])
+}
+
+/// Where the reply to the background query is in `buf`, from its `ESC ] 11 ;` to the end of its
+/// terminator, once all of it has arrived.
+///
 /// Unix alone, unlike the parsing around it: this is the framing of a reply nothing on Windows
 /// asks for, so not even a test reaches it there.
 #[cfg(unix)]
-fn osc_complete(buf: &[u8]) -> bool {
-    buf.contains(&0x07) || buf.windows(2).any(|w| w == [0x1b, b'\\'])
+fn osc11_reply(buf: &[u8]) -> Option<std::ops::Range<usize>> {
+    let start = buf.windows(5).position(|w| w == b"\x1b]11;")?;
+    let body = &buf[start..];
+    let end = body.iter().enumerate().find_map(|(i, b)| match b {
+        0x07 => Some(i + 1),
+        b'\\' if i > 0 && body[i - 1] == 0x1b => Some(i + 1),
+        _ => None,
+    })?;
+    Some(start..start + end)
 }
 
 #[cfg(any(unix, test))]
@@ -1306,6 +1339,45 @@ mod tests {
         assert!(!light_from_rgb(
             parse_osc11(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07").expect("dark")
         ));
+    }
+
+    /// Keys typed while the background query waits are read with its reply. They are kept, in the
+    /// order typed, and the reply is still parsed, whether they come before it, after it in the
+    /// same read, or split across reads with it.
+    #[cfg(unix)]
+    #[test]
+    fn keys_read_around_the_background_reply_are_kept_in_order() {
+        let mut reads: Vec<&[u8]> = vec![b"ab\x1b]11;rgb:1e1e/", b"1e1e/1e1e\x1b\\c\x1b[A"];
+        reads.reverse();
+        let mut typed = Vec::new();
+        let rgb = read_osc11_reply(
+            |tmp| {
+                let next = reads.pop()?;
+                tmp[..next.len()].copy_from_slice(next);
+                Some(next.len())
+            },
+            &mut typed,
+        );
+        assert!(!light_from_rgb(rgb.expect("the reply is still read")));
+        assert_eq!(typed, b"abc\x1b[A");
+    }
+
+    /// A terminal that never answers: everything read is a key and kept.
+    #[cfg(unix)]
+    #[test]
+    fn keys_read_while_no_background_reply_comes_are_kept() {
+        let mut reads: Vec<&[u8]> = vec![b"hello\r"];
+        let mut typed = Vec::new();
+        let rgb = read_osc11_reply(
+            |tmp| {
+                let next = reads.pop()?;
+                tmp[..next.len()].copy_from_slice(next);
+                Some(next.len())
+            },
+            &mut typed,
+        );
+        assert!(rgb.is_none());
+        assert_eq!(typed, b"hello\r");
     }
 
     /// Under `brave`, finished stays a named slot so it reads against the person's terminal.

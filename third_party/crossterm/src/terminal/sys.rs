@@ -2,14 +2,14 @@
 
 #[cfg(unix)]
 #[cfg(feature = "events")]
-pub use self::unix::supports_keyboard_enhancement;
+pub use self::unix::{supports_keyboard_enhancement, supports_keyboard_enhancement_within};
 #[cfg(unix)]
 pub(crate) use self::unix::{
     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
 };
 #[cfg(windows)]
 #[cfg(feature = "events")]
-pub use self::windows::supports_keyboard_enhancement;
+pub use self::windows::{supports_keyboard_enhancement, supports_keyboard_enhancement_within};
 #[cfg(all(windows, test))]
 pub(crate) use self::windows::temp_screen_buffer;
 #[cfg(windows)]

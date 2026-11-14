@@ -6724,6 +6724,123 @@ mod tests {
         );
     }
 
+    /// SESSION-40: a delegate whose thread has ended when a round starts is taken back without a
+    /// wait, and its requests, cache figures and written tokens are added to the turn's account
+    /// there, once.
+    ///
+    /// Rejects a collection that counts a delegate's requests only where it waited for the
+    /// delegate, which would charge a turn whose delegate was back before the next round for fewer
+    /// requests than were made (#3841).
+    #[test]
+    fn a_delegate_taken_back_at_the_start_of_a_round_is_counted_once() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
+        );
+        const LIMIT: Duration = Duration::from_secs(5);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "take back a delegate that has already ended");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let report = policy.label_piped_input("REPORTED BACK".to_string());
+        // The planner's two requests, made before the round that takes the delegate back.
+        let mut account = crate::outcome::Spent {
+            requests: 2,
+            ..Default::default()
+        };
+        let collected = std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let answered = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Ok(crate::delegate::Delegated {
+                            report,
+                            kind: "one-round".to_string(),
+                            usage: bravebot_aichat::protocol::Usage {
+                                prompt_tokens: 1200,
+                                completion_tokens: 30,
+                                cached: bravebot_aichat::protocol::Cached {
+                                    read_tokens: 1100,
+                                    ..Default::default()
+                                },
+                            },
+                            requests: 1,
+                        }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 1,
+                        took: Duration::from_millis(5),
+                        worked: Default::default(),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            });
+            let began = std::time::Instant::now();
+            while !answered.is_finished() {
+                assert!(began.elapsed() < LIMIT, "the delegate's thread never ended");
+                std::thread::yield_now();
+            }
+            let mut delegates = vec![Working {
+                join_started: None,
+                id: DelegateId::nth(1),
+                seeded: seeded.clone(),
+                checkout: None,
+                rounds: 1,
+                budget: None,
+                stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
+                handle: answered,
+            }];
+            // As the start of a round collects: waiting for none of them.
+            let collected = collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut account,
+                false,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+                &mut Worked::default(),
+                1,
+            )
+            .unwrap();
+            assert!(
+                delegates.is_empty(),
+                "a delegate whose thread had ended was left uncollected"
+            );
+            collected
+        });
+
+        assert_eq!(collected, 1, "the ended delegate was not collected once");
+        assert_eq!(
+            account.requests, 3,
+            "the planner's two requests and the delegate's one were not all counted"
+        );
+        assert_eq!(
+            account.cached.read_tokens, 1100,
+            "what the delegate read out of the cache was not counted"
+        );
+        assert_eq!(
+            account.output_tokens, 30,
+            "what the delegate wrote was not counted"
+        );
+    }
+
     /// RUN-26. Every finish found between rounds is reported, and a stop the person asked for is
     /// recorded in the trail, before any job's output is handed to the planner. A turn that fails
     /// part way through the handing therefore still says how each job ended, including the one it

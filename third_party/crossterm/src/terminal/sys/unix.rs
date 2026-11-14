@@ -188,6 +188,29 @@ pub fn supports_keyboard_enhancement() -> io::Result<bool> {
     query_keyboard_enhancement_flags().map(|flags| flags.is_some())
 }
 
+/// The wait crossterm 0.29.0 gives the keyboard query.
+#[cfg(feature = "events")]
+const KEYBOARD_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2000);
+
+/// [`supports_keyboard_enhancement`], giving up after `timeout` where no reply has arrived.
+///
+/// The query ends with the primary device attributes request, which every terminal answers, so a
+/// terminal that is there ends the wait with that reply and `timeout` is spent only where nothing
+/// answers. A reply that comes after it is read as an internal event and never as a key. Added in
+/// this tree; crossterm 0.29.0 has only the fixed two seconds.
+#[cfg(feature = "events")]
+pub fn supports_keyboard_enhancement_within(timeout: std::time::Duration) -> io::Result<bool> {
+    if is_raw_mode_enabled() {
+        query_keyboard_enhancement_flags_raw(timeout)
+    } else {
+        enable_raw_mode()?;
+        let flags = query_keyboard_enhancement_flags_raw(timeout);
+        disable_raw_mode()?;
+        flags
+    }
+    .map(|flags| flags.is_some())
+}
+
 /// Queries the terminal's currently active keyboard enhancement flags.
 ///
 /// On unix systems, this function will block and possibly time out while
@@ -195,7 +218,7 @@ pub fn supports_keyboard_enhancement() -> io::Result<bool> {
 #[cfg(feature = "events")]
 pub fn query_keyboard_enhancement_flags() -> io::Result<Option<KeyboardEnhancementFlags>> {
     if is_raw_mode_enabled() {
-        query_keyboard_enhancement_flags_raw()
+        query_keyboard_enhancement_flags_raw(KEYBOARD_QUERY_TIMEOUT)
     } else {
         query_keyboard_enhancement_flags_nonraw()
     }
@@ -204,19 +227,20 @@ pub fn query_keyboard_enhancement_flags() -> io::Result<Option<KeyboardEnhanceme
 #[cfg(feature = "events")]
 fn query_keyboard_enhancement_flags_nonraw() -> io::Result<Option<KeyboardEnhancementFlags>> {
     enable_raw_mode()?;
-    let flags = query_keyboard_enhancement_flags_raw();
+    let flags = query_keyboard_enhancement_flags_raw(KEYBOARD_QUERY_TIMEOUT);
     disable_raw_mode()?;
     flags
 }
 
 #[cfg(feature = "events")]
-fn query_keyboard_enhancement_flags_raw() -> io::Result<Option<KeyboardEnhancementFlags>> {
+fn query_keyboard_enhancement_flags_raw(
+    timeout: std::time::Duration,
+) -> io::Result<Option<KeyboardEnhancementFlags>> {
     use crate::event::{
         filter::{KeyboardEnhancementFlagsFilter, PrimaryDeviceAttributesFilter},
         poll_internal, read_internal, InternalEvent,
     };
     use std::io::Write;
-    use std::time::Duration;
 
     // This is the recommended method for testing support for the keyboard enhancement protocol.
     // We send a query for the flags supported by the terminal and then the primary device attributes
@@ -240,10 +264,7 @@ fn query_keyboard_enhancement_flags_raw() -> io::Result<Option<KeyboardEnhanceme
     }
 
     loop {
-        match poll_internal(
-            Some(Duration::from_millis(2000)),
-            &KeyboardEnhancementFlagsFilter,
-        ) {
+        match poll_internal(Some(timeout), &KeyboardEnhancementFlagsFilter) {
             Ok(true) => {
                 match read_internal(&KeyboardEnhancementFlagsFilter) {
                     Ok(InternalEvent::KeyboardEnhancementFlags(current_flags)) => {
