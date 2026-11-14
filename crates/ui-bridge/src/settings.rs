@@ -304,6 +304,25 @@ mod tests {
         }
     }
 
+    /// A checkout whose `limit` removes or raises the person's is listed with the key and the file,
+    /// as a key it may not name is. Read from the table of keys it may only narrow.
+    #[test]
+    fn a_checkout_limit_that_widens_the_persons_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "limit"));
+        for written in [r#"{"limit": null}"#, r#"{"limit": "999999999999"}"#] {
+            let (directory, settings) = vetting_layers(Some(r#"{"limit": "200k"}"#), Some(written));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": "limit", "path": project })],
+                "{written}"
+            );
+        }
+        let (_directory, settings) =
+            vetting_layers(Some(r#"{"limit": "200k"}"#), Some(r#"{"limit": "100k"}"#));
+        assert!(ignored(&settings).is_empty(), "a lower limit was reported");
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,

@@ -803,6 +803,15 @@ doctor-settings-retention-ignored =
 # reported before its words are written.
 doctor-settings-home-only-ignored =
     { $key } in { $path } is not obeyed: it is read from the person's own settings only
+# The spend limit is the one key a checkout may state, and only to lower it. A value that removes the
+# person's limit, raises it or counts in another unit is dropped, so the question about spending is
+# still put at the figure the person wrote.
+doctor-settings-limit-ignored =
+    limit in { $path } is not obeyed: it may lower the limit in ~/.bravebot/settings.json and cannot remove it, raise it or count it in another unit
+# A key a checkout may only narrow that has no message of its own above, so a key added to the table
+# is reported before its words are written.
+doctor-settings-narrowed-ignored =
+    { $key } in { $path } is not obeyed: it may only narrow what the person's own settings state, and this value does not
 # The sweep that removes old session records, language server indexes and findings waits while the
 # period it was asked for cannot be determined, and removes nothing, so a person who set a period
 # is not swept on the built-in one instead.

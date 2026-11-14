@@ -1332,11 +1332,39 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
 | `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
+| `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
 the desktop settings view each name every file that carried one, and a key added to the table is
 reported by both without an edit to either.
+
+The keys a project or local layer may only narrow are read from a second table (`NARROW_ONLY`), kept
+beside the first and reported through the same accessor, so `doctor` and the desktop settings view
+name a file whose value was not obeyed in the same way, and a key added to either table is reported
+by both without an edit to either. A key in it is settled once every layer has been read, and not
+by the closest layer winning. The layers entitled to the key (the home layer and the file
+`--settings` names, the later of the two winning) state the value in force. A project or local layer
+is then obeyed for it only where it takes nothing from that value: where the entitled layers state
+nothing, it is held to the key's default where the key has one and states the value where it has
+none; where they state one, it may state a value that is no wider, and what
+no wider means is a rule of the key's kind. The two checkout files are held to this in turn, project
+then local, each against the value the one before left, so the local file cannot raise what the
+project file lowered. A value that is not obeyed is dropped, the file is recorded under the key, and
+the value is not read anywhere. Only the home layer or the file `--settings` names can remove,
+raise or replace a value in the table.
+
+For `limit`, a layer states a value when it holds a whole number of tokens above zero or a count
+string such as `"200k"` or `"50 credits"`. `null`, zero, a string that is no figure and any other
+type state nothing, which is how the person's own file says they want no limit. A checkout's value
+is no wider when it is in the same unit as the value in force and no larger. A figure in the other
+unit is not narrower than a figure in this one, since tokens and credits count different things, so
+it is not obeyed. A checkout's `null`, zero or non-figure over a limit in force is a removal and is
+not obeyed. Where the person's own files state no limit, a checkout may state one, and a checkout
+value that states nothing leaves no limit and is not reported, because it removed nothing.
+[TURN-8](turns.md#TURN-8) is why `limit` is in the table, and `askIdleSeconds` is kept to the person's
+files for the reason [ASK-9](tools/ask-user.md#ASK-9) gives, which is that the person's own clock is
+not a repository's to set.
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
 a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
@@ -1439,6 +1467,14 @@ with it.
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
 `verified-by: bravebot_cli::doctor::a_checkout_naming_any_home_only_key_is_reported_with_the_key_and_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_naming_any_home_only_key_is_listed_as_ignored`
+`verified-by: bravebot_cli::doctor::a_checkout_limit_that_widens_the_persons_is_reported_with_the_file`
+`verified-by: bravebot_cli::doctor::every_narrow_only_key_is_said_with_its_file_and_not_as_home_only`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_limit_that_widens_the_persons_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::the_narrow_only_table_keys_are_unique_and_not_home_only`
+`verified-by: bravebot_config::settings::every_narrow_only_key_keeps_the_persons_value_against_a_wider_one`
+`verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`

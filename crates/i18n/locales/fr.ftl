@@ -678,6 +678,15 @@ doctor-settings-retention-ignored =
 # sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
 doctor-settings-home-only-ignored =
     { $key } dans { $path } n'est pas appliqué : il n'est lu que dans les réglages de la personne elle-même
+# La limite de dépense est la seule clé qu'une copie de travail peut nommer, et seulement pour
+# l'abaisser. Une valeur qui supprime la limite de la personne, la relève ou compte dans une autre
+# unité est écartée, de sorte que la question sur la dépense est posée au chiffre que la personne a écrit.
+doctor-settings-limit-ignored =
+    limit dans { $path } n'est pas appliqué : il peut abaisser la limite de ~/.bravebot/settings.json et ne peut ni la supprimer, ni la relever, ni la compter dans une autre unité
+# Une clé qu'une copie de travail ne peut que restreindre et qui n'a pas de message propre ci-dessus,
+# de sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
+doctor-settings-narrowed-ignored =
+    { $key } dans { $path } n'est pas appliqué : il ne peut que restreindre ce que les réglages de la personne elle-même indiquent, et cette valeur ne le fait pas
 # Le balayage qui supprime les anciens enregistrements de session, les index du serveur de langage et
 # les constats attend tant que la durée demandée ne peut pas être déterminée, et ne supprime rien,
 # afin que la personne qui a fixé une durée ne se voie pas appliquer à la place celle qui est intégrée.

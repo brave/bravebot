@@ -234,6 +234,153 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     ("askIdleSeconds", Entitled::OwnOrNamed),
 ];
 
+/// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
+///
+/// A new kind is a variant and one arm in each of the three methods. A boolean whose `false` is the
+/// narrower answer, or a count where a lower one is, is a kind of its own and is added there.
+#[derive(Clone, Copy)]
+enum Narrows {
+    /// The session spend limit: a count of one unit ([`crate::limit::Limit`]). A figure is
+    /// narrower when it is in the same unit and no larger.
+    Limit,
+}
+
+impl Narrows {
+    /// Whether a value states something this kind can compare.
+    ///
+    /// `null`, zero, a string that is no figure and any other shape state nothing: they are what
+    /// removes the bound when a layer that is not the person's writes one.
+    fn usable(self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Limit => limit_stated(Some(value)).is_some(),
+        }
+    }
+
+    /// What a checkout is held to where the person stated nothing usable, or `None` where there is
+    /// no bound and any usable value is a bound added.
+    ///
+    /// A key that has a default in force when nothing is stated returns it here, as the value the
+    /// file would have stated, so a checkout cannot go past what a person who wrote nothing gets.
+    /// A usable value it states is compared with this by [`Narrows::at_most`] as it would be with
+    /// the person's own.
+    fn unstated(self) -> Option<serde_json::Value> {
+        match self {
+            // There is no default limit: a person who stated none has a session nothing bounds.
+            Self::Limit => None,
+        }
+    }
+
+    /// Whether `offered` takes nothing from what `held` states: it asks for no more than `held`
+    /// does, in the same terms. Both are usable ([`Narrows::usable`]).
+    fn at_most(self, held: &serde_json::Value, offered: &serde_json::Value) -> bool {
+        match self {
+            Self::Limit => match (limit_stated(Some(held)), limit_stated(Some(offered))) {
+                (Some(held), Some(offered)) => {
+                    held.unit == offered.unit && offered.figure <= held.figure
+                }
+                _ => false,
+            },
+        }
+    }
+}
+
+/// The keys a checkout's settings file may state only to narrow what the person stated.
+///
+/// The home layer and the layers `entitled` names decide the key as they always did. A layer that
+/// is not entitled is obeyed for it only where its value is usable and is no wider than what the
+/// layers above it have settled on: where nothing is stated it states the value, and where the
+/// person stated one it may state a narrower one in the same terms ([`Narrows::at_most`]), and
+/// where the key has a default ([`Narrows::unstated`]) it is held to that. A value
+/// that does anything else is dropped, the file is recorded in `Settings::not_obeyed` under the key,
+/// and [`Settings::not_obeyed_all`] answers for it as it does for [`HOME_ONLY`], so `doctor` and the
+/// desktop settings view report it.
+///
+/// Settled in [`Settings::layered`] before the merge, which keeps whichever layer spoke last and so
+/// cannot be left to say which of two values is the narrower. To add a key: one row here, a
+/// [`Narrows`] kind if none fits (with its default bound in [`Narrows::unstated`] where the key has
+/// one), a row in the test table `NARROW_ONLY_EXPECTED`, and its `doctor-settings-<key>-ignored`
+/// message, which the general `doctor-settings-narrowed-ignored` stands in for until one is written.
+const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
+    // Where a question about the person's spend is put is decided by this figure (TURN-8), so a
+    // checkout cannot remove it, raise it or count in another unit.
+    ("limit", Narrows::Limit, Entitled::OwnOrNamed),
+];
+
+/// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
+///
+/// The named file is read after the checkout's two, so which layer is entitled cannot be known
+/// until all are, and a value cannot be compared with what the person said before then.
+#[derive(Default)]
+struct Narrowed {
+    /// What the last layer entitled to the key wrote, usable or not.
+    standing: Option<serde_json::Value>,
+    /// What each layer not entitled wrote, weakest layer first.
+    offered: Vec<(PathBuf, serde_json::Value)>,
+}
+
+impl Narrowed {
+    /// Put the value in force under `key` in `document`, and answer for the files that wrote one
+    /// that was not obeyed, weakest first.
+    ///
+    /// An offered value is compared with the one in force when its turn comes, so two checkout
+    /// files each narrow what the one before left, and a figure in the other unit than the one in
+    /// force is refused whichever file wrote it.
+    fn settle(self, kind: Narrows, document: &mut Document, key: &str) -> Vec<PathBuf> {
+        self.settle_against(kind, kind.unstated().as_ref(), document, key)
+    }
+
+    /// [`Narrowed::settle`] with the bound for a person who stated nothing given, so that the
+    /// comparison against it is the same code whichever kind supplies it.
+    ///
+    /// A value that is no wider than `unstated` is obeyed where nothing is held, and a usable one
+    /// that is wider is refused and reported. Once a value is held it replaces `unstated` as the
+    /// bound.
+    fn settle_against(
+        self,
+        kind: Narrows,
+        unstated: Option<&serde_json::Value>,
+        document: &mut Document,
+        key: &str,
+    ) -> Vec<PathBuf> {
+        let Self { standing, offered } = self;
+        let mut held = match standing {
+            Some(value) if kind.usable(&value) => Some(value),
+            // The person's own file stating nothing usable states that there is nothing to keep.
+            Some(value) => {
+                document.displaced.push(value);
+                None
+            }
+            None => None,
+        };
+        let mut refused = Vec::new();
+        for (path, value) in offered {
+            let usable = kind.usable(&value);
+            let obeyed = usable
+                && held
+                    .as_ref()
+                    .or(unstated)
+                    .is_none_or(|bound| kind.at_most(bound, &value));
+            if obeyed {
+                if let Some(wider) = held.replace(value) {
+                    document.displaced.push(wider);
+                }
+                continue;
+            }
+            document.displaced.push(value);
+            // A value that states nothing where nothing is in force removes nothing, and over a
+            // default it leaves the default, so there is nothing to report; the same value over a
+            // stated one is the removal this table is for.
+            if usable || held.is_some() {
+                refused.push(path);
+            }
+        }
+        if let Some(value) = held {
+            document.root.insert(key.to_string(), value);
+        }
+        refused
+    }
+}
+
 /// The number of days a record is kept when no `retentionDays` is stated.
 ///
 /// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
@@ -945,6 +1092,9 @@ struct LayerFacts {
     /// records are kept for, so the merge must never see it. Each is removed from the layer's
     /// own root before it reaches the merge, and the file is kept under the key.
     not_obeyed: BTreeMap<&'static str, Vec<PathBuf>>,
+    /// What each layer said about a key of [`NARROW_ONLY`], one entry per row of the table, settled
+    /// by [`LayerFacts::settle_narrowed`] once all are read.
+    narrowed: Vec<Narrowed>,
     /// Settled per layer for the reason `model` is: how long the person's own records are kept is
     /// theirs to state, and the merge keeps whichever file spoke last.
     retention_unreadable: Vec<PathBuf>,
@@ -1009,6 +1159,43 @@ impl LayerFacts {
                     .entry(*key)
                     .or_default()
                     .push(path.to_path_buf());
+            }
+        }
+    }
+
+    /// Taken out of the layer for the reason [`LayerFacts::home_only`] removes a key, and held
+    /// rather than dropped: which of the values a key was written with is in force is known only
+    /// once every layer is read.
+    fn narrow_only(
+        &mut self,
+        root: &mut Document,
+        merged: &mut Document,
+        path: &Path,
+        own: bool,
+        named_here: bool,
+    ) {
+        for ((key, _, entitled), held) in NARROW_ONLY.iter().zip(self.narrowed.iter_mut()) {
+            let Some(value) = root.root.remove(*key) else {
+                continue;
+            };
+            if entitled.admits(own, named_here) {
+                if let Some(replaced) = held.standing.replace(value) {
+                    merged.displaced.push(replaced);
+                }
+            } else {
+                held.offered.push((path.to_path_buf(), value));
+            }
+        }
+    }
+
+    /// Put into the merged root as the one value in force, so [`Settings::from_map`] reads it as
+    /// it reads a key nothing layered. A file whose value was not obeyed is reported with the
+    /// files that named a key of [`HOME_ONLY`].
+    fn settle_narrowed(&mut self, merged: &mut Document) {
+        for ((key, kind, _), held) in NARROW_ONLY.iter().zip(std::mem::take(&mut self.narrowed)) {
+            let refused = held.settle(*kind, merged, key);
+            if !refused.is_empty() {
+                self.not_obeyed.entry(*key).or_default().extend(refused);
             }
         }
     }
@@ -1499,7 +1686,10 @@ impl Settings {
 
         let mut merged = Document::default();
         let mut found = Vec::new();
-        let mut facts = LayerFacts::default();
+        let mut facts = LayerFacts {
+            narrowed: NARROW_ONLY.iter().map(|_| Narrowed::default()).collect(),
+            ..LayerFacts::default()
+        };
         let named_path = named.map(Path::to_path_buf);
         // Where a `/x` rule in a checkout's file starts, and what a start inside the workspace is
         // spelled relative to (PERM-3).
@@ -1524,6 +1714,7 @@ impl Settings {
             // repository answer for whoever cloned it.
             let granting = own || named_here;
             facts.home_only(&mut root, &path, own, named_here);
+            facts.narrow_only(&mut root, &mut merged, &path, own, named_here);
             facts.retention(&root, &path, own);
             facts.vetting_and_narrowing(&root, &path, own);
             facts.last_speaker(&root, &path, own);
@@ -1543,6 +1734,8 @@ impl Settings {
             facts.deny_and_ask_rules(&mut root, &path, own, &anchor);
             merge(&mut merged, root.take());
         }
+
+        facts.settle_narrowed(&mut merged);
 
         let mut settings = Self::from_map(&merged);
         settings.layers = found;
@@ -1609,16 +1802,7 @@ impl Settings {
         settings.prompt_cache_ttl =
             word(root, "promptCacheTtl").and_then(|word| crate::CacheTtl::parse(&word));
         settings.editor_mode = word(root, "editorMode");
-        settings.limit = match root.get("limit") {
-            Some(serde_json::Value::Number(count)) => count
-                .as_u64()
-                .filter(|tokens| *tokens > 0)
-                .map(crate::limit::Limit::tokens),
-            Some(serde_json::Value::String(text)) => {
-                crate::limit::parse(text, crate::limit::Unit::Tokens)
-            }
-            _ => None,
-        };
+        settings.limit = limit_stated(root.get("limit"));
         settings.defer_mcp_tools_above = match root.get("deferMcpToolsAbove") {
             Some(serde_json::Value::Number(count)) => count.as_u64().filter(|tokens| *tokens > 0),
             Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
@@ -2452,16 +2636,24 @@ impl Settings {
         HOME_ONLY.iter().map(|(key, _)| *key)
     }
 
-    /// Each file that named a key of [`HOME_ONLY`] from a layer not entitled to it, with the key,
-    /// in the order of the table and weakest layer first within a key.
+    /// The keys of [`NARROW_ONLY`], in the order of the table.
+    pub fn narrow_only_keys() -> impl Iterator<Item = &'static str> {
+        NARROW_ONLY.iter().map(|(key, _, _)| *key)
+    }
+
+    /// Each file that named a key of [`HOME_ONLY`] from a layer not entitled to it, and each file
+    /// whose value for a key of [`NARROW_ONLY`] was wider than the person's or stated nothing, with
+    /// the key, in the order of the tables and weakest layer first within a key.
     ///
     /// Carries key names and paths only, never a value a file stated.
     pub fn not_obeyed_all(&self) -> impl Iterator<Item = (&'static str, &Path)> {
-        Self::home_only_keys().flat_map(|key| self.not_obeyed(key).map(move |path| (key, path)))
+        Self::home_only_keys()
+            .chain(Self::narrow_only_keys())
+            .flat_map(|key| self.not_obeyed(key).map(move |path| (key, path)))
     }
 
-    /// The files that named `key`, a key of [`HOME_ONLY`], from a layer not entitled to it,
-    /// weakest first.
+    /// The files that named `key`, a key of [`HOME_ONLY`] or [`NARROW_ONLY`], from a layer not
+    /// entitled to it or with a value it was not entitled to state, weakest first.
     fn not_obeyed(&self, key: &str) -> impl Iterator<Item = &Path> {
         self.not_obeyed
             .get(key)
@@ -2981,6 +3173,25 @@ fn retrieval_stated(root: &serde_json::Map<String, serde_json::Value>) -> Option
 /// A real boolean and nothing else: `"true"`, `1` and `null` are absence, with no coercion.
 pub(crate) fn flag(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
     root.get(key).and_then(serde_json::Value::as_bool)
+}
+
+/// The spend limit a `limit` value states, or `None` where it states none.
+///
+/// A whole number above zero is a count of tokens, and a string is a count with an optional unit.
+/// Zero, a negative or fractional number, `null`, a boolean and a string that is no figure state
+/// nothing. The one reading for the merged root ([`Settings::from_map`]) and for the settlement of
+/// [`NARROW_ONLY`], so what a layer is held to is what a session would have read.
+fn limit_stated(value: Option<&serde_json::Value>) -> Option<crate::limit::Limit> {
+    match value {
+        Some(serde_json::Value::Number(count)) => count
+            .as_u64()
+            .filter(|tokens| *tokens > 0)
+            .map(crate::limit::Limit::tokens),
+        Some(serde_json::Value::String(text)) => {
+            crate::limit::parse(text, crate::limit::Unit::Tokens)
+        }
+        _ => None,
+    }
 }
 
 /// A whole number above zero, where the value is one.
@@ -7645,6 +7856,337 @@ mod tests {
         assert_eq!(settings.limit(), Some(crate::limit::Limit::tokens(200_000)));
         assert_eq!(settings.unread_keys().count(), 0);
         assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"]);
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// TURN-8 puts a question at the person's figure, so a checkout's file cannot remove it
+    /// (`null`, `0`, a string that is no figure), raise it, or count in another unit, whichever of
+    /// the two checkout files says so. The file is named for `doctor` and the desktop settings
+    /// view, and the figure still shows among the names the person set.
+    #[test]
+    fn a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit() {
+        use crate::limit::Limit;
+        for (written, why) in [
+            (r#"{"limit": null}"#, "removes it"),
+            (r#"{"limit": 0}"#, "removes it"),
+            (r#"{"limit": "none"}"#, "removes it"),
+            (r#"{"limit": false}"#, "removes it"),
+            (r#"{"limit": "999999999999"}"#, "raises it"),
+            (r#"{"limit": "1 credits"}"#, "changes the unit"),
+        ] {
+            for local in [false, true] {
+                let layers = Layers::new(if local {
+                    "limit-local"
+                } else {
+                    "limit-project"
+                })
+                .global(r#"{"limit": "200k"}"#);
+                let layers = if local {
+                    layers.local(written)
+                } else {
+                    layers.project(written)
+                };
+                let settings = layers.read();
+                assert_eq!(
+                    settings.limit(),
+                    Some(Limit::tokens(200_000)),
+                    "{written} in the {} layer {why}",
+                    if local { "local" } else { "project" }
+                );
+                assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"], "{written}");
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{written} was not reported");
+                assert_eq!(reported[0].0, "limit");
+                assert!(
+                    reported[0].1.ends_with(if local {
+                        LOCAL_SETTINGS_FILE
+                    } else {
+                        SETTINGS_FILE
+                    }),
+                    "{written} was reported under {:?}",
+                    reported[0].1
+                );
+            }
+        }
+    }
+
+    /// The same refusal where the person's limit is in credits: a count of tokens is another unit,
+    /// and a lower figure in the person's own unit is the only thing a checkout may add.
+    #[test]
+    fn a_checkout_layer_cannot_move_a_credit_limit_into_tokens() {
+        use crate::limit::Limit;
+        let settings = Layers::new("limit-credits")
+            .global(r#"{"limit": "50 credits"}"#)
+            .project(r#"{"limit": "10 tokens"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::credits(50)));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+
+        let settings = Layers::new("limit-credits-lower")
+            .global(r#"{"limit": "50 credits"}"#)
+            .project(r#"{"limit": "20 credits"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::credits(20)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// A checkout may lower the person's figure in the person's unit, and a figure equal to it
+    /// changes nothing and takes nothing, so it is not reported.
+    #[test]
+    fn a_checkout_layer_may_lower_the_limit_in_the_same_unit() {
+        use crate::limit::Limit;
+        for (layers, expected) in [
+            (
+                Layers::new("limit-lower")
+                    .global(r#"{"limit": "200k"}"#)
+                    .project(r#"{"limit": "100k"}"#),
+                Limit::tokens(100_000),
+            ),
+            (
+                Layers::new("limit-equal")
+                    .global(r#"{"limit": "200k"}"#)
+                    .project(r#"{"limit": 200000}"#),
+                Limit::tokens(200_000),
+            ),
+            (
+                Layers::new("limit-lower-local")
+                    .global(r#"{"limit": 200000}"#)
+                    .local(r#"{"limit": "1k"}"#),
+                Limit::tokens(1_000),
+            ),
+        ] {
+            let settings = layers.read();
+            assert_eq!(settings.limit(), Some(expected));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+    }
+
+    /// The file `--settings` names is the person's, as the home file is, so it decides the limit in
+    /// either direction.
+    #[test]
+    fn the_named_settings_file_decides_the_limit_as_the_home_file_does() {
+        use crate::limit::Limit;
+        let settings = Layers::new("limit-named")
+            .global(r#"{"limit": "200k"}"#)
+            .named(r#"{"limit": "1m"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(1_000_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        // A checkout is held to what the entitled layers settled on, whichever order the files are
+        // read in, so it narrows the named file's figure as it narrows the home file's.
+        let settings = Layers::new("limit-named-over-project")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "100k"}"#)
+            .named(r#"{"limit": "300k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(100_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        let settings = Layers::new("limit-named-under-project")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "250k"}"#)
+            .named(r#"{"limit": "300k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(250_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        let settings = Layers::new("limit-named-null")
+            .global(r#"{"limit": "200k"}"#)
+            .named(r#"{"limit": null}"#)
+            .read();
+        assert_eq!(settings.limit(), None);
+    }
+
+    /// Where the person's own files state no limit there is nothing to remove, so a checkout may
+    /// state one. A value of theirs that is no figure (`null`, `0`) states none, which is how a
+    /// person says they want no limit, and a checkout then adds a bound rather than removing one.
+    #[test]
+    fn a_checkout_layer_may_state_a_limit_where_the_person_stated_none() {
+        use crate::limit::Limit;
+        for (name, home) in [
+            ("limit-unstated", None),
+            ("limit-null", Some(r#"{"limit": null}"#)),
+            ("limit-zero", Some(r#"{"limit": 0}"#)),
+        ] {
+            let mut layers = Layers::new(name);
+            if let Some(home) = home {
+                layers = layers.global(home);
+            }
+            let settings = layers.project(r#"{"limit": "100k"}"#).read();
+            assert_eq!(settings.limit(), Some(Limit::tokens(100_000)), "{name}");
+            assert_eq!(settings.not_obeyed_all().count(), 0, "{name}");
+        }
+        // Nothing stated and a value that states nothing: no limit, and nothing it removed.
+        let settings = Layers::new("limit-null-over-nothing")
+            .project(r#"{"limit": null}"#)
+            .read();
+        assert_eq!(settings.limit(), None);
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// The two checkout files narrow in turn, each held to what the one before left, so a local
+    /// file cannot raise what the project file lowered and a unit cannot be changed between them.
+    #[test]
+    fn the_checkout_layers_narrow_one_after_the_other() {
+        use crate::limit::Limit;
+        let settings = Layers::new("limit-chain")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "100k"}"#)
+            .local(r#"{"limit": "150k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(100_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+
+        let settings = Layers::new("limit-chain-lower")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "100k"}"#)
+            .local(r#"{"limit": "50k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(50_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        let settings = Layers::new("limit-chain-unit")
+            .project(r#"{"limit": "100k"}"#)
+            .local(r#"{"limit": "10 credits"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(100_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// A file that stated a limit the session did not obey is still a file that stated something,
+    /// and the key is one this build reads, so it is never among the keys nothing reads.
+    #[test]
+    fn a_refused_limit_is_not_an_unread_key() {
+        let settings = Layers::new("limit-unread")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": null}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// Every row of the table is a key that is read by one of the kinds, none is also a row of
+    /// [`HOME_ONLY`] (which would remove it before it was compared), and each is listed once.
+    #[test]
+    fn the_narrow_only_table_keys_are_unique_and_not_home_only() {
+        let keys: Vec<&str> = Settings::narrow_only_keys().collect();
+        assert!(!keys.is_empty());
+        let mut seen = keys.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), keys.len(), "a key is listed twice");
+        for key in &keys {
+            assert!(
+                Settings::home_only_keys().all(|home| home != *key),
+                "{key} is in both tables"
+            );
+        }
+    }
+
+    /// A usable value that is no wider than the bound for a person who stated nothing is obeyed and
+    /// a wider one is refused and reported, which is how a key with a default is held. A value that
+    /// states nothing over that bound removes nothing and is not reported.
+    #[test]
+    fn a_default_bound_holds_a_checkout_where_the_person_stated_nothing() {
+        use crate::limit::Limit;
+        // What the document holds for the key afterwards: the value that is in force, or nothing
+        // where the bound for a person who stated nothing stays in force.
+        for (offered, in_force, reported) in [
+            (serde_json::json!("100k"), Some(Limit::tokens(100_000)), 0),
+            (serde_json::json!("200k"), Some(Limit::tokens(200_000)), 0),
+            (serde_json::json!("999999999999"), None, 1),
+            (serde_json::json!("1 credits"), None, 1),
+            (serde_json::Value::Null, None, 0),
+        ] {
+            let held = Narrowed {
+                standing: None,
+                offered: vec![(PathBuf::from("/checkout/settings.json"), offered.clone())],
+            };
+            let mut document = Document::default();
+            let refused = held.settle_against(
+                Narrows::Limit,
+                Some(&serde_json::json!("200k")),
+                &mut document,
+                "limit",
+            );
+            assert_eq!(refused.len(), reported, "{offered}");
+            assert_eq!(
+                limit_stated(document.root.get("limit")),
+                in_force,
+                "{offered}"
+            );
+        }
+    }
+
+    /// What each row of [`NARROW_ONLY`] is checked with: the person's value, values a checkout
+    /// writes that take something from it, and one that narrows it. `read` shows what a session
+    /// would read for the key, so one test holds every row to the same four statements.
+    struct NarrowCase {
+        key: &'static str,
+        read: fn(&Settings) -> String,
+        person: &'static str,
+        wider: &'static [&'static str],
+        narrower: &'static str,
+    }
+
+    /// One row for each row of [`NARROW_ONLY`], which the test below holds to be so.
+    const NARROW_ONLY_EXPECTED: &[NarrowCase] = &[NarrowCase {
+        key: "limit",
+        read: |settings| format!("{:?}", settings.limit()),
+        person: r#""200k""#,
+        wider: &["null", "0", r#""999999999999""#, r#""1 credits""#],
+        narrower: r#""100k""#,
+    }];
+
+    /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
+    /// wider one from the project and from the local layer (naming the file once), and takes a
+    /// narrower one without reporting it.
+    #[test]
+    fn every_narrow_only_key_keeps_the_persons_value_against_a_wider_one() {
+        let keys: Vec<&str> = Settings::narrow_only_keys().collect();
+        let cases: Vec<&str> = NARROW_ONLY_EXPECTED.iter().map(|case| case.key).collect();
+        assert_eq!(
+            keys, cases,
+            "the cases are not one for each row of the table"
+        );
+        for case in NARROW_ONLY_EXPECTED {
+            let key = case.key;
+            let object = |value: &str| format!(r#"{{"{key}": {value}}}"#);
+            let kept = (case.read)(
+                &Layers::new(&format!("narrow-{key}-person"))
+                    .global(&object(case.person))
+                    .read(),
+            );
+            for wider in case.wider {
+                for local in [false, true] {
+                    let layers =
+                        Layers::new(&format!("narrow-{key}-wider")).global(&object(case.person));
+                    let layers = if local {
+                        layers.local(&object(wider))
+                    } else {
+                        layers.project(&object(wider))
+                    };
+                    let settings = layers.read();
+                    assert_eq!((case.read)(&settings), kept, "{key}: {wider} local={local}");
+                    assert_eq!(
+                        settings.not_obeyed_all().count(),
+                        1,
+                        "{key}: {wider} local={local}"
+                    );
+                    assert_eq!(settings.names().filter(|name| *name == key).count(), 1);
+                }
+            }
+            let settings = Layers::new(&format!("narrow-{key}-narrower"))
+                .global(&object(case.person))
+                .project(&object(case.narrower))
+                .read();
+            assert_ne!(
+                (case.read)(&settings),
+                kept,
+                "{key}: narrower was not taken"
+            );
+            assert_eq!(settings.not_obeyed_all().count(), 0, "{key}");
+        }
     }
 
     /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`

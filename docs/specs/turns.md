@@ -431,6 +431,17 @@ question the planner asks, and every permission mode passes it on, bypassing inc
 asks about nothing still stops here, unless the person set no limit. A new limit or going on without
 one is the session's from then on, including for a turn already running when `/limit` is typed.
 
+**A checkout cannot set the person's limit aside.** The person has set no limit only if their own
+settings file and the file `--settings` names state none. A `limit` in a project or local settings
+file is read as a limit only where it takes nothing from the person's: it states one where they
+stated none, or a smaller figure in the same unit. A checkout's `null`, zero, figure that is not a
+count, larger figure or figure in the other unit (credits for tokens, or tokens for credits) is not
+obeyed, the question stays at the figure the person wrote, and `doctor` and the desktop settings
+view name the file ([BACKEND-24](backends.md#BACKEND-24)). A person's own `null` or zero is how
+they state no limit. A question about spending is one the driver puts to a person who has to be
+there, so what sets the figure is the person's own file and no repository
+([ASK-9](tools/ask-user.md#ASK-9)).
+
 **The figure is a count and the stop depends on no content.** Tokens are the sum of the usage the
 backends reported ([BACKEND-31](backends.md#BACKEND-31), [BACKEND-40](backends.md#BACKEND-40)). A
 request that reported nothing adds nothing, so a backend that reports no usage is never stopped by
@@ -478,6 +489,14 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
 `verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
 `verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
+`verified-by: bravebot_config::settings::a_checkout_layer_may_lower_the_limit_in_the_same_unit`
+`verified-by: bravebot_config::settings::a_checkout_layer_may_state_a_limit_where_the_person_stated_none`
+`verified-by: bravebot_config::settings::the_checkout_layers_narrow_one_after_the_other`
+`verified-by: bravebot_config::settings::the_named_settings_file_decides_the_limit_as_the_home_file_does`
+`verified-by: bravebot_config::settings::a_refused_limit_is_not_an_unread_key`
+`verified-by: bravebot_config::settings::the_nearest_layer_names_the_session_limit`
 
 <a id="TURN-9"></a>
 ### TURN-9: the same call three times running is held and asked about

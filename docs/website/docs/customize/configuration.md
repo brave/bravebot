@@ -321,6 +321,7 @@ one thing leaves everything else in force:
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and the file `--settings` names; a project or local file's are ignored and reported |
 | `git.identities` | your own file and the file `--settings` names, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
 | `askIdleSeconds` | your own file and the file `--settings` names; a project or local file's is ignored and reported |
+| `limit` | your own file and the file `--settings` names; a project or local file may state one where you stated none, or lower yours in the same unit, and a value that removes yours, raises it or counts in the other unit is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -781,8 +782,12 @@ The most tokens or premium requests a session may spend before the terminal clie
 stop, to go on without a limit or to go on under a new one. A whole number of tokens, or a string with
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
 to count premium requests instead, one for each request that presents the premium key. A value that is
-none of these, and zero, sets no limit. The nearest settings file that names it wins, and
-[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
+none of these, and zero, sets no limit. In your own files the nearest file that names it wins, and
+[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. A project or
+local settings file can add a limit where you have none, or lower yours in the same unit, so a
+repository can ask for a smaller bound on its own sessions. It cannot remove your limit (with `null`,
+zero or a value that is no figure), raise it, or count in the other unit, and `bravebot doctor` names
+a file whose value was ignored. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
 

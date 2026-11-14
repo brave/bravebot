@@ -265,6 +265,10 @@ fn home_only_line(key: &str, path: String) -> String {
         "references" => t!(doctor_settings_references_ignored, path = path),
         "attribution" => t!(doctor_settings_attribution_ignored, path = path),
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
+        "limit" => t!(doctor_settings_limit_ignored, path = path),
+        other if bravebot_config::Settings::narrow_only_keys().any(|key| key == other) => {
+            t!(doctor_settings_narrowed_ignored, key = other, path = path)
+        }
         other => t!(doctor_settings_home_only_ignored, key = other, path = path),
     }
 }
@@ -2494,6 +2498,57 @@ mod tests {
                 "{key} is said in the general message: {lines:?}"
             );
         }
+    }
+
+    /// TURN-8, BACKEND-24: a checkout whose `limit` removes, raises or changes the unit of the
+    /// person's is reported with the key and the file, in the message written for the limit. The
+    /// keys are read from the table of keys a checkout may only narrow, so a key added to it is held
+    /// to the first half of this as well.
+    #[test]
+    fn a_checkout_limit_that_widens_the_persons_is_reported_with_the_file() {
+        let root = scratch("narrow-only-keys");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        assert!(
+            bravebot_config::Settings::narrow_only_keys().any(|key| key == "limit"),
+            "limit is not in the table"
+        );
+        std::fs::write(home.join("settings.json"), r#"{"limit": "200k"}"#).expect("home file");
+        for written in [r#"{"limit": null}"#, r#"{"limit": "999999999999"}"#] {
+            std::fs::write(&project_file, written).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{written}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("limit in {}", project_file.display())),
+                "{written}: {lines:?}"
+            );
+            assert!(
+                lines[0].contains("may lower the limit"),
+                "{written} is said in the general message: {lines:?}"
+            );
+        }
+    }
+
+    /// A key of the narrow-only table is said with its own name and the file, never as a key read
+    /// from the person's own settings only. A key the table gains before its own arm is written is
+    /// said in the general message, which names the key and the file and says it may only narrow.
+    #[test]
+    fn every_narrow_only_key_is_said_with_its_file_and_not_as_home_only() {
+        let line = home_only_line("limit", "/checkout/settings.json".to_string());
+        assert!(line.contains("may lower the limit"), "{line}");
+        assert!(
+            bravebot_config::Settings::narrow_only_keys().all(|key| {
+                let line = home_only_line(key, "/f".to_string());
+                line.contains(key)
+                    && line.contains("/f")
+                    && !line.contains("read from the person's own settings only")
+            }),
+            "a key of the table is said as one that is read from the person's own settings only"
+        );
     }
 
     /// BACKEND-24: a key the table gains before its own message is written is said in the general
