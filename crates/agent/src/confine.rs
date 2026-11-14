@@ -1686,10 +1686,18 @@ impl Confinement {
         // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
         // row is a write refusal too: a row given without a request, or on macOS any row, a
         // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
-        // a write would run code later, or loosen this profile, are refused beside them.
-        if !unasked.is_empty() || self.prelude == Prelude::MacOs {
-            let mut refused = policy.unreadable.clone();
-            if let (Prelude::MacOs, Some(home)) = (self.prelude, self.home.as_deref()) {
+        // a write would run code later, or loosen this profile, are refused beside them, on Linux
+        // as on macOS: a session on the home directory or above it holds a row over them, and a
+        // launcher the person starts later reads what a stage wrote there (SANDBOX-30).
+        let reads_refused_for_writes = !unasked.is_empty() || self.prelude == Prelude::MacOs;
+        let refuses_persistence = matches!(self.prelude, Prelude::MacOs | Prelude::Linux);
+        if reads_refused_for_writes || refuses_persistence {
+            let mut refused = if reads_refused_for_writes {
+                policy.unreadable.clone()
+            } else {
+                Vec::new()
+            };
+            if let (true, Some(home)) = (refuses_persistence, self.home.as_deref()) {
                 refused.extend(persistence_locations(home));
             }
             for refused in refused {
@@ -4254,6 +4262,56 @@ mod tests {
     // Not under /home: macOS mounts autofs there, so each lookup beneath it asks the automounter.
     const HOME: &str = "/people/person";
 
+    /// Each place under the home directory a stage is refused writing wherever a row would reach
+    /// it, written out by name and not read from the rules: a name the rules lost would otherwise
+    /// leave this list and the code agreeing about nothing (SANDBOX-18).
+    const PERSISTENCE_NAMES: &[&str] = &[
+        ".zshenv",
+        ".zprofile",
+        ".zshrc",
+        ".zlogin",
+        ".zlogout",
+        ".bash_profile",
+        ".bash_login",
+        ".bashrc",
+        ".bash_aliases",
+        ".bash_logout",
+        ".profile",
+        ".config/fish",
+        ".xprofile",
+        ".xsessionrc",
+        "Library/LaunchAgents",
+        ".config/systemd/user",
+        ".config/autostart",
+        ".config/environment.d",
+        ".gitconfig",
+        ".config/git/config",
+        ".config/mimeapps.list",
+        ".local/share/applications",
+        ".config/gnome-mimeapps.list",
+        ".config/gnome-classic-mimeapps.list",
+        ".config/gnome-flashback-mimeapps.list",
+        ".config/ubuntu-mimeapps.list",
+        ".config/kde-mimeapps.list",
+        ".config/xfce-mimeapps.list",
+        ".config/cinnamon-mimeapps.list",
+        ".config/x-cinnamon-mimeapps.list",
+        ".config/mate-mimeapps.list",
+        ".config/unity-mimeapps.list",
+        ".config/pantheon-mimeapps.list",
+        ".config/budgie-mimeapps.list",
+        ".config/lxqt-mimeapps.list",
+        ".config/lxde-mimeapps.list",
+        ".config/deepin-mimeapps.list",
+        ".config/dde-mimeapps.list",
+        ".config/cosmic-mimeapps.list",
+        ".config/enlightenment-mimeapps.list",
+        ".config/ukui-mimeapps.list",
+        ".config/sway-mimeapps.list",
+        ".config/hyprland-mimeapps.list",
+        ".config/i3-mimeapps.list",
+    ];
+
     /// SANDBOX-22: the planner is told of a sandbox mode chosen while its turn runs, in the words
     /// of the mode it moved to, and of nothing that did not change. A move to `off` is told as the
     /// end of a boundary, since the description states none under `off`; a move to a confining
@@ -6404,31 +6462,10 @@ mod tests {
         for root in [HOME, "/"] {
             let confined = reading_confinement(Prelude::MacOs, &[root]);
             let policy = confined.policy(&step("/bin/cat", &["f"]), Path::new(root), &[]);
-            for name in [
-                ".ssh",
-                ".aws",
-                ".bravebot",
-                ".zshenv",
-                ".zprofile",
-                ".zshrc",
-                ".zlogin",
-                ".bash_profile",
-                ".bash_login",
-                ".bashrc",
-                ".profile",
-                ".zlogout",
-                ".bash_aliases",
-                ".bash_logout",
-                ".config/fish",
-                ".xprofile",
-                ".xsessionrc",
-                "Library/LaunchAgents",
-                ".config/systemd/user",
-                ".config/autostart",
-                ".config/environment.d",
-                ".gitconfig",
-                ".config/git/config",
-            ] {
+            for name in [".ssh", ".aws", ".bravebot"]
+                .into_iter()
+                .chain(PERSISTENCE_NAMES.iter().copied())
+            {
                 let path = Path::new(HOME).join(name);
                 assert!(
                     policy.unwritable.contains(&path),
@@ -6442,6 +6479,49 @@ mod tests {
             );
         }
         let beside = reading_confinement(Prelude::MacOs, &["/people/person/project"]);
+        let policy = beside.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+        assert!(policy.unwritable.is_empty(), "{:?}", policy.unwritable);
+    }
+
+    /// SANDBOX-18, SANDBOX-30: a Linux session on the home directory or above it writes beneath the
+    /// home except the persistence locations, `~/.config/mimeapps.list`, the desktop-named lists
+    /// and `~/.local/share/applications` among them, which a launcher the person starts later
+    /// reads (SANDBOX-30). The regression it rejects: the persistence refusal made only where
+    /// the prelude is macOS, so a normal-mode Linux stage could write a link handler that the
+    /// opener then runs outside the sandbox. A write to a file beside them stays granted.
+    #[test]
+    fn a_linux_session_at_or_above_home_cannot_write_where_a_write_runs_later() {
+        for root in [HOME, "/"] {
+            let confined = reading_confinement(Prelude::Linux, &[root]);
+            let policy = confined.policy(&step("/bin/cat", &["f"]), Path::new(root), &[]);
+            for name in PERSISTENCE_NAMES {
+                let path = Path::new(HOME).join(name);
+                assert!(
+                    policy.unwritable.contains(&path),
+                    "{root}: {name} is writable: {:?}",
+                    policy.unwritable
+                );
+            }
+            assert!(
+                policy
+                    .writable
+                    .iter()
+                    .any(|row| Path::new(HOME).starts_with(&row.path)),
+                "{root}: the session has no row over the home directory"
+            );
+            assert!(
+                !policy
+                    .unwritable
+                    .contains(&Path::new(HOME).join(".config/other.conf")),
+                "{root}: a file beside a persistence location is refused: {:?}",
+                policy.unwritable
+            );
+        }
+        let beside = reading_confinement(Prelude::Linux, &["/people/person/project"]);
         let policy = beside.policy(
             &step("/bin/cat", &["f"]),
             Path::new("/people/person/project"),

@@ -50,7 +50,11 @@ use std::process::Stdio;
 /// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not set, and Qt and GLib keep configuration under it.
 /// [`home_reads_outside_stage_writable`] also judges those two paths, since a stage can write them
 /// without writing `HOME` itself. A value a stage may write is removed and the program falls back
-/// to the account's own home.
+/// to the account's own home. That helps when `HOME` names a directory other than the account's
+/// home. When `HOME` is the account's home the fallback reads the same directories, so removing it
+/// changes nothing there. The writes are refused instead: `~/.config/mimeapps.list`, the
+/// `~/.config/<desktop>-mimeapps.list` files and `~/.local/share/applications` are persistence
+/// locations that a stage may not write (SANDBOX-18).
 ///
 /// `GIO_LAUNCH_DESKTOP` is the path of the wrapper program that `gio open` executes with the whole
 /// command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line 3100), so it is one
@@ -266,7 +270,10 @@ const READ_UNDER_HOME: [&str; 2] = [".config", ".local/share/applications"];
 /// Whether what `xdg-open` reads under `home` is outside the directories a stage may write.
 ///
 /// A session opened on `~/.config` or `~/.local/share` has no row for `HOME` itself, so `HOME` alone
-/// passes while the files read under it can be written. Each path in [`READ_UNDER_HOME`] is judged
+/// passes while the files read under it can be written. Removing `HOME` for that reason helps only
+/// where `HOME` names a directory other than the account's home, since the program then reads the
+/// account's home instead. Where `HOME` is the account's home, the persistence locations refuse the
+/// stage the writes (SANDBOX-18). Each path in [`READ_UNDER_HOME`] is judged
 /// as it is when it exists (a link counts and is followed by the judgment). One that does not exist
 /// is judged by the nearest existing directory above it below `home`, since whoever may write that
 /// directory can make the path. `home` itself is judged by [`CODE_SELECTORS`].
@@ -2643,10 +2650,11 @@ mod tests {
 
     /// SANDBOX-30, on the disk: `HOME` is removed when it, or the configuration or handler
     /// directory `xdg-open` reads under it, leads to a directory a stage may write, and kept
-    /// otherwise. The regression it rejects: `HOME` judged alone, so a session opened on
-    /// `~/.config` or on `~/.local/share/applications` (which has no row for `HOME`) leaves `HOME`
-    /// as set while the files read under it are the stage's; and a comparison of the names as
-    /// written, which a link into the session slips past.
+    /// otherwise. The regression it rejects: `HOME` judged alone, so a `HOME` naming a directory
+    /// whose `.config` or `.local/share/applications` is a stage's (a session opened on either has
+    /// no row for `HOME`) is left as set; and a comparison of the names as written, which a link
+    /// into the session slips past. Removing `HOME` does not protect an account's own home, which
+    /// GLib reads when `HOME` is unset; SANDBOX-18 refuses the writes there.
     #[cfg(unix)]
     #[test]
     fn a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk() {
