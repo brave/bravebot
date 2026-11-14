@@ -940,6 +940,11 @@ Any other key removes it. Each one is a request that costs tokens, charged to th
 by `/cost`. None is asked for in plan mode, in an incognito session or after a turn that failed or
 was stopped, and none is offered after an exchange that met content nobody vouched for. Only the boolean `true` turns it on.
 
+A project's `.bravebot/settings.json` or `settings.local.json` may state `false`, which keeps
+suggestions off for whoever runs bravebot in that directory. A `true` there is ignored, whether your
+own `~/.bravebot/settings.json` says `false` or says nothing, and `bravebot doctor` names the file.
+Only your own settings, or a file named with `--settings`, turn suggestions on.
+
 ### `terminalTitle`
 
 ```json

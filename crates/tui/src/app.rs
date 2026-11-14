@@ -41437,6 +41437,42 @@ mod tests {
         assert!(suggest_next(&failed, &config, &conversation, &trust).is_none());
     }
 
+    /// A session starts with suggestions off where a checkout's settings file turned them on and
+    /// the person's own did not (BACKEND-24), over the person's `false` and over nothing, and
+    /// stays on where the person's own file turned them on.
+    #[test]
+    fn a_checkouts_suggestions_do_not_turn_the_session_on() {
+        let root = crate::testutil::scratch_dir("bravebot-app-checkout-suggestions");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
+        std::fs::write(
+            cwd.join(".bravebot").join("settings.json"),
+            r#"{"suggestions": true}"#,
+        )
+        .expect("write the project layer");
+        let suggests = |home_text: &str| {
+            std::fs::write(home.join("settings.json"), home_text).expect("write the home layer");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let mut session = Session::new("none");
+            adopt_settings(&mut session, &settings, None);
+            session.suggests()
+        };
+
+        assert!(
+            !suggests(r#"{"suggestions": false}"#),
+            "over the person's false"
+        );
+        assert!(!suggests("{}"), "over nothing");
+        assert!(
+            suggests(r#"{"suggestions": true}"#),
+            "the person's own true"
+        );
+    }
+
     /// A session wide enough for the panel with `src/a.rs` written once.
     fn session_that_wrote() -> Session {
         let mut session = Session::new("none");

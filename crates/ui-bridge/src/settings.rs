@@ -375,6 +375,32 @@ mod tests {
         assert_eq!(settings.deep_links(), Some(false));
     }
 
+    /// A checkout whose `suggestions` is `true` is listed with the key and the file over the
+    /// person's `false` and over nothing, and one that leaves suggestions off is not.
+    #[test]
+    fn a_checkout_suggestions_turned_on_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "suggestions"));
+        for home in [Some(r#"{"suggestions": false}"#), None] {
+            let (directory, settings) = vetting_layers(home, Some(r#"{"suggestions": true}"#));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": "suggestions", "path": project })],
+                "{home:?}"
+            );
+            assert_ne!(settings.suggestions(), Some(true), "{home:?}");
+        }
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"suggestions": true}"#),
+            Some(r#"{"suggestions": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "suggestions left off were reported"
+        );
+        assert_eq!(settings.suggestions(), Some(false));
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,

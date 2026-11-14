@@ -247,6 +247,10 @@ enum Narrows {
     /// turns something off. Only a boolean states it ([`flag`]), so a quoted `"false"` states
     /// nothing. `true` is no wider than `true` and `false` is no wider than either.
     Off,
+    /// A switch that is off unless stated otherwise, and whose `false` is the narrower answer: it
+    /// leaves something off. Only a boolean states it ([`flag`]). Where the person stated nothing a
+    /// checkout is held to the default, so its `true` is not obeyed and its `false` is.
+    OffByDefault,
 }
 
 impl Narrows {
@@ -257,7 +261,7 @@ impl Narrows {
     fn usable(self, value: &serde_json::Value) -> bool {
         match self {
             Self::Limit => limit_stated(Some(value)).is_some(),
-            Self::Off => value.is_boolean(),
+            Self::Off | Self::OffByDefault => value.is_boolean(),
         }
     }
 
@@ -275,6 +279,9 @@ impl Narrows {
             // On where nothing is stated, and no value is wider than that, so a checkout's `true`
             // is what a person who wrote nothing already has and its `false` turns the switch off.
             Self::Off => None,
+            // Off where nothing is stated, and `true` is wider than that, so a checkout cannot turn
+            // on what a person who wrote nothing has off.
+            Self::OffByDefault => Some(serde_json::Value::Bool(false)),
         }
     }
 
@@ -288,7 +295,7 @@ impl Narrows {
                 }
                 _ => false,
             },
-            Self::Off => match (held.as_bool(), offered.as_bool()) {
+            Self::Off | Self::OffByDefault => match (held.as_bool(), offered.as_bool()) {
                 (Some(held), Some(offered)) => !offered || held,
                 _ => false,
             },
@@ -323,6 +330,10 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
     // over a person who refused them, since the link the operating system hands over is the one
     // the person's own `false` was written against (LINK-6).
     ("deepLinks", Narrows::Off, Entitled::OwnOrNamed),
+    // A request after every turn is a spend nobody asked for, so a checkout may leave suggestions
+    // off for whoever runs it there and may not turn them on, over the person's `false` or over
+    // the default (INPUT-43).
+    ("suggestions", Narrows::OffByDefault, Entitled::OwnOrNamed),
 ];
 
 /// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
@@ -2058,7 +2069,9 @@ impl Settings {
     /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-43).
     ///
     /// A boolean and nothing else, and the key exists to turn a request on, so only a real `true`
-    /// does it: a quoted `"true"` is absence and nothing is asked. The opposite of
+    /// does it: a quoted `"true"` is absence and nothing is asked. A project or local layer's
+    /// `true` is not read where the person's own files do not state `true` ([`NARROW_ONLY`]). The
+    /// opposite of
     /// [`Settings::terminal_title`], and for the opposite reason: a suggestion is a request that
     /// spends, so a value read loosely could spend for somebody who wrote something else.
     pub fn suggestions(&self) -> Option<bool> {
@@ -8176,6 +8189,15 @@ mod tests {
             wider: &["null", "0", r#""false""#],
             narrower: "false",
         },
+        // The default is off, so `true` over a person who stated nothing is held too, by
+        // `a_checkout_may_turn_suggestions_off_and_not_on`.
+        NarrowCase {
+            key: "suggestions",
+            read: |settings| format!("{:?}", settings.suggestions()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
     ];
 
     /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
@@ -8444,6 +8466,138 @@ mod tests {
             .project(r#"{"deepLinks": true}"#)
             .read();
         assert_eq!(settings.deep_links(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// INPUT-43, BACKEND-24: a project or local layer may leave suggestions off and may not turn
+    /// them on, over the person's `false` or over the default, and the file that tried is
+    /// reported. The person's own file and the file `--settings` names decide the key as they
+    /// would any other.
+    #[test]
+    fn a_checkout_may_turn_suggestions_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("suggestions-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"suggestions": true}"#;
+            let off = r#"{"suggestions": false}"#;
+
+            // Over the person's `false`, and over what a person who wrote nothing has, `true` is
+            // not obeyed and the file is named.
+            for global in [Some(off), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("on", global, on);
+                assert_ne!(
+                    settings.suggestions(),
+                    Some(true),
+                    "{global:?} local={local}"
+                );
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{global:?} local={local}");
+                assert_eq!(reported[0].0, "suggestions");
+                assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+                // Named where a value is in force, and not where the file's `true` left nothing,
+                // which is still not an empty settings because the file is reported.
+                assert_eq!(
+                    settings
+                        .names()
+                        .filter(|name| *name == "suggestions")
+                        .count(),
+                    usize::from(settings.suggestions().is_some())
+                );
+                assert!(!settings.is_empty());
+            }
+            assert_eq!(
+                with("on-over-off", Some(off), on).suggestions(),
+                Some(false),
+                "local={local}"
+            );
+
+            // A checkout's `false` leaves them off over `true` and over nothing, and neither is
+            // reported.
+            for global in [Some(on), None] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.suggestions(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` changes nothing and is not reported.
+            let settings = with("on-over-on", Some(on), on);
+            assert_eq!(settings.suggestions(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // A value that is not a boolean states nothing: a checkout's is absence and is not
+            // reported, and a person's does not hold a checkout to `true`.
+            for word in [r#""true""#, "1", "null"] {
+                let settings = with(
+                    "checkout-word",
+                    None,
+                    &format!(r#"{{"suggestions": {word}}}"#),
+                );
+                assert_eq!(settings.suggestions(), None, "{word} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{word}");
+            }
+            let settings = with("person-word", Some(r#"{"suggestions": "true"}"#), on);
+            assert_ne!(settings.suggestions(), Some(true), "local={local}");
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("suggestions-local-over-project")
+            .project(r#"{"suggestions": false}"#)
+            .local(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The person's own file turns them on, and a checkout's `false` then turns them off.
+        let settings = Layers::new("suggestions-person-on")
+            .global(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(true));
+        let settings = Layers::new("suggestions-person-on-checkout-off")
+            .global(r#"{"suggestions": true}"#)
+            .local(r#"{"suggestions": false}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(false));
+
+        // The file the command line named is the person's own act and turns them on, over the
+        // person's `false`, wherever it sits, and a checkout's `true` over its `false` is refused.
+        let settings = Layers::new("suggestions-named-on")
+            .global(r#"{"suggestions": false}"#)
+            .named(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("suggestions-named-inside-on")
+            .global(r#"{"suggestions": false}"#)
+            .named_inside_the_workspace(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("suggestions-named-off-checkout-on")
+            .named(r#"{"suggestions": false}"#)
+            .project(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(false));
         assert_eq!(settings.not_obeyed_all().count(), 1);
     }
 

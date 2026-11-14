@@ -268,6 +268,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
+        "suggestions" => t!(doctor_settings_suggestions_ignored, path = path),
         other if bravebot_config::Settings::narrow_only_keys().any(|key| key == other) => {
             t!(doctor_settings_narrowed_ignored, key = other, path = path)
         }
@@ -2609,6 +2610,51 @@ mod tests {
         let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
         assert_eq!(settings.deep_links(), Some(false));
         assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// INPUT-43, BACKEND-24: a checkout whose `suggestions` is `true` is reported with the key and
+    /// the file, in the message written for the key, over the person's `false` and over nothing,
+    /// and one that leaves suggestions off is not reported.
+    #[test]
+    fn a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file() {
+        for (name, home_text) in [
+            ("over-off", Some(r#"{"suggestions": false}"#)),
+            ("over-nothing", None),
+        ] {
+            let root = scratch(&format!("suggestions-on-{name}"));
+            let home = root.join("home");
+            let cwd = root.join("cwd");
+            let project_file = bravebot_config::project_settings_file(&cwd);
+            std::fs::create_dir_all(&home).expect("home");
+            std::fs::create_dir_all(project_file.parent().expect("project directory"))
+                .expect("cwd");
+            if let Some(text) = home_text {
+                std::fs::write(home.join("settings.json"), text).expect("home file");
+            }
+            std::fs::write(&project_file, r#"{"suggestions": true}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            assert_ne!(settings.suggestions(), Some(true), "{name}");
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{name}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("suggestions in {}", project_file.display())),
+                "{lines:?}"
+            );
+            assert!(
+                lines[0].contains("may leave suggestions off"),
+                "in the message of its own: {lines:?}"
+            );
+            assert!(
+                !lines[0].contains("read from the person's own settings only"),
+                "said as a key a checkout may not name: {lines:?}"
+            );
+
+            // A checkout that leaves suggestions off is not reported.
+            std::fs::write(&project_file, r#"{"suggestions": false}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+            assert_eq!(settings.suggestions(), Some(false), "{name}");
+            assert!(home_only_lines(&settings).is_empty(), "{name}");
+        }
     }
 
     /// A key of the narrow-only table is said with its own name and the file, never as a key read
