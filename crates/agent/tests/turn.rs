@@ -71222,6 +71222,10 @@ fn a_relative_program_not_found_inside_a_substitution_says_where_it_was_looked_f
 
     let last = bodies.last().expect("the round after the refusal");
     assert!(
+        last.contains("`./scripts/tool.sh` at offset 19: "),
+        "the substitution's refusal did not place the program in the whole line: {last}"
+    );
+    assert!(
         last.contains("is not a program that could be found: nothing runnable is at that path")
             && last.contains(
                 "It was looked for in 'sub', carried from the last run that named a directory; \
