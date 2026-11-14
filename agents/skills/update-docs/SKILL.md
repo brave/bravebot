@@ -7,7 +7,7 @@ description:
   belongs on, records how far it got, and builds the site cleanly. Triggers on:
   update docs, /update-docs, sync docs with specs, docs drift.'
 argument-hint: '[rev-range] [dry-run]'
-allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(gh pr create *), Bash(grep *), Bash(rg *), Read, Edit, Write
+allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(gh pr create *), Bash(gh pr view *), Bash(grep *), Bash(rg *), Read, Edit, Write
 ---
 
 # Bring the Documentation Site Up to Date With Brave Bot
@@ -104,8 +104,31 @@ A run that changed files ends by opening a pull request, without being asked. Do
 
 1. `git fetch upstream main`, then `git worktree add -b docs/update-through-<number> <path> upstream/main`, where `<number>` is the pull request number in the title of the commit recorded by `docs-ref.py set`.
 2. Copy the changed files into the worktree, including `docs/docs-updated-to-sha` and `docs/docs-deferred`. Leave out files the run did not write, such as `docs/maintenance-reviewed`.
-3. Commit as netzenbot, signed, with the netzenbot name, email and signing key set through environment overrides. The pre-push hook requires the author email `netzenbot@agentmail.to`. The commit title is `docs: bring the site up to the specs through #<number>`.
-4. Push to `origin`, which is netzenbot's fork, with `GIT_SSH_COMMAND` set to the netzenbot key. Never push to `upstream`.
-5. Open the pull request as netzenbot with `gh pr create --repo brave/bravebot --head netzenbot:<branch> --base main`. The body lists the pages changed, the commits deferred with their reasons, and that `make -C docs/website check` passed. It does not describe how the run went.
+3. Commit in the worktree with the person's own git configuration, following [commits.md](../../../docs/development/commits.md). The commit title is `docs: bring the site up to the specs through #<number>`.
+4. Push the branch to `origin` with `git push -u origin <branch>`. Never push to `upstream`.
+5. Open the pull request with `gh pr create --repo brave/bravebot --base main --title <title> --body-file <file>` from the worktree, so `gh` takes the head from the branch's remote. The body lists the pages changed, the commits deferred with their reasons, and that `make -C docs/website check` passed. It does not describe how the run went.
 
 A change to this skill is a separate pull request from its own worktree, never part of a documentation pull request.
+
+### Waiting for the checks and the review
+
+The pull request is not finished when it is opened. It is finished when its checks have passed and netzenbot-reviewer has reviewed the current head and asks for nothing, or one of the limits below ends the wait. Use [pr-fix](../pr-fix/SKILL.md) for each step, from the worktree. Below, `...` stands for `python3 agents/skills/pr-fix/pr-fix.py`, and the `run` arguments are the ones pr-fix gives for each step.
+
+1. `... review <pr>` asks netzenbot-reviewer for a review of the head.
+2. `... ci <pr> --wait` with `deadline_seconds: 600`. Repeat it until no check is pending.
+3. Read the verdict with `gh pr view <pr> --repo brave/bravebot --json state,isDraft,headRefOid,reviews,reviewRequests`. Only a review by netzenbot-reviewer made at `headRefOid` counts, since a push makes every earlier review a review of different code. A `PENDING` or `DISMISSED` review is ignored. The verdict is:
+   - approved: `APPROVED`, or `COMMENTED` with none of the reviewer's threads open in `... comments <pr>`. The wait is over.
+   - changes: `CHANGES_REQUESTED`, or `COMMENTED` with a thread of the reviewer's open. Do a fix round.
+   - pending: no counted review at the head. Poll in one `run` call that reads the verdict and sleeps 10 seconds in a loop until a counted review exists or 590 seconds have passed, then read it and call again.
+   - closed: the state is not `OPEN`. Stop and report.
+4. A fix round follows pr-fix steps 3 to 7 with `... start <pr>`: fix each failing check and make the change each open comment asks for and nothing beside it, commit the fixes as one new commit and never amend, `... push <pr>`, post a reply under each thread with `... reply`, and never resolve a thread. A comment that is mistaken, or that asks for something outside the pull request's changes, gets a reply and no change. Then go back to step 1.
+
+Stop and report what is left when:
+
+- the checks have failed three times in a row;
+- the reviewer has asked for changes five times;
+- a fix round pushed nothing because every comment was answered with a reply;
+- 120 minutes have passed since the last push with no review of the head, in which case report that the review is still pending at that head;
+- the pull request was merged or closed.
+
+A failing check that does not touch the diff and also fails on the base is not this pull request's to fix: report it and leave it.
