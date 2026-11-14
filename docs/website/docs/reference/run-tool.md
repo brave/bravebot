@@ -15,7 +15,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
-| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), and asked about every time. Under `off`, and in a turn that confines none of its runs, the line already starts with no sandbox, so the request is checked for its shape and then ignored, and the line is put to you as any other line is. In a workspace you have not trusted it is refused in every mode. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
+| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists (`cargo`, `node`, `python`, `go`, `maven`, `gradle` and `gh`, the last lending gh's cache and no network), `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), and asked about every time. Under `off`, and in a turn that confines none of its runs, the line already starts with no sandbox, so the request is checked for its shape and then ignored, and the line is put to you as any other line is. In a workspace you have not trusted it is refused in every mode. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
@@ -93,6 +93,12 @@ is compiled and before anyone is asked, and the carried directory goes back to t
 directory is checked again just before the first stage starts, so one removed while the question waited is
 reported as removed rather than as a program that could not be started.
 
+A program named by a relative path that is not there is refused, and the refusal says where the path
+was looked for: in the directory as the planner typed it, or at the workspace root. Where the call named
+no directory and the line would have run in one an earlier call named, the refusal says the directory was
+carried from that call and that passing `directory` changes it. A bare name is looked for on `PATH` and an
+absolute path names its own place, so their refusals name no directory.
+
 ## What the grammar takes
 
 | | |
@@ -167,7 +173,10 @@ variable or substitution as an argument or as the program, backticks (an assignm
   the removal is still applied after the assignment. A variable that is not set is refused too,
   naming the variable.
 - **A failing `cmd` is reported by its source and its exit status.** What it printed is in the
-  message neither for you nor for the model.
+  message neither for you nor for the model. A file that `cmd`'s own line could not open is named
+  once, under the directory as the line wrote it.
+- **The prompt counts `cmd` as a step.** The step count and rows in the approval prompt include it,
+  in the order it runs.
 
 ## Your answer binds to the plan, not to the line
 
@@ -275,6 +284,21 @@ link to a directory. `ls`, `stat` and `du` must name a path, because with none t
 working directory or, for BSD `stat`, on standard input, and `-L` and `-H` are refused because they
 follow a link to a place the line does not name.
 
+A name an unquoted pattern matched counts as a path read only where the program reads that argument as
+a file. Where it sits as an operand the program prints (`basename`'s or `dirname`'s), as grep's pattern,
+as an option or as an option's value, the line is not proven: you are asked and the output is untrusted.
+So `basename incoming/*` asks, `basename 'incoming/*'` (quoted, passed as written) does not, and
+`cat src/*.rs` in a tree you vouched for still runs unasked. A matched name that starts with `-` is
+read as an option and also stops the proof.
+
+A program that resolves into a directory a plan could have written is not proven either: you are asked
+and the output is untrusted. That covers a file under the working directory, the checkout that holds it
+(the nearest ancestor with a `.git`), a directory you added with `/add-dir` or left with `/cd`, the
+directory a delegate's checkout was made from, a directory a stage was let write with `request_path`, and
+a relative `PATH` entry. So a bare `pwd` that resolves to `bin/pwd` in the checkout asks. A checkout at
+your account home or at `/` puts every program under it in that set. A checkout marked only by `.hg` or
+`.jj` is not in it.
+
 A recursive search answers for the whole tree it walks, so `grep -r` takes its label from the
 directory it was pointed at and everything beneath it. A directory you refused inside a project you
 vouched for decides the answer about that project.
@@ -332,9 +356,16 @@ A line runs unasked only where all of these hold:
   so a file name holding a space is found, and also as the words in it, read with the quoting a shell
   applies, so `sh "run script.sh"` and `sh -c "'run script.sh'"` name the file they run;
 - no word in the line's own arguments names a file your trust map holds as untrusted, for example the
-  fetched text copied over a trusted file by `cp fetched.md AGENTS.md`. A path inside a `sh -c` string
-  is not a word of the arguments. Such a line is asked about as the file
-  tools are, and a refusal leaves the file and the map as they were.
+  fetched text copied over a trusted file by `cp fetched.md AGENTS.md`. The part of a word after its
+  first `=` is read as a word too, so `--reference=fetched.md` and `dd if=fetched.md of=AGENTS.md` are
+  looked at as the paths they name. A word that climbs out of the directory with `..`, one the trust map
+  says nothing about (a path outside the directory with no rule) and one whose names could not all be
+  found count as untrusted, and a directory word counts as untrusted when any path under it is. A glob
+  is checked under every name it matched. A line the audited table proves read-only, such as
+  `cat /etc/hosts`, is not asked about under this condition, and its output keeps the label it had.
+  A path inside a `sh -c` or `python3 -c` string, or a file `make` opens by itself, is not a word of the
+  arguments, so a line that copies an untrusted file that way is not asked about. A line that fails this
+  condition is asked about as the file tools are, and a refusal leaves the file and the map as they were.
 
 Its output is untrusted and private, as for any line nobody vouched for. Such a line runs with the network
 closed for that line, even where the session's network is open, which is the default: a plain command that needs
@@ -360,6 +391,20 @@ the line with the sandbox first. Where the refusal was a closed `run.network` th
 deny, the planner is told that a line with no sandbox, or the mode `off`, runs with the network
 open. A request you decline keeps the one it earned, and accepting one spends it.
 
+When a request for `unconfined` or `scopes` is refused, the model is told one sentence that does not
+say which setting withheld it, and you are shown a note beside it naming each cause that held, so you
+can tell which setting to change. The audit trail records the same causes.
+
+**A program that was not started is not reported as a line that may have run.** Where a program could not be
+confined, or could not be started because it is missing or the system refused it, the result says so. Where
+nothing of the line had started, it says the line was not run. Otherwise it says the line stopped at a
+program that was not started, and that the part before it may have run. For a program that could not be
+confined, it also says that running the same line again is refused the same way until one of the routes it
+names is taken: `unconfined: true`, and the sandbox mode `off`, each named only where the session would accept
+it. A line left running in the background is told the same. A program inside a `$(...)` that is refused
+this way is told in the older words, that the command substitution produced no value and the line may have
+run in part, with no routes named, and the refusal earns no request for no sandbox.
+
 A line stopped at its deadline or by you, a line that already ran with no sandbox and a line moved
 to the background earn nothing. A line whose own redirection leaves the workspace is the exception:
 the sandbox refuses it before anything runs, so it is accepted without a failure, as
@@ -381,6 +426,12 @@ no option name before the `=`, a pattern ahead of the `=`, and a dash with no `=
 planner is told the line as it wrote it, with the pattern, in a run's result, in a job's start and end,
 and in an error. A refusal by a `deny` rule names the program and no operands.
 
+A name a pattern matched counts as a file the line reads only where the program reads it as a file.
+`cat incoming/*` takes its label from what the trust map says about `incoming/`. `basename incoming/*`
+may print the names, so the line is asked about and its output is quarantined, and so is a line where
+a matched name starts with `-` and so is read as an option. Quoting the pattern, as in
+`basename 'incoming/*'`, passes it as written and keeps the line proven by what it reads.
+
 Expansion is bounded in both directions: a word standing for more than 100 arguments is refused with
 the count, and the walk gives up after 4,096 directories. An approval prompt nobody reads grants
 everything and asks nothing.
@@ -392,10 +443,19 @@ at the prompt, and it takes every rule a write takes: the permission rules, the 
 for that path, and the confinement that keeps a write inside the workspace. `>>` is a write, and
 `2>&1` renames a stream and touches no file.
 
-**A redirection outside the workspace needs a line with no sandbox.** bravebot, not the sandboxed
-program, opens the file a redirection names, so a destination outside the workspace and the
-directories you opened is refused. When you ask for a file there, such as `create ../hello.txt with
-howdy`, the planner is told it can start the line with `unconfined: true`. You are asked about that
+**A redirection outside the workspace is refused until you open its directory, or the line runs with no
+sandbox.** bravebot, not the sandboxed program, opens the file a redirection names, so a destination
+outside the workspace and the directories you opened is refused. The refusal gives the same remedy a
+file tool's write to that path gets: open the directory the file is in, or the directory itself, with
+`/add-dir` or `--add-dir`, with a warning where that directory holds the working directory. Once it is
+open, the same line writes the file. No directory is offered for a credential location, for a path under
+[`permissions.readsStayInWorkspace`](../customize/configuration.md), for a name that is not UTF-8, or where
+a link carried the path out. In a run nobody can be asked in, such as a one-shot run, the planner is told
+the remedy is none and to name the path it needs in its reply. A redirection written inside a shell's
+command string, as in `sh -c 'echo hi >> file'`, is opened by the sandboxed shell, and the failure note says
+to write it on the `run` line itself, where a refusal names the file. Where the session accepts it, the
+planner is also told it can start the line with `unconfined: true`, as for a file you asked for such as
+`create ../hello.txt with howdy`. You are asked about that
 one line every time, the prompt lists the file and says the line runs with no sandbox, and no answer
 to it is remembered. The same redirection runs without the argument under `--sandbox off`, where no
 program is sandboxed. A delegate, the desktop app, and the `strict` and `read-only` modes do not
@@ -409,7 +469,10 @@ or a link to the device, is an ordinary path and is refused as one outside the w
 
 **A destination is checked again just before each open.** If an earlier part of the line left a link
 that points outside the workspace and the directories you opened, the line stops there and names the
-destination. This holds for a file the line opens a second time. On a volume that folds case, a line
+destination. This holds for a file the line opens a second time. The `deny` rules and a delegate's
+`writes:` limit are asked again at each open too, so a link or hard link left at an approved name that
+leads to a denied file stops the line. A file a `$(...)` assignment value cannot open is named once,
+under the directory as the line wrote it. On a volume that folds case, a line
 that redirects to one file under two spellings is refused as a second writer. On Windows a target that
 reads as another file (a stream, a device such as `NUL`, a trailing dot or space, an 8.3 short name) is
 refused before any rule is consulted, for a file read with `<` as for one written. A short name is
@@ -444,7 +507,12 @@ remembered command cannot pick one up unseen. Both redirections are among the pr
 ## Something that wants a terminal is refused before it starts
 
 `git rebase -i`, `git add -i`, an editor, a pager without `--no-pager`: refused when the line is
-compiled, with the thing to do instead. The list is a convenience rather than a guarantee. Something
+compiled, with the thing to do instead. `git commit` is refused when it gives no message, because git
+would open an editor. `-m`, `-F`, `-C`, `--message`, `--file`, `--reuse-message` or `--no-edit` lets
+it through, and so does a plain `--fixup=<commit>` (or `--fixup <commit>`), since git writes the
+`fixup!` message itself. `--fixup=amend:<commit>` and `--fixup=reword:<commit>` open an editor and
+are refused unless a message option is also given. `--squash=<commit>` is refused. The list is a
+convenience rather than a guarantee. Something
 interactive that is not on it reaches [the deadline](#a-line-has-a-deadline) and comes back with
 what it printed.
 
@@ -479,7 +547,9 @@ comes back as text it can read, since nobody is shown it. Screening ([`--vet`](.
 changes it in any mode: a check's word answers first, so the planner is told the output comes back as
 text it can read or that it was kept back. Otherwise the planner is told you see the output and decide.
 The description names neither the mode nor the check. A run's result carries only the reference, the
-advice about vouching for the command (left out where a remembered line already stops the asking), and,
+advice about vouching for the command (left out where a remembered line already stops the asking, and
+left out where the mode answers runs without asking, as bypassing permissions does, since a run the mode
+approved vouches for no program; the result then says that what was printed cannot be shown in this turn), and,
 where the call passed `read: true` and the output did not come back, a note that the argument did not
 return it.
 

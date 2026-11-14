@@ -55,6 +55,14 @@ A command that colours its output is drawn without its colour codes, with a row 
 saying how many were left out ([the transcript](transcript.md)). That changes what the screen draws
 and not what the model is sent.
 
+## A command that starts a background process
+
+A command ends when the shell that ran it exits, not when every process it printed into does. A line
+such as `sleep 10 &` returns at once, and the process it started is left running, never stopped or
+waited for. The shell's pipes are read for a short grace of about two seconds after it exits, and what
+had arrived by then is what the model reads. Whatever the background process prints after that is not
+drawn and not sent, and Esc does not reach it.
+
 ## Output while it runs
 
 What a command prints is drawn under it as it prints, from standard output and standard error in the

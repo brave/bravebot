@@ -65,8 +65,14 @@ the first request of a turn and shows the address and code it prints. `GOOGLE_AP
 and impersonation are read by `gcloud` and not by bravebot. bravebot does not pass `gcloud` a
 `GOOGLE_APPLICATION_CREDENTIALS` that names a file in a directory a stage may write, or a relative
 or missing path, since a credential file of type `external_account` runs a command. It leaves off
-the other variables `gcloud` and Python read to choose code to run under the same rule, such as
-`PYTHONPATH` and `CLOUDSDK_PYTHON_ARGS`. The token goes only to Google's Vertex
+the other variables `gcloud` and Python read to choose code to run under the same rule: `PYTHONPATH`
+(a list, kept only when every entry passes), `PYTHONHOME`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`,
+`BROWSER`, `OPENSSL_CONF` and the two `CLOUDSDK_CONTEXT_AWARE_*` file paths. `CLOUDSDK_PYTHON_ARGS`
+is always left off. `CLOUDSDK_PYTHON` (the interpreter `gcloud` runs) and
+`CLOUDSDK_CONFIG` (whose `virtenv/bin/activate` it sources) are kept only where they are an absolute
+path outside every directory a stage may write. A bare interpreter name for `CLOUDSDK_PYTHON` is kept,
+and a relative or missing path is left off. If your credential file or interpreter lives in a directory
+a stage may write, it is left off and `gcloud` signs in as it would with none set. The token goes only to Google's Vertex
 host: an entry with a `baseURL` that names another host, or with an `authorization` header of its own,
 is never sent one. A key that is found is used and `gcloud` is not started. bravebot runs `gcloud` for
 each request, since the command states no expiry to keep an answer until.

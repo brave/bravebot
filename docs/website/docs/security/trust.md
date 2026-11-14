@@ -187,9 +187,12 @@ asked whether to trust it:
 Yes writes exactly the rule `@` would have written, so it stays consistent for every later read. The
 prompt shows the full path the rule will be held under, below the file's name, so a rule wider than the
 name reads as wider. A name that is empty, is only whitespace, has a space at either end of it or of a
-directory in it, or holds a character that draws as nothing (a zero-width character, a bidirectional
-control, a no-break space) or as a blank cell (the blank braille pattern) is drawn in quotes with each such
-character spelled out, so it cannot read as another name. The terminal and the desktop window also spell a
+directory in it, holds a character that draws as nothing (a zero-width character, a bidirectional
+control, a no-break space) or as a blank cell (the blank braille pattern), or holds a literal `"` or a
+literal Control Pictures character (U+2400 to U+243F), is drawn in quotes with each such
+character spelled out, so it cannot read as another name. A literal backslash is written `\\` once a
+name is quoted for one of these reasons, and a name that is otherwise plain, such as a Windows path, is
+drawn as it is. The terminal and the desktop window also spell a
 byte of a path that is not part of a UTF-8 character as `\xNN`, so two paths that differ only in such bytes
 are not drawn alike. The prompts for a write, an overwrite and an edit, for reading a credential, for a path
 programs may reach and about a directory, the names a checkout's removal would delete, and the files a run would write and the directories it is confined to, draw names the

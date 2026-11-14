@@ -376,7 +376,9 @@ only those it reaches, as `--merged` does. `search` prints the lines `pattern` m
 at a revision, as `git grep -n` does. Both page with `skip` as a log does.
 `status` lists staged, unstaged and untracked paths as `git status --short --no-renames` does. It
 detects no renames, and lists a file an attribute or `core.autocrlf` would convert, or a
-submodule, as not compared.
+submodule, as not compared. A `status` that runs out of time says it can be narrowed with a `path`
+and that `search.maxSeconds` sets the deadline, and names `git status` through `run` where the session
+holds `run`.
 
 **Why not just run git.** git runs programs its configuration names: an alias, a pager, a diff
 driver, `core.fsmonitor`, and `include.path` pulls configuration in from any file. That configuration
@@ -468,6 +470,12 @@ reference holds. It applies only while nothing has written that file since the r
 processor's answer about the file filled, or any write after a `run` line, is put to you as usual, even
 where that `run` line wrote nothing.
 
+**A yes is not spent if the path may have changed while you were asked.** If the file was written, or
+a `run` line started, after the preview was drawn, a yes writes nothing and leaves the file as it was.
+The agent is told the path may have changed while you were being asked, and to read it again and
+repeat the call. Any `run` line that started during the question has this effect, even one that wrote
+nothing. `edit_file` and `download_url` follow the same rule.
+
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
@@ -489,6 +497,11 @@ errors it found and on which lines, and how many warnings. A write never starts 
 server's own messages are never shown, only counts and line numbers. A server that has not finished
 indexing, or that did not answer in a few seconds, is reported as such rather than as "no errors". A
 file written from a `contents_ref` reports nothing.
+
+A destination that is a named pipe is written to as before. It has no earlier contents, so the diff
+shows an empty file and no backup is kept, and a `run` redirection into one is passed over by the scan
+of what the line leaves. Reading the destination does not wait for a writer, so the write does not
+hold up the other file tools.
 
 ## `edit_file`
 
@@ -1002,6 +1015,11 @@ the message that says it has started names what it was started without, for exam
 without writing files, because the run that started it does not hold it." For a call with `each`
 the sentence is said once and begins "Each was".
 
+A `reader` or `checker` delegate, and any delegate whose kind or definition leaves writing out, is
+refused a `write_file` or `edit_file` call at once: nobody is asked, nothing is scanned or shown, and
+the refusal tells it that this kind of delegate writes nothing and that its content belongs in its
+report. The audit trail records one refusal under `capability`.
+
 The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
 size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply
 with its tool calls. A [definition](../customize/agents.md) is listed with its kind's figure. The
@@ -1077,7 +1095,11 @@ and so does the account the turn gives of a background job that has ended.
 Nothing but the report crosses back: the exchange, the tool results and the quarantine end with the
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
 [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
-to you, replaces nothing on your screen, and reaches no host.
+to you, replaces nothing on your screen, and reaches no host. It is not offered
+[`vet_content`](#vet_content) or [`download_url`](#download_url) either, and the `spawn_agent`
+description tells the planner so: work that needs one of the four is done by the planner before it
+delegates or instead of delegating, and a reference that has to be read whole is read by the planner
+with `vet_content`.
 Naming one of them anyway is refused rather than run, since a model naming a tool it was never offered
 is ordinary. What it could not settle goes in the report, and the planner asks.
 
@@ -1177,6 +1199,14 @@ In the terminal, a series of more than one ends in a review that lists each ques
 answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
 reopens that question from the review, and either brings back what you had answered. A single
 question has no review.
+
+In the terminal, a question is drawn a line of the box for each line it was written in, with its
+inline markdown styled: bold, emphasis, code and headings lose the markers that make them so, and
+a fenced block is drawn as written. The choices, the typing field and the keys always keep their rows.
+A question taller than what is left of the box keeps at least three rows and scrolls with PgUp and
+PgDn, including while the typing field is open. One row says how many lines are below, or that the end
+is reached and how many are above, and the key hints name PgDn only while the question is cut. A long
+plan put by [`propose_plan`](#propose_plan) is drawn the same way, so every choice stays on the screen.
 
 With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
 that sits that long with no key pressed, and every question behind it. The planner is told that no

@@ -19,6 +19,15 @@ Write", by the word its own row will start with. The token count beside it moves
 arguments arrive, so a long file being written reads as work and not as a stall. The name goes once
 the call starts, the round ends, or the request has to be sent again.
 
+**While a request that failed in transit waits to be sent again, the working indicator says when**:
+`Reconnecting, next try in 38s`. Where a retry window decides how long the request goes on being sent
+again, it also says how long is left before bravebot gives up: `Reconnecting, next try in 38s, giving up
+in 52m 10s`. Both count down on screen. Where only a `maxRetries` count decides, there is no time to
+give up and the second figure is left out. When the pause is over, and while the next attempt is out,
+the indicator reads `Reconnecting` again. A line you type during the wait is still sent at once. The
+window and the count are set in the provider's
+[`options`](../customize/providers/openai-compatible.md#retries-and-a-reply-gone-quiet).
+
 **While the turn waits for a delegate's report, the working indicator reads "Waiting on d1"**, with the
 delegate's number, or "Waiting on d1, d2" with the numbers of every delegate still working. A planner
 that has only delegates left ends its round with one line saying what is outstanding, and that line
@@ -231,9 +240,15 @@ every theme.
 
 :::note
 The question about your background colour is asked once, before the first frame, and the answer is
-read straight off the terminal. Anything typed or pasted into the window before it arrives is read by
-that same question and discarded, and a terminal that answers with nothing holds the window open for
-its full 80 milliseconds. It happens once a session, before there is a box to type into.
+read straight off the terminal, together with the questions about your keys and graphics. Keys typed
+or pasted into the window before the answers arrive are kept and reach the box in the order you typed
+them, though nothing is drawn until the questions are answered or given up on: up to 80 milliseconds
+for the background colour and 500 milliseconds for the keys on a terminal that answers nothing. A
+terminal that answers the key question later than that is sent no disambiguated keys for the session,
+and one that did not answer it within 500 milliseconds is not asked about graphics. Keys that arrived
+together in one read do not answer the trust question, and the row above its keys says they were
+refused. Bytes that belong to no key are dropped, and the session says how many in a note before the
+first prompt. It happens once a session.
 :::
 
 See [Choosing a theme](../customize/theme.md) for where the choice is stored
@@ -260,13 +275,14 @@ one service, billed and credentialled differently, and which one answers is what
 between.
 
 **Left folds the section the cursor is in** down to its heading, which then says how many models it
-holds, and **Right** opens it again. The cursor moves to the nearest model still drawn. The arrow
-keys, Home, End and the wheel go over the models of a folded section, and Enter does nothing while
-the cursor is in one. Typing or deleting a character opens every section, so a search never hides a
-match.
+holds, and **Right** opens it again. The cursor moves to the folded section's heading, which is drawn as
+the row the cursor is on. The arrow keys, Home, End and the page keys stop on the heading of a folded
+section and go over its models, the wheel goes over the headings and the models, and Enter does
+nothing while the cursor is on a heading, so a list with every section folded can still be walked.
+Typing or deleting a character opens every section, so a search never hides a match.
 
-**PageDown and PageUp** move the cursor a screenful at a time through the models drawn, and **Home**
-and **End** go to the first and the last.
+**PageDown and PageUp** move the cursor a screenful at a time through the rows it can be on, and
+**Home** and **End** go to the first and the last.
 
 ## When the environment declines colour or motion
 
@@ -502,6 +518,9 @@ says what a click does and what does the same from the keyboard.
 | a delegate's block | opens that delegate's view, in the scroller, at the prompt and while a turn runs | Ctrl-L |
 | `‹ back` in the header of a delegate's view, or the sentence that closes it | leaves the view and returns to what it was opened over | Ctrl-L |
 | a prompt waiting behind a turn | takes it back into the box, with the prompts typed after it | Up, which takes them all |
+| `remove` at the right of a waiting line | removes that line from the queue and puts nothing in the box; a prompt removed is out of the turn's reach, and stays in the history | clearing the box discards the waiting lines |
+| `clear all` on the oldest waiting line, drawn once a second line waits | removes every waiting line, newest first, and leaves the box as it was | clearing the box |
+| a command a click on the info panel queued | removes it from the queue, since it has nothing to put in the box | |
 | a web address in the assistant's words, with ctrl held | opens it in your browser, also while a turn runs | `/open 1`, or `/open` and the address |
 | a file path in the assistant's words | shows the file at the end of the transcript, a moment later so a double click still selects the name | `/open 2`, or `/open` and the path |
 | a file path in the assistant's words, with ctrl held | opens the file in your editor, at the line the path gave | `/open edit 2`, or `/open edit` and the path |

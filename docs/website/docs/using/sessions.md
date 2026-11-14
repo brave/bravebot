@@ -207,6 +207,12 @@ a fraction of a fresh one, and the breakdown keeps no cache split per turn, so a
 be composed here rather than measured. What is written stays comparable across turns and across
 sessions, which is what the record is read for.
 
+The session record does keep two totals for the whole session, not for each turn: the tokens the
+service answered out of its cache and the tokens it wrote into it. They are left out of the record
+while both are zero, so a service that reports no cache figure reads the same as one that missed. The
+info panel does not read them back, so a resumed session shows no cache figures until a turn has run
+in it.
+
 ### Totalling what sessions spent
 
 ```sh
@@ -439,10 +445,15 @@ starting an [MCP server](../customize/mcp-servers.md) nobody has approved, which
 `needs input (server)` and drawn as a foreground session draws it. The question about sending a
 [message to another session](../reference/tools.md#message_session) is held the same way. Closing the terminal, losing the
 connection or typing `/detach` leaves the session running, with a turn in progress and a held question
-unchanged. `/detach` is not sent to the planner.
+unchanged. `/detach` is not sent to the planner. A foreground terminal session whose terminal has
+closed ends with exit status 129, the status a shell reports for a program ended by a hangup, even
+where the closing terminal sent no signal.
 
 A session with nothing running and no terminal attached for an hour is stopped, and the next `attach`
-or `reply` starts it again from its record in the mode every session opens in. A process that ends
+or `reply` starts it again from its record in the mode every session opens in. A background session's
+process, whether `--bg` started it or `reply`, `attach` or the supervisor started it again, ends
+before its first turn when this machine's [managed settings](../customize/managed-settings.md) refuse
+the model it settled on, and the message names the file that refused it. A process that ends
 between turns is started again, up to three times in an hour, idle and in the directory it worked in. It
 takes the environment of the terminal that ran the first `--bg`, so a variable exported in a later
 terminal does not reach it. One that ends during a turn is marked

@@ -77,10 +77,9 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/exit` | | Leave |
 
 Typing `/` offers the list in that order, with your [skills](#skills-after-a-slash) beneath it, and
-Tab completes. The list is one row per command and per skill, and a terminal without the room for all
-of them drops the last ones, skills first: everything is still typeable in full, and a letter or two
-narrows the list back onto the screen, but a short terminal costs you the discovery the list is there
-for.
+Tab completes. The list is one row per command and per skill. Where the room under the box holds
+fewer rows than the list, the list scrolls: the row under the cursor is always drawn, and Down
+reaches the last item.
 
 A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
 it takes appears dimly after the cursor until you start typing one.
@@ -383,7 +382,8 @@ Makes a directory both reachable and trusted, for this session. `--resume` carri
 `/clear` closes it. The path is absolute, starts with `~`, or is relative to the working directory,
 so `/add-dir ../notes` opens the directory beside the project. Where the working directory's name is
 not text, a relative path is refused and the full path is asked for. A directory already inside the
-project is refused. See
+project is refused, and so is a second path to a directory that is already open, such as a macOS
+firmlink or a Linux bind mount to it. See
 [Trusted directories](../security/trust.md#add-dir).
 
 `/add-dir close <path>` closes that one directory and keeps the conversation. A file only it reached
@@ -874,6 +874,8 @@ Lists what this session left unfinished, found by fixed rules over bravebot's ow
 
 It starts no turn and sends nothing to the model.
 
+A file written into the session's own directory is not counted as a change not built and is not listed under it, since the directory is outside the project and goes when the session ends. A turn whose only writes landed there is not asked whether to build them.
+
 **The line after a turn.** When a turn ends and the set of open loops has changed since the last turn, the session shows one line, such as `open: changes not built, the last command failed, 2 todos (planner); 1 kept checkout (you); 1 job running`. It gives counts only, grouped by whose move each is: the planner's, yours, or a wait. The same set is not repeated every turn, and `open: nothing` says the last one closed. The planner is told the same counts at the start of its next turn, and a resumed session works them out again from its record and the files on disk.
 
 ## `/todos`
@@ -1104,7 +1106,10 @@ the planner as your own prompt, for instance to ask for a commit with that messa
 Nothing is committed by the command itself.
 
 Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
-that holds what looks like a credential, and the line says which. A diff longer than one read takes is
+that holds what looks like a credential, and the line says which. Where a changed path is one nobody
+has vouched for, the message is still written but the box is left as it was and a note says the draft
+was not offered, since Enter would send a model's words about that path as a line you wrote. The
+[trust](../security/trust.md) page says how to vouch for a path. A diff longer than one read takes is
 drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
 or the session's. Typed while a turn runs it waits for the turn to end.
 
