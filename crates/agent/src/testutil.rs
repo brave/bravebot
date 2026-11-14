@@ -30,19 +30,40 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
 /// need not. The socket is bound through a short symlink in the temporary directory that points at
 /// the directory of `place`, so it is created at `place` itself, on whatever filesystem that is.
 /// The symlink is removed once the socket is bound.
+///
+/// The temporary directory can itself be long, for example a session scratch directory under
+/// `/private/var/folders`, and then no link in it is short enough. The link is then made in `/tmp`.
 #[cfg(unix)]
 pub(crate) fn socket_standing_at(place: &Path) -> std::os::unix::net::UnixListener {
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let temporary = std::env::temp_dir();
+    socket_standing_at_through(place, &[temporary, PathBuf::from("/tmp")])
+}
+
+/// [`socket_standing_at`] with the directories a link may be made in, tried in order. A directory
+/// in which the link cannot be made, or in which the socket path is too long, is passed over.
+#[cfg(unix)]
+fn socket_standing_at_through(
+    place: &Path,
+    link_dirs: &[PathBuf],
+) -> std::os::unix::net::UnixListener {
     static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // nosemgrep: rust.lang.security.temp-dir.temp-dir
-    let link = std::env::temp_dir().join(format!("bb{}-{made}.link", std::process::id()));
-    let _ = std::fs::remove_file(&link);
-    std::os::unix::fs::symlink(place.parent().expect("a directory"), &link).expect("link made");
-    let listener =
-        std::os::unix::net::UnixListener::bind(link.join(place.file_name().expect("a file name")))
-            .expect("socket");
-    std::fs::remove_file(&link).expect("link removed");
-    listener
+    for dir in link_dirs {
+        let link = dir.join(format!("bb{}-{made}.link", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        if std::os::unix::fs::symlink(place.parent().expect("a directory"), &link).is_err() {
+            continue;
+        }
+        let bound = std::os::unix::net::UnixListener::bind(
+            link.join(place.file_name().expect("a file name")),
+        );
+        std::fs::remove_file(&link).expect("link removed");
+        if let Ok(listener) = bound {
+            return listener;
+        }
+    }
+    panic!("no directory of {link_dirs:?} gives a socket path that fits in sun_path");
 }
 
 /// Repositories written object by object, the fixture the integration tests of `read_git` use.
@@ -265,4 +286,46 @@ pub(crate) fn xai_host(answers: Vec<XaiAnswer>) -> XaiHost {
         }
     });
     XaiHost { endpoint, taken }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::FileTypeExt;
+
+    /// A directory under the scratch directory whose own path is longer than `sun_path` (108 bytes
+    /// on Linux, 104 on macOS), standing in for a long `TMPDIR`.
+    fn directory_longer_than_sun_path(name: &str) -> PathBuf {
+        let mut long = scratch_dir(name);
+        while long.as_os_str().len() <= 120 {
+            long.push("a-directory-name-of-forty-characters-xxxx");
+        }
+        std::fs::create_dir_all(&long).expect("the long directory");
+        long
+    }
+
+    /// A temporary directory too long to bind a socket in must not stop a test that needs a socket
+    /// from getting one, and the socket has to be at the place asked for, not at the link's.
+    #[test]
+    fn a_socket_is_bound_at_its_place_when_the_first_link_directory_is_too_long() {
+        let long = directory_longer_than_sun_path("socket-long-link-dir");
+        let place_dir = scratch_dir("socket-long-link-place");
+        std::fs::create_dir_all(&place_dir).expect("the place's directory");
+        let place = place_dir.join("sock");
+        let _ = std::fs::remove_file(&place);
+
+        let _listener = socket_standing_at_through(&place, &[long.clone(), PathBuf::from("/tmp")]);
+
+        let kind = std::fs::symlink_metadata(&place).expect("something at the place");
+        assert!(kind.file_type().is_socket(), "the place holds a socket");
+        let left: Vec<_> = std::fs::read_dir(&long)
+            .expect("the long directory")
+            .collect();
+        assert!(
+            left.is_empty(),
+            "no link is left in the directory passed over: {left:?}"
+        );
+        std::fs::remove_dir_all(scratch_dir("socket-long-link-dir")).expect("removed");
+        std::fs::remove_dir_all(&place_dir).expect("removed");
+    }
 }
