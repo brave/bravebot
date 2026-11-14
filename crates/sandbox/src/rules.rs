@@ -145,6 +145,9 @@ pub enum Reason {
     /// A glob looked at more entries or went deeper than a glob may, so what it names is not
     /// known.
     TooBroad,
+    /// It starts with a variable, `$HOME/x` or `%USERPROFILE%\x`. No variable is expanded, so the
+    /// entry would be read as a relative path that is not the directory the person meant.
+    NamesAVariable,
     /// Another entry decides the path: a refusal at the same path, or one the managed layer wrote.
     Overridden,
 }
@@ -818,6 +821,9 @@ fn one(
     base: &Path,
 ) -> Result<Vec<PathBuf>, Reason> {
     let spelled = entry.path.trim();
+    if starts_with_a_variable(spelled) {
+        return Err(Reason::NamesAVariable);
+    }
     let (anchor, rest, absolute) = match spelled.strip_prefix('~') {
         Some("") => (home.ok_or(Reason::NoHome)?.to_path_buf(), "", true),
         Some(after) if after.starts_with(['/', '\\']) => (
@@ -893,6 +899,23 @@ fn one(
     kept.sort();
     kept.dedup();
     Ok(kept)
+}
+
+/// Whether an entry starts with a variable the way a shell (`$HOME`, `${HOME}`) or Windows
+/// (`%USERPROFILE%`) spells one.
+///
+/// An entry is read as written and no variable is expanded, so such an entry is a relative path
+/// beneath the session's directory that does not exist. A `%` counts only where a second `%` closes
+/// the name, since a directory may begin with one.
+fn starts_with_a_variable(spelled: &str) -> bool {
+    let name_start = |c: char| c.is_ascii_alphabetic() || c == '_';
+    if let Some(after) = spelled.strip_prefix('$') {
+        return after.starts_with(name_start) || after.starts_with('{');
+    }
+    if let Some(after) = spelled.strip_prefix('%') {
+        return after.starts_with(name_start) && after.contains('%');
+    }
+    false
 }
 
 /// The refusal that applies to a resolved path in a list that adds reach: `~/.ssh` and the state
@@ -1325,6 +1348,64 @@ mod tests {
             refusal_of(&resolve(&only(List::DenyRead, "~/x"), None, None, &base)),
             Some(Reason::NoHome)
         );
+    }
+
+    /// SANDBOX-25: an entry that starts with a variable names a directory no program has, since no
+    /// variable is expanded, so it is not in force and says why. The same text read as a relative
+    /// path would be a directory beneath the session's that does not exist, and a `denyWrite` of it
+    /// would protect nothing.
+    ///
+    /// Every list, because a refusal that held in one and not in another is the failure. The controls
+    /// are the spellings that are not a variable: a name with a `$` inside it, a `%` with no closing
+    /// `%`, a `$` before a digit or a space, and a `./`-prefixed path, each of which is a path that
+    /// can exist.
+    #[test]
+    fn an_entry_that_starts_with_a_variable_is_refused_in_every_list() {
+        let home = fresh("rules-variable-home");
+        let base = fresh("rules-variable-base");
+        for list in [
+            List::AllowRead,
+            List::DenyRead,
+            List::AllowWrite,
+            List::DenyWrite,
+        ] {
+            for spelled in [
+                "$HOME/.config/gh",
+                "${HOME}/.config/gh",
+                "$XDG_CONFIG_HOME",
+                "%USERPROFILE%\\.config\\gh",
+                "%HOME%/x",
+                "  $HOME/.config/gh",
+            ] {
+                let rules = resolve(&only(list, spelled), Some(&home), None, &base);
+                assert_eq!(
+                    refusal_of(&rules),
+                    Some(Reason::NamesAVariable),
+                    "{spelled} in {list:?}"
+                );
+            }
+            for spelled in [
+                "a$HOME/x",
+                "./$HOME/x",
+                "%100/x",
+                "100%/x",
+                "$5/x",
+                "$ x",
+                "$",
+                "%",
+            ] {
+                let rules = resolve(&only(list, spelled), Some(&home), None, &base);
+                assert_eq!(refusal_of(&rules), None, "{spelled} in {list:?}");
+            }
+        }
+        // A refused refusal holds back nothing, so a caller starting a stage has to know.
+        let rules = resolve(
+            &only(List::DenyWrite, "$HOME/.config/gh"),
+            Some(&home),
+            None,
+            &base,
+        );
+        assert!(rules.unapplied_denial().is_some());
     }
 
     /// A glob that cannot be listed within the bound is refused whole, so a `denyRead` over a tree

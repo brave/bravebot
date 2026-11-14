@@ -3472,7 +3472,9 @@ tried names the file in `doctor`. The managed file may pin each list: a pinned `
 added to the person's and cannot be lifted by an entry at or beneath it.
 
 A path is absolute, `~/`-prefixed or relative to the first directory the session was opened on. An
-entry is resolved to, and compared with a row in, one spelling, so that a Windows drive path with
+entry that starts with a variable, `$` or `${` before a name or `%` before a name and a closing `%`,
+is refused: no variable is expanded, so it would be read as a relative path that is not the directory
+it names. An entry is resolved to, and compared with a row in, one spelling, so that a Windows drive path with
 the `\\?\` prefix the file system returns is the same path as the one without it. An entry that
 climbs out of the directory it is read from, holds `..` where it is absolute, or starts with `~` in
 a session that names no home directory is refused. Each path is judged where it leads: the
@@ -3547,6 +3549,7 @@ because the path it names is the one the person was protecting.
 
 `verified-by: bravebot_sandbox::rules::a_name_is_met_by_a_star_and_a_question_mark_and_nothing_looser`
 `verified-by: bravebot_sandbox::rules::an_entry_is_read_from_where_its_spelling_says`
+`verified-by: bravebot_sandbox::rules::an_entry_that_starts_with_a_variable_is_refused_in_every_list`
 `verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_ssh_is_refused`

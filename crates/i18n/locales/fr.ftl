@@ -780,6 +780,7 @@ sandbox-rule-private-key = aucune liste n'ajoute d'accès à ~/.ssh, où se trou
 sandbox-rule-state-directory = aucune liste n'ajoute d'accès au dossier d'état, où se trouvent les clés de la passerelle (~/.bravebot, ou le dossier que BRAVEBOT_HOME désigne à la place), sauf pour lire son dossier sessions
 sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou le dossier d'état
 sandbox-rule-too-broad = son joker a regardé plus du disque qu'un motif ne le peut, donc ce qu'il désigne est inconnu
+sandbox-rule-names-a-variable = il commence par une variable, et aucune variable n'est développée dans un chemin, donc il serait lu comme un chemin relatif au dossier de la session ; écrivez le chemin en entier, ou commencez-le par ~/
 sandbox-rule-overridden = une autre entrée décide de ce chemin : un refus au même chemin, ou un refus écrit par le fichier géré
 sandbox-rule-cannot-subtract = cette plateforme ne peut pas retenir un chemin situé dans un dossier accordé à chaque étape, donc une étape est refusée au lieu d'être lancée avec le chemin accessible
 doctor-settings-allow-ignored =
@@ -791,6 +792,9 @@ doctor-settings-allow-granted =
 doctor-settings-unread = clé non lue
 doctor-settings-unread-key =
     { $key } dans { $path } n'est pas lu par cette version : il ne configure rien et ne restreint rien
+doctor-settings-unread-bypass =
+    { $key } dans { $path } n'est pas lu par cette version, donc le mode bypass reste accessible : la clé
+    qui le rend inaccessible est permissions.bypassUnreachable
 doctor-settings-mcp-declared =
     { $key } dans { $path } déclare un serveur MCP, ce que seul ~/.bravebot/mcp.json peut faire :
     rien de ce qu'il contient n'est démarré

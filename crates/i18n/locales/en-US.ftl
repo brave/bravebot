@@ -906,6 +906,7 @@ sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
 sandbox-rule-state-directory = no list adds reach to the state directory, where the gateway keys are (~/.bravebot, or the directory BRAVEBOT_HOME names instead), except to read its sessions directory
 sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or the state directory
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
+sandbox-rule-names-a-variable = it starts with a variable, and no variable is expanded in a path, so it would be read as a relative path under the session's directory; write the path out, or start it with ~/
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
@@ -925,6 +926,11 @@ doctor-settings-allow-granted =
 doctor-settings-unread = unread key
 doctor-settings-unread-key =
     { $key } in { $path } is not read by this build: it configures nothing and restricts nothing
+# Claude Code's switch for the mode that asks about nothing. It reads as a restriction in force to
+# whoever pasted it, and the key this build reads for the same purpose is named so it can be written.
+doctor-settings-unread-bypass =
+    { $key } in { $path } is not read by this build, so the bypass mode stays reachable: the key that
+    makes it unreachable is permissions.bypassUnreachable
 # A settings layer that tried to declare an MCP server. Named by key and file only, since the entry
 # may hold an argv and the values of variables.
 doctor-settings-mcp-declared =

@@ -3405,6 +3405,12 @@ impl Narrowing {
     /// The key that makes the bypass mode unreachable, as a `permissions` block spells it.
     pub const BYPASS_UNREACHABLE: &'static str = "bypassUnreachable";
 
+    /// Claude Code's key for the same thing, which this build does not read.
+    ///
+    /// It is named here so that `doctor` can say which key does what it was written to do instead
+    /// of reporting it as one more key nothing reads (BACKEND-36).
+    pub const CLAUDE_DISABLE_BYPASS: &'static str = "disableBypassPermissionsMode";
+
     /// The strictest of what two files said, key by key.
     ///
     /// Not the stronger file's answer. Both keys only ever refuse, so there is no raisable
@@ -3562,7 +3568,74 @@ fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The top-level keys one layer set that nothing here reads (BACKEND-36).
+/// The keys of the `permissions` block this build reads.
+///
+/// `defaultMode` is among them because it is parsed and acted on by nothing, which the permissions
+/// spec records under its known costs, so it is not an unread key. A key of Claude Code's block that
+/// is not here, such as `disableBypassPermissionsMode`, restricts nothing in this build.
+const PERMISSIONS_READ: &[&str] = &[
+    "additionalDirectories",
+    "allow",
+    "ask",
+    "defaultMode",
+    "deny",
+    Narrowing::BYPASS_UNREACHABLE,
+    Narrowing::READS_STAY_IN_WORKSPACE,
+];
+
+/// The keys of the `run` block this build reads.
+const RUN_READ: &[&str] = &[
+    "defaultSeconds",
+    "maxOutput",
+    "maxSeconds",
+    "network",
+    "scrubEnv",
+];
+
+/// The keys inside `permissions`, `sandbox.filesystem` and `run` that nothing here reads, spelled
+/// with the names that lead to them (BACKEND-36).
+///
+/// A key written in one of these blocks reads to whoever wrote it as a restriction in force, and a
+/// misspelling of `denyRead` or `scrubEnv` is exactly as invisible as an unread top-level key. A
+/// block spelled as anything but an object holds no key: the shape of a value is reported elsewhere
+/// ([`Settings::misshapen_rule_lists`], [`Settings::sandbox_filesystem_misshapen`]).
+fn unread_inside_blocks(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let filesystem = object(root, SANDBOX_BLOCK).and_then(|block| object(block, "filesystem"));
+    let mut unread = Vec::new();
+    unread_in(
+        &mut unread,
+        PERMISSIONS_BLOCK,
+        object(root, PERMISSIONS_BLOCK),
+        |key| PERMISSIONS_READ.contains(&key),
+    );
+    unread_in(&mut unread, "sandbox.filesystem", filesystem, |key| {
+        FILESYSTEM_LISTS.iter().any(|list| list.key() == key)
+    });
+    unread_in(&mut unread, "run", object(root, "run"), |key| {
+        RUN_READ.contains(&key)
+    });
+    unread
+}
+
+/// The keys of `block`, spelled under `name`, that `reads` does not accept.
+fn unread_in(
+    unread: &mut Vec<String>,
+    name: &str,
+    block: Option<&serde_json::Map<String, serde_json::Value>>,
+    reads: impl Fn(&str) -> bool,
+) {
+    if let Some(block) = block {
+        unread.extend(
+            block
+                .keys()
+                .filter(|key| !reads(key))
+                .map(|key| format!("{name}.{key}")),
+        );
+    }
+}
+
+/// The keys one layer set that nothing here reads, at the top level and inside the blocks that
+/// restrict something (BACKEND-36).
 ///
 /// Names only, whatever each holds: the value may be a credential, and the key is the whole of what
 /// somebody needs to find the line and decide whether they meant to write it.
@@ -3591,6 +3664,7 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>, granting: bool
         .filter(|key| !READ_KEYS.contains(&key.as_str()))
         .cloned()
         .chain(beside_the_mode)
+        .chain(unread_inside_blocks(root))
         .chain(crate::git_identities::unread_inside(root))
         .collect()
 }
@@ -3755,6 +3829,10 @@ fn merge_run(
 /// Strings only, and empty where the block is absent or shaped differently. A malformed entry is
 /// dropped rather than refused, on the same footing as everything else here: a half-typed file must
 /// not stop a session, and the built-in set still holds whatever this says.
+///
+/// A name is read without the whitespace at its ends, since no variable is named with any and an
+/// entry kept as written never matches one, so `"GITHUB_TOKEN "` would withhold nothing while the
+/// person who wrote it believes it withholds the token (RUN-28).
 fn scrub_list(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     let Some(run) = object(root, "run") else {
         return Vec::new();
@@ -3765,7 +3843,9 @@ fn scrub_list(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> 
     names
         .iter()
         .filter_map(|name| match name {
-            serde_json::Value::String(name) if !name.trim().is_empty() => Some(name.clone()),
+            serde_json::Value::String(name) if !name.trim().is_empty() => {
+                Some(name.trim().to_string())
+            }
             _ => None,
         })
         .collect()
@@ -7717,6 +7797,100 @@ mod tests {
             1
         );
         assert_eq!(read(r#"{"sandbox": "on"}"#), 0);
+    }
+
+    /// BACKEND-36 inside the blocks that restrict something: a misspelling of a key `permissions`,
+    /// `sandbox.filesystem` or `run` reads, and a key Claude Code's `permissions` block holds that this
+    /// build does not, are named with the block that leads to them.
+    ///
+    /// The first file spells each key wrongly and holds the second's `disableBypassPermissionsMode`,
+    /// which is the key a block copied out of `~/.claude/settings.json` arrives with and reads as a
+    /// restriction in force. The second file is the control: every key this build reads in the same
+    /// three blocks, `defaultMode` among them, reports nothing, so a report that named every key of a
+    /// block would fail it. A misspelling that differs only in case is among the first, since a key
+    /// is compared as written.
+    #[test]
+    fn a_key_inside_a_restricting_block_that_nothing_reads_is_named_with_its_block() {
+        let wrong = Layers::new("unread-inside-wrong")
+            .global(
+                r#"{
+                    "permissions": {"denyy": ["Read(./.env)"], "disableBypassPermissionsMode": "disable"},
+                    "sandbox": {"filesystem": {"denyread": ["~/.config/gh"]}},
+                    "run": {"scrubenv": ["GITHUB_TOKEN"]}
+                }"#,
+            )
+            .read();
+        let mut named: Vec<&str> = wrong.unread_keys().map(|(_, key)| key).collect();
+        named.sort_unstable();
+        assert_eq!(
+            named,
+            [
+                "permissions.denyy",
+                "permissions.disableBypassPermissionsMode",
+                "run.scrubenv",
+                "sandbox.filesystem.denyread",
+            ]
+        );
+
+        let right = Layers::new("unread-inside-right")
+            .global(
+                r#"{
+                    "permissions": {
+                        "defaultMode": "plan", "allow": [], "ask": [], "deny": [],
+                        "additionalDirectories": [], "readsStayInWorkspace": true,
+                        "bypassUnreachable": true
+                    },
+                    "sandbox": {"filesystem": {
+                        "allowRead": [], "denyRead": [], "allowWrite": [], "denyWrite": []
+                    }},
+                    "run": {
+                        "scrubEnv": [], "network": "open", "maxOutput": 1,
+                        "defaultSeconds": 1, "maxSeconds": 1
+                    }
+                }"#,
+            )
+            .read();
+        assert_eq!(right.unread_keys().count(), 0);
+    }
+
+    /// Each file that wrote an unread key inside a block is named, as a top-level key is: a key two
+    /// layers misspell is two lines, and the line for the home file is not lost to the checkout's.
+    #[test]
+    fn a_key_unread_inside_a_block_is_named_in_every_file_that_set_it() {
+        let layers = Layers::new("unread-inside-layers")
+            .global(r#"{"run": {"scrubenv": ["A_TOKEN"]}}"#)
+            .project(r#"{"run": {"scrubenv": ["B_TOKEN"]}}"#);
+        let settings = layers.read();
+        let unread: Vec<(PathBuf, &str)> = settings
+            .unread_keys()
+            .map(|(path, key)| (path.to_path_buf(), key))
+            .collect();
+        assert_eq!(
+            unread,
+            [
+                (layers.home.join(SETTINGS_FILE), "run.scrubenv"),
+                (
+                    layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                    "run.scrubenv"
+                ),
+            ]
+        );
+    }
+
+    /// RUN-28: a name has no whitespace at its ends. An entry with some is read without it, so
+    /// `"MY_TOKEN "` withholds `MY_TOKEN` instead of a name no variable has.
+    ///
+    /// A pattern is trimmed the same way, and a blank entry is still left out. The name in the middle
+    /// of an entry is not touched, which is the control that this trims the ends and does not strip
+    /// every space.
+    #[test]
+    fn a_scrub_name_is_read_without_the_whitespace_at_its_ends() {
+        let settings =
+            Settings::parse(r#"{"run": {"scrubEnv": ["MY_TOKEN ", "\tAWS_*\n", "  ", "A B"]}}"#);
+        assert_eq!(
+            settings.scrubbed().collect::<Vec<_>>(),
+            ["MY_TOKEN", "AWS_*", "A B"]
+        );
     }
 
     /// The half of BACKEND-36 that was already honoured stays where it was: a variable nothing

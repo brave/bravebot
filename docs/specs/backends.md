@@ -2388,7 +2388,16 @@ A top-level key beside the ones this build reads is kept on the same terms. The 
 applies, the key configures nothing and restricts nothing, and `doctor` names it with the file that
 set it, weakest first, every file that set one being named. The key is reported and what it was set
 to is not. A variable in `env` is not reported this way, being named already among the names the file
-set, and neither is a key inside a block this build reads.
+set.
+
+A key inside `permissions`, `sandbox.filesystem` or `run` that this build does not read is reported
+the same way, spelled with the block that leads to it (`run.scrubenv`,
+`sandbox.filesystem.denyread`). A misspelling of a key those blocks read restricts nothing and reads
+to whoever wrote it as a restriction in force. `permissions.defaultMode` is read and acted on by
+nothing ([permissions.md](permissions.md)), and is not reported. Claude Code's
+`permissions.disableBypassPermissionsMode` is reported with the key this build reads for the same
+purpose, `permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), since a block copied
+out of `~/.claude/settings.json` arrives holding it and the bypass mode stays reachable.
 
 That holds because the reason above is about the file rather than about the `env` block. The file is
 documented as largely the shape of another tool's, so a block pasted from one arrives holding
@@ -2407,8 +2416,11 @@ file in a checkout.
 `verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
 `verified-by: bravebot_config::settings::a_key_beside_the_ones_this_build_reads_is_named_with_the_file_that_set_it`
 `verified-by: bravebot_config::settings::a_key_this_build_reads_is_never_reported_as_unread`
+`verified-by: bravebot_config::settings::a_key_inside_a_restricting_block_that_nothing_reads_is_named_with_its_block`
+`verified-by: bravebot_config::settings::a_key_unread_inside_a_block_is_named_in_every_file_that_set_it`
 `verified-by: bravebot_config::settings::a_variable_nothing_consults_is_named_among_the_names_and_not_as_an_unread_key`
 `verified-by: bravebot_cli::running::doctor_names_a_top_level_key_it_does_not_read`
+`verified-by: bravebot_cli::running::doctor_names_a_restriction_that_names_nothing`
 
 <a id="BACKEND-37"></a>
 ### BACKEND-37: failures carry safe reasons and measured request counts

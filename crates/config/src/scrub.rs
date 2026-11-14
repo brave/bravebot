@@ -372,6 +372,17 @@ mod tests {
         );
     }
 
+    /// RUN-28: the name a settings file lists with whitespace at an end is the name that is
+    /// withheld. `names` is what a stage is built from, so the assertion is on the variable the
+    /// stage loses and not on the settings that were read.
+    #[test]
+    fn a_name_listed_with_trailing_whitespace_is_withheld_as_the_name() {
+        let settings = Settings::parse(r#"{"run": {"scrubEnv": ["MY_TOKEN "]}}"#);
+        let names = names(&settings);
+        assert!(names.iter().any(|name| name == "MY_TOKEN"));
+        assert!(!names.iter().any(|name| name == "MY_TOKEN "));
+    }
+
     /// A program this agent starts for its own purposes is not held to somebody's own list. A name
     /// there answers what the commands *they* ask for may see, and `AWS_PROFILE` in it would
     /// otherwise stop the AWS CLI resolving the credential it is run to resolve.
