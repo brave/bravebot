@@ -401,6 +401,29 @@ mod tests {
         assert_eq!(settings.suggestions(), Some(false));
     }
 
+    /// A checkout whose `deferMcpToolsAbove` is higher than the person's is listed with the key and
+    /// the file, and one that lowers the size is not.
+    #[test]
+    fn a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "deferMcpToolsAbove"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"deferMcpToolsAbove": "20k"}"#),
+            Some(r#"{"deferMcpToolsAbove": 18446744073709551615}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "deferMcpToolsAbove", "path": project })]
+        );
+        assert_eq!(settings.defer_mcp_tools_above(), Some(20_000));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"deferMcpToolsAbove": "20k"}"#),
+            Some(r#"{"deferMcpToolsAbove": "5k"}"#),
+        );
+        assert!(ignored(&settings).is_empty(), "a lower size was reported");
+        assert_eq!(settings.defer_mcp_tools_above(), Some(5_000));
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,

@@ -696,6 +696,11 @@ doctor-settings-deep-links-ignored =
 # personne indiquent `false` ou n'indiquent rien.
 doctor-settings-suggestions-ignored =
     suggestions dans { $path } n'est pas appliqué : il peut laisser les suggestions désactivées et ne peut pas les activer, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
+# Une copie de travail peut abaisser la taille au-delà de laquelle les outils d'un serveur sont proposés
+# par leur nom, et ne peut ni la relever ni indiquer une valeur lue comme une absence de taille : une
+# telle valeur est écartée et la taille de la personne reste en vigueur.
+doctor-settings-defer-mcp-tools-ignored =
+    deferMcpToolsAbove dans { $path } n'est pas appliqué : il peut abaisser la taille de ~/.bravebot/settings.json et ne peut ni la relever, ni la supprimer
 # Une clé qu'une copie de travail ne peut que restreindre et qui n'a pas de message propre ci-dessus,
 # de sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
 doctor-settings-narrowed-ignored =

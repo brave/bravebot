@@ -1781,6 +1781,11 @@ line and no `mcpServers:` line, a delegate whose `mcp_servers` leaves it none an
 ([TOOL-6](tools/tool-surface.md#TOOL-6)). A turn below the size, and every turn without the
 setting, is offered every tool in full and no `load_tool`.
 
+The size is read through the layers of [BACKEND-24](backends.md#BACKEND-24). A project or local
+settings file may lower it, or state one where the person's own settings and the file `--settings`
+names state none, and may not raise it or remove it. Its larger figure, or a value that reads as no
+size, is dropped over the person's size, and `doctor` names the file.
+
 **Why.** Every tool of every approved server is otherwise sent in full on every turn, so a person
 who connects several pays that context on turns that use none of them. Deferral moves when vouched
 text is shown and decides nothing from it.
@@ -1795,6 +1800,8 @@ text is shown and decides nothing from it.
 `verified-by: bravebot_agent::mcp::an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server`
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_loader_for_deferred_server_tools`
 `verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
+`verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
+`verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
 
 <a id="SERVERS-17"></a>
 ### SERVERS-17: a declaration may name tool allow and deny lists that filter what is offered

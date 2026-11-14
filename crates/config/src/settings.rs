@@ -236,8 +236,8 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
 
 /// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
 ///
-/// A new kind is a variant and one arm in each of the three methods. A count where a lower one is
-/// the narrower, or a boolean whose `true` is, is a kind of its own and is added there.
+/// A new kind is a variant and one arm in each of the three methods. A boolean whose `true` is the
+/// narrower answer, or a count in a unit of its own, is a kind of its own and is added there.
 #[derive(Clone, Copy)]
 enum Narrows {
     /// The session spend limit: a count of one unit ([`crate::limit::Limit`]). A figure is
@@ -251,6 +251,11 @@ enum Narrows {
     /// leaves something off. Only a boolean states it ([`flag`]). Where the person stated nothing a
     /// checkout is held to the default, so its `true` is not obeyed and its `false` is.
     OffByDefault,
+    /// A bare count with no unit, where a lower figure is the narrower one. A whole number above
+    /// zero or a count string such as `"20k"` states it ([`count_stated`]). A figure is narrower
+    /// when it is no larger. Where the person stated nothing there is no bound, so a checkout's
+    /// figure is a bound added.
+    Count,
 }
 
 impl Narrows {
@@ -262,6 +267,7 @@ impl Narrows {
         match self {
             Self::Limit => limit_stated(Some(value)).is_some(),
             Self::Off | Self::OffByDefault => value.is_boolean(),
+            Self::Count => count_stated(value).is_some(),
         }
     }
 
@@ -282,6 +288,9 @@ impl Narrows {
             // Off where nothing is stated, and `true` is wider than that, so a checkout cannot turn
             // on what a person who wrote nothing has off.
             Self::OffByDefault => Some(serde_json::Value::Bool(false)),
+            // No threshold is in force where nothing is stated, which offers every tool in full,
+            // so any figure a checkout states is a bound added.
+            Self::Count => None,
         }
     }
 
@@ -297,6 +306,10 @@ impl Narrows {
             },
             Self::Off | Self::OffByDefault => match (held.as_bool(), offered.as_bool()) {
                 (Some(held), Some(offered)) => !offered || held,
+                _ => false,
+            },
+            Self::Count => match (count_stated(held), count_stated(offered)) {
+                (Some(held), Some(offered)) => offered <= held,
                 _ => false,
             },
         }
@@ -334,6 +347,10 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
     // off for whoever runs it there and may not turn them on, over the person's `false` or over
     // the default (INPUT-43).
     ("suggestions", Narrows::OffByDefault, Entitled::OwnOrNamed),
+    // A higher threshold sends every tool definition of every approved server in full on every
+    // request, so a checkout may lower the figure or state one where the person stated none and may
+    // not raise it, remove it or state something that reads as no threshold (SERVERS-16).
+    ("deferMcpToolsAbove", Narrows::Count, Entitled::OwnOrNamed),
 ];
 
 /// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
@@ -1833,11 +1850,7 @@ impl Settings {
             word(root, "promptCacheTtl").and_then(|word| crate::CacheTtl::parse(&word));
         settings.editor_mode = word(root, "editorMode");
         settings.limit = limit_stated(root.get("limit"));
-        settings.defer_mcp_tools_above = match root.get("deferMcpToolsAbove") {
-            Some(serde_json::Value::Number(count)) => count.as_u64().filter(|tokens| *tokens > 0),
-            Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
-            _ => None,
-        };
+        settings.defer_mcp_tools_above = root.get("deferMcpToolsAbove").and_then(count_stated);
         settings.terminal_title = flag(root, "terminalTitle");
         settings.suggestions = flag(root, "suggestions");
         settings.update_check = flag(root, "updateCheck");
@@ -2052,7 +2065,9 @@ impl Settings {
     /// only, if they name one.
     ///
     /// A number, or a size written as `"limit"` is (`"20k"`). Anything else is absence, which
-    /// leaves every tool offered in full. It only ever offers less, so any layer may state it.
+    /// leaves every tool offered in full. A project or local layer's figure is obeyed only where it
+    /// is no higher than the one the person's own files state, since a higher one sends more of
+    /// every definition on every request ([`NARROW_ONLY`]).
     pub fn defer_mcp_tools_above(&self) -> Option<u64> {
         self.defer_mcp_tools_above
     }
@@ -3205,6 +3220,20 @@ fn retrieval_stated(root: &serde_json::Map<String, serde_json::Value>) -> Option
 /// A real boolean and nothing else: `"true"`, `1` and `null` are absence, with no coercion.
 pub(crate) fn flag(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
     root.get(key).and_then(serde_json::Value::as_bool)
+}
+
+/// The count a value states, or `None` where it states none.
+///
+/// A whole number above zero, or a string that is a count with an optional `k` or `m`
+/// ([`crate::limit::parse_count`]). Zero, a negative or fractional number, `null`, a boolean and a
+/// string that is no figure state nothing. The one reading for the merged root
+/// ([`Settings::from_map`]) and for the settlement of [`NARROW_ONLY`].
+fn count_stated(value: &serde_json::Value) -> Option<u64> {
+    match value {
+        serde_json::Value::Number(count) => count.as_u64().filter(|tokens| *tokens > 0),
+        serde_json::Value::String(text) => crate::limit::parse_count(text),
+        _ => None,
+    }
 }
 
 /// The spend limit a `limit` value states, or `None` where it states none.
@@ -8198,6 +8227,27 @@ mod tests {
             wider: &["null", "0", r#""false""#],
             narrower: "false",
         },
+        // A count: the person's `"20k"` is not raised by a larger number or string, and a value
+        // that reads as no threshold does not remove it. Lowering, stating where the person stated
+        // none, and the named file are held by
+        // `a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`.
+        NarrowCase {
+            key: "deferMcpToolsAbove",
+            read: |settings| format!("{:?}", settings.defer_mcp_tools_above()),
+            person: r#""20k""#,
+            wider: &[
+                "null",
+                "0",
+                "true",
+                "-5",
+                "1.5",
+                r#""banana""#,
+                "20001",
+                r#""21k""#,
+                "18446744073709551615",
+            ],
+            narrower: r#""10k""#,
+        },
     ];
 
     /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
@@ -8599,6 +8649,142 @@ mod tests {
             .read();
         assert_eq!(settings.suggestions(), Some(false));
         assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// SERVERS-16, BACKEND-24: a project or local layer may lower the size past which server tools
+    /// are offered by name, and state one where the person's own files state none, and may not
+    /// raise it or state something that reads as no size over one the person stated. The file that
+    /// tried is reported.
+    #[test]
+    fn a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it() {
+        let key = "deferMcpToolsAbove";
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, named: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("defer-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                let layers = match named {
+                    Some(text) => layers.named(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let object = |value: &str| format!(r#"{{"{key}": {value}}}"#);
+
+            // The reproduction: a figure no count exceeds does not replace the person's.
+            let settings = with(
+                "huge",
+                Some(&object(r#""20k""#)),
+                None,
+                &object("18446744073709551615"),
+            );
+            assert_eq!(settings.defer_mcp_tools_above(), Some(20_000), "{local}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, key);
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert!(!settings.is_empty());
+
+            // A figure that reads as no size does not remove the person's, and is reported.
+            for word in ["0", "null", "true", "-5", r#""banana""#, r#""0k""#] {
+                let settings = with("unreadable", Some(&object("20000")), None, &object(word));
+                assert_eq!(
+                    settings.defer_mcp_tools_above(),
+                    Some(20_000),
+                    "{word} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 1, "{word} local={local}");
+            }
+
+            // A lower figure is obeyed and costs nothing to report. So is an equal one.
+            for (written, expected) in [("1000", 1_000), (r#""5k""#, 5_000), ("20000", 20_000)] {
+                let settings = with("lower", Some(&object(r#""20k""#)), None, &object(written));
+                assert_eq!(
+                    settings.defer_mcp_tools_above(),
+                    Some(expected),
+                    "{written} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{written}");
+            }
+
+            // Where the person's own files state no size, a checkout may state one.
+            for global in [
+                None,
+                Some(r#"{"model": "m"}"#),
+                Some(r#"{"deferMcpToolsAbove": 0}"#),
+            ] {
+                let settings = with("stated", global, None, &object(r#""30k""#));
+                assert_eq!(
+                    settings.defer_mcp_tools_above(),
+                    Some(30_000),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // Nothing stated by anyone leaves every tool offered in full, and a checkout that
+            // states no size where there is none is not reported.
+            let settings = with("none", None, None, &object("0"));
+            assert_eq!(settings.defer_mcp_tools_above(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // The file the command line named is the person's own act: it decides the key over
+            // the person's own file in either direction, and a checkout is held to it.
+            let settings = with(
+                "named",
+                Some(&object(r#""20k""#)),
+                Some(&object(r#""50k""#)),
+                &object(r#""40k""#),
+            );
+            assert_eq!(
+                settings.defer_mcp_tools_above(),
+                Some(40_000),
+                "local={local}"
+            );
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with(
+                "named-raised",
+                Some(&object(r#""20k""#)),
+                Some(&object(r#""50k""#)),
+                &object(r#""60k""#),
+            );
+            assert_eq!(
+                settings.defer_mcp_tools_above(),
+                Some(50_000),
+                "local={local}"
+            );
+            assert_eq!(settings.not_obeyed_all().count(), 1);
+        }
+
+        // The local file is held to what the project file lowered, and a lower one is obeyed.
+        let settings = Layers::new("defer-local-over-project")
+            .global(&format!(r#"{{"{key}": "20k"}}"#))
+            .project(&format!(r#"{{"{key}": "10k"}}"#))
+            .local(&format!(r#"{{"{key}": "15k"}}"#))
+            .read();
+        assert_eq!(settings.defer_mcp_tools_above(), Some(10_000));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // A file `--settings` names inside the workspace is the person's own act as one outside it.
+        let settings = Layers::new("defer-named-inside")
+            .global(&format!(r#"{{"{key}": "20k"}}"#))
+            .named_inside_the_workspace(&format!(r#"{{"{key}": "50k"}}"#))
+            .read();
+        assert_eq!(settings.defer_mcp_tools_above(), Some(50_000));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
     }
 
     /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`

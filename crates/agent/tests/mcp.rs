@@ -6859,6 +6859,48 @@ fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
     assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
 }
 
+/// SERVERS-16, BACKEND-24: the threshold a turn defers at is the one the settings in force read
+/// through the layers, so a project file that states a figure no count exceeds does not turn the
+/// person's small one into "offer everything in full".
+#[test]
+fn a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for() {
+    let scratch = Scratch::new("deferred-checkout-raised");
+    let home = scratch.path.join("home");
+    let project_file = bravebot_config::project_settings_file(&scratch.project());
+    std::fs::create_dir_all(&home).expect("home");
+    std::fs::create_dir_all(project_file.parent().expect("project directory"))
+        .expect("project directory");
+    std::fs::write(home.join("settings.json"), r#"{"deferMcpToolsAbove": 1}"#).expect("home file");
+    std::fs::write(
+        &project_file,
+        r#"{"deferMcpToolsAbove": 18446744073709551615}"#,
+    )
+    .expect("project file");
+    let settings = bravebot_config::Settings::layered(Some(home), Some(&scratch.project()), None);
+    let threshold = settings
+        .defer_mcp_tools_above()
+        .expect("the person's own figure is in force");
+
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        threshold,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    let names = offered_names(&sent[0]);
+    assert!(names.contains(&"load_tool".to_string()), "{names:?}");
+    assert!(
+        !names.contains(&FORECAST.to_string()),
+        "the checkout's figure kept the tool in full: {names:?}"
+    );
+}
+
 /// Run a deferring turn whose planner spawns a delegate with `spawn`, whose own planner then names
 /// `load_tool`. Returns the delegate's requests, what the person was asked and the MCP methods the
 /// server was sent past its handshake.

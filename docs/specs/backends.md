@@ -1336,6 +1336,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
 | `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
 | `suggestions` | the same as `limit`, with the default bound: a project or local layer may leave it off and may not turn it on, over the person's `false` or over nothing |
+| `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1389,6 +1390,17 @@ only where the person's own files state `true`, which changes nothing, and is ot
 and is reported, so a checkout cannot start a request after each turn that the person did not ask
 for ([INPUT-43](terminal-input.md#INPUT-43)). A value that is not a boolean states nothing, is
 absence, and is not reported.
+
+For `deferMcpToolsAbove`, a layer states a value when it holds a whole number above zero or a count
+string such as `"20k"`. `null`, zero, a negative or fractional number, a boolean and a string that
+is no figure state nothing, which is how a layer says every tool is offered in full. A checkout's
+value is no wider when it is no larger than the value in force, since a larger size sends more of
+every tool definition on every request. A checkout's larger value, and a value that states nothing
+over one in force, are not obeyed and are reported, so a checkout cannot turn the person's
+deferral into every tool in full ([SERVERS-16](mcp-servers.md#SERVERS-16)). Where the person's own
+files state no size, a checkout may state one, because the key has no default bound, and a checkout
+value that states nothing there leaves no size and is not reported. The two checkout files are held
+to this in turn, so the local file cannot raise what the project file lowered.
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
 a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
@@ -1505,6 +1517,10 @@ with it.
 `verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
 `verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
+`verified-by: bravebot_cli::doctor::a_checkout_deferral_threshold_that_raises_the_persons_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored`
+`verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
 `verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`

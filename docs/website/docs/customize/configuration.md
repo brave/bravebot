@@ -825,6 +825,11 @@ offered no `load_tool`.
 A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
 default. It lasts a turn, so a later turn loads again.
 
+A project's `.bravebot/settings.json` or `settings.local.json` may lower the size, or state one where
+your own `~/.bravebot/settings.json` and a file named with `--settings` state none. It cannot raise
+the size or remove it: a larger figure, or a value such as `0` or `null`, is ignored and
+`bravebot doctor` names the file.
+
 ### `retentionDays`
 
 ```json

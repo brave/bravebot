@@ -821,6 +821,11 @@ doctor-settings-deep-links-ignored =
 # state nothing.
 doctor-settings-suggestions-ignored =
     suggestions in { $path } is not obeyed: it may leave suggestions off and cannot turn them on, which only ~/.bravebot/settings.json and the file --settings names can
+# A checkout may lower the size past which a server's tools are offered by name, and may not raise it
+# or state a value that reads as no size, so a figure that does is dropped and the person's own size
+# stays in force.
+doctor-settings-defer-mcp-tools-ignored =
+    deferMcpToolsAbove in { $path } is not obeyed: it may lower the size in ~/.bravebot/settings.json and cannot raise it or remove it
 # A key a checkout may only narrow that has no message of its own above, so a key added to the table
 # is reported before its words are written.
 doctor-settings-narrowed-ignored =
