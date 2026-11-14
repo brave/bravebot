@@ -120,7 +120,6 @@ pub fn said_in_a_session(rejected: &Rejected, described: String) -> String {
         true => t!(session_permission_rule_partly_read, problem = described),
         false => t!(session_permission_rule_ignored, problem = described),
     }
-    .to_string()
 }
 
 /// Every entry of the four filesystem lists with why it is not in force, or `None` where it is.
