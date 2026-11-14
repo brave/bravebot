@@ -67,21 +67,21 @@ to look at. Escape stops the nearest thing and never leaves; Ctrl-C stops the ne
 leaves once there is nothing left. An open scroller is a thing to stop, and it is the innermost
 one.
 
-`verified-by: bravebot_tui::app::ctrl_o_opens_the_scroller`
-`verified-by: bravebot_tui::app::the_scroller_opens_on_the_view_that_was_already_there`
-`verified-by: bravebot_tui::app::q_escape_and_ctrl_o_each_close_the_scroller`
-`verified-by: bravebot_tui::app::closing_the_scroller_leaves_the_view_where_it_was`
+`verified-by: bravebot_tui::app::tests::scroller::ctrl_o_opens_the_scroller`
+`verified-by: bravebot_tui::app::tests::scroller::the_scroller_opens_on_the_view_that_was_already_there`
+`verified-by: bravebot_tui::app::tests::scroller::q_escape_and_ctrl_o_each_close_the_scroller`
+`verified-by: bravebot_tui::app::tests::scroller::closing_the_scroller_leaves_the_view_where_it_was`
 `verified-by: bravebot_tui::state::the_row_at_the_top_of_the_view_survives_the_screen_changing_shape`
 `verified-by: bravebot_tui::app::tests::scrollbar::opening_the_scroller_with_the_view_scrolled_back_beside_a_bar_leaves_the_same_words_at_the_top`
 `verified-by: bravebot_tui::app::tests::scrollbar::opening_the_scroller_beside_the_info_panel_and_while_a_turn_runs_holds_the_words_too`
-`verified-by: bravebot_tui::app::ctrl_c_closes_the_scroller_before_it_reaches_anything_else`
-`verified-by: bravebot_tui::app::the_scroller_answers_the_stop_keys_before_the_turn_does`
-`verified-by: bravebot_tui::app::a_turn_goes_on_running_while_the_scroller_is_open`
-`verified-by: bravebot_tui::app::the_scroller_left_open_under_a_running_command_still_closes`
-`verified-by: bravebot_tui::app::the_press_after_the_scroller_closes_stops_the_command`
-`verified-by: bravebot_tui::app::the_scroller_keeps_scrolling_under_a_running_command`
-`verified-by: bravebot_tui::app::the_chords_that_close_the_scroller_close_it_while_a_search_is_typed`
-`verified-by: bravebot_tui::app::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
+`verified-by: bravebot_tui::app::tests::scroller::ctrl_c_closes_the_scroller_before_it_reaches_anything_else`
+`verified-by: bravebot_tui::app::tests::scroller::the_scroller_answers_the_stop_keys_before_the_turn_does`
+`verified-by: bravebot_tui::app::tests::scroller::a_turn_goes_on_running_while_the_scroller_is_open`
+`verified-by: bravebot_tui::app::tests::scroller::the_scroller_left_open_under_a_running_command_still_closes`
+`verified-by: bravebot_tui::app::tests::scroller::the_press_after_the_scroller_closes_stops_the_command`
+`verified-by: bravebot_tui::app::tests::scroller::the_scroller_keeps_scrolling_under_a_running_command`
+`verified-by: bravebot_tui::app::tests::scroller::the_chords_that_close_the_scroller_close_it_while_a_search_is_typed`
+`verified-by: bravebot_tui::app::tests::scroller::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
 
 
 <a id="SCROLL-2"></a>
@@ -106,14 +106,14 @@ come back to it.
 Nothing here is a difference about sending. Sending is what a running turn refuses; this is a mode
 the person opened with a key and closes with any of four.
 
-`verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_the_scroller_is_open`
-`verified-by: bravebot_tui::app::enter_sends_nothing_from_inside_the_scroller`
-`verified-by: bravebot_tui::app::a_key_the_scroller_does_not_take_does_nothing`
-`verified-by: bravebot_tui::app::a_chord_the_scroller_does_not_name_does_nothing`
+`verified-by: bravebot_tui::app::tests::scroller::a_typed_character_does_not_reach_the_box_while_the_scroller_is_open`
+`verified-by: bravebot_tui::app::tests::scroller::enter_sends_nothing_from_inside_the_scroller`
+`verified-by: bravebot_tui::app::tests::scroller::a_key_the_scroller_does_not_take_does_nothing`
+`verified-by: bravebot_tui::app::tests::scroller::a_chord_the_scroller_does_not_name_does_nothing`
 `verified-by: bravebot_tui::app::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
 `verified-by: bravebot_tui::render::the_help_names_the_watch_chord_as_it_is_bound`
-`verified-by: bravebot_tui::app::the_line_comes_back_untouched_when_the_scroller_closes`
-`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_scroller_is_open`
+`verified-by: bravebot_tui::app::tests::scroller::the_line_comes_back_untouched_when_the_scroller_closes`
+`verified-by: bravebot_tui::app::tests::scroller::a_paste_and_a_drop_do_not_reach_the_line_while_the_scroller_is_open`
 
 
 <a id="SCROLL-3"></a>
@@ -193,30 +193,30 @@ screens is past the end of any transcript. A count waiting for its key changes w
 so it is on the screen, as the box draws one beside its mode word. `3n` is `n` pressed three times, and takes no decision from untrusted bytes
 that the Known costs below do not already admit.
 
-`verified-by: bravebot_tui::app::the_line_keys_move_the_view_by_a_line`
-`verified-by: bravebot_tui::app::the_half_page_keys_move_the_view_by_half_a_screen`
-`verified-by: bravebot_tui::app::the_page_keys_move_the_view_by_a_whole_screen`
+`verified-by: bravebot_tui::app::tests::scroller::the_line_keys_move_the_view_by_a_line`
+`verified-by: bravebot_tui::app::tests::scroller::the_half_page_keys_move_the_view_by_half_a_screen`
+`verified-by: bravebot_tui::app::tests::scroller::the_page_keys_move_the_view_by_a_whole_screen`
 `verified-by: bravebot_tui::confirm::j_and_k_scroll_each_prompt_a_line_as_the_arrows_do`
 `verified-by: bravebot_tui::confirm::j_and_k_scroll_the_run_prompt_where_keep_reach_is_offered_too`
 `verified-by: bravebot_tui::trust_prompt::j_and_k_scroll_the_question_a_line_and_answer_nothing`
-`verified-by: bravebot_tui::app::the_end_keys_reach_the_first_row_and_the_last`
-`verified-by: bravebot_tui::app::the_prompt_keys_land_on_the_turn_before_and_the_turn_after`
-`verified-by: bravebot_tui::app::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
-`verified-by: bravebot_tui::app::the_view_stops_at_the_last_row_rather_than_scrolling_past_it`
-`verified-by: bravebot_tui::app::the_wheel_scrolls_the_scroller_as_it_scrolls_the_transcript`
-`verified-by: bravebot_tui::app::the_wheel_moves_the_configured_number_of_rows`
-`verified-by: bravebot_tui::app::the_wheel_moves_three_rows_where_nothing_names_a_number`
-`verified-by: bravebot_tui::app::a_wheel_count_outside_the_range_is_held_to_it`
-`verified-by: bravebot_tui::app::a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count`
+`verified-by: bravebot_tui::app::tests::scroller::the_end_keys_reach_the_first_row_and_the_last`
+`verified-by: bravebot_tui::app::tests::scroller::the_prompt_keys_land_on_the_turn_before_and_the_turn_after`
+`verified-by: bravebot_tui::app::tests::scroller::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
+`verified-by: bravebot_tui::app::tests::scroller::the_view_stops_at_the_last_row_rather_than_scrolling_past_it`
+`verified-by: bravebot_tui::app::tests::scroller::the_wheel_scrolls_the_scroller_as_it_scrolls_the_transcript`
+`verified-by: bravebot_tui::app::tests::scroller::the_wheel_moves_the_configured_number_of_rows`
+`verified-by: bravebot_tui::app::tests::scroller::the_wheel_moves_three_rows_where_nothing_names_a_number`
+`verified-by: bravebot_tui::app::tests::scroller::a_wheel_count_outside_the_range_is_held_to_it`
+`verified-by: bravebot_tui::app::tests::scroller::a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count`
 `verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
 `verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_far_the_wheel_moves_the_view`
-`verified-by: bravebot_tui::app::a_count_moves_the_view_that_many_times_as_far`
-`verified-by: bravebot_tui::app::a_count_stops_at_the_ends_of_the_transcript`
-`verified-by: bravebot_tui::app::a_count_on_the_prompt_keys_walks_that_many_prompts_and_stops_at_the_ends`
-`verified-by: bravebot_tui::app::a_count_on_n_walks_that_many_matches_and_wraps`
-`verified-by: bravebot_tui::app::a_key_that_takes_no_count_drops_it`
-`verified-by: bravebot_tui::app::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
+`verified-by: bravebot_tui::app::tests::scroller::a_count_moves_the_view_that_many_times_as_far`
+`verified-by: bravebot_tui::app::tests::scroller::a_count_stops_at_the_ends_of_the_transcript`
+`verified-by: bravebot_tui::app::tests::scroller::a_count_on_the_prompt_keys_walks_that_many_prompts_and_stops_at_the_ends`
+`verified-by: bravebot_tui::app::tests::scroller::a_count_on_n_walks_that_many_matches_and_wraps`
+`verified-by: bravebot_tui::app::tests::scroller::a_key_that_takes_no_count_drops_it`
+`verified-by: bravebot_tui::app::tests::scroller::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
 `verified-by: bravebot_tui::render::the_footer_draws_a_count_waiting_for_its_key`
 
 
@@ -251,9 +251,9 @@ is also what somebody scanning a transcript for a filename actually wants.
 `verified-by: bravebot_tui::render::a_search_matches_what_is_drawn_and_not_the_bytes_behind_it`
 `verified-by: bravebot_tui::state::n_and_shift_n_walk_the_matches_and_wrap`
 `verified-by: bravebot_tui::render::a_search_that_matches_nothing_says_so_and_moves_nothing`
-`verified-by: bravebot_tui::app::escape_abandons_a_half_typed_search`
-`verified-by: bravebot_tui::app::escape_clears_a_finished_search_before_it_closes_the_scroller`
-`verified-by: bravebot_tui::app::backspacing_past_the_start_abandons_the_search`
+`verified-by: bravebot_tui::app::tests::scroller::escape_abandons_a_half_typed_search`
+`verified-by: bravebot_tui::app::tests::scroller::escape_clears_a_finished_search_before_it_closes_the_scroller`
+`verified-by: bravebot_tui::app::tests::scroller::backspacing_past_the_start_abandons_the_search`
 `verified-by: bravebot_tui::render::every_match_on_the_screen_is_highlighted`
 `verified-by: bravebot_tui::render::how_many_matches_there_are_is_drawn`
 `verified-by: bravebot_tui::render::a_line_holding_two_matches_is_counted_as_two`
@@ -307,8 +307,8 @@ gains anything from it having existed.
 **Why.** A pager can search a screen. Everything past that, meaning reading two passages side by
 side, keeping a copy, or grepping the lot, is a text editor's job, and the user has one.
 
-`verified-by: bravebot_tui::app::v_asks_for_the_editor`
-`verified-by: bravebot_tui::app::the_transcript_editor_key_does_nothing_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::scroller::v_asks_for_the_editor`
+`verified-by: bravebot_tui::app::tests::scroller::the_transcript_editor_key_does_nothing_while_a_turn_runs`
 `verified-by: bravebot_tui::render::what_goes_to_the_editor_is_marked_the_way_the_screen_is`
 `verified-by: bravebot_tui::render::what_goes_to_the_editor_leaves_out_the_word_that_copies_a_block`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_written_outside_the_workspace`
@@ -335,7 +335,7 @@ is indistinguishable from an interface that has stopped responding. The way out 
 that must never be the line that did not fit.
 
 `verified-by: bravebot_tui::render::the_scroller_says_it_is_open_and_which_key_closes_it`
-`verified-by: bravebot_tui::app::the_help_key_lists_the_keys`
+`verified-by: bravebot_tui::app::tests::scroller::the_help_key_lists_the_keys`
 `verified-by: bravebot_tui::render::the_help_says_that_any_key_puts_it_away`
 `verified-by: bravebot_tui::render::the_help_names_every_key_the_scroller_spec_names`
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
@@ -410,7 +410,7 @@ session expand.
 **Why.** The transcript shows five lines of a result and twelve of a write, and says how many it
 left out. Without a key the rest is reachable only by rerunning the command or opening the file.
 
-`verified-by: bravebot_tui::app::x_expands_the_call_the_view_is_on_and_a_second_press_collapses_it`
+`verified-by: bravebot_tui::app::tests::scroller::x_expands_the_call_the_view_is_on_and_a_second_press_collapses_it`
 `verified-by: bravebot_tui::render::the_expand_key_toggles_the_call_the_view_is_on`
 `verified-by: bravebot_tui::render::the_expand_key_does_nothing_where_a_call_has_no_more`
 `verified-by: bravebot_tui::render::an_expanded_result_shows_every_line_it_kept`

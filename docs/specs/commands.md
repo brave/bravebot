@@ -274,10 +274,10 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
 `verified-by: bravebot_tui::app::a_tilde_is_expanded_only_as_a_whole_first_segment`
-`verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
-`verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
-`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
-`verified-by: bravebot_tui::app::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_pasted_into_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
+`verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
 `verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
 
 

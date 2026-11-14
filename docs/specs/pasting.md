@@ -112,7 +112,7 @@ bypassing permissions answered for them. That route does not come through here a
 here. What it rests on is an endorsement of one slot, recorded as that, and the picture never joins
 the person's own message. This gate still admits a paste and nothing else.
 
-`verified-by: bravebot_tui::app::a_picture_off_the_clipboard_becomes_a_marker_in_the_line`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_off_the_clipboard_becomes_a_marker_in_the_line`
 `verified-by: bravebot_agent::turn::a_picture_is_never_shown_to_the_planner`
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
@@ -192,15 +192,15 @@ is presentation only. The picture that is sent is the bytes that were pasted, wh
 drawing was made of them, and a picture that will not decode, or a terminal that answers no query,
 leaves the box as it was.
 
-`verified-by: bravebot_tui::app::a_picture_is_refused_in_shell_mode_rather_than_written_into_the_command`
-`verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
-`verified-by: bravebot_tui::app::a_picture_pasted_into_a_task_goes_with_the_plan`
-`verified-by: bravebot_tui::app::a_picture_pasted_into_a_loop_goes_with_its_first_tick`
-`verified-by: bravebot_tui::app::a_picture_named_on_a_question_that_waited_still_goes_with_it`
-`verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
-`verified-by: bravebot_tui::app::a_picture_named_on_a_command_that_waited_is_words_by_the_time_it_is_carried_out`
-`verified-by: bravebot_tui::app::a_command_line_whose_marker_was_deleted_says_nothing_about_a_picture`
-`verified-by: bravebot_tui::app::a_picture_too_large_to_send_says_so_with_its_size`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_is_refused_in_shell_mode_rather_than_written_into_the_command`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_pasted_into_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_pasted_into_a_task_goes_with_the_plan`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_pasted_into_a_loop_goes_with_its_first_tick`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_named_on_a_question_that_waited_still_goes_with_it`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_named_on_a_command_that_waited_is_words_by_the_time_it_is_carried_out`
+`verified-by: bravebot_tui::app::tests::pasting::a_command_line_whose_marker_was_deleted_says_nothing_about_a_picture`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_too_large_to_send_says_so_with_its_size`
 `verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_is_scaled_down_and_sent`
 `verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text`
 `verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_declaring_too_wide_a_canvas_is_refused_unread`
@@ -250,11 +250,11 @@ Ctrl-V would paste a picture appears for any of the flavours.
 
 On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-paste` or `xclip`.
 
-`verified-by: bravebot_tui::app::an_empty_paste_goes_and_reads_the_clipboard_instead`
-`verified-by: bravebot_tui::app::an_empty_paste_mid_turn_goes_and_reads_the_clipboard_too`
-`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
-`verified-by: bravebot_tui::app::a_paste_that_carried_text_is_left_alone`
-`verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
+`verified-by: bravebot_tui::app::tests::pasting::an_empty_paste_goes_and_reads_the_clipboard_instead`
+`verified-by: bravebot_tui::app::tests::pasting::an_empty_paste_mid_turn_goes_and_reads_the_clipboard_too`
+`verified-by: bravebot_tui::app::tests::pasting::ctrl_v_reads_the_clipboard_during_a_turn_too`
+`verified-by: bravebot_tui::app::tests::pasting::a_paste_that_carried_text_is_left_alone`
+`verified-by: bravebot_tui::app::tests::pasting::which_key_carries_a_picture_is_said_once_per_session`
 `verified-by: bravebot_tui::clipboard::a_picture_wins_over_the_text_beside_it`
 `verified-by: bravebot_tui::clipboard::the_text_beside_a_picture_is_never_read`
 `verified-by: bravebot_tui::clipboard::a_png_is_read_before_a_jpeg_beside_it`
@@ -463,14 +463,14 @@ arrived on the clipboard, and keeping the two apart is what keeps PASTE-2 narrow
 `verified-by: bravebot_tui::dropped::a_uri_list_line_that_is_not_a_local_file_names_nothing`
 `verified-by: bravebot_tui::dropped::a_uri_naming_localhost_is_a_file_on_this_machine`
 `verified-by: bravebot_tui::dropped::a_name_that_is_not_text_refuses_the_list_and_is_not_taken_for_its_lookalikes`
-`verified-by: bravebot_tui::app::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
-`verified-by: bravebot_tui::app::a_copied_file_is_carried_read_or_written_out_by_its_type_as_a_dropped_one_is`
-`verified-by: bravebot_tui::app::a_copied_file_named_with_a_space_and_a_quote_is_one_file`
-`verified-by: bravebot_tui::app::a_copied_file_is_written_as_its_path_in_shell_mode_and_nothing_is_staged`
-`verified-by: bravebot_tui::app::a_copied_file_that_is_gone_says_there_is_nothing_to_paste`
-`verified-by: bravebot_tui::app::a_copied_file_is_staged_while_a_turn_runs_too`
-`verified-by: bravebot_tui::app::a_refused_list_of_copied_files_says_so_and_stages_nothing`
-`verified-by: bravebot_tui::app::a_copied_file_with_an_escape_in_its_name_refuses_a_shell_line_as_a_dragged_one_does`
+`verified-by: bravebot_tui::app::tests::pasting::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
+`verified-by: bravebot_tui::app::tests::pasting::a_copied_file_is_carried_read_or_written_out_by_its_type_as_a_dropped_one_is`
+`verified-by: bravebot_tui::app::tests::pasting::a_copied_file_named_with_a_space_and_a_quote_is_one_file`
+`verified-by: bravebot_tui::app::tests::pasting::a_copied_file_is_written_as_its_path_in_shell_mode_and_nothing_is_staged`
+`verified-by: bravebot_tui::app::tests::pasting::a_copied_file_that_is_gone_says_there_is_nothing_to_paste`
+`verified-by: bravebot_tui::app::tests::pasting::a_copied_file_is_staged_while_a_turn_runs_too`
+`verified-by: bravebot_tui::app::tests::pasting::a_refused_list_of_copied_files_says_so_and_stages_nothing`
+`verified-by: bravebot_tui::app::tests::pasting::a_copied_file_with_an_escape_in_its_name_refuses_a_shell_line_as_a_dragged_one_does`
 
 ## Known costs
 

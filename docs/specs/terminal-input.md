@@ -347,8 +347,8 @@ Up, then Escape, then Enter. From vi's INSERT mode that Escape is two presses (I
 
 **Why.** A chord that silently does nothing reads as a broken feature.
 
-`verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
-`verified-by: bravebot_tui::app::a_paste_clears_the_hint_that_prompted_it`
+`verified-by: bravebot_tui::app::tests::pasting::which_key_carries_a_picture_is_said_once_per_session`
+`verified-by: bravebot_tui::app::tests::pasting::a_paste_clears_the_hint_that_prompted_it`
 `verified-by: bravebot_tui::state::the_offer_is_not_made_where_ctrl_enter_cannot_arrive`
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_not_drawn_where_the_key_cannot_arrive`
 
@@ -465,7 +465,7 @@ attached to no press.
 `verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
 `verified-by: bravebot_tui::app::a_file_dropped_while_a_turn_is_running_is_attached`
 `verified-by: bravebot_tui::app::ctrl_j_is_not_swallowed_while_a_turn_runs`
-`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
+`verified-by: bravebot_tui::app::tests::pasting::ctrl_v_reads_the_clipboard_during_a_turn_too`
 
 <a id="INPUT-10"></a>
 ### INPUT-10: a prompt sent while a turn runs goes into that turn, at its next round boundary
@@ -2441,11 +2441,11 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
 `verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
-`verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
-`verified-by: bravebot_tui::app::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
-`verified-by: bravebot_tui::app::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
-`verified-by: bravebot_tui::app::a_letter_held_with_any_other_modifier_is_not_that_letter`
-`verified-by: bravebot_tui::app::the_keys_the_view_reads_with_a_modifier_held_still_answer`
+`verified-by: bravebot_tui::app::tests::watching::a_moved_chord_leaves_the_view_it_opened`
+`verified-by: bravebot_tui::app::tests::watching::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
+`verified-by: bravebot_tui::app::tests::watching::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
+`verified-by: bravebot_tui::app::tests::watching::a_letter_held_with_any_other_modifier_is_not_that_letter`
+`verified-by: bravebot_tui::app::tests::watching::the_keys_the_view_reads_with_a_modifier_held_still_answer`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`

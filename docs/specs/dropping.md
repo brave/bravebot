@@ -56,7 +56,7 @@ files on the clipboard reaches by the same route ([PASTE-12](pasting.md#PASTE-12
 [DROP-10](#DROP-10) states. Nothing else mints it.
 
 `verified-by: bravebot_tui::drop::dropping_an_image_puts_a_marker_in_the_line`
-`verified-by: bravebot_tui::app::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
+`verified-by: bravebot_tui::app::tests::pasting::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_read_as_a_drop`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_attached_as_a_drop`
 
@@ -148,12 +148,12 @@ shows.
 `verified-by: bravebot_filetype::by_name::an_extension_is_recognised_whatever_its_case`
 `verified-by: bravebot_filetype::by_name::the_recognised_types_are_the_ones_claude_code_takes`
 `verified-by: bravebot_filetype::by_name::the_noun_names_what_was_dropped`
-`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
-`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_task_goes_with_the_plan`
-`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_loop_goes_with_its_first_tick`
-`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_that_waited_still_goes_with_it`
-`verified-by: bravebot_tui::app::a_text_file_dropped_onto_a_question_is_sent_as_its_name`
-`verified-by: bravebot_tui::app::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
+`verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_task_goes_with_the_plan`
+`verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_loop_goes_with_its_first_tick`
+`verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_that_waited_still_goes_with_it`
+`verified-by: bravebot_tui::app::tests::dropping::a_text_file_dropped_onto_a_question_is_sent_as_its_name`
+`verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
 `verified-by: bravebot_tui::state::a_later_tick_of_a_loop_names_the_file_the_first_one_carried`
 `verified-by: bravebot_tui::loops::a_dropped_file_goes_to_one_tick_and_its_name_to_every_other`
 `verified-by: bravebot_agent::attached::a_dropped_picture_comes_back_as_the_bytes_a_request_can_hold`
@@ -210,14 +210,14 @@ dropped with is not the command the person made.
 `verified-by: bravebot_tui::drop::a_mixed_drop_keeps_each_in_its_place`
 `verified-by: bravebot_tui::drop::deleting_the_marker_takes_the_attachment_off`
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
-`verified-by: bravebot_tui::app::dispatching_a_command_clears_what_was_dropped_on_its_line`
-`verified-by: bravebot_tui::app::a_command_line_whose_dropped_marker_was_deleted_carries_no_file`
-`verified-by: bravebot_tui::app::a_file_dropped_onto_a_shell_line_is_run_as_its_path`
-`verified-by: bravebot_tui::app::a_dropped_name_with_a_space_reaches_the_shell_as_one_word`
-`verified-by: bravebot_tui::app::a_dropped_name_holding_shell_syntax_runs_none_of_it`
-`verified-by: bravebot_tui::app::a_quote_in_a_dropped_name_does_not_end_its_quoting`
-`verified-by: bravebot_tui::app::a_dropped_name_holding_an_invisible_character_writes_nothing_and_says_why`
-`verified-by: bravebot_tui::app::a_drop_with_a_control_character_in_a_name_writes_none_of_its_paths`
+`verified-by: bravebot_tui::app::tests::dropping::dispatching_a_command_clears_what_was_dropped_on_its_line`
+`verified-by: bravebot_tui::app::tests::dropping::a_command_line_whose_dropped_marker_was_deleted_carries_no_file`
+`verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_shell_line_is_run_as_its_path`
+`verified-by: bravebot_tui::app::tests::dropping::a_dropped_name_with_a_space_reaches_the_shell_as_one_word`
+`verified-by: bravebot_tui::app::tests::dropping::a_dropped_name_holding_shell_syntax_runs_none_of_it`
+`verified-by: bravebot_tui::app::tests::dropping::a_quote_in_a_dropped_name_does_not_end_its_quoting`
+`verified-by: bravebot_tui::app::tests::dropping::a_dropped_name_holding_an_invisible_character_writes_nothing_and_says_why`
+`verified-by: bravebot_tui::app::tests::dropping::a_drop_with_a_control_character_in_a_name_writes_none_of_its_paths`
 `verified-by: bravebot_tui::dropped::a_path_is_quoted_for_the_shell_only_when_it_needs_to_be`
 `verified-by: bravebot_tui::drop::a_drop_leaves_room_after_itself`
 
