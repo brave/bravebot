@@ -630,8 +630,11 @@ pub(crate) fn reads_readable_state(
 /// The places under the home directory where a write becomes code that runs later as the account
 /// with no profile around it: what a shell or an X session reads as it starts or ends, the per-user
 /// jobs launchd, systemd and a desktop session start, the variables systemd sets for every program
-/// of the account, and git's own configuration, whose `core.fsmonitor`, `core.pager`, `!` aliases
-/// and credential helpers git runs.
+/// of the account, git's own configuration, whose `core.fsmonitor`, `core.pager`, `!` aliases
+/// and credential helpers git runs, and the link handler a desktop's opener reads: the user
+/// `mimeapps.list`, the lists named for a desktop (GLib reads one for each name in
+/// `XDG_CURRENT_DESKTOP`, so the common desktops are listed, and a name outside them is not), and
+/// the directory of `.desktop` files they point at.
 const PERSISTENCE_LOCATIONS: &[&str] = &[
     ".zshenv",
     ".zprofile",
@@ -653,6 +656,30 @@ const PERSISTENCE_LOCATIONS: &[&str] = &[
     ".config/environment.d",
     ".gitconfig",
     ".config/git/config",
+    ".config/mimeapps.list",
+    ".local/share/applications",
+    ".config/gnome-mimeapps.list",
+    ".config/gnome-classic-mimeapps.list",
+    ".config/gnome-flashback-mimeapps.list",
+    ".config/ubuntu-mimeapps.list",
+    ".config/kde-mimeapps.list",
+    ".config/xfce-mimeapps.list",
+    ".config/cinnamon-mimeapps.list",
+    ".config/x-cinnamon-mimeapps.list",
+    ".config/mate-mimeapps.list",
+    ".config/unity-mimeapps.list",
+    ".config/pantheon-mimeapps.list",
+    ".config/budgie-mimeapps.list",
+    ".config/lxqt-mimeapps.list",
+    ".config/lxde-mimeapps.list",
+    ".config/deepin-mimeapps.list",
+    ".config/dde-mimeapps.list",
+    ".config/cosmic-mimeapps.list",
+    ".config/enlightenment-mimeapps.list",
+    ".config/ukui-mimeapps.list",
+    ".config/sway-mimeapps.list",
+    ".config/hyprland-mimeapps.list",
+    ".config/i3-mimeapps.list",
 ];
 
 /// Each place under `home` that a stage is refused writing wherever a row would otherwise reach it
@@ -1924,6 +1951,7 @@ mod tests {
             ".config/systemd/user",
             ".config/git",
             ".config/fish",
+            ".local/share/applications",
             "dotfiles",
         ] {
             fs::create_dir_all(home.join(directory)).unwrap();
@@ -1932,6 +1960,9 @@ mod tests {
             ".zshrc",
             ".gitconfig",
             ".config/git/ignore",
+            ".config/other.conf",
+            ".config/mimeapps.list",
+            ".local/share/other.txt",
             "dotfiles/bashrc",
             "dotfiles/README",
         ] {
@@ -1954,11 +1985,16 @@ mod tests {
             home.join(".config/autostart/job.desktop"),
             home.join(".config/git/config"),
             home.join(".config/fish/config.fish"),
+            home.join(".config/mimeapps.list"),
+            home.join(".config/gnome-mimeapps.list"),
+            home.join(".local/share/applications/handler.desktop"),
         ] {
             assert!(!granted(&refused), "{} is writable", refused.display());
         }
         for written in [
             home.join("Library/Other/new.txt"),
+            home.join(".config/other.conf"),
+            home.join(".local/share/other.txt"),
             home.join(".config/git/ignore"),
             home.join("dotfiles/README"),
         ] {
@@ -1974,12 +2010,18 @@ mod tests {
     #[cfg(unix)]
     fn a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not() {
         let home = fresh("request-persistence-home");
-        for directory in [".config/git", ".config/fish/functions", "dotfiles"] {
+        for directory in [
+            ".config/git",
+            ".config/fish/functions",
+            ".local/share/applications",
+            "dotfiles",
+        ] {
             fs::create_dir_all(home.join(directory)).unwrap();
         }
         for file in [
             ".zshrc",
             ".config/git/config",
+            ".config/mimeapps.list",
             "dotfiles/bashrc",
             "notes.txt",
         ] {
@@ -1999,6 +2041,10 @@ mod tests {
             ".config/git",
             ".config/git/config",
             ".config/fish/functions",
+            ".config/mimeapps.list",
+            ".config/gnome-mimeapps.list",
+            ".local/share/applications",
+            ".local/share/applications/handler.desktop",
         ] {
             assert_eq!(
                 ask(named, true),
@@ -2006,10 +2052,61 @@ mod tests {
                 "{named}"
             );
         }
-        for named in [".zshrc", ".config/git/config", "dotfiles"] {
+        for named in [
+            ".zshrc",
+            ".config/git/config",
+            "dotfiles",
+            ".config/mimeapps.list",
+            ".local/share/applications",
+        ] {
             assert!(ask(named, false).is_ok(), "{named} cannot be read");
         }
         assert!(ask("notes.txt", true).is_ok());
+    }
+
+    /// SANDBOX-30: the places an opener reads a link handler from are persistence locations, as
+    /// the shell startup files are: the user `mimeapps.list`, the lists named for the common
+    /// desktops, and the directory of `.desktop` files, a file inside it included. A file beside
+    /// them is not. The regression it rejects: the table without them, which leaves a handler a
+    /// stage wrote read by the opener, `aws` or `gcloud` outside the sandbox. A name outside the
+    /// common desktops is not listed (the decision is recorded in the clause).
+    #[test]
+    fn the_link_handler_files_are_persistence_locations() {
+        let home = Path::new("/people/person");
+        let locations = persistence_locations(home);
+        for named in [
+            ".config/mimeapps.list",
+            ".local/share/applications",
+            ".config/gnome-mimeapps.list",
+            ".config/ubuntu-mimeapps.list",
+            ".config/kde-mimeapps.list",
+            ".config/xfce-mimeapps.list",
+            ".config/x-cinnamon-mimeapps.list",
+        ] {
+            assert!(locations.contains(&home.join(named)), "{named} is not held");
+            assert!(inside_a_persistence_location(&home.join(named), home));
+        }
+        for inside in [
+            ".local/share/applications/handler.desktop",
+            ".local/share/applications/mimeinfo.cache",
+            ".local/share/applications/gnome-mimeapps.list",
+        ] {
+            assert!(
+                inside_a_persistence_location(&home.join(inside), home),
+                "{inside} is not inside"
+            );
+        }
+        for beside in [
+            ".config/mimeapps.list.bak",
+            ".config/other.conf",
+            ".local/share/applications-notes",
+            ".local/share/other",
+        ] {
+            assert!(
+                !inside_a_persistence_location(&home.join(beside), home),
+                "{beside} is inside"
+            );
+        }
     }
 
     /// A write row above a location the base refuses is not a way to write there.

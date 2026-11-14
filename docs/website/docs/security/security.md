@@ -432,10 +432,10 @@ profiles under `~/AppData/Local` (`BraveSoftware`, `Google/Chrome`, `Chromium`, 
 `Microsoft` in `~/AppData/Local` and `~/AppData/Roaming` (`Credentials`, `Protect`, `Crypto` and
 `Vault`). A session opened on `~/AppData/Local` or on `~/AppData/Roaming/Microsoft` is refused. On macOS a
 credential directory that is a link (a dotfile manager's `~/.ssh`, say) is refused where it stands and
-where it leads. On macOS, when the session is opened on your home directory or above it, a stage also
+where it leads. On Linux and macOS, when the session is opened on your home directory or above it, a stage also
 cannot write the places it cannot read, nor the shell startup files (`~/.zshenv`, `~/.zprofile`,
-`~/.zshrc`, `~/.zlogin`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`, `~/.profile`) or
-`~/Library/LaunchAgents`, because what is written there runs later outside the sandbox. They stay
+`~/.zshrc`, `~/.zlogin`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`, `~/.profile`),
+`~/Library/LaunchAgents` or the other places listed below, because what is written there runs later outside the sandbox. They stay
 readable.
 
 In bypass mode, a delegate's stages included, and for a path a `request_path` call asks to write, a stage is also refused writes to
@@ -443,10 +443,14 @@ the persistence locations: the shell startup and logout files (`~/.zshenv`, `~/.
 `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`,
 `~/.bash_aliases`, `~/.bash_logout` and `~/.profile`), `~/.config/fish`, `~/.xprofile`,
 `~/.xsessionrc`, `~/Library/LaunchAgents`, `~/.config/systemd/user`, `~/.config/autostart`,
-`~/.config/environment.d`, `~/.gitconfig` and `~/.config/git/config`. Reads are not affected. A stage
+`~/.config/environment.d`, `~/.gitconfig`, `~/.config/git/config`, `~/.config/mimeapps.list`,
+`~/.local/share/applications` and the `~/.config/<desktop>-mimeapps.list` files for the common
+desktops (`gnome`, `kde`, `xfce` and similar; a list for another desktop name is not refused).
+Reads are not affected. A stage
 therefore cannot run `git config --global`. The locations are fixed paths, so a `ZDOTDIR` or
 `XDG_CONFIG_HOME` that moves one leaves the moved file writable, and a `PATH` directory such as
-`~/.local/bin` stays writable.
+`~/.local/bin` stays writable. A session opened on one of these locations itself, such as
+`~/.local/share/applications`, is not refused.
 
 **On macOS a stage reaches only a fixed list of system services.** The pasteboard and LaunchServices
 (opening a file or URL in another application) are refused. So `open` and `osascript` fail under

@@ -1754,20 +1754,29 @@ covers the table of [SANDBOX-12](#SANDBOX-12) and, on macOS, `/Library/Keychains
 compared without regard to case on macOS and exactly on Linux. A directory above a location, the
 home directory among them, is granted and the location inside it stays refused. On macOS Seatbelt's
 refusal of a read is not a refusal of a write, so each location the stage is refused reading that
-lies inside a directory it may write is refused writing too, as is each place under the home
-directory where a write becomes code that runs later outside the profile: the shell startup and
+lies inside a directory it may write is refused writing too. On Linux and on macOS each place under the home
+directory where a write becomes code that runs later outside the profile is refused writing as well, where a
+row of the session lies above it: the shell startup and
 logout files `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`,
 `~/.bash_login`, `~/.bashrc`, `~/.bash_aliases` (which Debian's `~/.bashrc` reads),
 `~/.bash_logout` and `~/.profile`, the directory `~/.config/fish`, the files an X session reads as
 it starts, `~/.xprofile` and `~/.xsessionrc`, the per-user job directories `~/Library/LaunchAgents`,
 `~/.config/systemd/user` and `~/.config/autostart`, the directory `~/.config/environment.d` whose
 variables systemd sets for every program of the account, and git's own configuration `~/.gitconfig`
-and `~/.config/git/config`. These persistence locations are named at those fixed paths, so a
+and `~/.config/git/config`, and the places a desktop's opener reads the handler of a link from: the
+user `~/.config/mimeapps.list`, the directory `~/.local/share/applications` (its `.desktop` files, and
+the `defaults.list`, `mimeinfo.cache` and `<desktop>-mimeapps.list` files inside it), and the lists
+`~/.config/<desktop>-mimeapps.list` for gnome, gnome-classic, gnome-flashback, ubuntu, kde, xfce,
+cinnamon, x-cinnamon, mate, unity, pantheon, budgie, lxqt, lxde, deepin, dde, cosmic, enlightenment,
+ukui, sway, hyprland and i3. GLib reads one such list for each name in `XDG_CURRENT_DESKTOP`; the
+list is the common desktops, and a list for a name outside it is not refused. These persistence locations are named at those fixed paths, so a
 `ZDOTDIR` or an `XDG_CONFIG_HOME` that moves one leaves the file it moved it to unrefused. They
 are refused for writing only and are read as the rest of the home directory is. A session
 opened on the home directory or on a directory above it therefore writes beneath it except the
-credential locations and the persistence locations, and a session opened on a directory that holds
-none of them has nothing to refuse. `/add-dir`,
+credential locations and the persistence locations, on Linux as on macOS, and a session opened on a directory that holds
+none of them has nothing to refuse. A session opened on a persistence location itself, such as
+`~/.local/share/applications`, is not refused: its row is on the location, so a stage may write there.
+`/add-dir`,
 `--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
 person is not shown a session directory the stage would be refused for.
 
@@ -1837,7 +1846,7 @@ the hooks and the configuration too: `git init` and `git clone` write both from 
 so a refusal there is a git that does not work. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
 open the home. A local MCP server also reads the installation above its program's `bin` directory when
-that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)). The persistence locations are refused for writing on macOS because a program started
+that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)). The persistence locations are refused for writing on Linux and macOS because a program started
 later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
 `core.pager`, a `!` alias, a credential helper) runs as the account with no profile around it, so a
 write there reaches past the stage that made it. The scratch directory is held to the directory the session
@@ -1892,6 +1901,19 @@ directory, that is every new file at the top of the project, the lockfile `npm i
 into place among them, and held back from git's own files it is the `index.lock` every commit
 makes. A Windows container refuses a policy that carries a refusal at all.
 
+**What the persistence locations cost (known costs).** A session opened on the home directory or
+above it, or a write grant under it, lets a stage write the account's configuration. bravebot
+refuses the credential locations and the persistence locations, and keeps its checked starts from
+reading what a stage could have written ([SANDBOX-30](#SANDBOX-30)). It does not refuse a file that
+a program the person chose reads later: an editor's configuration, a program in `~/.local/bin`
+(above), or a `~/.config/<desktop>-mimeapps.list` for a desktop outside the list of this clause. A
+session opened on a persistence location itself, such as `~/.local/share/applications`, is not
+refused. A person avoids these by opening sessions on a project directory, or narrows a wider one
+with `denyWrite`. What the clipboard tools, `osascript`, the inhibitor, the scheduler's programs,
+the stored-login `gh`, `xcode-select` and the OpenShell command line read under the home was not
+checked. `kde-open` under KDE and Qt's fallback with `HOME` unset, macOS `open`'s per-user handler
+and Windows `rundll32` were not checked either ([SANDBOX-30](#SANDBOX-30)).
+
 `verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
@@ -1920,6 +1942,8 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
 `verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
+`verified-by: bravebot_agent::confine::a_linux_session_at_or_above_home_cannot_write_where_a_write_runs_later`
+`verified-by: bravebot_sandbox::rules::the_link_handler_files_are_persistence_locations`
 `verified-by: bravebot_agent::confine::a_windows_session_inside_a_credential_location_is_refused`
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_application_data_of_gcloud_or_gpg_is_refused`
 `verified-by: bravebot_agent::confine::a_windows_session_on_local_application_data_or_a_browser_profile_is_refused`
@@ -4376,9 +4400,15 @@ file. A new spawn that looks a name up through
   `XDG_DATA_HOME` are not set. The opener removes `HOME` when it does not name an existing directory
   outside every directory a stage may write, and also when `$HOME/.config` or
   `$HOME/.local/share/applications` leads to one (a path that does not exist is judged by the
-  nearest directory above it that does, below `HOME`). A session opened on `~/.config` or
-  `~/.local/share/applications` has no row for `HOME` itself, which is why those two are judged. The
-  generic table does not list `HOME`. The AWS CLI lists it as a directory (below), and gcloud, `ssh`
+  nearest directory above it that does, below `HOME`). Those two are judged because a session
+  opened on either has no row for `HOME` itself. The removal protects a `HOME` that names a
+  directory other than the account's home. Where `HOME` is the account's home it protects nothing,
+  because GLib reads the same directories without it (below), so what covers a session opened on
+  `~/.config` is that a stage may not write
+  `~/.config/mimeapps.list`, `~/.config/<desktop>-mimeapps.list` or `~/.local/share/applications`,
+  which are persistence locations ([SANDBOX-18](#SANDBOX-18)). A session opened on
+  `~/.local/share/applications` itself holds a row on that location and is not covered, which
+  SANDBOX-18 records as a known cost. The generic table does not list `HOME`. The AWS CLI lists it as a directory (below), and gcloud, `ssh`
   and `git` keep it. The AWS CLI, the gcloud launcher and the `ssh-keygen`, `ssh` and `git` of
   `doctor --push-identity` list `BROWSER` and the four `XDG_` directories,
   since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
@@ -4409,15 +4439,15 @@ file. A new spawn that looks a name up through
   directories under the account's real home. The application's `HOME` comes from the person's login
   session, which a stage cannot change, so the opener reads a directory a stage may write only when
   the account's home is one, and removing `HOME` does not change that.
-  On Linux under a GNOME session the application's opener therefore still reads a `HOME`, a
-  runtime directory or a bus address that a stage may write. For `HOME` that happens when a session
-  was opened on the home directory, on `~/.config` or on `~/.local/share/applications`, or was
-  granted writes there: a program the person approved with `run` can write a `mimeapps.list` or a
-  `.desktop` file there, and the next open from the application runs that handler outside the
-  sandbox. Neither `~/.config/mimeapps.list` nor `~/.local/share/applications` is among the
-  persistence locations named in this clause as refused for writing. A person avoids it by opening
-  sessions on a project directory and not on the home directory, and by not adding `~/.config` or
-  `~/.local/share/applications` as a session directory. What `gio open` and `xdg-open` on Linux do
+  On Linux under a GNOME session the application's opener therefore reads a runtime
+  directory or a bus address that a stage may write. The opener does not read a handler a stage
+  wrote through `HOME`: `~/.config/mimeapps.list`, the `~/.config/<desktop>-mimeapps.list` files of the
+  desktops named in [SANDBOX-18](#SANDBOX-18) and `~/.local/share/applications` are persistence
+  locations, so a stage is refused writing them in a session opened on the home directory, on
+  `~/.config` or on `~/.local/share`, or granted writes there. A session opened on a location
+  itself, such as `~/.local/share/applications`, holds a row on it, which is not refused. A
+  `~/.config/<desktop>-mimeapps.list`
+  for a desktop name outside that list is not refused. What `gio open` and `xdg-open` on Linux do
   with `HOME` removed was observed for `gio open` (see the run under a GNOME session below) and
   agrees with the GLib source, and the opener's start through Electron under a GNOME session with a
   file manager on the bus is not observed.
@@ -4751,6 +4781,16 @@ file. A new spawn that looks a name up through
   started without `-E` or `-I`, which is why its list holds the `PYTHON*` variables. The AWS list
   does not, since the generic table holds those the script run reached (`PYTHONPATH`) and a probe of
   the frozen executable reached none.
+  Both starts also keep Python's user site from running code. An `aws` that is a script, and
+  `gcloud`, import `usercustomize.py` and the `.pth` files in the user site, which is
+  `~/.local/lib/python*/site-packages` (`~/Library/Python` on a macOS framework build,
+  `%APPDATA%\Python` on Windows). The start sets `PYTHONNOUSERSITE=1` when the user base, judged as
+  `HOME` is for a shim, is or lies inside a directory a stage may write, or cannot be judged because
+  the environment holds no absolute account directory. A `PYTHONUSERBASE` the checked start keeps
+  is the user base instead. The start does not set it otherwise, because the variable also hides
+  packages installed with `pip install --user`. `PYTHONNOUSERSITE` is set after the checked start
+  settled the environment and is not a row of either list, since it names no path to judge
+  (`bravebot_sandbox::programs::python_user_site_off_when_writable`).
   The test that runs the installed CLI with a `credential_process` helper is skipped on a machine
   with no `aws` in a directory the lookup accepts, so its `verified-by` line holds only where the
   CLI is installed.
@@ -6253,6 +6293,14 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
+`verified-by: bravebot_sandbox::programs::the_user_site_is_writable_when_home_or_what_it_reads_under_home_is_a_stage_directory`
+`verified-by: bravebot_sandbox::programs::the_user_site_is_writable_when_the_home_is_not_held_or_not_absolute`
+`verified-by: bravebot_sandbox::programs::the_user_base_variable_decides_only_when_a_start_keeps_it`
+`verified-by: bravebot_sandbox::programs::the_user_site_is_turned_off_only_for_a_start_whose_user_site_a_stage_may_write`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_turns_off_the_user_site_only_where_a_stage_may_write_it`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_turns_off_the_user_site_when_dot_local_leads_into_a_stage_directory`
+`verified-by: bravebot_agent::gcloud::the_gcloud_start_turns_off_the_user_site_only_where_a_stage_may_write_it`
+`verified-by: bravebot_agent::gcloud::the_gcloud_start_turns_off_the_user_site_when_dot_local_leads_into_a_stage_directory`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the sixteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the sixteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
 `verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the sixteen names where Electron's own shell starts it with all sixteen; its showItemInFolder case is a test case of its own, asserts a start of xdg-open and passed on Linux in CI run 43104226342; the ui job of CI runs it through make check-ui-build on ubuntu-latest and fails on Linux when Electron or xvfb-run is missing)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`

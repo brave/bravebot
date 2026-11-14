@@ -602,6 +602,70 @@ fn withhold_home_a_stage_may_write(
     }
 }
 
+/// Where Python's per-user site directory is kept when `PYTHONUSERBASE` does not move it: the
+/// variable that names the account's directory and the paths under it that hold the user base. The
+/// site is the `lib/` tree inside, where `usercustomize.py` and `.pth` files make the interpreter
+/// run code at start. A framework build on macOS uses `Library/Python` and any other build uses
+/// `.local`, so both are judged there.
+const USER_BASE_UNDER: (&str, &[&str]) = if cfg!(windows) {
+    ("APPDATA", &["Python"])
+} else if cfg!(target_os = "macos") {
+    ("HOME", &["Library/Python", ".local"])
+} else {
+    ("HOME", &[".local"])
+};
+
+/// Whether a stage may write the directory Python reads its per-user site from, judged for a
+/// program started with `held` as its environment.
+///
+/// A `PYTHONUSERBASE` that [`may_be_run`] keeps names a directory outside every directory a stage
+/// may write, and is the one used. Where it is unset, or a checked start removes it, Python uses
+/// the default under the account's directory, which is judged as `HOME` is for a shim: the
+/// directory itself and the nearest existing path under it ([`under_home_outside_stage_writable`]).
+/// An account directory the environment does not hold, or a relative one, cannot be judged and
+/// counts as writable. Only names and paths decide this ([SANDBOX-30]).
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md#SANDBOX-30
+pub fn python_user_site_may_be_written(
+    held: &[(OsString, OsString)],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    let value_of = |wanted: &str| {
+        held.iter()
+            .find(|(name, _)| is_variable(name, wanted))
+            .map(|(_, value)| Path::new(value))
+    };
+    if value_of("PYTHONUSERBASE")
+        .is_some_and(|base| may_be_run(Names::Directory, base, outside_stage_writable))
+    {
+        return false;
+    }
+    let (variable, under) = USER_BASE_UNDER;
+    let Some(account) = value_of(variable) else {
+        return true;
+    };
+    !(may_be_run(Names::Directory, account, outside_stage_writable)
+        && under_home_outside_stage_writable(account, under, outside_stage_writable))
+}
+
+/// Set `PYTHONNOUSERSITE=1` on `command` when a stage may write Python's per-user site directory
+/// ([`python_user_site_may_be_written`]), and leave the environment alone otherwise.
+///
+/// For a started program that runs Python and reads `usercustomize.py` and `.pth` files from the
+/// user site (`aws`, `gcloud`). `PYTHONNOUSERSITE` has no path to judge, so it is not a
+/// [`CODE_SELECTORS`] entry: it is set here, after [`start_against`] has settled the environment.
+/// It is not set when the directory is one no stage may write, since it also turns off packages a
+/// person installed with `pip install --user`, which an `aws` installed that way needs.
+pub fn python_user_site_off_when_writable(
+    command: &mut Command,
+    held: &[(OsString, OsString)],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) {
+    if python_user_site_may_be_written(held, outside_stage_writable) {
+        command.env("PYTHONNOUSERSITE", "1");
+    }
+}
+
 /// Whether each of the paths `under` `home` is outside the directories a stage may write.
 ///
 /// A session opened on `~/.config` or `~/.pyenv` has no row for `HOME` itself, so `HOME` alone
@@ -3516,5 +3580,154 @@ mod tests {
             assert!(judged("fire\u{fffd}ox"));
             assert!(judged("/safe/bin/fire\u{fffd}ox %s"));
         }
+    }
+
+    /// `python_user_site_may_be_written` for a start holding `held`, when `session` is the one
+    /// directory a stage may write.
+    #[cfg(unix)]
+    fn user_site_writable(held: &[(&str, &Path)], session: &Path) -> bool {
+        let row = session.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let held: Vec<(OsString, OsString)> = held
+            .iter()
+            .map(|(name, value)| (OsString::from(name), value.as_os_str().to_os_string()))
+            .collect();
+        python_user_site_may_be_written(&held, &|file: &Path| {
+            outside_stage_writable_with(file, rows, &[])
+        })
+    }
+
+    /// SANDBOX-30. The regression it rejects: judging only whether `HOME` itself is outside the
+    /// directories a stage may write, so a `HOME` outside them passes while `~/.local`, where Python
+    /// reads `usercustomize.py` and `.pth` files from, is a link into one. A `HOME` with no such
+    /// directory is judged by `HOME`, so one a stage may not write is not reported as writable.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_site_is_writable_when_home_or_what_it_reads_under_home_is_a_stage_directory() {
+        let session = scratch_dir("programs-usersite-home-session");
+        let safe = scratch_dir("programs-usersite-home-safe");
+        let home = scratch_dir("programs-usersite-home-home");
+
+        assert!(user_site_writable(&[("HOME", &session)], &session));
+        assert!(!user_site_writable(&[("HOME", &safe)], &session));
+        assert!(!user_site_writable(&[("HOME", &home)], &session));
+        std::fs::create_dir_all(home.join(".local")).unwrap();
+        assert!(!user_site_writable(&[("HOME", &home)], &session));
+        std::fs::remove_dir_all(home.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&session, home.join(".local")).unwrap();
+        assert!(user_site_writable(&[("HOME", &home)], &session));
+    }
+
+    /// SANDBOX-30. The regression it rejects: reading no `HOME` as a directory no stage may write,
+    /// or a relative `HOME` as one, so the interpreter's user site is left on when nothing says
+    /// where it is.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_site_is_writable_when_the_home_is_not_held_or_not_absolute() {
+        let session = scratch_dir("programs-usersite-nohome-session");
+
+        assert!(user_site_writable(&[], &session));
+        assert!(user_site_writable(&[("HOME", Path::new("home"))], &session));
+    }
+
+    /// SANDBOX-30. The regression it rejects: ignoring `PYTHONUSERBASE`, so a user base a person
+    /// moved outside every stage directory is switched off for a `HOME` a stage may write, or one a
+    /// stage may write is judged as if the start kept it, when the start removes it and Python
+    /// falls back to `~/.local`.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_base_variable_decides_only_when_a_start_keeps_it() {
+        let session = scratch_dir("programs-usersite-base-session");
+        let safe = scratch_dir("programs-usersite-base-safe");
+        let home = scratch_dir("programs-usersite-base-home");
+        let planted = session.join("base");
+
+        assert!(!user_site_writable(
+            &[("HOME", &session), ("PYTHONUSERBASE", &safe)],
+            &session
+        ));
+        assert!(user_site_writable(
+            &[("HOME", &session), ("PYTHONUSERBASE", &planted)],
+            &session
+        ));
+        assert!(!user_site_writable(
+            &[("HOME", &home), ("PYTHONUSERBASE", &planted)],
+            &session
+        ));
+        assert!(user_site_writable(
+            &[("HOME", &session), ("PYTHONUSERBASE", Path::new("base"))],
+            &session
+        ));
+    }
+
+    /// SANDBOX-30: the account's directory and `PYTHONUSERBASE` are judged by the bytes of their
+    /// values, and the directory named by a lossy rendering of a value is another one
+    /// ([PATH-003]). The stage directory's name is not text, and a directory named by its lossy
+    /// rendering is not a stage directory. The regression it rejects is judging a value through
+    /// `to_string_lossy`, which reads each stage directory below as its lookalike and each
+    /// lookalike as the stage directory.
+    ///
+    /// [PATH-003]: ../../../docs/best-practices/paths.md
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_user_site_is_judged_by_the_bytes_of_home_and_the_user_base_and_not_by_their_lossy_lookalikes()
+     {
+        use std::os::unix::ffi::OsStrExt;
+        let parent = scratch_dir("programs-usersite-bytes");
+        let session = parent.join(OsStr::from_bytes(b"w\xff"));
+        let lookalike = parent.join("w\u{FFFD}");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&lookalike).unwrap();
+
+        // `HOME` is the directory a stage may write, or the directory named by its lossy rendering.
+        assert!(user_site_writable(&[("HOME", &session)], &session));
+        assert!(!user_site_writable(&[("HOME", &lookalike)], &session));
+
+        // `HOME` is outside every stage directory and `.local`, where the user site is, leads into
+        // one, so the path under `HOME` decides. The home whose name is its lookalike has a
+        // `.local` of its own that a stage may not write.
+        let home = parent.join(OsStr::from_bytes(b"h\xff"));
+        let home_lookalike = parent.join("h\u{FFFD}");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(home_lookalike.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&session, home.join(".local")).unwrap();
+        assert!(user_site_writable(&[("HOME", &home)], &session));
+        assert!(!user_site_writable(&[("HOME", &home_lookalike)], &session));
+
+        // `PYTHONUSERBASE` with no `HOME` held: a base that is a stage directory is not kept, so
+        // the account's directory decides and, not being held, counts as writable. The base named
+        // by the lossy rendering is outside every stage directory and is kept.
+        assert!(user_site_writable(
+            &[("PYTHONUSERBASE", &session)],
+            &session
+        ));
+        assert!(!user_site_writable(
+            &[("PYTHONUSERBASE", &lookalike)],
+            &session
+        ));
+    }
+
+    /// The regression it rejects: setting `PYTHONNOUSERSITE` for every start, which turns off the
+    /// packages a person installed with `pip install --user`, or never setting it.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_site_is_turned_off_only_for_a_start_whose_user_site_a_stage_may_write() {
+        let session = scratch_dir("programs-usersite-env-session");
+        let safe = scratch_dir("programs-usersite-env-safe");
+        let row = session.clone();
+        let rows = std::slice::from_ref(&row);
+        let sets_it = |home: &Path| {
+            let held = vec![(OsString::from("HOME"), home.as_os_str().to_os_string())];
+            let mut command = Command::new("/usr/bin/true");
+            python_user_site_off_when_writable(&mut command, &held, &|file: &Path| {
+                outside_stage_writable_with(file, rows, &[])
+            });
+            command
+                .get_envs()
+                .any(|(name, value)| name == "PYTHONNOUSERSITE" && value == Some(OsStr::new("1")))
+        };
+
+        assert!(sets_it(&session));
+        assert!(!sets_it(&safe));
     }
 }
