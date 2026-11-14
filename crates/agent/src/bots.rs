@@ -1,3 +1,4 @@
+use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value, json};
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -747,15 +748,77 @@ fn old_rows(data_folder: &Path) -> OldRows {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return OldRows::Nothing,
         Err(error) => return OldRows::Unconvertible(Problem::new(&path, error)),
     };
-    let value: Value = match serde_json::from_str(&text) {
-        Ok(value) => value,
+    let bots = match serde_json::from_str::<BotsKey>(&text) {
+        Ok(BotsKey(bots)) => bots,
         Err(error) => return OldRows::Unconvertible(Problem::new(&path, error)),
     };
-    match value.get("bots") {
+    match bots {
         None => OldRows::Nothing,
         Some(Value::Array(entries)) if entries.is_empty() => OldRows::Nothing,
-        Some(Value::Array(entries)) => OldRows::Entries(entries.clone()),
+        Some(Value::Array(entries)) => OldRows::Entries(entries),
         Some(_) => OldRows::Unconvertible(Problem::new(&path, "its `bots` key is not an array")),
+    }
+}
+
+// The other keys are skipped without decoding their text. The GUI writes a summoned reply cut to
+// 4000 UTF-16 units, which can end in half of a surrogate pair, and serde_json refuses that escape
+// where JavaScript reads it back. A file that is not an object has no `bots` key.
+struct BotsKey(Option<Value>);
+
+impl<'de> Deserialize<'de> for BotsKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(BotsKeyVisitor).map(Self)
+    }
+}
+
+struct BotsKeyVisitor;
+
+impl<'de> Visitor<'de> for BotsKeyVisitor {
+    type Value = Option<Value>;
+
+    fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str("a JSON value")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut bots = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if key == "bots" {
+                bots = Some(map.next_value()?);
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(bots)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(None)
     }
 }
 
@@ -1633,6 +1696,29 @@ mod tests {
         assert_eq!(listing.dropped[2].slug.as_deref(), Some("filler098"));
     }
 
+    /// The GUI keeps a summoned reply cut to 4000 UTF-16 units in the same file, and a cut inside a
+    /// surrogate pair is written as an escape that JavaScript reads back and serde_json refuses.
+    #[test]
+    fn rows_move_when_another_key_of_the_old_file_holds_half_of_a_surrogate_pair() {
+        let scratch = Scratch::made("move-half-pair");
+        let entries = vec![bot("kept")];
+        let old = scratch.write_old(&format!(
+            r#"{{"summons": [{{"reply": "cut at \ud83d"}}], "bots": {}, "recents": ["\udc00"]}}"#,
+            Value::Array(entries.clone())
+        ));
+
+        let listing = scratch.list();
+
+        assert_eq!(slugs(&listing), ["kept"]);
+        assert_eq!(listing.unreadable, None);
+        assert!(!listing.old_rows_waiting);
+        assert_eq!(scratch.stored(), entries);
+        assert_eq!(
+            std::fs::read(scratch.data().join("bravebot-ui.json")).unwrap(),
+            old
+        );
+    }
+
     #[test]
     fn a_second_start_does_not_read_the_old_key_again() {
         let first = Scratch::made("move-first");
@@ -1690,6 +1776,12 @@ mod tests {
             ("absent", None),
             ("no-key", Some("{\"layout\": null}")),
             ("empty", Some("{\"bots\": []}")),
+            (
+                "nested",
+                Some("{\"layout\": {\"bots\": [{\"slug\": \"a\"}]}}"),
+            ),
+            ("an-array", Some("[{\"bots\": [{\"slug\": \"a\"}]}]")),
+            ("a-string", Some("\"bots\"")),
         ] {
             let scratch = Scratch::new(&format!("move-none-{name}"));
             std::fs::create_dir_all(scratch.data()).unwrap();

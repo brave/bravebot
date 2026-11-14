@@ -88,6 +88,22 @@ test('rows held in the old key of bravebot-ui.json move to bots.json unchanged, 
   } finally { f.clean() }
 })
 
+// A summoned reply is kept cut to its first REPLY_MAX UTF-16 units, and a cut inside a surrogate pair
+// leaves half of it, which JSON.stringify writes as an escape.
+test('rows move when another key of bravebot-ui.json holds half of a surrogate pair', async () => {
+  const f = await fixture()
+  try {
+    const rows = [botRow({ slug: 'alpha', home: join(f.profile, 'bot-homes', 'alpha') })]
+    const half = '😀'.slice(0, 1)
+    writeFileSync(f.old, JSON.stringify({ bots: rows, summons: [{ reply: `cut at ${half}` }] }))
+    assert.match(readFileSync(f.old, 'utf8'), /\\ud83d"/, 'the half is written as an escape')
+
+    assert.deepEqual(slugs(await f.main.bots()), ['alpha'])
+    assert.equal(f.main.botsProblem(), null)
+    assert.deepEqual(JSON.parse(readFileSync(f.file, 'utf8')), { bots: rows })
+  } finally { f.clean() }
+})
+
 test('an old file that cannot be converted gives no bots, names its path, and a make is refused', async () => {
   for (const content of ['{ not json', JSON.stringify({ bots: { not: 'an array' } })]) {
     const f = await fixture()

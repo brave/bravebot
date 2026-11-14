@@ -227,8 +227,10 @@ whichever program reads the rows first, and it is the same code in both. It take
 `bots.json.lock` ([BOT-4](#BOT-4)) first, checks again under the lock that `bots.json` does not exist,
 writes through a temporary file renamed into place, and releases the lock, so a program that moved the
 rows and then made a bot is not overwritten by a program that checked earlier. It reads the `bots` key of
-`bravebot-ui.json` in the data folder. When that key is an array with at least one entry, the function
-writes `bots.json` holding every entry of the array, in its order, with every field the entry has.
+`bravebot-ui.json` in the data folder, and skips the other keys without decoding their text. The GUI
+keeps a summoned reply there cut to 4000 UTF-16 units, which can end in half of a surrogate pair,
+and serde_json refuses the escape JavaScript writes for it. When the `bots` key is an array with at
+least one entry, the function writes `bots.json` holding every entry of the array, in its order, with every field the entry has.
 That includes an entry BOT-3 would drop, an entry after the 100th and a field the module does not
 know. The move repairs and drops nothing. The rules of BOT-3 apply to those entries when `bots.json`
 is read, as they apply to any entry of that file. The module never writes `bravebot-ui.json`, so the
@@ -298,6 +300,7 @@ face from. A bot the terminal makes takes its slug as the seed, so both programs
 `verified-by: bravebot_agent::bots::a_write_that_waits_past_the_limit_for_the_lock_is_refused_naming_it`
 `verified-by: bravebot_agent::bots::a_write_that_fails_before_the_rename_leaves_the_file_as_it_was`
 `verified-by: bravebot_agent::bots::the_rows_in_the_old_file_move_unchanged_and_the_old_file_is_untouched`
+`verified-by: bravebot_agent::bots::rows_move_when_another_key_of_the_old_file_holds_half_of_a_surrogate_pair`
 `verified-by: bravebot_agent::bots::a_second_start_does_not_read_the_old_key_again`
 `verified-by: bravebot_agent::bots::an_existing_bots_file_is_not_moved_over`
 `verified-by: bravebot_agent::bots::a_move_that_waited_for_the_lock_finds_the_file_another_program_wrote`
@@ -305,7 +308,7 @@ face from. A bot the terminal makes takes its slug as the seed, so both programs
 `verified-by: bravebot_agent::bots::an_old_file_that_cannot_be_converted_is_named_and_nothing_is_written`
 `verified-by: bravebot_agent::bots::nothing_is_moved_where_nothing_may_be_written`
 `verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-rows-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes is in bots.json and not in bravebot-ui.json, that a bot is listed again by a bridge started afterwards, that the rows of an old bravebot-ui.json written in the old forms move unchanged and in order and the old file is left as it was, that a second start does not read the old key again, that an absent or empty key leaves no bots file, and that an old file that does not parse, or whose bots key is not an array, gives no rows, names its path and refuses a make; ui/scripts/bot-store.test.mjs asserts that the desktop sends the data folder Electron names and never reads or writes the bots key of bravebot-ui.json, that a write the agent refuses is shown with its reason and the bot is not shown as saved, and that a file that could not be read is never written over; make check-ui runs both)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-rows-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes is in bots.json and not in bravebot-ui.json, that a bot is listed again by a bridge started afterwards, that the rows of an old bravebot-ui.json written in the old forms move unchanged and in order and the old file is left as it was, that they move when another key holds half of a surrogate pair as JSON.stringify writes it, that a second start does not read the old key again, that an absent or empty key leaves no bots file, and that an old file that does not parse, or whose bots key is not an array, gives no rows, names its path and refuses a make; ui/scripts/bot-store.test.mjs asserts that the desktop sends the data folder Electron names and never reads or writes the bots key of bravebot-ui.json, that a write the agent refuses is shown with its reason and the bot is not shown as saved, and that a file that could not be read is never written over; make check-ui runs both)`
 
 <a id="BOT-5"></a>
 ### BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
