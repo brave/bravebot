@@ -751,6 +751,11 @@ default lifetime between turns pays to read the whole conversation again; the on
 that, and the providers charge a higher rate to write it. With the key absent, bravebot sends no
 lifetime and every service keeps its own default. Any other word names nothing and sends nothing.
 
+Your own `~/.bravebot/settings.json` and a file named with `--settings` may choose either lifetime. A
+project's `.bravebot/settings.json` or `settings.local.json` may ask for `5m` and cannot ask for
+`1h`, over your `5m` or where you chose nothing: that value is ignored and `bravebot doctor` names
+the file.
+
 A model that does not accept a lifetime refuses the request on it. That request is sent again with the
 lifetime removed and the cache breakpoints kept, and the model is not sent one again in that process.
 A model that does not accept breakpoints at all is handled as before.

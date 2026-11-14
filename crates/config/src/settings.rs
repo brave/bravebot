@@ -256,6 +256,12 @@ enum Narrows {
     /// when it is no larger. Where the person stated nothing there is no bound, so a checkout's
     /// figure is a bound added.
     Count,
+    /// One word out of a short list, narrowest first, where a word further down the list takes
+    /// more of something from the person than one above it. A string that is one of the words,
+    /// ignoring surrounding space, states it ([`word_rank`]); any other string and any other type
+    /// state nothing. Where the person stated nothing a checkout is held to the first word, so
+    /// only the narrowest is obeyed.
+    Word(&'static [&'static str]),
 }
 
 impl Narrows {
@@ -268,6 +274,7 @@ impl Narrows {
             Self::Limit => limit_stated(Some(value)).is_some(),
             Self::Off | Self::OffByDefault => value.is_boolean(),
             Self::Count => count_stated(value).is_some(),
+            Self::Word(words) => word_rank(words, value).is_some(),
         }
     }
 
@@ -291,6 +298,9 @@ impl Narrows {
             // No threshold is in force where nothing is stated, which offers every tool in full,
             // so any figure a checkout states is a bound added.
             Self::Count => None,
+            // The narrowest word is what a checkout may state over a person who stated nothing,
+            // and a wider one would choose for them what only they choose.
+            Self::Word(words) => words.first().map(|word| serde_json::Value::from(*word)),
         }
     }
 
@@ -312,9 +322,17 @@ impl Narrows {
                 (Some(held), Some(offered)) => offered <= held,
                 _ => false,
             },
+            Self::Word(words) => match (word_rank(words, held), word_rank(words, offered)) {
+                (Some(held), Some(offered)) => offered <= held,
+                _ => false,
+            },
         }
     }
 }
+
+/// The cache lifetimes `promptCacheTtl` may state, shortest first, spelled as
+/// [`crate::CacheTtl::wire`] spells them. A test holds the two to be the same list.
+const CACHE_TTL_WORDS: &[&str] = &["5m", "1h"];
 
 /// The keys a checkout's settings file may state only to narrow what the person stated.
 ///
@@ -351,6 +369,13 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
     // request, so a checkout may lower the figure or state one where the person stated none and may
     // not raise it, remove it or state something that reads as no threshold (SERVERS-16).
     ("deferMcpToolsAbove", Narrows::Count, Entitled::OwnOrNamed),
+    // The longer lifetime is charged at a higher write rate (BACKEND-27), so a checkout may ask for
+    // the shorter one and may not ask for the longer one, over the person's `5m` or over nothing.
+    (
+        "promptCacheTtl",
+        Narrows::Word(CACHE_TTL_WORDS),
+        Entitled::OwnOrNamed,
+    ),
 ];
 
 /// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
@@ -3234,6 +3259,16 @@ fn count_stated(value: &serde_json::Value) -> Option<u64> {
         serde_json::Value::String(text) => crate::limit::parse_count(text),
         _ => None,
     }
+}
+
+/// The place of the word `value` states in `words`, or `None` where it states none.
+///
+/// A string only, trimmed as [`word`] trims it, and one of `words` spelled exactly. The one reading
+/// the settlement of [`NARROW_ONLY`] uses for a [`Narrows::Word`] key, which is the one
+/// [`crate::CacheTtl::parse`] applies to the merged root.
+fn word_rank(words: &[&str], value: &serde_json::Value) -> Option<usize> {
+    let text = value.as_str()?.trim();
+    words.iter().position(|word| *word == text)
 }
 
 /// The spend limit a `limit` value states, or `None` where it states none.
@@ -8248,6 +8283,18 @@ mod tests {
             ],
             narrower: r#""10k""#,
         },
+        // A word: the person's `"1h"` is not replaced by a word that states no lifetime, since that
+        // removes it. `5m` over `1h` narrows, and `1h` over `5m` or over nothing is held by
+        // `a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`.
+        NarrowCase {
+            key: "promptCacheTtl",
+            read: |settings| format!("{:?}", settings.prompt_cache_ttl()),
+            person: r#""1h""#,
+            wider: &[
+                "null", "0", "true", r#""2h""#, r#""1H""#, r#""""#, r#""60m""#,
+            ],
+            narrower: r#""5m""#,
+        },
     ];
 
     /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
@@ -10869,6 +10916,143 @@ mod tests {
             .read();
         assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// BACKEND-24, BACKEND-27: a project or local layer may ask for the five minute lifetime and may
+    /// not ask for the hour over the person's `5m` or over nothing, and the file that tried is
+    /// reported. The person's own files and the file `--settings` names may choose either.
+    #[test]
+    fn a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one() {
+        use crate::CacheTtl;
+        let key = "promptCacheTtl";
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, named: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("cache-ttl-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                let layers = match named {
+                    Some(text) => layers.named(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let object = |value: &str| format!(r#"{{"{key}": {value}}}"#);
+
+            // The reproduction: a checkout's hour does not replace the person's five minutes, and
+            // does not state one where the person stated nothing.
+            for (name, global) in [
+                ("over-five", Some(object(r#""5m""#))),
+                ("over-none", None),
+                ("over-other-key", Some(r#"{"model": "m"}"#.to_string())),
+                ("over-unreadable", Some(object(r#""2h""#))),
+            ] {
+                let settings = with(name, global.as_deref(), None, &object(r#""1h""#));
+                let expected = global
+                    .as_deref()
+                    .filter(|text| text.contains("5m"))
+                    .map(|_| CacheTtl::FiveMinutes);
+                assert_eq!(
+                    settings.prompt_cache_ttl(),
+                    expected,
+                    "{name} local={local}"
+                );
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{name} local={local}");
+                assert_eq!(reported[0].0, key);
+                assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+                assert!(!settings.is_empty(), "{name}");
+                assert_eq!(settings.unread_keys().count(), 0, "{name}");
+            }
+
+            // The five minutes is obeyed over the person's hour and over nothing, and costs
+            // nothing to report.
+            for (name, global) in [
+                ("short-over-hour", Some(object(r#""1h""#))),
+                ("short-over-none", None),
+                ("short-over-five", Some(object(r#""5m""#))),
+            ] {
+                let settings = with(name, global.as_deref(), None, &object(r#""5m""#));
+                assert_eq!(
+                    settings.prompt_cache_ttl(),
+                    Some(CacheTtl::FiveMinutes),
+                    "{name} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{name}");
+            }
+
+            // The hour over the person's own hour changes nothing, so nothing is reported.
+            let settings = with(
+                "hour-over-hour",
+                Some(&object(r#""1h""#)),
+                None,
+                &object(r#""1h""#),
+            );
+            assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::OneHour));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // A word that states no lifetime where the person stated none removes nothing and is
+            // not reported.
+            let settings = with("unreadable-over-none", None, None, &object(r#""2h""#));
+            assert_eq!(settings.prompt_cache_ttl(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // The file the command line named is the person's own act, and a checkout is held
+            // to what it decides.
+            let settings = with(
+                "named-hour",
+                Some(&object(r#""5m""#)),
+                Some(&object(r#""1h""#)),
+                &object(r#""5m""#),
+            );
+            assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with(
+                "named-hour-held",
+                Some(&object(r#""5m""#)),
+                Some(&object(r#""1h""#)),
+                &object(r#""1h""#),
+            );
+            assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::OneHour));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The named file admits the hour over the person's five minutes, inside the workspace too.
+        let settings = Layers::new("cache-ttl-named-inside")
+            .global(&format!(r#"{{"{key}": "5m"}}"#))
+            .named_inside_the_workspace(&format!(r#"{{"{key}": "1h"}}"#))
+            .read();
+        assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::OneHour));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        // The local file is held to what the project file chose.
+        let settings = Layers::new("cache-ttl-local-over-project")
+            .global(&format!(r#"{{"{key}": "1h"}}"#))
+            .project(&format!(r#"{{"{key}": "5m"}}"#))
+            .local(&format!(r#"{{"{key}": "1h"}}"#))
+            .read();
+        assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+    }
+
+    /// The words the settlement compares are the ones the setting is read with, in the order of how
+    /// long each keeps the prefix, so a lifetime added to [`crate::CacheTtl`] is not left out of it.
+    #[test]
+    fn the_cache_lifetime_words_of_the_table_are_the_lifetimes_the_setting_reads() {
+        let read: Vec<&str> = crate::CacheTtl::ALL.iter().map(|ttl| ttl.wire()).collect();
+        assert_eq!(CACHE_TTL_WORDS, read.as_slice());
     }
 
     /// A pin written to a scratch file, for the resolution tests below.

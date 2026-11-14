@@ -826,6 +826,10 @@ doctor-settings-suggestions-ignored =
 # stays in force.
 doctor-settings-defer-mcp-tools-ignored =
     deferMcpToolsAbove in { $path } is not obeyed: it may lower the size in ~/.bravebot/settings.json and cannot raise it or remove it
+# The longer cache lifetime is charged at a higher write rate, so a checkout may ask for 5m and not
+# for 1h, which only the person's own settings and the file --settings names may choose.
+doctor-settings-prompt-cache-ttl-ignored =
+    promptCacheTtl in { $path } is not obeyed: it may ask for 5m and cannot ask for 1h, which only ~/.bravebot/settings.json and the file --settings names can ask for
 # A key a checkout may only narrow that has no message of its own above, so a key added to the table
 # is reported before its words are written.
 doctor-settings-narrowed-ignored =

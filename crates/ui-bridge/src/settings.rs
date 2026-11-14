@@ -424,6 +424,39 @@ mod tests {
         assert_eq!(settings.defer_mcp_tools_above(), Some(5_000));
     }
 
+    /// A checkout whose `promptCacheTtl` asks for the hour, over the person's five minutes or over
+    /// nothing, is listed with the key and the file, and one that asks for five minutes is not.
+    #[test]
+    fn a_checkout_asking_for_the_long_cache_lifetime_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "promptCacheTtl"));
+        for home in [Some(r#"{"promptCacheTtl": "5m"}"#), None] {
+            let (directory, settings) = vetting_layers(home, Some(r#"{"promptCacheTtl": "1h"}"#));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": "promptCacheTtl", "path": project })],
+                "{home:?}"
+            );
+            assert_ne!(
+                settings.prompt_cache_ttl(),
+                Some(bravebot_config::CacheTtl::OneHour),
+                "{home:?}"
+            );
+        }
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"promptCacheTtl": "1h"}"#),
+            Some(r#"{"promptCacheTtl": "5m"}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "the shorter lifetime was reported"
+        );
+        assert_eq!(
+            settings.prompt_cache_ttl(),
+            Some(bravebot_config::CacheTtl::FiveMinutes)
+        );
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,

@@ -701,6 +701,11 @@ doctor-settings-suggestions-ignored =
 # telle valeur est écartée et la taille de la personne reste en vigueur.
 doctor-settings-defer-mcp-tools-ignored =
     deferMcpToolsAbove dans { $path } n'est pas appliqué : il peut abaisser la taille de ~/.bravebot/settings.json et ne peut ni la relever, ni la supprimer
+# La durée de cache la plus longue est facturée à un tarif d'écriture plus élevé : une copie de travail
+# peut demander 5m et ne peut pas demander 1h, que seuls les réglages de la personne et le fichier
+# nommé par --settings peuvent choisir.
+doctor-settings-prompt-cache-ttl-ignored =
+    promptCacheTtl dans { $path } n'est pas appliqué : il peut demander 5m et ne peut pas demander 1h, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
 # Une clé qu'une copie de travail ne peut que restreindre et qui n'a pas de message propre ci-dessus,
 # de sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
 doctor-settings-narrowed-ignored =

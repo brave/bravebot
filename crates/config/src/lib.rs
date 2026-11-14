@@ -6623,4 +6623,65 @@ mod tests {
         let config = resolved(&unchosen, exported, complete_env).expect("configured");
         assert_eq!(ttls(&config), (None, None, vec![None]));
     }
+
+    /// A checkout's `1h` over the person's `5m` or over nothing never reaches a request: the layers
+    /// are read as a session reads them and the lifetime reaches the gateway client's configuration,
+    /// the account the environment names and one a provider block names. A checkout's `5m` does.
+    #[test]
+    fn a_checkouts_long_cache_lifetime_reaches_no_account() {
+        let exported = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        };
+        let block = r#""provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+            "models": {"anthropic.claude-sonnet-4-5": {}}}}"#;
+        let root = testutil::scratch_dir("checkout-cache-lifetime");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch cwd");
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
+        std::fs::write(
+            home.join("settings.json"),
+            format!(r#"{{"promptCacheTtl": "5m", {block}}}"#),
+        )
+        .expect("home layer");
+        let project = cwd.join(".bravebot/settings.json");
+        let seen = |text: &str| {
+            std::fs::write(&project, text).expect("project layer");
+            let settings = Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let config = resolved(&settings, exported, complete_env).expect("configured");
+            (
+                config.prompt_cache_ttl,
+                config
+                    .bedrock
+                    .as_ref()
+                    .and_then(|account| account.cache_ttl()),
+                config
+                    .providers
+                    .iter()
+                    .filter_map(|entry| entry.bedrock.as_ref())
+                    .map(|account| account.cache_ttl())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let short = (
+            Some(CacheTtl::FiveMinutes),
+            Some(CacheTtl::FiveMinutes),
+            vec![Some(CacheTtl::FiveMinutes)],
+        );
+        assert_eq!(seen(r#"{"promptCacheTtl": "1h"}"#), short);
+        assert_eq!(seen(r#"{"promptCacheTtl": "5m"}"#), short);
+
+        // Without the person's choice, the checkout's hour leaves the service's own default.
+        std::fs::write(home.join("settings.json"), format!("{{{block}}}")).expect("home layer");
+        assert_eq!(
+            seen(r#"{"promptCacheTtl": "1h"}"#),
+            (None, None, vec![None])
+        );
+        assert_eq!(seen(r#"{"promptCacheTtl": "5m"}"#), short);
+    }
 }

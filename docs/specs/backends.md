@@ -1337,6 +1337,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
 | `suggestions` | the same as `limit`, with the default bound: a project or local layer may leave it off and may not turn it on, over the person's `false` or over nothing |
 | `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
+| `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1401,6 +1402,18 @@ deferral into every tool in full ([SERVERS-16](mcp-servers.md#SERVERS-16)). Wher
 files state no size, a checkout may state one, because the key has no default bound, and a checkout
 value that states nothing there leaves no size and is not reported. The two checkout files are held
 to this in turn, so the local file cannot raise what the project file lowered.
+
+For `promptCacheTtl`, a layer states a value when it holds the string `5m` or `1h`, ignoring
+surrounding space and spelled in lower case. Any other string, a number, a boolean and `null` state
+nothing. `5m` is the narrower value, since the longer lifetime is charged at a higher write rate
+([BACKEND-27](#BACKEND-27)). The key has a default bound, which is no lifetime, so where the
+person's own files state nothing a checkout's `5m` is obeyed and its `1h` is not. Where they state
+`5m`, a checkout's `1h` is not obeyed, and where they state `1h` a checkout's `5m` is obeyed. A
+checkout's `1h` over the person's `1h` changes nothing and is not reported. A checkout value that
+states no lifetime over one in force is a removal and is not obeyed, and one where none is in force
+removes nothing and is not reported. The file `--settings` names is the person's own act and may
+state either, inside the workspace or outside it ([PERM-14](permissions.md#PERM-14)). The two
+checkout files are held to this in turn.
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
 a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
@@ -1522,6 +1535,10 @@ with it.
 `verified-by: bravebot_ui_bridge::settings::a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored`
 `verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
 `verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
+`verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
+`verified-by: bravebot_config::settings::the_cache_lifetime_words_of_the_table_are_the_lifetimes_the_setting_reads`
+`verified-by: bravebot_cli::doctor::a_checkout_asking_for_the_long_cache_lifetime_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_asking_for_the_long_cache_lifetime_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
@@ -1627,7 +1644,10 @@ asking a service which refuses costs one round trip while not asking costs every
 settings puts a `ttl` of that word on each breakpoint, the prompt's and the conversation's alike.
 Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
 has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
-is why the default is no lifetime rather than the longest. The value comes from the settings and
+is why the default is no lifetime rather than the longest. The setting is read from the person's own
+file and from the file `--settings` names. A project or local layer may state `5m` and may not state
+`1h`, which is dropped and reported ([BACKEND-24](#BACKEND-24)), so a repository cannot make every
+request in it carry the dearer lifetime. The value comes from the settings and
 never from message content, so no branch depends on an untrusted byte.
 
 **A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
@@ -1658,6 +1678,8 @@ for one that does not.
 `verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
+`verified-by: bravebot_config::lib::a_checkouts_long_cache_lifetime_reaches_no_account`
+`verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
