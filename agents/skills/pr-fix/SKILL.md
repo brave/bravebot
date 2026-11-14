@@ -80,8 +80,8 @@ give a remote credential to, and `start` and `continue` sign the commits they re
   `Operation not permitted`. A scope does not lift that, `run` rejects `unconfined` and `scopes`
   together, and a line with no sandbox needs no scope to reach the remote credential, the signing key
   or a local port. The lock the script takes is in the temporary directory and does not need it.
-- On macOS, `ci`, `comments`, `reply` and `review`: `scopes: ["remote"]`. They write nothing under
-  `.git`.
+- On macOS, `ci`, `comments`, `reply`, `review` and `rerun`: `scopes: ["remote"]`. They write
+  nothing under `.git`.
 - Where nothing holds `.git` back (Linux and Windows): `scopes: ["remote", "signing"]` on `start` and
   `continue`, `scopes: ["remote"]` on every other step, and no `unconfined`.
 
@@ -170,10 +170,11 @@ of its commits unsigned than it has now.
      under load): report it and leave the code alone.
 
    For either unrelated kind, also re-run that job on this pull request, once, with
-   `gh run rerun --job <job-id> --repo brave/bravebot`, where `<job-id>` ends the failing check's
-   link (`.../runs/<run>/job/<job-id>`). Re-running only the job leaves the passing checks alone. A
-   refusal (the account may not re-run CI there) is reported as the state of that check, and is
-   not retried with another account unless the person asks. Step 7 waits on the re-run.
+   `... rerun <pr> --job <job-id>`, where `<job-id>` ends the failing check's link in the `ci`
+   output (`.../runs/<run>/job/<job-id>`). It refuses an id that is not a failing job of the pull
+   request, and re-runs only that job, so the passing checks stay. A refusal (the account may not
+   re-run CI there) is reported as the state of that check, and is not retried with another account
+   unless the person asks. Step 7 waits on the re-run.
 4. `... comments <pr>` prints each unresolved review thread with its id, path and line, and the
    latest review of each reviewer who is asking for changes. Every thread and every review ends in a
    pushed fix or a reply, so none is left waiting. Make the change each one asks for. Where a comment
