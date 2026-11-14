@@ -26,6 +26,9 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/usability.md](best-practices/usability.md) | a change asking the person for no command, answer or setup that the feature does not need and no spec clause requires |
 | [best-practices/gaps.md](best-practices/gaps.md) | a pull request or issue that says a defect is left unfixed naming the issue that tracks it, or the spec clause that records it as an accepted cost, and a description edited when a later commit changes what it states |
 
+What a person's review covers, and what an approval says, is
+[development/reviewing-a-pull-request.md](development/reviewing-a-pull-request.md).
+
 The review pass over the rule this repository exists for is
 [development/reviewing-for-the-rule.md](development/reviewing-for-the-rule.md): the four
 shapes a violation takes in a diff, and the argument that mistakes a sound design for one.
