@@ -105,8 +105,8 @@ has read it is a different thing, single-use, writing no rule and leaving the tr
 what it said, and it is [vetting.md](../vetting.md).
 
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
-`verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
-`verified-by: bravebot_agent::tools::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
+`verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
+`verified-by: bravebot_agent::tools::tests::arguments::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer
@@ -205,7 +205,7 @@ of `job_output` for a name that is no job, name `run` only where the turn's list
 ([TOOL-6](tool-surface.md#TOOL-6)). Without it, they say a reference to what a program printed, or a
 job name handed back, and leave out the sentence that a program can filter the output.
 
-`verified-by: bravebot_agent::tools::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::arguments::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
 
 **Why nobody is asked.** The cap is a budget and not an authority ([RUN-21](run.md#RUN-21)). The
 label on these bytes already let the planner read them, and the only thing that kept them out of the
@@ -298,16 +298,16 @@ argument filled from a reference it lists the references that hold a choice. Eac
 is also recorded in the trail as a blocked `reference` gate naming the tool and the argument and not
 the name typed ([TRACE-2](../trace.md#TRACE-2)), so a turn that was refused is not recorded as clean.
 
-`verified-by: bravebot_agent::tools::a_name_no_slot_holds_is_refused_with_the_form_a_reference_is_written_in`
-`verified-by: bravebot_agent::tools::the_references_listed_for_an_unknown_name_are_the_ones_that_hold_output`
-`verified-by: bravebot_agent::tools::a_delegate_naming_no_slot_is_told_the_form_and_not_vet_content`
-`verified-by: bravebot_agent::tools::vet_content_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::a_processor_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::write_file_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::read_file_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::run_naming_no_slot_for_stdin_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::the_references_listed_for_an_unknown_name_are_the_latest_eight`
-`verified-by: bravebot_agent::tools::the_trail_names_the_argument_and_not_the_name_typed`
+`verified-by: bravebot_agent::tools::tests::arguments::a_name_no_slot_holds_is_refused_with_the_form_a_reference_is_written_in`
+`verified-by: bravebot_agent::tools::tests::arguments::the_references_listed_for_an_unknown_name_are_the_ones_that_hold_output`
+`verified-by: bravebot_agent::tools::tests::arguments::a_delegate_naming_no_slot_is_told_the_form_and_not_vet_content`
+`verified-by: bravebot_agent::tools::tests::arguments::vet_content_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::a_processor_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::write_file_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::read_file_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::run_naming_no_slot_for_stdin_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::the_references_listed_for_an_unknown_name_are_the_latest_eight`
+`verified-by: bravebot_agent::tools::tests::arguments::the_trail_names_the_argument_and_not_the_name_typed`
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 `verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
 `verified-by: bravebot_agent::browser_group_servers::a_name_no_slot_holds_is_listed_the_choices_that_were_made`

@@ -8,10 +8,11 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 259
+      - crates/agent/src/tools.rs: 258
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
+      - crates/agent/src/tools/tests/reading_together.rs: 1
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 13
@@ -98,7 +99,7 @@ something carries, and a planner's context holds nothing untrusted.
 `verified-by: bravebot_core::policy::routing_refuses_untrusted_values`
 `verified-by: bravebot_core::policy::routing_refuses_private_values`
 `verified-by: bravebot_core::policy::fetched_content_can_be_written_but_cannot_choose_the_path`
-`verified-by: bravebot_agent::tools::a_reference_destination_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::editing::a_reference_destination_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="TOOL-2"></a>
 ### TOOL-2: before adding a tool, ask what its routing field is
@@ -173,7 +174,7 @@ and whoever reviews it is asked what footing its text is on.
 `verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
-`verified-by: bravebot_agent::tools::a_failed_listing_names_the_directory_as_typed_and_not_where_it_landed`
+`verified-by: bravebot_agent::tools::tests::editing::a_failed_listing_names_the_directory_as_typed_and_not_where_it_landed`
 `verified-by: bravebot_agent::turn::a_background_line_that_did_not_start_names_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_credential_refusal_names_the_redirection_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_refused_redirection_is_named_under_the_directory_as_typed`
@@ -320,8 +321,8 @@ tool as the control.
 
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
-`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
-`verified-by: bravebot_agent::tools::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::arguments::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::arguments::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::ask_user_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
@@ -366,16 +367,16 @@ tool as the control.
 `verified-by: bravebot_agent::tools::the_read_file_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_edit_file_description_names_write_file_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::the_notebook_refusal_names_only_the_routes_the_turn_holds`
-`verified-by: bravebot_agent::tools::a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words`
-`verified-by: bravebot_agent::tools::the_git_refusal_names_run_only_where_the_turn_holds_it`
-`verified-by: bravebot_agent::tools::an_untrusted_git_answer_is_refused_in_the_helpers_words`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_notebook_refusal_names_only_the_routes_the_turn_holds`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_git_refusal_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::an_untrusted_git_answer_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
-`verified-by: bravebot_agent::tools::the_processor_and_vet_pointers_name_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_lsp_refusal_names_search_and_read_file_only_where_the_list_holds_them`
+`verified-by: bravebot_agent::tools::tests::editing::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
+`verified-by: bravebot_agent::tools::tests::arguments::the_processor_and_vet_pointers_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::arguments::the_lsp_refusal_names_search_and_read_file_only_where_the_list_holds_them`
 `verified-by: bravebot_agent::tools::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::git::the_note_for_a_file_past_the_size_cap_names_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::the_not_compared_heading_names_run_only_where_the_turn_holds_it`

@@ -184,7 +184,7 @@ can say so in its answer, where somebody reads it, rather than by going quiet fo
 `verified-by: bravebot_tui::loops::an_interval_within_the_bounds_is_reported_as_unadjusted`
 `verified-by: bravebot_tui::loops::a_wait_a_turn_asked_for_is_held_to_the_bounds`
 `verified-by: bravebot_tui::state::an_interval_outside_the_bounds_is_reported_as_the_one_that_will_happen`
-`verified-by: bravebot_agent::tools::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 
 <a id="LOOP-8"></a>
 ### LOOP-8: where the person gave an interval, the driver keeps it and no turn can change it

@@ -2487,7 +2487,7 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for`
 `verified-by: bravebot_cli::lines::an_answer_in_words_is_read_as_words_and_a_pick_wins_over_them`
 `verified-by: bravebot_cli::lines::words_are_taken_only_on_a_vouched_channel_and_only_for_a_question_of_one_prompt`
-`verified-by: bravebot_agent::tools::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not`
+`verified-by: bravebot_agent::tools::tests::questions::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not`
 `verified-by: bravebot_cli::running::input_lines_is_refused_beside_what_it_cannot_go_with`
 `verified-by: bravebot_cli::running::an_incognito_run_reading_lines_still_puts_a_write_to_the_program_and_writes_no_record`
 `verified-by: bravebot_cli::running::a_run_reading_lines_streams_without_being_given_the_stream_flag`

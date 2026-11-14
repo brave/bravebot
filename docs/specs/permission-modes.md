@@ -690,13 +690,13 @@ plan is refused rather than shown.
 **Known cost.** The prompt is a permission to change mode, not an answer to a question the planner
 invented (MODE-7), so no mode answers it for the person.
 
-`verified-by: bravebot_agent::tools::approving_a_plan_leaves_plan_mode_for_the_mode_chosen`
-`verified-by: bravebot_agent::tools::a_plan_not_approved_leaves_plan_mode_in_force`
-`verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
-`verified-by: bravebot_agent::tools::a_plan_proposed_outside_plan_mode_asks_nobody`
-`verified-by: bravebot_agent::tools::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
+`verified-by: bravebot_agent::tools::tests::questions::approving_a_plan_leaves_plan_mode_for_the_mode_chosen`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_not_approved_leaves_plan_mode_in_force`
+`verified-by: bravebot_agent::tools::tests::questions::the_same_plan_proposed_again_is_put_under_a_new_key`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_proposed_outside_plan_mode_asks_nobody`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
 `verified-by: bravebot_agent::tools::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
-`verified-by: bravebot_agent::tools::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
+`verified-by: bravebot_agent::tools::tests::questions::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
 `verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
 `verified-by: bravebot_agent::plan_approval::no_answer_selects_bypassing_or_leaves_plan_mode_without_a_choice`
 `verified-by: bravebot_tui::ask::a_long_plan_leaves_every_choice_and_the_keys_on_screen`

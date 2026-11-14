@@ -120,15 +120,15 @@ until a read works.
 `verified-by: bravebot_agent::turn::a_trusted_entry_of_a_mixed_listing_is_read_through_its_reference`
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
-`verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 `verified-by: bravebot_agent::workspace::a_failure_is_worded_about_the_name_the_caller_may_say`
-`verified-by: bravebot_agent::tools::a_deferred_read_that_fails_does_not_name_the_file`
-`verified-by: bravebot_agent::tools::a_deferred_read_a_rule_denies_does_not_name_the_file`
-`verified-by: bravebot_agent::tools::a_deferred_read_of_a_removed_file_does_not_name_the_file`
-`verified-by: bravebot_agent::tools::an_edit_by_reference_to_a_removed_file_does_not_name_the_file`
-`verified-by: bravebot_agent::tools::a_read_by_reference_to_a_removed_file_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_that_fails_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_a_rule_denies_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_of_a_removed_file_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_to_a_removed_file_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::a_read_by_reference_to_a_removed_file_does_not_name_the_file`
 `verified-by: bravebot_agent::workspace::a_listing_leaves_out_a_directory_it_cannot_open_and_says_so`
-`verified-by: bravebot_agent::tools::a_listing_that_cannot_open_a_directory_does_not_name_it`
+`verified-by: bravebot_agent::tools::tests::editing::a_listing_that_cannot_open_a_directory_does_not_name_it`
 `verified-by: bravebot_agent::turn::asking_to_read_a_search_or_listing_changes_nothing_where_a_person_answers_for_it`
 `verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_says_so_and_keeps_its_notes`
 
@@ -247,7 +247,7 @@ in the planner's context on every round that resends them.
 `verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
 `verified-by: bravebot_agent::workspace::an_unbounded_listing_takes_every_file_of_a_large_directory`
 `verified-by: bravebot_agent::workspace::a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name`
-`verified-by: bravebot_agent::tools::a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out`
+`verified-by: bravebot_agent::tools::tests::editing::a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
 `verified-by: bravebot_agent::turn::sentences::a_listing_cut_per_directory_names_each_reference_with_what_it_left_out`
 `verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
@@ -278,8 +278,8 @@ placed the link, and this clause adds no reach. `repo_map` has the same walk and
 count: [repo-map.md](repo-map.md).
 
 `verified-by: bravebot_agent::workspace::a_listing_counts_every_symbolic_link_it_did_not_enter`
-`verified-by: bravebot_agent::tools::a_listing_counts_the_links_it_did_not_enter_and_does_not_name_them`
-`verified-by: bravebot_agent::tools::a_quarantined_listing_carries_the_link_count_beside_its_references`
+`verified-by: bravebot_agent::tools::tests::editing::a_listing_counts_the_links_it_did_not_enter_and_does_not_name_them`
+`verified-by: bravebot_agent::tools::tests::editing::a_quarantined_listing_carries_the_link_count_beside_its_references`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter`
 `verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
 `verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
@@ -311,7 +311,7 @@ description of `include` carries the same statement.
 planner took that for a directory with no readme, or retried with a character class that fails the
 same way. An unreadable pattern must not come back looking like a fact about the tree.
 
-`verified-by: bravebot_agent::tools::a_pattern_that_selects_no_file_says_so_and_says_matching_is_case_sensitive`
-`verified-by: bravebot_agent::tools::a_pattern_leaning_on_missing_syntax_is_named_even_when_directories_are_listed`
-`verified-by: bravebot_agent::tools::the_glob_arguments_say_matching_is_case_sensitive`
+`verified-by: bravebot_agent::tools::tests::editing::a_pattern_that_selects_no_file_says_so_and_says_matching_is_case_sensitive`
+`verified-by: bravebot_agent::tools::tests::editing::a_pattern_leaning_on_missing_syntax_is_named_even_when_directories_are_listed`
+`verified-by: bravebot_agent::tools::tests::editing::the_glob_arguments_say_matching_is_case_sensitive`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_says_when_its_pattern_selected_no_file`

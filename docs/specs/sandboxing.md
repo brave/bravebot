@@ -891,8 +891,8 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_agent::confine::a_scratch_directory_inside_a_state_directory_that_is_moved_gets_no_row`
 `verified-by: bravebot_agent::confine::a_stage_cannot_read_a_state_directory_that_is_moved_out_of_the_default`
 `verified-by: bravebot_agent::confine::a_stage_cannot_read_a_state_directory_that_lies_inside_its_session_directory`
-`verified-by: bravebot_agent::tools::a_turns_confinement_refuses_the_state_directory_the_turn_runs_under`
-`verified-by: bravebot_agent::tools::a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under`
+`verified-by: bravebot_agent::tools::tests::arguments::a_turns_confinement_refuses_the_state_directory_the_turn_runs_under`
+`verified-by: bravebot_agent::tools::tests::arguments::a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under`
 `verified-by: bravebot_agent::servers::a_servers_confinement_does_not_read_a_state_directory_that_is_moved`
 `verified-by: bravebot_sandbox::policy::a_refusal_is_recorded_and_changes_nothing_else`
 `verified-by: bravebot_sandbox::policy::a_policy_made_nameable_keeps_its_refusals`
@@ -1664,12 +1664,12 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_agent::confine::a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
 `verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
 `verified-by: bravebot_agent::tools::a_failed_line_says_it_may_have_run_in_part_only_where_a_stage_had_started`
-`verified-by: bravebot_agent::tools::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
 `verified-by: bravebot_agent::exec::a_program_that_could_not_be_started_says_what_of_the_line_had_started`
 `verified-by: bravebot_agent::exec::a_repointed_link_after_an_earlier_part_records_that_the_part_had_started`
 `verified-by: bravebot_agent::confine::a_job_refused_at_its_second_stage_records_that_the_first_had_started`
-`verified-by: bravebot_agent::tools::a_program_refused_after_part_of_its_line_started_says_which_part_may_have_run`
-`verified-by: bravebot_agent::tools::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
+`verified-by: bravebot_agent::tools::tests::confinement::a_program_refused_after_part_of_its_line_started_says_which_part_may_have_run`
+`verified-by: bravebot_agent::tools::tests::confinement::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
 `verified-by: bravebot_sandbox::windows::the_job_carries_every_ui_limit_whatever_the_policy`
 `verified-by: bravebot_sandbox::windows::a_job_that_cannot_be_limited_refuses_the_stage_naming_the_cause`
 `verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
@@ -1680,7 +1680,7 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_sandbox::windows::a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses`
 `verified-by: bravebot_sandbox::windows::a_stage_is_limited_whether_or_not_this_process_is_in_a_job`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
-`verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
+`verified-by: bravebot_agent::tools::tests::arguments::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
 `verified-by: bravebot_sandbox::linux::a_confined_process_leads_a_session_of_its_own`
 `verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
@@ -1976,7 +1976,7 @@ and Windows `rundll32` were not checked either ([SANDBOX-30](#SANDBOX-30)).
 `verified-by: bravebot_agent::confine::a_stage_that_relinks_the_scratch_directory_hands_the_next_stage_nothing`
 `verified-by: bravebot_agent::confine::a_line_that_relinks_the_scratch_directory_is_refused_at_the_stage_after`
 `verified-by: bravebot_agent::confine::a_scratch_directory_made_again_by_a_program_does_not_stop_the_stages_after`
-`verified-by: bravebot_agent::tools::a_turns_confinement_holds_the_scratch_directory_to_the_one_the_session_made`
+`verified-by: bravebot_agent::tools::tests::arguments::a_turns_confinement_holds_the_scratch_directory_to_the_one_the_session_made`
 `verified-by: bravebot_agent::confine::a_session_directory_whose_name_leads_elsewhere_gets_no_row`
 `verified-by: bravebot_agent::confine::a_session_directory_as_recorded_is_a_row_and_starts_a_stage`
 `verified-by: bravebot_agent::confine::a_working_directory_that_leads_elsewhere_is_not_replaced_by_an_added_one_as_the_place`
@@ -1986,7 +1986,7 @@ and Windows `rundll32` were not checked either ([SANDBOX-30](#SANDBOX-30)).
 `verified-by: bravebot_agent::confine::a_line_that_relinks_an_added_directory_is_refused_at_the_stage_after`
 `verified-by: bravebot_agent::confine::a_line_that_relinks_the_primary_root_is_refused_at_the_stage_after`
 `verified-by: bravebot_agent::confine::an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after`
-`verified-by: bravebot_agent::tools::a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded`
+`verified-by: bravebot_agent::tools::tests::arguments::a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded`
 `verified-by: bravebot_tui::sessions::a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopened`
 `verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
 `verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
@@ -2260,13 +2260,13 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::the_profile_line_ends_with_the_fixed_sentence_about_credential_locations`
 `verified-by: bravebot_agent::turn::a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit`
 `verified-by: bravebot_agent::turn::a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added`
-`verified-by: bravebot_agent::tools::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
+`verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
 `verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_states_no_boundary_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
-`verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
+`verified-by: bravebot_agent::tools::tests::arguments::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
 `verified-by: bravebot_agent::confine::where_the_lists_are_keyed_only_a_gh_stage_writes_ghs_cache`
@@ -2285,7 +2285,7 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::the_run_description_of_a_run_nobody_can_be_asked_in_names_no_route_only_a_person_takes`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
-`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
 `verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
@@ -2318,7 +2318,7 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::turn::a_failed_job_that_lists_processes_is_told_what_a_failed_run_of_it_is_told`
 `verified-by: bravebot_agent::confine::the_sentences_about_loopback_and_listing_processes_name_no_tool`
 `verified-by: bravebot_sandbox::macos::process_listing_programs_fail_under_both_bases_whether_or_not_what_they_seek_runs`
-`verified-by: bravebot_agent::tools::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -3134,7 +3134,7 @@ scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a
 `verified-by: bravebot_agent::confine::a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed`
 `verified-by: bravebot_agent::confine::the_plan_and_the_failure_line_name_a_remembered_scope`
 `verified-by: bravebot_agent::confine::a_remembered_scope_keeps_a_closed_network_and_a_remembered_directory_does_not`
-`verified-by: bravebot_agent::tools::remembered_reach_comes_from_the_state_directory_for_the_session_that_has_one`
+`verified-by: bravebot_agent::tools::tests::arguments::remembered_reach_comes_from_the_state_directory_for_the_session_that_has_one`
 `verified-by: bravebot_agent::turn::a_refused_run_whose_stderr_names_a_path_adds_no_row`
 `verified-by: bravebot_agent::turn::a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only`
 `verified-by: bravebot_agent::incognito::no_remembered_reach_is_written_down`
@@ -3402,8 +3402,8 @@ says nothing about them.
 `verified-by: bravebot_agent::confine::only_on_unlisted_ask_under_a_list_asks_about_hosts`
 `verified-by: bravebot_agent::confine::a_granted_host_changes_the_list_the_next_line_is_held_to`
 `verified-by: bravebot_agent::confine::a_granted_host_is_carried_by_the_proxy_and_a_denied_one_still_is_not`
-`verified-by: bravebot_agent::tools::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept`
-`verified-by: bravebot_agent::tools::a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse`
+`verified-by: bravebot_agent::tools::tests::confinement::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse`
 `verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
 `verified-by: bravebot_core::policy::a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no`
 `verified-by: bravebot_tui::confirm::grants::a_host_prompt_shows_each_host_and_what_a_yes_does`
@@ -3685,7 +3685,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
-`verified-by: bravebot_agent::tools::a_refused_scope_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_scope_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::confine::a_requested_scope_lifts_its_own_directory_for_a_stage_that_names_none`
 `verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
@@ -3707,7 +3707,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
 `verified-by: bravebot_agent::turn::scopes_are_accepted_and_dropped_under_off`
-`verified-by: bravebot_agent::tools::a_request_where_no_profile_applies_is_accepted_and_dropped`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_where_no_profile_applies_is_accepted_and_dropped`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_workspace_write`
 `verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
@@ -3919,7 +3919,7 @@ back.
 `verified-by: bravebot_agent::confine::a_write_grant_held_before_read_only_writes_nothing_until_the_mode_returns`
 `verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
-`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
+`verified-by: bravebot_agent::tools::tests::confinement::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
@@ -3930,7 +3930,7 @@ back.
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes`
 `verified-by: bravebot_agent::confine::a_bypass_stage_cannot_write_where_the_person_denied_a_read`
-`verified-by: bravebot_agent::tools::a_session_in_bypass_is_given_what_a_request_would_be_and_so_is_its_delegate`
+`verified-by: bravebot_agent::tools::tests::arguments::a_session_in_bypass_is_given_what_a_request_would_be_and_so_is_its_delegate`
 `verified-by: bravebot_agent::confine::a_bypass_stage_of_a_delegate_in_a_checkout_is_given_no_row_for_the_working_directory`
 `verified-by: bravebot_agent::turn::a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not`
 `verified-by: bravebot_agent::confine::a_bypass_stage_writes_beside_the_working_directory_without_a_request`
@@ -4062,14 +4062,14 @@ The planner is pointed at the argument because it has no other way to learn it w
 refuse the path.
 
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
-`verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
-`verified-by: bravebot_agent::tools::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
-`verified-by: bravebot_agent::tools::each_confined_failure_earns_one_request_for_no_sandbox`
-`verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_earns_one_request_for_no_sandbox`
-`verified-by: bravebot_agent::tools::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
+`verified-by: bravebot_agent::tools::tests::confinement::each_confined_failure_earns_one_request_for_no_sandbox`
+`verified-by: bravebot_agent::tools::tests::confinement::a_program_that_could_not_be_confined_earns_one_request_for_no_sandbox`
+`verified-by: bravebot_agent::tools::tests::confinement::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
 `verified-by: bravebot_agent::tools::a_refused_closed_network_says_a_line_with_no_sandbox_has_the_network_open`
-`verified-by: bravebot_agent::tools::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`
-`verified-by: bravebot_agent::tools::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
 `verified-by: bravebot_agent::turn::a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox`
 `verified-by: bravebot_agent::turn::a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked`
 `verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
@@ -4082,7 +4082,7 @@ refuse the path.
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
-`verified-by: bravebot_agent::tools::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
