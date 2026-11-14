@@ -20,6 +20,7 @@ import {
   TRUST_APPROVE,
   approveTrust,
   checker,
+  launchArguments,
   launchLive,
   readTrust,
   showSessions,
@@ -193,4 +194,9 @@ test('approveTrust reads the question through before it presses the yes', async 
   const { question, calls } = questionDouble()
   await approveTrust(question)
   assert.deepEqual(calls, [['evaluate'], ['click', '[data-test="trust-approve"]']])
+})
+
+test('a launch names the user-data directory it is given, and none otherwise', () => {
+  assert.deepEqual(launchArguments('/tmp/scratch/user-data'), ['.', '--user-data-dir=/tmp/scratch/user-data'])
+  assert.deepEqual(launchArguments(), ['.'])
 })

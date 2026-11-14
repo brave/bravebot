@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject, type S
 import type { Bot } from '../shared/bots'
 import type { BotFormValue } from './components/Bots'
 import type { Live } from './live'
+import { problemToShow } from './bots-problem'
 
 /** What `useBots` takes from the component that owns the sessions. */
 export interface BotsInputs {
@@ -14,6 +15,7 @@ export interface BotsInputs {
 /** The bot list on screen, and the edits that change it that need no session to be closed. */
 export function useBots({ openedLives, updateSession, setLive, setProblem }: BotsInputs) {
   const [bots, setBots] = useState<Bot[]>([])
+  const shownProblem = useRef<string | null>(null)
 
   /**
    * Read the bot list again.
@@ -21,10 +23,18 @@ export function useBots({ openedLives, updateSession, setLive, setProblem }: Bot
    * The main process owns it, and writes to it that this window did not make: a bot's session id
    * and its compaction watermark are taken off what the agent answered. So this is asked for after
    * a turn as well as after an edit — the copy on screen is a copy.
+   *
+   * A problem with the bots file is put on the banner once, since other actions clear the banner
+   * and a read after every turn would put back one somebody closed. `asked` puts it up again
+   * while it lasts, for the read made when somebody goes to the list.
    */
-  const readBots = useCallback(async () => {
+  const readBots = useCallback(async ({ asked = false }: { asked?: boolean } = {}) => {
     setBots(await window.bravebot.readBots().catch(() => []))
-  }, [])
+    const problem = await window.bravebot.readBotsProblem().catch(() => null)
+    const shown = problemToShow(problem, shownProblem.current, asked)
+    if (shown !== null) setProblem(shown)
+    shownProblem.current = problem
+  }, [setProblem])
 
   // Read inside the event listener and inside `send`, both installed once and neither able to
   // close over a list that changes under them.

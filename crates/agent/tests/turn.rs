@@ -22025,6 +22025,9 @@ fn a_job_stopped_with_the_turn_counts_what_it_wrote_before_the_stop() {
 /// the job wrote, since the turn ends there and nothing compares the job again.
 ///
 /// Rejects counting the finished jobs after the check, which a stop returns before.
+///
+/// The rounds that wait for the job list files. A `run` line lists the tree before and after it,
+/// so one that overlaps the job's write counts that write as its own.
 #[cfg(unix)]
 #[test]
 fn a_stop_during_the_check_on_an_ended_jobs_account_still_counts_its_write() {
@@ -22035,13 +22038,26 @@ fn a_stop_during_the_check_on_an_ended_jobs_account_still_counts_its_write() {
     )
     .unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, _received) = serve_until_job_1_finishes_answering_checks_after(
-        vec![a_check_finding_nothing()],
-        vec![
-            tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
-            tool_request("job_output", r#"{"job":"job:1","read":true}"#),
-        ],
-    );
+    let mut step = 0;
+    let (endpoint, _received) = serve_rounds(vec![a_check_finding_nothing()], false, move |body| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+            2 => tool_request("job_output", r#"{"job":"job:1","read":true}"#),
+            _ if body.contains(JOB_1_FINISHED) || step > 150 => reply_with("done"),
+            _ => {
+                thread::sleep(std::time::Duration::from_millis(20));
+                tool_request(
+                    "list_files",
+                    if step % 2 == 0 {
+                        r#"{"directory":"."}"#
+                    } else {
+                        r#"{"directory":"./"}"#
+                    },
+                )
+            }
+        }))
+    });
     let mode = bravebot_agent::PermissionMode::Bypass;
     let mut reading = ReadsWhatItRan::new(true);
     let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);

@@ -62,7 +62,7 @@ export interface Services {
   /** The folder the agent confirmed the session works in, or undefined where it is not open. */
   folderOf(session: string): string | undefined
   /** The bot whose conversation this is: the one whose handle it is, or whose home it runs in. */
-  ownerOf(session: string, folder: string): string | undefined
+  ownerOf(session: string, folder: string): string | undefined | Promise<string | undefined>
   /** Record that a handle is a bot's conversation. */
   adopt(session: string, slug: string): void
   /** Give a bot made before definitions one. Throws where it cannot. */
@@ -108,7 +108,7 @@ export async function sendSummonedTurn(
   if (!request) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
   const folder = services.folderOf(session)
   if (folder === undefined) return { error: { code: 'bad_request', message: 'that session is not open' } }
-  const owner = services.ownerOf(session, folder)
+  const owner = await services.ownerOf(session, folder)
   if (owner === summoned.slug) {
     return { error: { code: 'bad_request', message: `this is ${summoned.name}’s own conversation` } }
   }

@@ -9,8 +9,8 @@ import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture
 import { BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-ux-final')
 mkdirSync(output, { recursive: true })
-const { profile, directory } = makeProfile({ copy: true })
-const app = await electron.launch({args:['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000})
+const { profile, directory, state } = makeProfile({ copy: true })
+const app = await electron.launch({args:['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000,env:{...process.env,BRAVEBOT_HOME:state}})
 let page
 const originalClipboard = await app.evaluate(({clipboard})=>clipboard.readText())
 try {
