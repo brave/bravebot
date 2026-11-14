@@ -734,6 +734,13 @@ doctor-skill-keys-unread =
         [one] { $skill } declares { $keys }, which nothing here reads
        *[other] { $skill } declares { $keys }, none of which anything here reads
     }
+# A key a delegate definition declared that nothing here reads. The definition is its file's path and
+# the keys are that file's own words, joined with a comma, both from a source somebody vouched for.
+doctor-definition-keys-unread =
+    { $count ->
+        [one] { $definition } declares { $keys }, which nothing here reads
+       *[other] { $definition } declares { $keys }, none of which anything here reads
+    }
 # A file that configures a gateway names no variables, and reporting that as an absent file would
 # describe a file the person is looking at.
 doctor-settings-no-variables = settings.json, naming no variables
@@ -5113,6 +5120,16 @@ delegate-writes-not-read =
     { $count ->
         [one] { $definition } has a writes pattern that cannot be read here, so it covers no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
        *[other] { $definition } has writes patterns that cannot be read here, so they cover no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
+    }
+# A definition declared a key another agent reads as a restriction on its subagent, and nothing here
+# reads it, so its delegate holds what its kind and its tools line give it. The definition is its
+# file's path and the keys are that file's own words, joined with a comma, both from a vouched-for
+# file; a key is named here only where it is spelled with letters, hyphens and underscores. "tools"
+# and "kind" are keys and stay as they are.
+delegate-restriction-not-applied =
+    { $count ->
+        [one] { $definition } declares { $keys }, which nothing here applies, so its delegate is not restricted by it. A tools line names the tools the delegate may call, and its kind decides whether it may run programs or write files
+       *[other] { $definition } declares { $keys }, none of which anything here applies, so its delegate is not restricted by them. A tools line names the tools the delegate may call, and its kind decides whether it may run programs or write files
     }
 # A definition asks for a checkout and is loaded as a reader, either as its own kind line says or
 # because a definition of the same name narrowed it. A reader is never given a checkout. The

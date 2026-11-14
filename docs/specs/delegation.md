@@ -1023,11 +1023,27 @@ Keys other than the ones this reads are ignored rather than refused, per
 deliberate divergence from the strict schemas those tools use, and it is what lets one checked-in
 directory serve several of them.
 
+Ignored is not silent. A key a definition declares that nothing here reads is carried with the
+definition, and `bravebot doctor` names it, one line per definition, as it names a skill's
+([SKILL-16](skills.md#SKILL-16)). Where the key is a restriction another agent reads on its
+subagent, `disallowedTools` or `permissionMode` in any of the spellings that differ from them only
+in case, hyphens and underscores, the turn says so when the definition is discovered: the key is
+named and never its value, the delegate is not restricted by it, and the definition's `tools:` line
+and its kind are what decide what the delegate may call. The definition still loads. A restriction
+that is dropped without a word leaves its author with a delegate they believe cannot run programs
+or write files, which is the one wrong belief about a delegate that costs something.
+
 `verified-by: bravebot_agent::agents::a_definition_carries_a_name_a_description_a_kind_and_a_body`
 `verified-by: bravebot_agent::agents::a_kind_nobody_enumerated_is_not_a_definition`
 `verified-by: bravebot_agent::agents::a_definition_needs_a_kind_and_a_description`
 `verified-by: bravebot_agent::agents::an_asterisk_is_a_name_and_never_the_whole_list`
 `verified-by: bravebot_agent::agents::a_key_nothing_here_reads_is_ignored_rather_than_refused`
+`verified-by: bravebot_agent::agents::a_restriction_written_for_another_agent_is_named_as_not_applied`
+`verified-by: bravebot_agent::agents::one_restriction_nothing_applies_is_named_alone`
+`verified-by: bravebot_agent::agents::a_respelt_restriction_is_found_and_an_unrelated_key_is_not`
+`verified-by: bravebot_agent::agents::the_notice_repeats_a_key_and_never_its_value`
+`verified-by: bravebot_agent::agents::every_key_this_reads_is_read`
+`verified-by: bravebot_cli::running::doctor_names_the_keys_a_definition_declares_that_nothing_reads`
 `verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`
 `verified-by: bravebot_core::delegate::naming_tools_drops_the_capabilities_no_named_tool_reaches`
 `verified-by: bravebot_core::delegate::a_definition_narrowed_to_one_tool_can_still_reach_the_endpoint`

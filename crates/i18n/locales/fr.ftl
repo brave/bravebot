@@ -609,6 +609,11 @@ doctor-skill-keys-unread =
         [one] { $skill } déclare { $keys }, que rien ici ne lit
        *[other] { $skill } déclare { $keys }, dont rien ici ne lit aucune
     }
+doctor-definition-keys-unread =
+    { $count ->
+        [one] { $definition } déclare { $keys }, que rien ici ne lit
+       *[other] { $definition } déclare { $keys }, dont rien ici ne lit aucune
+    }
 doctor-settings-no-variables = settings.json, ne nommant aucune variable
 doctor-settings-layer = couche
 doctor-settings-override = remplacement
@@ -4060,6 +4065,11 @@ delegate-writes-not-read =
     { $count ->
         [one] { $definition } a un motif writes illisible ici, qui ne couvre donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
        *[other] { $definition } a des motifs writes illisibles ici, qui ne couvrent donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
+    }
+delegate-restriction-not-applied =
+    { $count ->
+        [one] { $definition } déclare { $keys }, que rien ici n'applique : son délégué n'est donc pas restreint par cette clé. Une ligne tools nomme les outils que le délégué peut appeler, et son kind décide s'il peut lancer des programmes ou écrire des fichiers
+       *[other] { $definition } déclare { $keys }, dont rien ici n'applique aucune : son délégué n'est donc pas restreint par ces clés. Une ligne tools nomme les outils que le délégué peut appeler, et son kind décide s'il peut lancer des programmes ou écrire des fichiers
     }
 delegate-checkout-reader =
     { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
