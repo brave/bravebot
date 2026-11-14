@@ -823,7 +823,9 @@ address in the answer is loopback, private, link-local (the cloud metadata addre
 unique-local, carrier-grade NAT or otherwise reserved, the fetch fails before anything is sent and the
 connection is made only to the addresses that were checked. A URL whose host is written as an address,
 such as `http://127.0.0.1:8080/`, is what you approved and is fetched; `localhost` is a name. Behind a
-proxy the proxy resolves the target, so the check does not apply there. A model running on loopback is
+proxy the proxy resolves the target too, so bravebot also looks the host up itself and refuses it on the
+same terms before the request is sent to the proxy. The proxy's own lookup is not seen, so it can still
+answer differently, and what a proxy may reach is its own configuration's. A model running on loopback is
 unaffected, since this applies to `fetch_url` and nothing else.
 
 **A result names the URL you asked for, never where a redirect went.** A fetch that succeeds names it
