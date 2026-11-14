@@ -1057,6 +1057,25 @@ plain `--fixup=<commit>` or `--fixup <commit>` is not refused either, because gi
 two-word spellings, open an editor and are refused unless a message source is also given.
 `--squash=<commit>` and a bare `git commit` are refused.
 
+A line that names the editor outright is not refused for opening one. The editor is named by a
+variable written in front of the `git` step itself (`GIT_SEQUENCE_EDITOR=<command>` or
+`GIT_EDITOR=<command>`) or by `git -c sequence.editor=<command>` or `-c core.editor=<command>`, and
+the value must be literal text in the line. The setting git reads first decides, as git does: a
+sequence editor, then the editor of a message. A value that is empty, that is computed when the step
+starts (only possible in bypass mode), or that is a program this list refuses as an editor (`vim`,
+`nano`) names none, and the line is refused as it would be without the setting. An assignment in
+front of another step, or of any other variable, does not lift the refusal. `GIT_SEQUENCE_EDITOR`
+and `sequence.editor` lift only the refusal of `git rebase -i`. `GIT_EDITOR` and `core.editor` also
+lift the refusal of a `git commit` that supplies no message, including `--squash=<commit>` and
+`--fixup=amend:` or `--fixup=reword:`, because git runs the named editor on the message. `git add -i`
+and `git add -p` are never lifted. The subcommand is found past `-c <key=value>` and `-C <dir>`, so
+options in front of it do not hide it from this check. The decision reads only the words of the
+line and never a file.
+
+The refusal of `git rebase -i` names the routes that work: `GIT_SEQUENCE_EDITOR=<command> git rebase
+-i <base>`, `git rebase --autosquash <base>` without `-i` to fold fixup commits, and `git commit
+--fixup=reword:<sha> -m <message>` followed by `git rebase --autosquash <base>` to change a subject.
+
 The list is a convenience rather than a guarantee. Something interactive that is not on it hits the
 deadline and returns what it printed, which is the same outcome by a slower road.
 
@@ -1064,6 +1083,9 @@ deadline and returns what it printed, which is the same outcome by a slower road
 `verified-by: bravebot_agent::cmdline::a_line_that_names_the_terminal_device_is_refused`
 `verified-by: bravebot_agent::cmdline::the_same_program_without_the_interactive_part_is_not_refused`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::cmdline::a_line_that_names_the_editor_outright_is_not_refused`
+`verified-by: bravebot_agent::cmdline::an_editor_whose_name_is_computed_does_not_lift_the_refusal`
+`verified-by: bravebot_agent::cmdline::the_refusal_of_an_interactive_rebase_names_the_routes_that_work`
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
 
 <a id="CMDLINE-16"></a>

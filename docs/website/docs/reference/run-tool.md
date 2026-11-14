@@ -507,8 +507,13 @@ remembered command cannot pick one up unseen. Both redirections are among the pr
 ## Something that wants a terminal is refused before it starts
 
 `git rebase -i`, `git add -i`, an editor, a pager without `--no-pager`: refused when the line is
-compiled, with the thing to do instead. `git commit` is refused when it gives no message, because git
-would open an editor. `-m`, `-F`, `-C`, `--message`, `--file`, `--reuse-message` or `--no-edit` lets
+compiled, with the thing to do instead. `git rebase -i` is let through when the line names the editor
+outright, as in `GIT_SEQUENCE_EDITOR=<command> git rebase -i <base>`, `GIT_EDITOR=<command>` or
+`git -c sequence.editor=<command> rebase -i <base>`, with a literal command that needs no terminal.
+`git rebase --autosquash <base>` without `-i` and `git commit --fixup=reword:<sha> -m <message>` need
+no editor at all. `git commit` is refused when it gives no message, because git would open an editor
+(unless the line names `GIT_EDITOR` or `-c core.editor`). `-m`, `-F`, `-C`, `--message`, `--file`,
+`--reuse-message` or `--no-edit` lets
 it through, and so does a plain `--fixup=<commit>` (or `--fixup <commit>`), since git writes the
 `fixup!` message itself. `--fixup=amend:<commit>` and `--fixup=reword:<commit>` open an editor and
 are refused unless a message option is also given. `--squash=<commit>` is refused. The list is a
