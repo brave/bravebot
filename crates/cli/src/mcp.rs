@@ -4561,13 +4561,13 @@ mod tests {
         let (outcome, _) = typing(&directory, ADD, "y\n");
         assert!(outcome.is_ok(), "{outcome:?}");
         let _ = std::fs::remove_dir_all(checkout.join(".bravebot"));
-        let agents = checkout.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let target = agents.join("settings.json");
+        let shared = checkout.join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let target = shared.join("settings.json");
         std::fs::write(&target, "{}").unwrap();
         std::fs::create_dir_all(checkout.join(".bravebot")).unwrap();
         let project = bravebot_config::project_settings_file(&checkout);
-        std::os::unix::fs::symlink("../agents/settings.json", &project).unwrap();
+        std::os::unix::fs::symlink("../shared/settings.json", &project).unwrap();
         let enable = ["enable", "weather", "-s", "project"];
 
         let (outcome, _) = typing(&directory, &enable, "");
@@ -4602,13 +4602,13 @@ mod tests {
 
         // A link that ends at nothing says nowhere it stays.
         std::fs::remove_file(&project).unwrap();
-        std::os::unix::fs::symlink("../agents/missing.json", &project).unwrap();
+        std::os::unix::fs::symlink("../shared/missing.json", &project).unwrap();
         let (outcome, _) = typing(&directory, &enable, "");
         assert_eq!(
             outcome.map_err(|(ending, _)| ending),
             Err(Ending::Configuration)
         );
-        assert!(!agents.join("missing.json").exists());
+        assert!(!shared.join("missing.json").exists());
 
         // The person's own files are not the checkout's where the checkout holds the state
         // directory, and are where it does not.
