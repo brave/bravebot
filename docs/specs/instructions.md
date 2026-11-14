@@ -253,7 +253,7 @@ exactly that.
 ### INSTR-9: where the planner is working is stated, and is not read through the trust gate
 
 The system prompt says the working directory, whether the tree is a git repository, whether the
-GitHub CLI is on the path, the platform, the OS version, the shell, today's date, and the directory
+GitHub CLI is on the path, whether the Jenkins CLI (`jk`) is on the path, the platform, the OS version, the shell, today's date, and the directory
 this session has to itself ([trust-map.md](trust-map.md)) where it has one, with what that directory
 is for and the name a program started from a command line reads its path from. A session that has
 none has nothing said about one. These are facts about the machine, and the prompt says so.
@@ -269,6 +269,13 @@ named as the fallback for a CLI nobody has logged in with. A delegate reads this
 and is offered neither road, no `fetch_url` at all and no `run` without the capability for it
 ([DELEGATE-4](delegation.md#DELEGATE-4)), so an imperative choosing between them is stated where
 those tools are.
+
+What an installed Jenkins CLI is for is said on the same terms, to the same turn and not to a
+delegate: the commands that read a build's result, its stages, the end of its console log and its
+test report, where the page of a build is many times the part that was wanted. Where `jk` fails for
+want of a login, the planner says so and names `jk auth login` as what signs it in. It asks nobody,
+since a session that is not interactive has nobody to ask, and it is not sent to `fetch_url`, because a Jenkins server that asks for a login refuses a fetch as well. Each probe is
+its own: a machine with one CLI says so for that one and nothing for the other.
 
 What to do when a program fails because something it needs is missing from this machine is said on
 the same terms, to the turn a person is watching and only where the session has a directory of its
@@ -354,6 +361,11 @@ it is the planner's.
 `verified-by: bravebot_agent::preamble::an_installed_github_cli_still_names_fetch_url_as_the_fallback`
 `verified-by: bravebot_agent::preamble::the_road_a_github_url_takes_is_not_in_the_block_a_delegate_reads`
 `verified-by: bravebot_agent::turn::the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on`
+`verified-by: bravebot_agent::preamble::whether_the_jenkins_cli_is_installed_is_said_either_way_and_apart_from_the_github_cli`
+`verified-by: bravebot_agent::preamble::a_jenkins_build_is_sent_to_the_cli_only_where_the_probe_found_one`
+`verified-by: bravebot_agent::preamble::an_installed_jenkins_cli_says_what_to_do_when_it_is_not_logged_in`
+`verified-by: bravebot_agent::preamble::what_the_jenkins_cli_is_for_is_not_in_the_block_a_delegate_reads`
+`verified-by: bravebot_agent::turn::the_road_for_a_jenkins_build_goes_out_with_the_fact_it_rests_on`
 
 <a id="INSTR-10"></a>
 ### INSTR-10: words from the command line have the last word on precedence, and a replacement reaches the opening alone
@@ -895,7 +907,7 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   something, which is a second thing to be wrong about how the filesystem looks. A project keeping
   skills in one directory pays two listings of directories that are not there, which is two failed
   `read_dir` calls.
-- **Looking for the GitHub CLI walks `$PATH` every turn**, for the same reason and against the same
+- **Looking for the GitHub CLI and the Jenkins CLI each walks `$PATH` every turn**, for the same reason and against the same
   alternative: the block is composed per turn, so a value read once would be the one that goes stale
   when something is installed mid-session. The machine that pays most is the one without the CLI,
   which walks every entry to the end to say so, and it is still a handful of directory reads in front

@@ -243,6 +243,7 @@ run a command to learn them:
 | Working directory | The absolute path of the workspace root |
 | Is a git repository | Whether this tree or a directory above it holds a `.git` |
 | GitHub CLI (gh) on PATH | Whether `gh` is installed, looked up on `$PATH` the way a `run` would |
+| Jenkins CLI (jk) on PATH | Whether `jk` is installed, looked up the same way |
 | Platform | `macos`, `linux`, or whatever this build runs on |
 | OS version | The kernel release string on Unix, as `uname` reports it. On Windows, the three numbers a build is named by |
 | Shell | `$SHELL`, or `/bin/sh` when that is unset or empty |
@@ -329,6 +330,20 @@ what to fall back to when `gh` fails for that reason.
 A [delegate](../reference/tools.md#spawn_agent) is told the fact and not this paragraph. It has no
 `fetch_url` at all, and `run` only if its kind reaches programs, so a sentence choosing between the
 two would send it after a tool it was not given.
+
+### The Jenkins CLI
+
+Where `jk` is on your `$PATH`, the block says so and adds the commands that read a Jenkins build,
+through [`run`](../reference/tools.md#run): `jk run view` for the result and the stages, `jk log`
+with `--tail`, `--grep` or `--step` for the console log, `jk test report` for the tests and
+`jk run ls` for recent builds of a job. Each returns the part you asked for, where
+[`fetch_url`](../reference/tools.md#fetch_url) fetches the page around it.
+
+Whether you have logged in with `jk` is not looked at, since that cannot be told without a request.
+Where `jk` fails for that reason the planner says so and names `jk auth login` as what signs it in. It
+does not fall back to `fetch_url`, because a Jenkins server that asks for a login refuses a fetch too.
+A [delegate](../reference/tools.md#spawn_agent) is told the fact and not this paragraph, for the
+reason given under [The GitHub CLI](#the-github-cli).
 
 ## Trust
 

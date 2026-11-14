@@ -127,7 +127,7 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   and a session with no home directory, lend none, and the push still runs. The files a tool reads by name to do its job, such as the `gh`
   login, `~/.npmrc` and `~/.netrc`, are readable. So are the shell startup files, `~/.gitconfig`,
   `~/.pgpass`, `~/.my.cnf`, `~/.vault-token` and the configuration of tools such as `helm`, `glab`,
-  `doctl` and `rclone`.
+  `doctl`, `jk` and `rclone`.
 
   A transcript can hold what you pasted, and a program that can read the session records could send
   them out wherever the network is open. Close the network with `--run-network closed` if that

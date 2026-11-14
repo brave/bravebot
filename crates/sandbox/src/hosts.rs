@@ -256,7 +256,7 @@ pub fn registry_hosts(toolchain: Toolchain) -> &'static [&'static str] {
         Toolchain::Node => &["registry.npmjs.org"],
         Toolchain::Python => &["pypi.org", "files.pythonhosted.org"],
         Toolchain::Go => &["proxy.golang.org"],
-        Toolchain::Maven | Toolchain::Gradle | Toolchain::Gh => &[],
+        Toolchain::Maven | Toolchain::Gradle | Toolchain::Gh | Toolchain::Jk => &[],
     }
 }
 

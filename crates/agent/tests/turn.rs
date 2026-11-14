@@ -28219,6 +28219,36 @@ fn the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on() {
     );
 }
 
+/// The Jenkins CLI's fact and what it is for go out together or not at all, as the GitHub CLI's do.
+#[test]
+fn the_road_for_a_jenkins_build_goes_out_with_the_fact_it_rests_on() {
+    let scratch = Scratch::new("jenkins-road");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read a build"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert_eq!(
+        body.contains("Jenkins CLI (jk) on PATH: true"),
+        body.contains("The Jenkins CLI is installed"),
+        "the fact and what it is for did not go out together: {body}"
+    );
+}
+
 /// A planner that lists a tree and then asks four delegates to list it again has paid for the
 /// answer twice and put it in the context it was delegating to keep clear. Nothing it read
 /// crosses to a delegate, so the reading has to happen there or not at all.

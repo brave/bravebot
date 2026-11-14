@@ -6961,6 +6961,7 @@ mod tests {
                         ".gradle/wrapper",
                         ".gradle/native",
                         ".cache/gh",
+                        ".config/jk/keychain.lock",
                     ]
                     .iter()
                     .any(|cache| path.ends_with(cache)),
