@@ -6,9 +6,9 @@
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, APPROVE_BUTTON, openFirstSession } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, APPROVE_BUTTON, openFirstSession, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -67,7 +67,7 @@ if (await appears(page.locator('.confirm.run'), 120, 'the pipeline is put to the
     (await card.locator(CONFIRM_BUTTON).count()) === 3,
     'three answers: refuse, run once, run and stop asking',
   )
-  await page.screenshot({ path: '/tmp/bravebot-ui/13-run-asked.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/13-run-asked.png` })
 
   await card.locator(`${APPROVE_BUTTON}:not(.always)`).click()
   await page.waitForTimeout(1200)
@@ -99,7 +99,7 @@ if (sawOutput) {
     actual === stated,
     `the bytes shown are all of them (${actual} lines, card says ${stated})`,
   )
-  await page.screenshot({ path: '/tmp/bravebot-ui/14-output-asked.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/14-output-asked.png` })
   await card.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(1000)
 } else {
@@ -122,7 +122,7 @@ check(
   (await page.locator('.quarantine').count()) > 0,
   'and that what it printed was confined rather than read',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/15-run-done.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/15-run-done.png` })
 
 await app.close()
 console.log(problems.length ? `\nRESULT: ${problems.length} failed` : '\nRESULT: ok')

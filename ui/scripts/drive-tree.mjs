@@ -14,9 +14,9 @@
 // that step is in the manual pass.
 import { mkdirSync, symlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive, openFirstSession } from './drive-support.mjs'
+import { checker, launchLive, openFirstSession, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -119,7 +119,7 @@ if (item === null) {
       `a child is indented (${Math.round(outerText.x)} → ${Math.round(childText.x)}) without narrowing the row`,
     )
   }
-  await page.screenshot({ path: '/tmp/bravebot-ui/11-tree.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/11-tree.png` })
   await folder.click()
   await page.waitForTimeout(500)
   check((await item.getAttribute('aria-expanded')) === 'false', 'clicking it again shuts it')
@@ -215,4 +215,4 @@ if (problems.length > 0) {
   console.log(`\nRESULT: ${problems.length} failed`)
   process.exit(1)
 }
-console.log('\nRESULT: ok — shot in /tmp/bravebot-ui/11-tree.png')
+console.log(`\nRESULT: ok — shot in ${SHOTS_DIR}/11-tree.png`)

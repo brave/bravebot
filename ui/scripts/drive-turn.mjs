@@ -2,9 +2,9 @@
 // Launched from a shell with the credentials explicitly unset, to prove the binary
 // carries them rather than inheriting them.
 import { mkdirSync } from 'node:fs'
-import { launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE } from './drive-support.mjs'
+import { launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { app, page } = await launchLive()
 
@@ -22,7 +22,7 @@ const blocked = page.locator('.unconfigured')
 for (let i = 0; i < 60; i++) {
   if (await blocked.isVisible().catch(() => false)) {
     console.log('RESULT: unconfigured screen shown')
-    await page.screenshot({ path: '/tmp/bravebot-ui/03-unconfigured.png' })
+    await page.screenshot({ path: `${SHOTS_DIR}/03-unconfigured.png` })
     await app.close()
     process.exit(1)
   }
@@ -37,5 +37,5 @@ if (failed > 0) {
 } else {
   console.log('RESULT: replied ->', (await answered.textContent())?.slice(0, 120))
 }
-await page.screenshot({ path: '/tmp/bravebot-ui/03-turn.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/03-turn.png` })
 await app.close()

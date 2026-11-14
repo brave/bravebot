@@ -8,6 +8,8 @@
 // `playwright-core` is loaded when a launch happens, so the helpers that only take a page can be
 // tested without a browser driver installed.
 
+/** The directory the drivers write their screenshots to. */
+export const SHOTS_DIR = '/tmp/bravebot-ui'
 /** The composer's text box, and the same while it accepts input (no turn is running). */
 export const COMPOSER_INPUT = '.composer textarea'
 export const COMPOSER_IDLE = '.composer textarea:not([disabled])'

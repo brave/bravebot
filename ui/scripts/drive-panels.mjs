@@ -6,9 +6,9 @@
 // through heights between full and nothing. A collapse that jumps looks identical in
 // stills, so the height is sampled while it moves.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, sessionsOrSkip } from './drive-support.mjs'
+import { checker, launchLive, sessionsOrSkip, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -59,7 +59,7 @@ const shut = closing[closing.length - 1]
 const middles = closing.filter((h) => h > shut + 1 && h < open - 1)
 check(middles.length > 0, `collapse passes through part-heights (${middles.length} frames)`)
 check(shut < open - 20, `collapse ends at just the heading (${Math.round(shut)}px of ${Math.round(open)}px)`)
-await page.screenshot({ path: '/tmp/bravebot-ui/07-panels-closed.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/07-panels-closed.png` })
 
 await head.click()
 const opening = await sample()
@@ -68,7 +68,7 @@ check(
   'expand passes through part-heights',
 )
 check(Math.abs(opening[opening.length - 1] - open) < 1, 'expand ends back at full height')
-await page.screenshot({ path: '/tmp/bravebot-ui/08-panels-open.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/08-panels-open.png` })
 
 // --- and the same fold, around a run of tool calls -------------------------------------
 if ((await page.locator('.tool-run').count()) === 0) {
@@ -109,12 +109,12 @@ if ((await page.locator('.tool-run').count()) === 0) {
     'a closed run leaves the tab order and the accessibility tree',
   )
   check(await runHead.isVisible(), 'the header stays, so the run can be brought back')
-  await page.screenshot({ path: '/tmp/bravebot-ui/11-run-closed.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/11-run-closed.png` })
 
   await runHead.click()
   await page.waitForTimeout(400)
   check(Math.abs((await runHeight()) - runOpen) < 1, 'the run reopens to its full height')
-  await page.screenshot({ path: '/tmp/bravebot-ui/12-run-open.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/12-run-open.png` })
 }
 
 // --- the tabs that decide which panels the column shows -------------------------------
@@ -150,7 +150,7 @@ check(
   !(await plan.locator('summary').isVisible()),
   'a panel that is tabbed away leaves the tab order and the accessibility tree',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/13-panel-tabs.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/13-panel-tabs.png` })
 
 await page.getByRole('tab', { name: 'Overview', exact: true }).click()
 await page.waitForTimeout(300)

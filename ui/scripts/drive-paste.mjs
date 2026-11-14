@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, COMPOSER_SEND, approveTrust } from './drive-support.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND, approveTrust, SHOTS_DIR } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -27,7 +27,7 @@ const { root, project, profile, env } = makeWorld('bravebot-paste-', { service, 
 const desktop = join(root, 'desktop')
 writeFileSync(join(project, 'README.md'), '# scratch\n')
 
-const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
+const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? SHOTS_DIR
 mkdirSync(output, { recursive: true })
 const viewport = { width: 1400, height: 1000 }
 

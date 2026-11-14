@@ -18,7 +18,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { INSTALL } from './overlay.mjs'
 import { projectsIn } from './world.mjs'
-import { SIDEBAR_TAB } from '../drive-support.mjs'
+import { SIDEBAR_TAB, SHOTS_DIR } from '../drive-support.mjs'
 
 // The two numbers the whole video is timed by, and the only two worth arguing about. They
 // started at 700/620, which watched back as dead air — a pause between two things happening
@@ -30,7 +30,7 @@ const BEAT = 620
 /** How long the pointer takes to cross the window. Long enough to be followed by eye. */
 const GLIDE = 430
 
-export const SHOTS = '/tmp/bravebot-ui/demo'
+export const SHOTS = `${SHOTS_DIR}/demo`
 
 /** `mm:ss` since the first caption, for reading the narration log against the footage. */
 const stamp = (from) => {

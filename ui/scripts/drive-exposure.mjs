@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON, approveTrust } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON, approveTrust, SHOTS_DIR } from './drive-support.mjs'
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE'
 
@@ -25,7 +25,7 @@ const toolResults = (round) => (JSON.parse(round).messages ?? []).filter((messag
 const { root, project, profile, env } = makeWorld('bravebot-exposure-', { service })
 writeFileSync(join(project, '.env'), `AWS_ACCESS_KEY_ID=${KEY}\n`)
 
-const output = '/tmp/bravebot-ui'
+const output = SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

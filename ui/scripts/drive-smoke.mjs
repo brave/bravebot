@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { _electron as electron } from 'playwright-core'
+import { SHOTS_DIR } from './drive-support.mjs'
 
 const executablePath = process.argv[2]
 const app = await electron.launch({
@@ -28,8 +29,8 @@ try {
   assert.equal(windowState.visible, true, 'Native window must be visible')
   assert.equal(windowState.minimized, false)
   assert.deepEqual(errors, [], 'Renderer must load without uncaught errors')
-  mkdirSync('/tmp/bravebot-ui', { recursive: true })
-  const screenshot = `/tmp/bravebot-ui/${executablePath ? 'packaged' : 'development'}-smoke.png`
+  mkdirSync(SHOTS_DIR, { recursive: true })
+  const screenshot = `${SHOTS_DIR}/${executablePath ? 'packaged' : 'development'}-smoke.png`
   await page.screenshot({ path: screenshot })
   console.log(`Visible UI and Rust bridge ${info.ok.version} verified. Screenshot: ${screenshot}`)
 } finally {

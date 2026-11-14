@@ -13,9 +13,9 @@
 // persisted layout with every other driver, so it puts the columns back before it leaves.
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, approveTrustIfAsked } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, approveTrustIfAsked, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -251,7 +251,7 @@ check(
   /Agent/.test(await about.locator('dl').textContent()),
   'and it carries the agent build, which is the first thing worth knowing',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/11-menu-about.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/11-menu-about.png` })
 await page.keyboard.press('Escape')
 await page.waitForTimeout(400)
 check(!(await about.isVisible()), 'Escape closes it — nothing here traps anybody')
@@ -326,4 +326,4 @@ if (problems.length > 0) {
   console.log(`\nRESULT: ${problems.length} failed`)
   process.exit(1)
 }
-console.log('\nRESULT: ok — shot in /tmp/bravebot-ui/11-menu-about.png')
+console.log(`\nRESULT: ok — shot in ${SHOTS_DIR}/11-menu-about.png`)

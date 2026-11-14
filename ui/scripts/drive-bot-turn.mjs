@@ -11,12 +11,12 @@
 // `settings.json`, `model` and `leo-premium.json`, so the agent can reach the backend the real one
 // is configured for, and the copies are removed when it ends.
 
-import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON } from './drive-support.mjs'
+import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -67,7 +67,7 @@ check(
   `the reply obeys the purpose nobody typed into the composer (${reply.slice(0, 60)})`,
 )
 
-await page.screenshot({ path: '/tmp/bravebot-ui/24-bot-turn.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/24-bot-turn.png` })
 
 // Nothing is drawn for the briefing during the turn it arrives in, and that is not an oversight:
 // the agent emits no event when it reads a file the user named, so a live transcript has nothing
@@ -124,7 +124,7 @@ await page2.locator(SIDEBAR_TAB).nth(0).click()
 await page2.waitForTimeout(400)
 const listed = page2.locator('.session').filter({ has: page2.locator('.bot-face') })
 check((await listed.count()) >= 1, 'the bot’s conversation is in the Chats list with its face')
-await page2.screenshot({ path: '/tmp/bravebot-ui/25-bot-resumed.png' })
+await page2.screenshot({ path: `${SHOTS_DIR}/25-bot-resumed.png` })
 
 await back.close()
 
