@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -730,7 +731,7 @@ def test_a_wait_ends_at_its_deadline_counting_the_start_up_and_every_poll():
     def poll(*args, **kwargs):
         clock.now += 4
         polls.append(clock.now)
-        return SimpleNamespace(stdout=json.dumps({"statusCheckRollup": PENDING}), returncode=0)
+        return SimpleNamespace(stdout=json.dumps({"state": "OPEN", "statusCheckRollup": PENDING}), returncode=0)
 
     argv = ["pr-fix.py", "ci", "7", "--wait", "--wait-seconds", "95"]
     with mock.patch.object(sys, "argv", argv), mock.patch.object(pr_fix, "time", clock.time), \
@@ -740,6 +741,50 @@ def test_a_wait_ends_at_its_deadline_counting_the_start_up_and_every_poll():
     assert code == 2 and "0 passed, 0 failed, 1 pending" in out, out
     assert 95 <= clock.now <= 95 + 4, f"stopped at {clock.now}s: the deadline plus the poll that was under way"
     assert len(polls) == 3, polls
+
+
+def wait_on(polls, wait_seconds=540):
+    """Run `ci 7 --wait` against a pull request whose checks are pending, answering each poll with `polls`."""
+    clock, asked = Clock(), []
+
+    def look(number, create):
+        return SimpleNamespace(number=number, tree=Path("/nonexistent"), head_sha="abc", rollup=PENDING)
+
+    def poll(*args, **kwargs):
+        asked.append(kwargs)
+        return polls(clock, kwargs)
+
+    argv = ["pr-fix.py", "ci", "7", "--wait", "--wait-seconds", str(wait_seconds)]
+    with mock.patch.object(sys, "argv", argv), mock.patch.object(pr_fix, "time", clock.time), \
+            mock.patch.object(pr_fix, "git", lambda *a, **k: "/tmp"), \
+            mock.patch.object(pr_fix, "lookup", look), mock.patch.object(pr_fix, "run", poll):
+        code, out = quietly(pr_fix.main)
+    return code, out, asked, clock.now
+
+
+def test_a_wait_ends_when_the_pull_request_is_merged_while_its_checks_are_still_pending():
+    polled = []
+
+    def merged_on_the_third_poll(clock, kwargs):
+        polled.append(clock.now)
+        state = "MERGED" if len(polled) == 3 else "OPEN"
+        view = {"state": state, "url": "https://github.com/brave/bravebot/pull/7", "statusCheckRollup": PENDING}
+        return SimpleNamespace(stdout=json.dumps(view), returncode=0)
+
+    code, out, _, elapsed = wait_on(merged_on_the_third_poll)
+    assert code == 1 and "pull/7 is merged" in out, (code, out)
+    assert len(polled) == 3 and elapsed < 540, f"{len(polled)} polls over {elapsed}s: the wait ran on after the merge"
+
+
+def test_a_poll_that_hangs_is_given_no_more_time_than_the_wait_has_left():
+    def hangs(clock, kwargs):
+        clock.now += kwargs["timeout"]
+        raise subprocess.TimeoutExpired("gh", kwargs["timeout"])
+
+    code, out, asked, elapsed = wait_on(hangs, wait_seconds=100)
+    assert code == 2 and "0 passed, 0 failed, 1 pending" in out, (code, out)
+    assert [one["timeout"] for one in asked] == [70], f"the wait has 100 - 30 s left at the first poll: {asked}"
+    assert elapsed <= 100, f"stopped at {elapsed}s, after the 100 s the wait was given"
 
 
 def test_pull_requests_that_wait_share_what_is_left_of_one_wait():

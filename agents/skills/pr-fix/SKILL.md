@@ -207,7 +207,8 @@ of its commits unsigned than it has now.
    3 and 4 found nothing to change (no failing check, no open thread, no review asking for changes),
    where the pull request needs only a new review. Then `... ci <pr> --wait`
    with `deadline_seconds: 600` on the `run` call, since the default of 300 seconds stops it first.
-   A pull request's wait ends as soon as one of its checks fails, and every wait ends nine minutes
+   A pull request's wait ends as soon as one of its checks fails or the pull request is merged or
+   closed (it exits 1 and names the state), and every wait ends nine minutes
    after the script started, so the call takes nine minutes at most however many pull requests it
    was given. It exits 0 when all pass, 1 when one failed and 2 when checks are still running.
    Where the `run` tool's ceiling is lower than 600, pass the ceiling as `deadline_seconds` and
