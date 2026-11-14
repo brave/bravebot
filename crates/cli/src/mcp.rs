@@ -368,228 +368,160 @@ fn declared(
     before: usize,
     scope: &mut Option<Scope>,
 ) -> Result<Declaration, Refusal> {
-    let mut variables = Vec::new();
-    let mut env = BTreeMap::new();
-    let mut env_http_headers = BTreeMap::new();
-    let mut bearer_env: Option<String> = None;
-    let mut directory = None;
-    let mut transport = None;
-    let mut startup = None;
-    let mut tool = None;
-    let mut tools = Vec::new();
-    let mut exclude_tools = Vec::new();
-    let mut allowed_hosts: Option<Vec<String>> = None;
-    let mut ask_every_call = false;
-    let mut openshell: Option<String> = None;
-    let mut choices = ChoiceArguments::new();
+    let mut typed = Typed::default();
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
         let value = flags.get(index + 1);
         let position = |at: usize| (before + at + 1) as i64;
-        let mut taken = 2;
-        match flag {
-            "-e" | "--env" => {
-                let run = flags[index + 1..]
-                    .iter()
-                    .take_while(|word| !word.starts_with('-'))
-                    .count();
-                if run == 0 {
-                    return Err(argument(t!(mcp_env_needs_a_name)).into());
+        // A flag with a joined form is split at its first `=`. Any other word is left whole, so
+        // `--dir=/x` and `--=x` are unknown options and not `--dir` and the program flag.
+        let (name, inline) = match flag.split_once('=') {
+            Some((name, inline)) if JOINED.contains(&name) => (name, Some(inline)),
+            _ => (flag, None),
+        };
+        let mut taken = if inline.is_some() { 1 } else { 2 };
+        match name {
+            "-e" | "--env" => match inline {
+                Some(word) => {
+                    if word.is_empty() {
+                        return Err(argument(t!(mcp_env_needs_a_name)).into());
+                    }
+                    given(
+                        word,
+                        true,
+                        position(index),
+                        &mut typed.variables,
+                        &mut typed.env,
+                    )?;
                 }
-                for (at, word) in flags.iter().enumerate().skip(index + 1).take(run) {
-                    given(word, run == 1, position(at), &mut variables, &mut env)?;
+                None => {
+                    let run = run_after(flags, index);
+                    if run == 0 {
+                        return Err(argument(t!(mcp_env_needs_a_name)).into());
+                    }
+                    for (at, word) in flags.iter().enumerate().skip(index + 1).take(run) {
+                        given(
+                            word,
+                            run == 1,
+                            position(at),
+                            &mut typed.variables,
+                            &mut typed.env,
+                        )?;
+                    }
+                    taken = 1 + run;
                 }
-                taken = 1 + run;
-            }
-            joined if joined.starts_with("--env=") || joined.starts_with("-e") => {
-                let word = joined
-                    .strip_prefix("--env=")
-                    .or_else(|| joined.strip_prefix("-e"))
-                    .unwrap_or_default();
-                if word.is_empty() {
-                    return Err(argument(t!(mcp_env_needs_a_name)).into());
-                }
-                given(word, true, position(index), &mut variables, &mut env)?;
+            },
+            joined if joined.starts_with("-e") => {
+                let word = joined.strip_prefix("-e").unwrap_or_default();
+                given(
+                    word,
+                    true,
+                    position(index),
+                    &mut typed.variables,
+                    &mut typed.env,
+                )?;
                 taken = 1;
             }
             "--dir" => {
                 let path = value.ok_or_else(|| argument(t!(mcp_dir_needs_a_path)))?;
-                directory = Some(place(path)?);
+                typed.directory = Some(place(path)?);
             }
             "--tools" => {
-                let run = flags[index + 1..]
-                    .iter()
-                    .take_while(|word| !word.starts_with('-'))
-                    .count();
-                if run == 0 {
-                    return Err(argument(t!(mcp_tools_needs_a_list)).into());
-                }
-                let before = tools.len();
-                for word in &flags[index + 1..index + 1 + run] {
-                    for item in word.split(',') {
-                        let trimmed = item.trim();
-                        if !trimmed.is_empty() {
-                            tools.push(trimmed.to_string());
-                        }
-                    }
-                }
-                if tools.len() == before {
-                    return Err(argument(t!(mcp_tools_needs_a_list)).into());
-                }
-                taken = 1 + run;
-            }
-            joined if joined.starts_with("--tools=") => {
-                let word = joined.strip_prefix("--tools=").unwrap_or_default();
-                let before = tools.len();
-                for item in word.split(',') {
-                    let trimmed = item.trim();
-                    if !trimmed.is_empty() {
-                        tools.push(trimmed.to_string());
-                    }
-                }
-                if tools.len() == before {
-                    return Err(argument(t!(mcp_tools_needs_a_list)).into());
-                }
-                taken = 1;
+                taken = word_list(flags, index, inline, &mut typed.tools, || {
+                    argument(t!(mcp_tools_needs_a_list))
+                })?;
             }
             "--exclude-tools" => {
-                let run = flags[index + 1..]
-                    .iter()
-                    .take_while(|word| !word.starts_with('-'))
-                    .count();
-                if run == 0 {
-                    return Err(argument(t!(mcp_exclude_tools_needs_a_list)).into());
-                }
-                let before = exclude_tools.len();
-                for word in &flags[index + 1..index + 1 + run] {
-                    for item in word.split(',') {
-                        let trimmed = item.trim();
-                        if !trimmed.is_empty() {
-                            exclude_tools.push(trimmed.to_string());
-                        }
-                    }
-                }
-                if exclude_tools.len() == before {
-                    return Err(argument(t!(mcp_exclude_tools_needs_a_list)).into());
-                }
-                taken = 1 + run;
-            }
-            joined if joined.starts_with("--exclude-tools=") => {
-                let word = joined.strip_prefix("--exclude-tools=").unwrap_or_default();
-                let before = exclude_tools.len();
-                for item in word.split(',') {
-                    let trimmed = item.trim();
-                    if !trimmed.is_empty() {
-                        exclude_tools.push(trimmed.to_string());
-                    }
-                }
-                if exclude_tools.len() == before {
-                    return Err(argument(t!(mcp_exclude_tools_needs_a_list)).into());
-                }
-                taken = 1;
+                taken = word_list(flags, index, inline, &mut typed.exclude_tools, || {
+                    argument(t!(mcp_exclude_tools_needs_a_list))
+                })?;
             }
             "--allowed-hosts" => {
-                let Some(word) = value.filter(|word| !word.starts_with('-')) else {
+                // A spaced word starting with `-` is the next flag, and a joined one is a list.
+                let word = inline.or_else(|| {
+                    value
+                        .map(String::as_str)
+                        .filter(|word| !word.starts_with('-'))
+                });
+                let Some(word) = word else {
                     return Err(argument(t!(mcp_allowed_hosts_needs_a_list)).into());
                 };
-                allowed_hosts = Some(hosts_in(word)?);
-            }
-            joined if joined.starts_with("--allowed-hosts=") => {
-                let word = joined.strip_prefix("--allowed-hosts=").unwrap_or_default();
-                allowed_hosts = Some(hosts_in(word)?);
-                taken = 1;
+                typed.allowed_hosts = Some(hosts_in(word)?);
             }
             "--ask-every-call" => {
-                ask_every_call = true;
+                typed.ask_every_call = true;
                 taken = 1;
             }
             "--openshell" => {
-                let Some(image) = value.filter(|word| !word.starts_with('-')) else {
+                // A spaced image starting with `-` is the next flag, and an empty one is refused
+                // by the declaration. A joined image is refused here where it is empty.
+                let image = match inline {
+                    Some(image) => Some(image).filter(|image| !image.is_empty()),
+                    None => value
+                        .map(String::as_str)
+                        .filter(|word| !word.starts_with('-')),
+                };
+                let Some(image) = image else {
                     return Err(argument(t!(mcp_openshell_needs_an_image)).into());
                 };
-                openshell = Some(image.clone());
-            }
-            joined if joined.starts_with("--openshell=") => {
-                let image = joined.strip_prefix("--openshell=").unwrap_or_default();
-                if image.is_empty() {
-                    return Err(argument(t!(mcp_openshell_needs_an_image)).into());
-                }
-                openshell = Some(image.to_string());
-                taken = 1;
+                typed.openshell = Some(image.to_string());
             }
             "--choice" => {
-                let pair = value.ok_or_else(|| argument(t!(mcp_choice_needs_a_pair)))?;
-                choose(pair, &mut choices)?;
-            }
-            joined if joined.starts_with("--choice=") => {
-                let pair = joined.strip_prefix("--choice=").unwrap_or_default();
-                choose(pair, &mut choices)?;
-                taken = 1;
+                let pair = inline
+                    .or(value.map(String::as_str))
+                    .ok_or_else(|| argument(t!(mcp_choice_needs_a_pair)))?;
+                choose(pair, &mut typed.choices)?;
             }
             "--startup-timeout" => {
-                startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
+                typed.startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
             "--tool-timeout" => {
-                tool = Some(seconds(value, Timeouts::TOOL_KEY)?);
+                typed.tool = Some(seconds(value, Timeouts::TOOL_KEY)?);
             }
             "--bearer-env" => {
-                let name = value.ok_or_else(|| argument(t!(mcp_bearer_env_needs_a_name)))?;
-                if bearer_env.is_some() {
-                    return Err(Refusal::Problem(Problem::Twice(name.clone())));
-                }
-                bearer_env = Some(name.clone());
-            }
-            joined if joined.starts_with("--bearer-env=") => {
-                let name = joined.strip_prefix("--bearer-env=").unwrap_or_default();
-                if name.is_empty() {
+                let name = inline
+                    .or(value.map(String::as_str))
+                    .ok_or_else(|| argument(t!(mcp_bearer_env_needs_a_name)))?;
+                // A joined name is refused where it is empty. A spaced one is refused by the
+                // declaration, after the check that there is one only.
+                if inline.is_some() && name.is_empty() {
                     return Err(argument(t!(mcp_bearer_env_needs_a_name)).into());
                 }
-                if bearer_env.is_some() {
+                if typed.bearer_env.is_some() {
                     return Err(Refusal::Problem(Problem::Twice(name.to_string())));
                 }
-                bearer_env = Some(name.to_string());
-                taken = 1;
+                typed.bearer_env = Some(name.to_string());
             }
             "--header-env" => {
-                let pair = value.ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
+                let pair = inline
+                    .or(value.map(String::as_str))
+                    .ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
                 let (header, var) = pair
                     .split_once('=')
                     .ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
                 if header.is_empty() || var.is_empty() {
                     return Err(argument(t!(mcp_header_env_needs_a_pair)).into());
                 }
-                if env_http_headers.contains_key(header) {
+                if typed.env_http_headers.contains_key(header) {
                     return Err(Refusal::Problem(Problem::Twice(header.to_string())));
                 }
-                env_http_headers.insert(header.to_string(), var.to_string());
-            }
-            joined if joined.starts_with("--header-env=") => {
-                let pair = joined.strip_prefix("--header-env=").unwrap_or_default();
-                let (header, var) = pair
-                    .split_once('=')
-                    .ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
-                if header.is_empty() || var.is_empty() {
-                    return Err(argument(t!(mcp_header_env_needs_a_pair)).into());
-                }
-                if env_http_headers.contains_key(header) {
-                    return Err(Refusal::Problem(Problem::Twice(header.to_string())));
-                }
-                env_http_headers.insert(header.to_string(), var.to_string());
-                taken = 1;
+                typed
+                    .env_http_headers
+                    .insert(header.to_string(), var.to_string());
             }
             "--http" => {
                 let url = value.ok_or_else(|| argument(t!(mcp_http_needs_a_url)))?;
-                if transport.is_some() {
+                if typed.transport.is_some() {
                     return Err(argument(t!(mcp_two_transports)).into());
                 }
-                transport = Some(Transport::Http(url.clone()));
+                typed.transport = Some(Transport::Http(url.clone()));
             }
             "--stdio" | "--" => {
-                if transport.is_some() {
+                if typed.transport.is_some() {
                     return Err(argument(t!(mcp_two_transports)).into());
                 }
-                let program = match flag {
+                let program = match name {
                     "--" => index + 1,
                     _ if value.map(String::as_str) == Some("--") => index + 2,
                     _ => return Err(argument(t!(mcp_stdio_needs_a_program)).into()),
@@ -598,7 +530,7 @@ fn declared(
                 if argv.is_empty() {
                     return Err(argument(t!(mcp_stdio_needs_a_program)).into());
                 }
-                transport = Some(Transport::Stdio(argv));
+                typed.transport = Some(Transport::Stdio(argv));
                 break;
             }
             "-s" | "--scope" => take_scope(value, scope)?,
@@ -613,61 +545,159 @@ fn declared(
         }
         index += taken;
     }
-    let timeouts = Timeouts::new(startup, tool).map_err(Refusal::Problem)?;
-    match transport {
-        None => Err(argument(t!(mcp_needs_a_transport)).into()),
-        Some(Transport::Stdio(argv)) => {
-            if !env_http_headers.is_empty() || bearer_env.is_some() {
-                return Err(Refusal::Problem(Problem::Remote("env_http_headers")));
+    typed.declaration()
+}
+
+/// The flags that also take their value joined to them as `--flag=value`.
+const JOINED: [&str; 8] = [
+    "--env",
+    "--tools",
+    "--exclude-tools",
+    "--allowed-hosts",
+    "--openshell",
+    "--choice",
+    "--bearer-env",
+    "--header-env",
+];
+
+/// What the flags of `add` have said so far, before the transport they name is checked.
+#[derive(Default)]
+struct Typed {
+    variables: Vec<String>,
+    env: BTreeMap<String, String>,
+    env_http_headers: BTreeMap<String, String>,
+    bearer_env: Option<String>,
+    directory: Option<String>,
+    transport: Option<Transport>,
+    startup: Option<u64>,
+    tool: Option<u64>,
+    tools: Vec<String>,
+    exclude_tools: Vec<String>,
+    allowed_hosts: Option<Vec<String>>,
+    ask_every_call: bool,
+    openshell: Option<String>,
+    choices: ChoiceArguments,
+}
+
+impl Typed {
+    /// The declaration these flags spell: the transport they name, with only what that transport
+    /// takes, and every part checked as an entry in the file is.
+    fn declaration(self) -> Result<Declaration, Refusal> {
+        let Self {
+            mut variables,
+            env,
+            env_http_headers,
+            bearer_env,
+            directory,
+            transport,
+            startup,
+            tool,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            openshell,
+            choices,
+        } = self;
+        let timeouts = Timeouts::new(startup, tool).map_err(Refusal::Problem)?;
+        match transport {
+            None => Err(argument(t!(mcp_needs_a_transport)).into()),
+            Some(Transport::Stdio(argv)) => {
+                if !env_http_headers.is_empty() || bearer_env.is_some() {
+                    return Err(Refusal::Problem(Problem::Remote("env_http_headers")));
+                }
+                // A bare name is looked for only in the PATH a declaration gives it (SERVERS-10),
+                // so one typed with neither would be a server that can never start. A program in
+                // a sandbox is looked for in its image instead.
+                if openshell.is_none()
+                    && bravebot_agent::servers::is_a_bare_name(&argv[0])
+                    && !env.contains_key("PATH")
+                {
+                    variables.push("PATH".to_string());
+                }
+                let backend = match openshell {
+                    Some(image) => mcp::Backend::OpenShell { image },
+                    None => mcp::Backend::Native,
+                };
+                let declaration = Declaration::stdio(argv, variables, directory)
+                    .and_then(|declaration| declaration.running_in(backend))
+                    .and_then(|declaration| declaration.storing(env))
+                    .and_then(|declaration| declaration.hosting(allowed_hosts))
+                    .and_then(|declaration| declaration.filtering(tools, exclude_tools))
+                    .map(|declaration| declaration.asking_every_call(ask_every_call))
+                    .and_then(|declaration| declaration.choosing(choices))
+                    .map(|declaration| declaration.timing(timeouts))
+                    .map_err(Refusal::Problem)?;
+                shares_nothing(&declaration).map_err(argument)?;
+                Ok(declaration)
             }
-            // A bare name is looked for only in the PATH a declaration gives it (SERVERS-10), so
-            // one typed with neither would be a server that can never start. A program in a
-            // sandbox is looked for in its image instead.
-            if openshell.is_none()
-                && bravebot_agent::servers::is_a_bare_name(&argv[0])
-                && !env.contains_key("PATH")
-            {
-                variables.push("PATH".to_string());
+            Some(Transport::Http(_)) if !variables.is_empty() => {
+                Err(Refusal::Problem(Problem::Remote("variables")))
             }
-            let backend = match openshell {
-                Some(image) => mcp::Backend::OpenShell { image },
-                None => mcp::Backend::Native,
-            };
-            let declaration = Declaration::stdio(argv, variables, directory)
-                .and_then(|declaration| declaration.running_in(backend))
-                .and_then(|declaration| declaration.storing(env))
+            Some(Transport::Http(_)) if !env.is_empty() => {
+                Err(Refusal::Problem(Problem::Remote("env")))
+            }
+            Some(Transport::Http(_)) if directory.is_some() => {
+                Err(Refusal::Problem(Problem::Remote("directory")))
+            }
+            Some(Transport::Http(_)) if !choices.is_empty() => {
+                Err(Refusal::Problem(Problem::Remote("choice_arguments")))
+            }
+            Some(Transport::Http(_)) if openshell.is_some() => {
+                Err(Refusal::Problem(Problem::Remote("backend")))
+            }
+            Some(Transport::Http(url)) => Declaration::http(url)
+                .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
                 .and_then(|declaration| declaration.hosting(allowed_hosts))
                 .and_then(|declaration| declaration.filtering(tools, exclude_tools))
                 .map(|declaration| declaration.asking_every_call(ask_every_call))
-                .and_then(|declaration| declaration.choosing(choices))
                 .map(|declaration| declaration.timing(timeouts))
-                .map_err(Refusal::Problem)?;
-            shares_nothing(&declaration).map_err(argument)?;
-            Ok(declaration)
+                .map_err(Refusal::Problem),
         }
-        Some(Transport::Http(_)) if !variables.is_empty() => {
-            Err(Refusal::Problem(Problem::Remote("variables")))
-        }
-        Some(Transport::Http(_)) if !env.is_empty() => {
-            Err(Refusal::Problem(Problem::Remote("env")))
-        }
-        Some(Transport::Http(_)) if directory.is_some() => {
-            Err(Refusal::Problem(Problem::Remote("directory")))
-        }
-        Some(Transport::Http(_)) if !choices.is_empty() => {
-            Err(Refusal::Problem(Problem::Remote("choice_arguments")))
-        }
-        Some(Transport::Http(_)) if openshell.is_some() => {
-            Err(Refusal::Problem(Problem::Remote("backend")))
-        }
-        Some(Transport::Http(url)) => Declaration::http(url)
-            .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
-            .and_then(|declaration| declaration.hosting(allowed_hosts))
-            .and_then(|declaration| declaration.filtering(tools, exclude_tools))
-            .map(|declaration| declaration.asking_every_call(ask_every_call))
-            .map(|declaration| declaration.timing(timeouts))
-            .map_err(Refusal::Problem),
     }
+}
+
+/// How many words after the flag at `index` come before the next word that starts with `-`.
+fn run_after(flags: &[String], index: usize) -> usize {
+    flags
+        .iter()
+        .skip(index + 1)
+        .take_while(|word| !word.starts_with('-'))
+        .count()
+}
+
+/// The names in a `--tools` or `--exclude-tools` flag, added to `into`, and how many words of
+/// `flags` the flag took. Spaced, the flag takes every word up to the next flag; joined, it takes
+/// the one word it was joined to. Each word is split at `,`, trimmed, and kept where it is not
+/// blank. `needs` is the refusal where there is no word or no name in them.
+fn word_list(
+    flags: &[String],
+    index: usize,
+    inline: Option<&str>,
+    into: &mut Vec<String>,
+    needs: impl Fn() -> Stopped,
+) -> Result<usize, Refusal> {
+    let run = match inline {
+        Some(_) => 0,
+        None => run_after(flags, index),
+    };
+    if inline.is_none() && run == 0 {
+        return Err(needs().into());
+    }
+    let before = into.len();
+    let spaced = flags.iter().skip(index + 1).take(run).map(String::as_str);
+    for word in inline.into_iter().chain(spaced) {
+        for item in word.split(',') {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() {
+                into.push(trimmed.to_string());
+            }
+        }
+    }
+    if into.len() == before {
+        return Err(needs().into());
+    }
+    Ok(1 + run)
 }
 
 /// The entries of a comma-separated list of hosts, where there is at least one. Each is checked as
@@ -3275,6 +3305,142 @@ mod tests {
 
         let refused = declared_by(&["--ask-every-call=false", "--", "/opt/srv"]);
         assert!(refused.is_none(), "a value was taken");
+    }
+
+    /// What `declared` makes of `flags`, in a word each test can compare: the message of a flag that
+    /// was refused as an argument, the problem a declaration was refused for, or `declared`.
+    fn outcome(flags: &[&str]) -> String {
+        match declared(&words(flags), 1, &mut None) {
+            Ok(_) => "declared".to_string(),
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            Err(Refusal::Said((ending, _))) => panic!("{flags:?} ended with {ending:?}"),
+            Err(Refusal::Problem(problem)) => format!("{problem:?}"),
+        }
+    }
+
+    /// A flag with no `=` form refuses `--flag=value` as an unknown option and shows the flag
+    /// alone, since the value may be a secret (`--http=https://user:pass@host`). `--=x` is an
+    /// unknown option and not the `--` that starts a program. The regression it rejects is a
+    /// split of every `--flag=value` that gives each flag an inline form it does not have, which
+    /// would read `--dir=/x` as `--dir /x` and `--=x` as the program.
+    #[test]
+    fn a_flag_with_no_joined_form_is_an_unknown_option_that_never_repeats_its_value() {
+        for (typed, flag) in [
+            ("--dir=/srv/data", "--dir"),
+            ("--startup-timeout=5", "--startup-timeout"),
+            ("--tool-timeout=5", "--tool-timeout"),
+            ("--http=https://user:pass@host.example/mcp", "--http"),
+            ("--scope=user", "--scope"),
+            ("--stdio=x", "--stdio"),
+            ("--ask-every-call=false", "--ask-every-call"),
+            ("--=x", "--"),
+        ] {
+            for flags in [
+                vec![typed, "--", "/opt/srv"],
+                vec!["--http", "https://mcp.example.com/mcp", typed],
+            ] {
+                let said = outcome(&flags);
+                assert_eq!(
+                    said,
+                    t!(cli_unknown_option, flag = shown(flag)).to_string(),
+                    "{flags:?}"
+                );
+                assert!(
+                    !said.contains("pass") && !said.contains("/srv/data"),
+                    "{said}"
+                );
+            }
+        }
+    }
+
+    /// The spaced and the joined spelling of a flag differ in what each refuses and where. A
+    /// `--allowed-hosts` word starting with `-` is refused spaced and read as a list joined; an
+    /// `--openshell` image is the other way about for an empty word, which the joined form refuses
+    /// at the flag and the spaced form passes to the declaration; a `--bearer-env` name is
+    /// refused empty at the flag only joined, and a second one is refused as a repeat before an
+    /// empty name is looked at when spaced. The regression they reject is one arm for both
+    /// spellings that applies one spelling's check to the other.
+    #[test]
+    fn the_spaced_and_the_joined_spelling_of_a_flag_keep_their_own_refusals() {
+        let hosts = t!(mcp_allowed_hosts_needs_a_list).to_string();
+        assert_eq!(outcome(&["--allowed-hosts", "-x", "--", "/opt/srv"]), hosts);
+        assert_eq!(
+            outcome(&["--allowed-hosts=-x", "--", "/opt/srv"]),
+            "declared"
+        );
+        assert_eq!(outcome(&["--allowed-hosts=", "--", "/opt/srv"]), hosts);
+
+        let image = t!(mcp_openshell_needs_an_image).to_string();
+        assert_eq!(outcome(&["--openshell", "-x", "--", "python3"]), image);
+        assert_eq!(outcome(&["--openshell=", "--", "python3"]), image);
+        assert_eq!(outcome(&["--openshell", "--", "python3"]), image);
+        assert_eq!(
+            outcome(&["--openshell", "", "--", "python3"]),
+            format!("{:?}", Problem::Backend("image"))
+        );
+        // A joined word starting with `-` reaches the declaration, which refuses it as an image.
+        assert_eq!(
+            outcome(&["--openshell=-x", "--", "python3"]),
+            format!("{:?}", Problem::Backend("image"))
+        );
+
+        let with = |more: &[&'static str]| {
+            let mut flags = vec!["--http", "https://mcp.example.com/mcp"];
+            flags.extend_from_slice(more);
+            flags
+        };
+        let name = t!(mcp_bearer_env_needs_a_name).to_string();
+        assert_eq!(outcome(&with(&["--bearer-env="])), name);
+        assert_eq!(outcome(&with(&["--bearer-env=A", "--bearer-env="])), name);
+        assert_eq!(
+            outcome(&with(&["--bearer-env", "A", "--bearer-env", ""])),
+            format!("{:?}", Problem::Twice(String::new()))
+        );
+        assert_eq!(
+            outcome(&with(&["--bearer-env", ""])),
+            format!("{:?}", Problem::Name)
+        );
+    }
+
+    /// A joined flag takes its own word and no more, so the word after it is a stray word, named by
+    /// its place. A spaced flag takes the value after it, and so the same word is not stray; `-e`,
+    /// `--env`, `--tools` and `--exclude-tools` take every word up to the next flag. The regression
+    /// it rejects is a joined flag that also takes the next word, or a spaced one that leaves it.
+    #[test]
+    fn a_joined_flag_takes_one_word_and_a_spaced_one_takes_the_value_after_it() {
+        let stray = |position: i64| t!(mcp_add_stray_argument, position = position).to_string();
+        for (joined, spaced) in [
+            (
+                "--allowed-hosts=a.example",
+                ["--allowed-hosts", "a.example"],
+            ),
+            ("--openshell=img", ["--openshell", "img"]),
+            ("--choice=t:a", ["--choice", "t:a"]),
+            ("--bearer-env=A", ["--bearer-env", "A"]),
+            ("--header-env=H=V", ["--header-env", "H=V"]),
+            ("--tools=a", ["--tools", "a"]),
+            ("--exclude-tools=a", ["--exclude-tools", "a"]),
+            ("--env=A=1", ["--env", "A=1"]),
+            ("-eA=1", ["-e", "A=1"]),
+        ] {
+            assert_eq!(outcome(&[joined, "word"]), stray(3), "{joined}");
+            let runs = matches!(spaced[0], "--tools" | "--exclude-tools" | "--env" | "-e");
+            let flags = [spaced[0], spaced[1], "word"];
+            match runs {
+                true => assert_ne!(outcome(&flags), stray(4), "{flags:?}"),
+                false => assert_eq!(outcome(&flags), stray(4), "{flags:?}"),
+            }
+        }
+        for list in ["--tools", "--exclude-tools"] {
+            let both = declared(&words(&[list, "a", "word", "--", "/opt/srv"]), 1, &mut None)
+                .ok()
+                .expect("declared");
+            let kept = match list {
+                "--tools" => both.tools(),
+                _ => both.exclude_tools(),
+            };
+            assert_eq!(kept, &["a", "word"], "{list}");
+        }
     }
 
     /// SERVERS-21: `add` writes the property, the question says every call is asked about, and
