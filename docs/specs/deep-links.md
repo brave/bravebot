@@ -156,7 +156,11 @@ path holds a quote, a percent sign or a line break, and registers only after the
 place. A registration that fails does not fail the install. The
 `deepLinks` setting, when it is the boolean `false`, makes `--handle-uri` refuse every link, with the
 status for a configuration problem ([CLI-6](cli.md#CLI-6)), before a link is read; a quoted `"false"`
-leaves links on. An administrator who wants the registration gone removes the entry.
+leaves links on. A project or local settings file may state `false` and so refuse links for whoever
+runs `--handle-uri` there, and a `true` in one does not undo a `false` in the person's own settings
+or in the file `--settings` names: it is dropped and `doctor` names the file
+([BACKEND-24](backends.md#BACKEND-24)). An administrator who wants the registration gone removes the
+entry.
 
 macOS is not built: it needs an application bundle that declares the scheme. Until it is, a link
 does nothing there.
@@ -167,9 +171,13 @@ registration they did not choose.
 
 **Known cost.** The environment variable stops the installer registering and the setting stops
 links being honoured; neither reads the other, because a shell script cannot read the layers a
-settings file is merged from. A person who sets only the setting keeps an entry that refuses.
+settings file is merged from. A person who sets only the setting keeps an entry that refuses. A
+person who has not written `false` is not protected from a checkout that wrote it: links are
+refused in that checkout.
 
 `verified-by: bravebot_config::settings::only_a_boolean_turns_deep_links_off`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_deep_links_off_and_not_on`
+`verified-by: bravebot_config::settings::every_narrow_only_key_keeps_the_persons_value_against_a_wider_one`
 `verified-by: bravebot_cli::running::a_link_that_asks_for_more_or_is_switched_off_starts_nothing`
 `verified-by: bravebot_cli::installer_deep_link::the_entry_runs_the_binary_in_a_terminal_with_the_link`
 `verified-by: bravebot_cli::installer_deep_link::nothing_is_registered_where_it_is_switched_off_or_the_path_is_unsafe`

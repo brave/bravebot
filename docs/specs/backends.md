@@ -1334,6 +1334,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
 | `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
 | `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
+| `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1373,6 +1374,12 @@ stated, and its `true` is obeyed only where the person's own files do not state 
 on where nothing is stated, so a checkout's `true` over nothing or over the person's `true` changes
 nothing and is not reported. A checkout's `true` over the person's `false` is not obeyed and is
 reported. The startup check for a newer release is why the key is in the table.
+
+`deepLinks` is read the same way as `updateCheck`: only a boolean states it, `false` is the narrower
+value, and a checkout's `true` over the person's `false` is not obeyed and is reported. A link is
+refused where the merged value is `false`, so a checkout that wrote `false` refuses links for whoever
+runs `--handle-uri` there, and a checkout cannot open one the person refused
+([LINK-6](deep-links.md#LINK-6)).
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
 a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
@@ -1483,6 +1490,9 @@ with it.
 `verified-by: bravebot_config::settings::a_checkout_may_turn_the_update_check_off_and_not_on`
 `verified-by: bravebot_cli::doctor::a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_deep_links_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_deep_links_that_accepts_them_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_deep_links_turned_on_over_the_persons_off_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`

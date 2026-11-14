@@ -319,6 +319,10 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
     // A checkout may turn the startup check off for whoever runs it there, and may not turn it back
     // on over a person who turned it off.
     ("updateCheck", Narrows::Off, Entitled::OwnOrNamed),
+    // A checkout may refuse `bravebot://` links for whoever runs it there, and may not accept them
+    // over a person who refused them, since the link the operating system hands over is the one
+    // the person's own `false` was written against (LINK-6).
+    ("deepLinks", Narrows::Off, Entitled::OwnOrNamed),
 ];
 
 /// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
@@ -8163,6 +8167,15 @@ mod tests {
             wider: &["null", "0", r#""false""#],
             narrower: "false",
         },
+        // The same shape as `updateCheck`: `true` over `false` is held by
+        // `a_checkout_may_turn_deep_links_off_and_not_on`.
+        NarrowCase {
+            key: "deepLinks",
+            read: |settings| format!("{:?}", settings.deep_links()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
     ];
 
     /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
@@ -8327,6 +8340,111 @@ mod tests {
             .read();
         assert_eq!(settings.update_check(), Some(false));
         assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// LINK-6, BACKEND-24: a project or local layer may refuse links and may not accept them over a
+    /// person who refused them, and the file that tried is reported. A person who stated nothing,
+    /// or `true`, is not held to `false`, and the file `--settings` names is the person's own act
+    /// in either direction.
+    #[test]
+    fn a_checkout_may_turn_deep_links_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("deep-links-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"deepLinks": true}"#;
+            let off = r#"{"deepLinks": false}"#;
+
+            // Over the person's `false`, `true` is not obeyed and the file is named.
+            let settings = with("on-over-off", Some(off), on);
+            assert_eq!(settings.deep_links(), Some(false), "local={local}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, "deepLinks");
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert_eq!(settings.names().collect::<Vec<_>>(), ["deepLinks"]);
+            assert!(!settings.is_empty());
+
+            // A checkout's `false` refuses links over `true` and over a person who wrote nothing,
+            // and neither is reported.
+            for global in [Some(on), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.deep_links(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` or nothing refuses nothing and is not reported.
+            for global in [Some(on), None] {
+                let settings = with("on", global, on);
+                assert_ne!(
+                    settings.deep_links(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // A person's value that is not a boolean states nothing, so it does not hold a
+            // checkout to `false`, and a checkout's that is not one refuses nothing.
+            let settings = with("person-word", Some(r#"{"deepLinks": "false"}"#), on);
+            assert_eq!(settings.deep_links(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with("checkout-word", None, r#"{"deepLinks": "false"}"#);
+            assert_eq!(settings.deep_links(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("deep-links-local-over-project")
+            .project(r#"{"deepLinks": false}"#)
+            .local(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The file the command line named is the person's own act: it accepts links over the
+        // person's `false`, and the person's layers it sits above are replaced by it.
+        let settings = Layers::new("deep-links-named-on")
+            .global(r#"{"deepLinks": false}"#)
+            .named(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        // A checkout's `false` then narrows what the person's layers settled on, and a checkout's
+        // `true` over the named file's `false` is refused.
+        let settings = Layers::new("deep-links-named-on-checkout-off")
+            .global(r#"{"deepLinks": false}"#)
+            .project(r#"{"deepLinks": false}"#)
+            .named(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("deep-links-named-off-checkout-on")
+            .named(r#"{"deepLinks": false}"#)
+            .project(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
     }
 
     /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`

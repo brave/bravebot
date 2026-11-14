@@ -349,6 +349,32 @@ mod tests {
         assert_eq!(settings.update_check(), Some(false));
     }
 
+    /// A checkout whose `deepLinks` is `true` over the person's `false` is listed with the key and
+    /// the file, and one that switches links off is not.
+    #[test]
+    fn a_checkout_deep_links_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "deepLinks"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"deepLinks": false}"#),
+            Some(r#"{"deepLinks": true}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "deepLinks", "path": project })]
+        );
+        assert_eq!(settings.deep_links(), Some(false));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"deepLinks": true}"#),
+            Some(r#"{"deepLinks": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "links switched off were reported"
+        );
+        assert_eq!(settings.deep_links(), Some(false));
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,

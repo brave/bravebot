@@ -25288,6 +25288,44 @@ fn a_link_that_asks_for_more_or_is_switched_off_starts_nothing() {
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stderr.contains("deepLinks"), "{stderr}");
 
+    // A checkout's file may switch links off over a home that says nothing, and may not switch them
+    // on over the person's `false`: both are refused for the setting, before the link is read.
+    for (home_setting, checkout_setting, status, says) in [
+        (
+            r#""deepLinks": false,"#,
+            r#"{"deepLinks": true}"#,
+            3,
+            "deepLinks",
+        ),
+        ("", r#"{"deepLinks": false}"#, 3, "deepLinks"),
+        ("", r#"{"deepLinks": true}"#, 2, "terminal"),
+    ] {
+        let name = format!(
+            "cli-running-handle-uri-checkout-{status}-{}",
+            home_setting.len()
+        );
+        let scratch = Scratch::new(&name)
+            .with_settings(&settings_for(&gateway).replacen('{', &format!("{{{home_setting}"), 1))
+            .with_file("checkout/.bravebot/settings.json", checkout_setting);
+        let cwd = scratch.path.join("checkout");
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--handle-uri", "bravebot://open?prompt=hi"],
+        );
+        let (_, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{home_setting} {checkout_setting}: {stderr}"
+        );
+        assert!(
+            stderr.contains(says),
+            "{home_setting} {checkout_setting}: {stderr}"
+        );
+    }
+
     assert!(
         gateway.asked.try_recv().is_err(),
         "a refused link sent a turn"

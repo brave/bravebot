@@ -965,6 +965,11 @@ installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` or `ins
 out, or delete `bravebot-handler.desktop` from `~/.local/share/applications` on Linux, or the
 `HKCU\Software\Classes\bravebot` registry key on Windows.
 
+A project's `.bravebot/settings.json` or `settings.local.json` may state `false`, which refuses links
+for whoever runs `--handle-uri` in that directory. A `true` there is ignored where your own
+`~/.bravebot/settings.json`, or a file named with `--settings`, says `false`, and `bravebot doctor`
+names the file.
+
 ### `tui.mouse`
 
 ```json
