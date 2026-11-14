@@ -671,6 +671,10 @@ pub struct Egress {
     /// sent with this one and everything else with `agent`, so a local model endpoint on loopback
     /// is untouched.
     guarded: ureq::Agent,
+    /// The same lookup, made by this crate for the host of a fetch in flight that a proxy carries.
+    /// ureq resolves only the proxy's own host through an agent's resolver and leaves the target to
+    /// the proxy, so `guarded` cannot classify the target there.
+    target_guard: std::sync::Arc<address::GuardedResolver>,
     /// What the agent was configured with, so a request stating its own reply bound can have the
     /// phases that carry it worked out again the same way.
     timeouts: Timeouts,
@@ -791,6 +795,10 @@ impl Egress {
         system: impl Fn() -> R + Send + Sync + 'static,
     ) -> Self {
         let (agent, guarded) = build_agents(timeouts, transport.agent_config_builder(), &system);
+        let target_guard = std::sync::Arc::new(address::GuardedResolver::over(
+            address::Lookup::new(system()),
+            address::is_public,
+        ));
         let held = transport.clone();
         let rebuild: Rebuild = Box::new(move |pair| {
             build_agents(
@@ -811,6 +819,7 @@ impl Egress {
         Self {
             agent,
             guarded,
+            target_guard,
             timeouts,
             presenting,
             transport: transport.clone(),
@@ -892,16 +901,25 @@ impl Egress {
     ) -> Result<Sent, EgressError> {
         match cancel {
             Some(cancel) => self.send_watching(request, url, patient, fetching, started, cancel),
-            None => send(
-                &self.agent_for_hop(request, fetching, url),
-                self.timeouts,
-                request,
-                url,
-                patient,
-                started,
-                None,
-            ),
+            None => {
+                let agent = self.agent_for_hop(request, fetching, url);
+                if let Some(guard) = self.target_guard_for(fetching, url) {
+                    check_target(&guard, &agent, self.timeouts, url)?;
+                }
+                send(&agent, self.timeouts, request, url, patient, started, None)
+            }
         }
+    }
+
+    /// The lookup to classify `url`'s host with before the hop is sent, for a fetch in flight that
+    /// a proxy carries. A hop that goes direct is classified by the lookup its agent makes, and a
+    /// request that is not a fetch is not classified at all.
+    fn target_guard_for(
+        &self,
+        fetching: bool,
+        url: &str,
+    ) -> Option<std::sync::Arc<address::GuardedResolver>> {
+        (fetching && self.proxied(url)).then(|| self.target_guard.clone())
     }
 
     /// As built, with the lookup a fetch in flight makes replaced, so a test can state what a name
@@ -916,12 +934,22 @@ impl Egress {
         self
     }
 
+    /// As built, with the lookup that classifies a proxied fetch's host replaced, so a test can
+    /// state what a name resolves to behind a proxy without a name server.
+    #[cfg(test)]
+    fn target_guarded_by(mut self, resolver: address::GuardedResolver) -> Self {
+        self.target_guard = std::sync::Arc::new(resolver);
+        self
+    }
+
     /// The agent for one request: the guarded one for a fetch in flight that no proxy stands in
     /// front of.
     ///
     /// A proxy resolves the target itself, and ureq resolves the proxy's own host through the
     /// resolver instead, so guarding that lookup would refuse a proxy on this machine and check
-    /// nothing about the target. That cost is recorded in `docs/specs/tools/fetch-url.md`.
+    /// nothing about the target. A fetch behind a proxy is classified by [`check_target`] before
+    /// the hop is sent, and what that leaves unchecked is recorded in
+    /// `docs/specs/tools/fetch-url.md`.
     fn agent_for(&self, fetching: bool, url: &str) -> &ureq::Agent {
         if fetching && !self.proxied(url) {
             &self.guarded
@@ -1173,19 +1201,29 @@ impl Egress {
             request.clone(),
             url.to_string(),
         );
+        let guard = self.target_guard_for(fetching, url);
         let timeouts = self.timeouts;
         let stop = cancel.clone();
         std::thread::spawn(move || {
+            // The lookup is made here with the request, since it waits as long as any other part
+            // of one and a stop must not have to wait for it.
+            let outcome = match &guard {
+                Some(guard) => check_target(guard, &agent, timeouts, &target),
+                None => Ok(()),
+            }
+            .and_then(|()| {
+                send(
+                    &agent,
+                    timeouts,
+                    &hop,
+                    &target,
+                    patient,
+                    started,
+                    Some(&stop),
+                )
+            });
             // A send that fails means the caller stopped, so there is nobody left to answer.
-            let _ = answered.send(send(
-                &agent,
-                timeouts,
-                &hop,
-                &target,
-                patient,
-                started,
-                Some(&stop),
-            ));
+            let _ = answered.send(outcome);
         });
 
         loop {
@@ -1208,6 +1246,37 @@ impl Egress {
                 }
             }
         }
+    }
+}
+
+/// Refuse a hop to a host that resolves, from this machine, to an address that is not public.
+///
+/// For a hop a proxy carries, where the agent's own lookup is of the proxy. The proxy looks the
+/// host up again, so this is a check of the name as this machine sees it and does not pin what the
+/// proxy connects to. A lookup that fails, or that does not finish in time, is left to the proxy:
+/// a network that reaches the world only through one need not resolve the world's names, and a
+/// name it cannot resolve has no answer to classify.
+fn check_target(
+    guard: &address::GuardedResolver,
+    agent: &ureq::Agent,
+    timeouts: Timeouts,
+    url: &str,
+) -> Result<(), EgressError> {
+    use ureq::unversioned::resolver::Resolver;
+    use ureq::unversioned::transport::{NextTimeout, time::Duration as Bound};
+
+    let Ok(uri) = url.parse::<ureq::http::Uri>() else {
+        return Ok(());
+    };
+    let bound = NextTimeout {
+        after: Bound::Exact(timeouts.resolve),
+        reason: ureq::Timeout::Resolve,
+    };
+    match guard.resolve(&uri, agent.config(), bound) {
+        Err(error) if address::is_refusal(&error) => Err(EgressError::AddressRefused {
+            url: url.to_string(),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -2889,6 +2958,51 @@ mod tests {
         (port, connections)
     }
 
+    /// A proxy that counts the connections made to it and, for each, accepts the `CONNECT` the
+    /// client opens a tunnel with and then answers the request sent through it with the next of
+    /// `responses`.
+    fn serve_proxy(
+        responses: Vec<String>,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = connections.clone();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                // A client opens a tunnel with CONNECT, and then sends the request on it, or sends
+                // the request to the proxy itself. Either way the request gets the response.
+                loop {
+                    let mut line = String::new();
+                    let mut first = None;
+                    while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                        if line == "\r\n" {
+                            break;
+                        }
+                        first.get_or_insert_with(|| line.clone());
+                        line.clear();
+                    }
+                    let Some(first) = first else {
+                        break;
+                    };
+                    if first.starts_with("CONNECT") {
+                        let _ = stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+                        continue;
+                    }
+                    let _ = stream.write_all(response.as_bytes());
+                    break;
+                }
+            }
+        });
+        (port, connections)
+    }
+
     fn page(body: &str) -> String {
         format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -3126,6 +3240,228 @@ mod tests {
             direct.agent_for(false, "http://docs.example.com/"),
             &direct.agent
         ));
+    }
+
+    /// An egress behind the proxy listening on `proxy_port`, whose fetches are classified through
+    /// `answers` by the lookup this crate makes for a proxied host.
+    fn egress_proxied_resolving(
+        proxy_port: u16,
+        answers: Vec<Vec<&str>>,
+        admits: fn(std::net::IpAddr) -> bool,
+    ) -> (Egress, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let resolver = Answers {
+            lookups: lookups.clone(),
+            answers: answers
+                .into_iter()
+                .map(|answer| answer.into_iter().map(ip).collect())
+                .collect(),
+        };
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(
+                TrustRoots::Bundled,
+                Some(&format!("http://127.0.0.1:{proxy_port}")),
+                None,
+            ),
+        )
+        .target_guarded_by(address::GuardedResolver::over(
+            address::Lookup::new(resolver),
+            admits,
+        ));
+        (egress, lookups)
+    }
+
+    /// As [`fetched`], on the road a caller that can stop the request takes.
+    fn fetched_stoppably(egress: &Egress, request: Request) -> Result<(), EgressError> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "fetch a page");
+        let mut sink = bravebot_core::event::NullSink;
+        let Ok(mut policy) = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        ) else {
+            panic!("policy begins");
+        };
+        policy.endorse_fetch(&request.url);
+        assert!(policy.before_fetch(&request.url).is_ok(), "approved");
+        let outcome = egress
+            .fetch_streaming(
+                &mut policy,
+                request,
+                Label::untrusted_public(),
+                Some(&Cancel::new()),
+            )
+            .map(|_| ());
+        policy.fetch_finished();
+        outcome
+    }
+
+    /// The proxy resolves the target itself, so the lookup that guards a direct fetch never sees
+    /// it. A name this machine resolves to a non-public address is refused all the same, and
+    /// nothing is sent to the proxy for it.
+    #[test]
+    fn a_proxied_name_resolving_to_a_non_public_address_is_refused_before_the_proxy_is_asked() {
+        for answer in ["169.254.169.254", "127.0.0.1", "10.1.2.3", "fd00:ec2::254"] {
+            let (proxy, connections) = serve_proxy(vec![page("fetched")]);
+            let (egress, lookups) =
+                egress_proxied_resolving(proxy, vec![vec![answer]], address::is_public);
+            let asked = "http://docs.example.test/page";
+
+            let outcome = fetched(&egress, Request::get(asked));
+            assert!(
+                matches!(&outcome, Err(EgressError::AddressRefused { url }) if url == asked),
+                "{answer}: {outcome:?}"
+            );
+            let outcome = fetched_stoppably(&egress, Request::get(asked));
+            assert!(
+                matches!(&outcome, Err(EgressError::AddressRefused { url }) if url == asked),
+                "{answer}, stoppable: {outcome:?}"
+            );
+
+            assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 2);
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(
+                connections.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{answer}: the proxy was sent a request"
+            );
+        }
+    }
+
+    /// The check refuses what is not public and nothing else: a name that resolves to a public
+    /// address is sent to the proxy, which is the route it was configured for.
+    #[test]
+    fn a_proxied_name_resolving_to_a_public_address_is_sent_to_the_proxy() {
+        let (proxy, connections) = serve_proxy(vec![page("fetched"), page("fetched")]);
+        let (egress, lookups) =
+            egress_proxied_resolving(proxy, vec![vec!["93.184.216.34"]], address::is_public);
+
+        let response = fetched(&egress, Request::get("http://docs.example.test/page"))
+            .expect("a public address is sent through the proxy");
+        assert_eq!(response.status, 200);
+        fetched_stoppably(&egress, Request::get("http://docs.example.test/page"))
+            .expect("a public address is sent through the proxy by a stoppable caller too");
+
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// An answer holding one non-public address is a name pointing somewhere it should not, as it
+    /// is without a proxy.
+    #[test]
+    fn a_proxied_name_with_one_non_public_address_among_public_ones_is_refused() {
+        let (proxy, connections) = serve_proxy(vec![page("fetched")]);
+        let (egress, _) = egress_proxied_resolving(
+            proxy,
+            vec![vec!["93.184.216.34", "169.254.169.254"]],
+            address::is_public,
+        );
+        let outcome = fetched(&egress, Request::get("http://mixed.example.test/"));
+        assert!(matches!(outcome, Err(EgressError::AddressRefused { .. })));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A hop is classified when it is made, so a name that is public on the first hop and not on
+    /// the second is refused on the second, and the failure names the URL that was asked for.
+    #[test]
+    fn a_proxied_redirect_hop_resolving_to_a_non_public_address_is_refused() {
+        let (proxy, connections) = serve_proxy(vec![redirect("/second"), page("not reached")]);
+        let (egress, lookups) = egress_proxied_resolving(
+            proxy,
+            vec![vec!["93.184.216.34"], vec!["169.254.169.254"]],
+            address::is_public,
+        );
+        let asked = "http://hop.example.test/first";
+
+        match fetched(&egress, Request::get(asked)) {
+            Err(EgressError::AddressRefused { url }) => assert_eq!(url, asked),
+            other => panic!("expected the second hop refused: {other:?}"),
+        }
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 2);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the first hop reached the proxy"
+        );
+    }
+
+    /// The check belongs to a fetch in flight. Everything else sent through a proxy, a model
+    /// endpoint for one, is not classified and makes no lookup of its own.
+    #[test]
+    fn a_proxied_request_that_is_not_a_fetch_is_not_classified() {
+        let (proxy, connections) = serve_proxy(vec![page("model")]);
+        let (egress, lookups) =
+            egress_proxied_resolving(proxy, vec![vec!["10.1.2.3"]], address::is_public);
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "ask the model");
+        let mut sink = bravebot_core::event::NullSink;
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy begins");
+        let response = egress
+            .fetch(
+                &mut policy,
+                Request::get("http://model.example.test/v1"),
+                Label::untrusted_public(),
+            )
+            .expect("no fetch is in flight");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A host the proxy is not used for goes direct, so the lookup that classifies it is the
+    /// agent's own and is made once.
+    #[test]
+    fn a_host_excluded_from_the_proxy_is_classified_once() {
+        let (port, connections) = serve_counting(vec![page("direct")]);
+        let (proxy, proxied) = serve_proxy(vec![page("proxied")]);
+        let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let answers = || Answers {
+            lookups: lookups.clone(),
+            answers: vec![vec![ip("127.0.0.1")]],
+        };
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(
+                TrustRoots::Bundled,
+                Some(&format!("http://127.0.0.1:{proxy}")),
+                Some("direct.example.test"),
+            ),
+        )
+        .guarded_by(address::GuardedResolver::over(
+            address::Lookup::new(answers()),
+            loopback_only,
+        ))
+        .target_guarded_by(address::GuardedResolver::over(
+            address::Lookup::new(answers()),
+            loopback_only,
+        ));
+
+        let response = fetched(
+            &egress,
+            Request::get(format!("http://direct.example.test:{port}/")),
+        )
+        .expect("a host the proxy is not used for is fetched directly");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(proxied.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
