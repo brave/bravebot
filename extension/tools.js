@@ -1519,6 +1519,17 @@ function elementNamed(params, numbered = false) {
   };
 }
 
+// The mouse button and the number of clicks a click call asks for, the left
+// button once where it says nothing. A right click is made once.
+function clickButtonAndCount(params) {
+  const button = oneOf(params, "button", BUTTONS, "left");
+  const count = wholeNumber(params, "count", 1, 2, 1);
+  if (button === "right" && count !== 1) {
+    throw new ToolError("a right click is made once", INVALID_PARAMS);
+  }
+  return { button, count };
+}
+
 // Where a listed element goes, as a list shows it: the origin of a web address,
 // the scheme alone for another kind (`javascript:`, `mailto:`), and nothing for an
 // element that goes nowhere.
@@ -1722,17 +1733,29 @@ export const BUSY_MESSAGE =
 
 let asking = false;
 
+// Runs `work` as the one action that may wait for the person's answer. A call
+// that finds another one waiting is refused with BUSY_MESSAGE, and the place is
+// given up when `work` returns or fails. The check and the claim have no await
+// between them, so two calls in the same tick cannot both pass.
+async function exclusively(work) {
+  if (asking) {
+    throw new Refusal(BUSY_MESSAGE);
+  }
+  asking = true;
+  try {
+    return await work();
+  } finally {
+    asking = false;
+  }
+}
+
 // The whole of an action on an element: find it and outline it, bring its tab
 // forward and put it in front of the person to wait for their answer, take the
 // outline away, then act. The outline goes whether the person allowed it or
 // not, and whether the window answered or failed. Only one action is on the way
 // at a time.
 async function actOnElement(chrome, params, spec) {
-  if (asking) {
-    throw new Refusal(BUSY_MESSAGE);
-  }
-  asking = true;
-  try {
+  return exclusively(async () => {
     const resolution = await resolveElement(chrome, params, { ...spec, outline: true });
     let approved;
     try {
@@ -1748,9 +1771,7 @@ async function actOnElement(chrome, params, spec) {
       await clearOutline(chrome, resolution);
     }
     return await performAction(chrome, resolution, approved);
-  } finally {
-    asking = false;
-  }
+  });
 }
 
 // The whole of a call to a tool of input-trusted: the page is named by a web
@@ -1765,15 +1786,7 @@ async function actTrusted(chrome, method, params, args) {
     throw new ToolError("url must be an http or https address", INVALID_PARAMS);
   }
   refuseBlocked(await blockedSites(chrome), url);
-  if (asking) {
-    throw new Refusal(BUSY_MESSAGE);
-  }
-  asking = true;
-  try {
-    return await forward(chrome, method, { url, ...args });
-  } finally {
-    asking = false;
-  }
+  return exclusively(() => forward(chrome, method, { url, ...args }));
 }
 
 // Configures the world of a call and runs the probe of scripts.js in it, before
@@ -1853,54 +1866,51 @@ async function runScript(chrome, params) {
   if (!(await userScriptsAvailable(chrome))) {
     throw new Refusal(UNAVAILABLE);
   }
-  if (asking) {
-    throw new Refusal(BUSY_MESSAGE);
-  }
-  asking = true;
-  const worldId = newWorldId();
-  try {
-    const documentId = await probeWorld(chrome, tab.id, url, worldId);
-    const resolution = Object.freeze({
-      tabId: tab.id,
-      url,
-      code,
-      description: describeScript({ origin: originOf(url), url, code }),
-    });
-    if (!spend(await confirm(resolution), resolution)) {
-      throw new Refusal("the script was not allowed in the browser, so nothing was run");
-    }
-    await stillTheOneTab(chrome, tab.id, url);
-    let injected;
+  return exclusively(async () => {
+    const worldId = newWorldId();
     try {
-      injected = await withinPageWait(() =>
-        chrome.userScripts.execute({
-          target: { tabId: tab.id, documentIds: [documentId] },
-          world: "USER_SCRIPT",
-          worldId,
-          js: [{ code }],
-        }),
-      );
-    } catch (error) {
-      throw new ToolError(`the page at ${url} cannot be scripted: ${error.message}`);
+      const documentId = await probeWorld(chrome, tab.id, url, worldId);
+      const resolution = Object.freeze({
+        tabId: tab.id,
+        url,
+        code,
+        description: describeScript({ origin: originOf(url), url, code }),
+      });
+      if (!spend(await confirm(resolution), resolution)) {
+        throw new Refusal("the script was not allowed in the browser, so nothing was run");
+      }
+      await stillTheOneTab(chrome, tab.id, url);
+      let injected;
+      try {
+        injected = await withinPageWait(() =>
+          chrome.userScripts.execute({
+            target: { tabId: tab.id, documentIds: [documentId] },
+            world: "USER_SCRIPT",
+            worldId,
+            js: [{ code }],
+          }),
+        );
+      } catch (error) {
+        throw new ToolError(`the page at ${url} cannot be scripted: ${error.message}`);
+      }
+      const answered = injected?.[0];
+      if (!answered) {
+        throw new ToolError(`the page at ${url} returned nothing`);
+      }
+      const after = await chrome.tabs.get(tab.id).catch(() => undefined);
+      if (after?.url !== url) {
+        throw new ToolError(`the tab left ${url} while the script ran, so its answer is not returned`);
+      }
+      const { text: result, cut } = resultText(answered.result);
+      return { status: "ran", origin: originOf(url), result, ...(cut ? { cut: true } : {}) };
+    } finally {
+      try {
+        await chrome.userScripts.resetWorldConfiguration(worldId);
+      } catch {
+        // The entry for a world that was used once is left to the browser.
+      }
     }
-    const answered = injected?.[0];
-    if (!answered) {
-      throw new ToolError(`the page at ${url} returned nothing`);
-    }
-    const after = await chrome.tabs.get(tab.id).catch(() => undefined);
-    if (after?.url !== url) {
-      throw new ToolError(`the tab left ${url} while the script ran, so its answer is not returned`);
-    }
-    const { text: result, cut } = resultText(answered.result);
-    return { status: "ran", origin: originOf(url), result, ...(cut ? { cut: true } : {}) };
-  } finally {
-    try {
-      await chrome.userScripts.resetWorldConfiguration(worldId);
-    } catch {
-      // The entry for a world that was used once is left to the browser.
-    }
-    asking = false;
-  }
+  });
 }
 
 // What a call is told about the file it carries (files.js), by the word of the
@@ -3569,11 +3579,7 @@ export const TOOLS = {
   // the context menu event.
   async click_element(chrome, params) {
     const target = elementNamed(params, true);
-    const button = oneOf(params, "button", BUTTONS, "left");
-    const count = wholeNumber(params, "count", 1, 2, 1);
-    if (button === "right" && count !== 1) {
-      throw new ToolError("a right click is made once", INVALID_PARAMS);
-    }
+    const { button, count } = clickButtonAndCount(params);
     const action =
       button === "right" ? "right_click" : count === 2 ? "double_click" : "click";
     return actOnElement(chrome, params, { action, target });
@@ -3673,11 +3679,7 @@ export const TOOLS = {
   // the call says otherwise.
   async click_element_trusted(chrome, params) {
     const target = elementNamed(params);
-    const button = oneOf(params, "button", BUTTONS, "left");
-    const count = wholeNumber(params, "count", 1, 2, 1);
-    if (button === "right" && count !== 1) {
-      throw new ToolError("a right click is made once", INVALID_PARAMS);
-    }
+    const { button, count } = clickButtonAndCount(params);
     return actTrusted(chrome, "click_element_trusted", params, {
       ...target,
       button,
