@@ -180,6 +180,8 @@ check:
 	@python3 contrib/check-toolchain.py
 	@python3 contrib/check-fuzz-lints.py --selftest
 	@python3 contrib/check-fuzz-lints.py
+	@python3 contrib/check-verus-contracts.py --selftest
+	@python3 contrib/check-verus-contracts.py
 
 # Whether every call of programs::start and programs::start_against states CodeSelectors, and every
 # variable in a CODE_SELECTORS list (crates/sandbox/src/programs.rs, crates/agent/src/gcloud.rs,
@@ -494,6 +496,47 @@ check-fuzz: fuzz-prerequisites check-fuzz-lints
 			-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target) $(call fuzz_dict,$$target); \
 	done
 
+# Verus (docs/development/verification.md). contrib/check-verus.py runs Verus on each crate that
+# carries contracts, which has to verify, and on a copy of it under each mutation in
+# verify/mutations.txt, which has to fail, so a contract a broken body also meets fails here.
+# verify/history.rs holds the fixes from the history that are not yet contracts in their crates,
+# each refused under the `before_<commit>` cfg that restores the code before the fix. Verus brings
+# its own toolchain, so this is run by name and is not part of check.
+VERUS_VERSION = 0.2026.11.02.8bf68ee
+VERUS ?= verus
+VERUS_HISTORY = before_3facf14a before_e0cd1903 before_20ce6086
+
+.PHONY: check-verus
+check-verus: check-verus-contracts
+	@python3 contrib/check-verus.py --selftest
+	@VERUS="$(VERUS)" python3 contrib/check-verus.py
+	$(VERUS) verify/history.rs
+	@set -e; for cfg in $(VERUS_HISTORY); do \
+		out=$$($(VERUS) verify/history.rs --cfg $$cfg 2>&1) && { \
+			echo "verus: verify/history.rs verified with --cfg $$cfg, which it must refuse" >&2; \
+			exit 1; \
+		}; \
+		echo "$$out" | grep -Eq '^verification results:: [0-9]+ verified, [1-9][0-9]* errors' || { \
+			echo "$$out" >&2; \
+			echo "verus: verify/history.rs --cfg $$cfg failed before verification, so nothing was refused" >&2; \
+			exit 1; \
+		}; \
+		echo "verus: verify/history.rs --cfg $$cfg refused, as it must be"; \
+	done
+
+# Whether the Verus contracts in crates/ are the ones verify/contracts.txt records. Needs no
+# toolchain, so `check` runs it, and so does `check-scripts`, which the Security job in CI runs: a
+# contract that is removed or weakened fails on every pull request, not only where Verus is
+# installed.
+.PHONY: check-verus-contracts check-verus-contracts-ledger check-verus-contracts-selftest
+check-verus-contracts: check-verus-contracts-selftest check-verus-contracts-ledger
+
+check-verus-contracts-ledger:
+	python3 contrib/check-verus-contracts.py
+
+check-verus-contracts-selftest:
+	python3 contrib/check-verus-contracts.py --selftest
+
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
 # Catches a feature that only compiles on a newer toolchain than the release build has.
@@ -634,11 +677,13 @@ check-affected-containers:
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
-	check-review-ready-selftest check-clean-branches-selftest
+	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
+	check-verus-contracts-ledger
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
-	check-review-ready-selftest check-clean-branches-selftest
+	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
+	check-verus-contracts-ledger
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py

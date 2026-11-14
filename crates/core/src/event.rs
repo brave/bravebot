@@ -12,9 +12,13 @@ use crate::label::Label;
 use crate::slot::SlotId;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// Which principle a refusal upholds. Useful for explaining a block to a user
 /// without re-deriving why it happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Principle {
     /// Untrusted data attempted to influence where an action goes.
     IntegrityGate,

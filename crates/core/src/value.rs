@@ -20,6 +20,9 @@ use crate::label::Label;
 use crate::policy::Declassification;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// A value carrying a provenance label.
 ///
 /// Intentionally missing: `Deref`, `PartialEq`, `Display`, and any infallible
@@ -86,9 +89,27 @@ use std::fmt;
 /// let _: String = a.into();
 /// ```
 #[derive(Clone)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Labelled<T> {
     value: T,
     label: Label,
+}
+
+// What a contract may say about a labelled value: its label and its value. Spec functions exist
+// only for Verus, so a build has neither, and neither is a function of `Labelled`'s own.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub closed spec fn spec_label_of<T>(v: &Labelled<T>) -> Label {
+    v.label
+}
+
+pub closed spec fn spec_value_of<T>(v: &Labelled<T>) -> T {
+    v.value
+}
 }
 
 impl<T> Labelled<T> {
@@ -101,11 +122,19 @@ impl<T> Labelled<T> {
         Self::new(value, Label::trusted_public())
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_label_of(&self),
+    ))]
     pub fn label(&self) -> Label {
         self.label
     }
 
     /// Read the inner value. Requires a policy-minted witness.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_value_of(&self),
+    ))]
     pub fn declassify(self, _proof: &Declassification) -> T {
         self.value
     }
@@ -114,8 +143,14 @@ impl<T> Labelled<T> {
     /// already `(T,pub)`, so there is nothing to declassify. Returns the original
     /// value back on mismatch so a caller cannot smuggle content through by
     /// discarding the error.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_label_of(&self) == crate::spec::trusted_public(),
+            r is Ok ==> r->Ok_0 == spec_value_of(&self),
+            r is Err ==> r->Err_0 == self,
+    ))]
     pub fn into_trusted(self) -> Result<T, Self> {
-        if self.label == Label::trusted_public() {
+        if self.label.is_trusted() && self.label.is_public() {
             Ok(self.value)
         } else {
             Err(self)
@@ -124,6 +159,12 @@ impl<T> Labelled<T> {
 
     /// Re-label a value, which may only degrade it. Returns `None` if the requested
     /// label is not reachable by degradation from the current one.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Some <==> crate::spec::degrades(spec_label_of(&self), to),
+            r is Some ==> spec_value_of(&r->Some_0) == spec_value_of(&self),
+            r is Some ==> spec_label_of(&r->Some_0) == to,
+    ))]
     pub fn relabel(self, to: Label) -> Option<Self> {
         if self.label.degrades_to(to) {
             Some(Self {

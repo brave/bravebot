@@ -29,6 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// Proof that a read of labelled content has been authorised and recorded.
 ///
 /// Lives here, and not beside [`Labelled`], because of who is allowed to make one.
@@ -37,11 +40,13 @@ use std::marker::PhantomData;
 /// crate downstream of it. [`Labelled::declassify`] therefore cannot be reached without
 /// passing a gate that recorded why.
 #[derive(Debug)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct Declassification {
     reason: &'static str,
 }
 
 impl Declassification {
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     pub(in crate::policy) fn authorise(reason: &'static str) -> Self {
         Self { reason }
     }
@@ -231,6 +236,24 @@ impl fmt::Display for Denial {
 }
 
 impl std::error::Error for Denial {}
+
+// The sink's trait, for the gates' signatures to name. Its methods are left to the code.
+#[cfg(verus_keep_ghost)]
+verus! {
+#[verifier::external_trait_specification]
+pub trait ExSink {
+    type ExternalTraitSpecificationFor: Sink;
+}
+}
+
+// A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
+// says only whether a gate refused. Opaque to Verus, and unchanged in a build.
+#[cfg(verus_keep_ghost)]
+verus! {
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExDenial(Denial);
+}
 
 /// Why a session refused a `run` call's request for reach past its profile (SANDBOX-26,
 /// SANDBOX-29).
@@ -544,6 +567,12 @@ pub enum Containment {
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is a separate answer about the run or its host, and each is read on its own"
+)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::external_body,
+    verifier::reject_recursive_types(S)
 )]
 pub struct Policy<'sink, S: Sink> {
     routing: Routing,
@@ -870,6 +899,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &self.routing
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
         self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
@@ -881,6 +911,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Denial { principle, message }
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
@@ -3364,6 +3395,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// A refusal is not a condition to work around: it means a caller tried to do the one thing
     /// the design forbids, and the fix is to use a reference instead.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> label.integrity == Integrity::Trusted,
+    ))]
     fn refuse_untrusted(&mut self, gate: &'static str, what: &str, label: Label) -> Gated<()> {
         if label.is_trusted() {
             return Ok(());
@@ -3389,6 +3424,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// being bypassed by a caller that would rather have the bytes. Confidentiality is
     /// deliberately not checked: staying inside the process releases nothing, and workspace
     /// content is private as a matter of course.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::value::spec_label_of(value).integrity == Integrity::Trusted,
+    ))]
     pub fn read_trusted_content<T: Clone>(&mut self, tool: &str, value: &Labelled<T>) -> Gated<T> {
         self.refuse_untrusted("trusted-read", tool, value.label())?;
         let label = value.label();

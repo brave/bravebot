@@ -69,6 +69,11 @@ Before changing behaviour or adding, removing, or weakening test assertions, use
 [testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
 test approach, and use its evidence requirements when reporting the result.
 
+Before changing a gate, the label lattice, `Labelled`, or code that slices or does arithmetic on a
+length from outside, read [docs/development/verification.md](docs/development/verification.md).
+Such a change comes with a Verus contract and a mutation that shows the contract can fail, and runs
+`make check-verus` before it is pushed.
+
 Before adding or changing anything in `ui/` that a person sees or interacts with (components,
 layout, styles, icons, copy, dialogs, menus, cards), use
 [design](agents/skills/design/SKILL.md). It describes the current look of the application, and new
