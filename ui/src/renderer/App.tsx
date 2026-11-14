@@ -642,15 +642,25 @@ export function App(): React.JSX.Element {
   /**
    * Close a session named by a right-click.
    *
-   * Only the open one can actually be closed — the others have no handle, because this build
-   * opens one at a time. Closing a row that is not the open one is therefore nothing rather
-   * than an error, and the menu item is the same item either way.
+   * A row's id is the record's id, or the draft's id while the chat has no record yet. Every
+   * session this window opened for that id is closed: the one on screen the way File > Close Chat
+   * closes it, and each one opened earlier and still running behind it by telling the agent, which
+   * cancels its turn and refuses what it waits on, and then dropping it from the open sessions.
+   * A row with no session open has nothing to close.
    */
   const closeNamed = useCallback(
-    (id: string) => {
-      if (live?.summary.id === id) void closeSession()
+    async (id: string) => {
+      const held = [...openedLives.current.values()].filter((item) => (item.summary.id ?? item.draftId) === id)
+      for (const item of held) {
+        if (item.handle === handleRef.current) await closeSession()
+        else {
+          await call('session.close', { session: item.handle }).catch(() => undefined)
+          openedLives.current.delete(item.handle)
+          refreshLives((n) => n + 1)
+        }
+      }
     },
-    [live, closeSession],
+    [closeSession],
   )
 
   const copyProjectPath = useCallback(
