@@ -2933,6 +2933,8 @@ it and was writing the text when the ceiling fell.
 `verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
 `verified-by: bravebot_aichat::client::a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools`
 `verified-by: bravebot_aichat::client::a_reply_the_ceiling_stopped_before_it_wrote_anything_names_the_ceiling`
+`verified-by: bravebot_aichat::lib::a_reply_the_ceiling_stopped_is_described_in_one_sentence_per_state`
+`verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_is_described_as_the_aichat_client_describes_it`
 `verified-by: bravebot_agent::failure_categories::a_reply_the_ceiling_stopped_before_it_wrote_anything_is_diagnosed_at_its_ceiling`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`

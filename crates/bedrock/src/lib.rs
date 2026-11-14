@@ -122,22 +122,7 @@ impl fmt::Display for BedrockError {
             Self::Reported { kind } => {
                 write!(f, "AWS stopped the reply part way through and reported {kind}")
             }
-            Self::TooLong(cut_off) => {
-                let ceiling = cut_off.ceiling;
-                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
-                match (&cut_off.call, cut_off.thought) {
-                    (Some(OpenCall { tool: Some(tool), .. }), _) => write!(
-                        f,
-                        "while writing a call to {tool}, so the call was not made"
-                    )?,
-                    (Some(OpenCall { tool: None, .. }), _) => {
-                        f.write_str("while writing a tool call, so the call was not made")?
-                    }
-                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
-                    (None, false) => f.write_str("before writing anything")?,
-                }
-                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
-            }
+            Self::TooLong(cut_off) => write!(f, "{cut_off}"),
             Self::NoModel => f.write_str(
                 "no Bedrock model is configured. Set ANTHROPIC_DEFAULT_OPUS_MODEL (or the sonnet or \
                  haiku equivalent) in ~/.bravebot/settings.json",
@@ -1687,6 +1672,35 @@ mod tests {
             said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
             "the setting that raises it is not named: {said}"
         );
+    }
+
+    /// The sentence for a reply the ceiling stopped is the one the aichat client uses, in each of
+    /// its four forms. Two copies of it would drift, and a person reads the same failure from
+    /// whichever backend they use.
+    #[test]
+    fn a_reply_the_ceiling_stopped_is_described_as_the_aichat_client_describes_it() {
+        let call = |tool: Option<&str>| {
+            Some(OpenCall {
+                tool: tool.map(str::to_string),
+                arguments: 10,
+            })
+        };
+        for (call, thought) in [
+            (call(Some("write_file")), true),
+            (call(None), false),
+            (None, true),
+            (None, false),
+        ] {
+            let cut_off = CutOff {
+                ceiling: 32_000,
+                call,
+                thought,
+            };
+            assert_eq!(
+                BedrockError::TooLong(cut_off.clone()).to_string(),
+                bravebot_aichat::ChatError::TooLong(cut_off).to_string()
+            );
+        }
     }
 
     /// Prompt caching is not something every model this backend can reach offers, and an

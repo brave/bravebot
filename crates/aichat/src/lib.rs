@@ -119,27 +119,7 @@ impl fmt::Display for ChatError {
             Self::Reported { failure } => {
                 write!(f, "the service stopped the reply and reported {failure}")
             }
-            Self::TooLong(cut_off) => {
-                let ceiling = cut_off.ceiling;
-                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
-                match (&cut_off.call, cut_off.thought) {
-                    (
-                        Some(OpenCall {
-                            tool: Some(tool), ..
-                        }),
-                        _,
-                    ) => write!(
-                        f,
-                        "while writing a call to {tool}, so the call was not made"
-                    )?,
-                    (Some(OpenCall { tool: None, .. }), _) => {
-                        f.write_str("while writing a tool call, so the call was not made")?
-                    }
-                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
-                    (None, false) => f.write_str("before writing anything")?,
-                }
-                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
-            }
+            Self::TooLong(cut_off) => write!(f, "{cut_off}"),
             Self::Account(failure @ AccountFailure::Xai(_)) => write!(f, "xAI account: {failure}"),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
         }
@@ -251,6 +231,30 @@ pub struct CutOff {
     pub call: Option<OpenCall>,
     /// Whether any of its reasoning arrived.
     pub thought: bool,
+}
+
+impl fmt::Display for CutOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ceiling = self.ceiling;
+        write!(f, "the model reached its output limit of {ceiling} tokens ")?;
+        match (&self.call, self.thought) {
+            (
+                Some(OpenCall {
+                    tool: Some(tool), ..
+                }),
+                _,
+            ) => write!(
+                f,
+                "while writing a call to {tool}, so the call was not made"
+            )?,
+            (Some(OpenCall { tool: None, .. }), _) => {
+                f.write_str("while writing a tool call, so the call was not made")?
+            }
+            (None, true) => f.write_str("while thinking, and wrote nothing")?,
+            (None, false) => f.write_str("before writing anything")?,
+        }
+        f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
+    }
 }
 
 /// A tool call a reply was still writing when the ceiling stopped it.
@@ -1761,6 +1765,47 @@ mod tests {
     use super::*;
     use bravebot_config::DEFAULT_MODEL;
     use protocol::Message;
+
+    /// The sentence for a reply the ceiling stopped, byte for byte, in each of its four forms.
+    /// Written once, as `Display for CutOff`, and used by every error that carries one.
+    #[test]
+    fn a_reply_the_ceiling_stopped_is_described_in_one_sentence_per_state() {
+        let cut = |call: Option<OpenCall>, thought: bool| CutOff {
+            ceiling: 32_000,
+            call,
+            thought,
+        };
+        let call = |tool: Option<&str>| {
+            Some(OpenCall {
+                tool: tool.map(str::to_string),
+                arguments: 10,
+            })
+        };
+        let tail = ". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn";
+        let cases = [
+            (
+                cut(call(Some("write_file")), true),
+                "the model reached its output limit of 32000 tokens while writing a call to write_file, so the call was not made",
+            ),
+            (
+                cut(call(None), false),
+                "the model reached its output limit of 32000 tokens while writing a tool call, so the call was not made",
+            ),
+            (
+                cut(None, true),
+                "the model reached its output limit of 32000 tokens while thinking, and wrote nothing",
+            ),
+            (
+                cut(None, false),
+                "the model reached its output limit of 32000 tokens before writing anything",
+            ),
+        ];
+        for (cut_off, head) in cases {
+            let want = format!("{head}{tail}");
+            assert_eq!(cut_off.to_string(), want);
+            assert_eq!(ChatError::TooLong(cut_off.clone()).to_string(), want);
+        }
+    }
 
     fn config() -> Config {
         Config::from_lookup(|key| {
