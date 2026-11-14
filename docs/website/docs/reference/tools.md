@@ -994,8 +994,7 @@ request during the wait instead of one per report. A line you send still wakes t
 does another call reaching its own count. The result of the call says which of these the planner
 is waiting for. A delegate that starts delegates of its own is not woken by a line you send, so
 its description and result leave that out. The figure decides only when the planner is asked again, so you are not asked about
-it. Delegates that end close together are not joined into one wake unless they end within one
-20 ms check, which is left as a cost of the default.
+it. Delegates that end within one 20 ms check are not joined into one wake.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
@@ -1015,10 +1014,7 @@ the message that says it has started names what it was started without, for exam
 without writing files, because the run that started it does not hold it." For a call with `each`
 the sentence is said once and begins "Each was".
 
-A `reader` or `checker` delegate, and any delegate whose kind or definition leaves writing out, is
-refused a `write_file` or `edit_file` call at once: nobody is asked, nothing is scanned or shown, and
-the refusal tells it that this kind of delegate writes nothing and that its content belongs in its
-report. The audit trail records one refusal under `capability`.
+A delegate that cannot write is refused a `write_file` or `edit_file` call at once, with no prompt, and the audit trail records it under `capability`.
 
 The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
 size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply
@@ -1095,12 +1091,8 @@ and so does the account the turn gives of a background job that has ended.
 Nothing but the report crosses back: the exchange, the tool results and the quarantine end with the
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
 [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
-to you, replaces nothing on your screen, and reaches no host. It is not offered
-[`vet_content`](#vet_content) or [`download_url`](#download_url) either, and the `spawn_agent`
-description tells the planner so: work that needs one of the four is done by the planner before it
-delegates or instead of delegating, and a reference that has to be read whole is read by the planner
-with `vet_content`.
-Naming one of them anyway is refused rather than run, since a model naming a tool it was never offered
+to you, replaces nothing on your screen, and reaches no host.
+Naming one of those tools anyway is refused rather than run, since a model naming a tool it was never offered
 is ordinary. What it could not settle goes in the report, and the planner asks.
 
 A delegate is offered this tool itself, down to three levels below the turn. One at the bottom is
@@ -1109,8 +1101,7 @@ leaves this one out. A call from either anyway is refused. Every delegate in the
 turn's one ceiling, and each is approved and narrowed by the run that started it.
 
 Fetching is out because a delegate reaching a website would stop you to approve a host for a sub-task
-you never set up. Every kind does reach the network, since a planner is a model call and that request
-is egress like any other, and that is the whole of what the capability buys it.
+you never set up. Every kind still reaches the network, since each planner request is egress.
 
 :::note
 The confirmation for a write shows the path and the diff, as it always does, but it does not say that
