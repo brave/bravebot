@@ -2607,15 +2607,18 @@ impl Compiler<'_, '_> {
                     parts.push(ValuePart::Variable(name.clone()));
                 }
                 Piece::Substitution { source, offset } => {
-                    let node = parse_with(source, Expansions::Refused).map_err(|inner| {
-                        // The inner line's offsets are its own; the outer line's are what a
-                        // reader can point at.
-                        Refused {
-                            span: Span::new(inner.span.start + offset, inner.span.end + offset),
-                            ..inner
-                        }
+                    // The inner line's offsets are its own; the outer line's are what a reader can
+                    // point at. That holds for a refusal compiling the inner line as much as for
+                    // one parsing it.
+                    let into_the_line = |inner: Refused| Refused {
+                        span: Span::new(inner.span.start + offset, inner.span.end + offset),
+                        ..inner
+                    };
+                    let node = parse_with(source, Expansions::Refused).map_err(into_the_line)?;
+                    let steps = self.node(&node).map_err(|stopped| match stopped {
+                        Stopped::Compile(inner) => Stopped::Compile(into_the_line(inner)),
+                        rule @ Stopped::Rule(_) => rule,
                     })?;
-                    let steps = self.node(&node)?;
                     parts.push(ValuePart::Substitution {
                         source: source.clone(),
                         steps: Box::new(steps),
@@ -4309,6 +4312,48 @@ mod tests {
             matches!(unclosed.reason, Reason::Unclosed(_)),
             "{unclosed:?}"
         );
+    }
+
+    /// A refusal from inside a substitution gives its position in the whole line, whether the inner
+    /// line failed to parse or failed to compile. A compile refusal that kept the inner line's own
+    /// offsets would point the planner at a column of text it never wrote there.
+    #[test]
+    fn bypass_substitution_refusals_are_placed_in_the_whole_line() {
+        let tree = Tree::new("bypass-offsets");
+        tree.executable("bin/cmd").executable("bin/inner");
+        for (line, text, reason) in [
+            (
+                "FOO=\"$(./bin/missing)\" ./bin/cmd",
+                "./bin/missing",
+                Reason::NotAtPath,
+            ),
+            (
+                "FOO=\"$(nosuchprogram-4022)\" ./bin/cmd",
+                "nosuchprogram-4022",
+                Reason::NotFound,
+            ),
+            (
+                "FOO=\"x-$(./bin/inner a > *.zzz)-y\" ./bin/cmd",
+                "*.zzz",
+                Reason::NotOnePath,
+            ),
+            (
+                "FOO=\"$(./bin/inner | ./bin/missing)\" ./bin/cmd",
+                "./bin/missing",
+                Reason::NotAtPath,
+            ),
+            (
+                "FOO=\"$(./bin/inner $X)\" ./bin/cmd",
+                "$X",
+                Reason::Variable,
+            ),
+        ] {
+            let refused = bypass_refused(line, &tree.root);
+            assert_eq!(refused.reason, reason, "{line}");
+            assert_eq!(refused.text, text, "{line}");
+            let start = line.find(text).expect("the refused text is in the line");
+            assert_eq!(refused.span, Span::new(start, start + text.len()), "{line}");
+        }
     }
 
     /// A rule that denies the inner command stops the line, as it would for a step of its own.
