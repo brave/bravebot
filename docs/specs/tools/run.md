@@ -1028,6 +1028,15 @@ says whether the job has ended, and kills it on request. A look that passes `rea
 slice back as text where the mode or a check answers, and the account the turn gives of an ended job
 is handed back the same way where that job's latest look passed it ([RUN-22](#RUN-22)).
 
+**A look is drawn with the job's command.** The line a person reads for a `job_output` call is the
+job's name and the line the person approved for it, drawn as a `run` command is (first line, and
+nothing at all for a line that declares a credential), so a wait says what it is waiting for and not
+only `job:1`. The name is read through the gate every planner argument is read through, since finding
+the job is a comparison against the planner's words. A name that is no job of the turn is drawn as it
+was typed. A session read back off disk has no jobs, so its looks are drawn with the name alone.
+
+`verified-by: bravebot_agent::turn::a_look_at_a_job_is_drawn_with_the_command_the_job_runs`
+
 Every gate is the one a foreground run passes, at the same point and in the same order: the rules,
 the person's approval, and the label the output will carry are all settled before anything starts.
 Being left running is not a reason to ask for less.

@@ -1274,6 +1274,28 @@ impl Jobs {
         self.kept
     }
 
+    /// How a look at a job is named on the line a person reads: the name the planner typed and
+    /// the command that job runs, so a wait says what it is waiting for instead of `job:1`.
+    ///
+    /// The name is read through the gate every planner argument is read through, as `job_output`
+    /// reads it, because finding the job is a comparison against the planner's words. The command
+    /// is the line the person approved, which a screen already drew when the job started, and it
+    /// goes back to a screen drawn as a `run` command is. `None` where the name is no job of
+    /// this turn's or the line declares a credential, which leaves the line as the name alone.
+    pub(crate) fn drawn_with_its_command<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        arguments: &Value,
+    ) -> Option<String> {
+        let named = argument(arguments, "job")?;
+        let name = policy
+            .read_planner_argument("job_output", "job", &named)
+            .ok()?;
+        let job = self.running.get(&name)?;
+        let command = command_as_drawn(&job.line);
+        (!command.is_empty()).then(|| format!("{name}  {command}"))
+    }
+
     /// The jobs still running that the planner has not been told the end of, with how long each
     /// has run.
     ///
@@ -2994,6 +3016,15 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         .map(|(_, alias, tool)| format!("{alias}:{tool}"))
         .or_else(|| name.strip_prefix("mcp__").map(server_named));
     let target = target_of(policy, &name, server.as_deref(), tools.slots, &arguments);
+    // A look at a job is drawn with the command the job runs: its name alone says nothing to
+    // the person watching, who never saw the planner choose it.
+    let target = match name.as_str() {
+        "job_output" => tools
+            .jobs
+            .drawn_with_its_command(policy, &arguments)
+            .unwrap_or(target),
+        _ => target,
+    };
     // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
     // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
     // selects no server, and with either holding the server's tools back the offer is not deferred.

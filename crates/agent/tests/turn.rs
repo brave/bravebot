@@ -21550,6 +21550,42 @@ fn a_background_line_that_changes_nothing_counts_no_write() {
     );
 }
 
+/// RUN-15: a look at a job is drawn with the command the job runs, so a wait says what it is
+/// waiting for and not only `job:1`. A name that is no job of the turn is drawn as it was typed.
+///
+/// Rejects the target of a `job_output` line being the planner's name alone.
+#[test]
+fn a_look_at_a_job_is_drawn_with_the_command_the_job_runs() {
+    let scratch = Scratch::new("job-look-names-its-command");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    work_after(
+        &workspace,
+        vec![
+            tool_request("run", r#"{"command":"sleep 1","background":true}"#),
+            waiting_for_job_1(),
+            tool_request("job_output", r#"{"job":"job:9"}"#),
+            reply_with("done"),
+        ],
+        &mut reporter,
+    );
+    let drawn: Vec<(&str, &str)> = reporter
+        .started
+        .iter()
+        .filter(|activity| activity.tool == "job_output")
+        .map(|activity| (activity.verb, activity.target.as_str()))
+        .collect();
+    // The line as the person approved it, which spells the program out by where it was found.
+    let [(_, first), (_, second)] = drawn[..] else {
+        panic!("two looks were announced: {drawn:?}");
+    };
+    assert!(
+        first.starts_with("job:1  ") && first.ends_with("sleep 1"),
+        "{drawn:?}"
+    );
+    assert_eq!(second, "job:9", "{drawn:?}");
+}
+
 /// GROUND-1: a job whose end `job_output` reports is counted there, once, and not again by
 /// a later look or by the end of the turn.
 ///
