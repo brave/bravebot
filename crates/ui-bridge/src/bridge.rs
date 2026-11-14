@@ -2937,11 +2937,6 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     workspace_of(open, settings, |state| state.lock().ok())
 }
 
-/// `session_workspace` for a request answered while a turn may be running, which never waits for
-/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
-/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
-/// turn is blocked on. A turn holding it leaves out the directories the session added and its
-/// scratch directory, the same fallback a poisoned lock gets.
 /// The definitions a message from this session may be addressed to, as rows for the `@` list: the
 /// set `/agent` accepts, resolved under the session's trust and permission rules.
 ///
@@ -2979,6 +2974,11 @@ fn offered_definitions(open: &Open, settings: Option<&Path>) -> Vec<bravebot_men
     rows
 }
 
+/// `session_workspace` for a request answered while a turn may be running, which never waits for
+/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
+/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
+/// turn is blocked on. A turn holding it leaves out the directories the session added and its
+/// scratch directory, the same fallback a poisoned lock gets.
 fn session_workspace_unless_running(
     open: &Open,
     settings: &Settings,

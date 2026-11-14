@@ -22,9 +22,9 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key, log_retry,
-    pause_before_retry, read_in_background, refuses_the_body, remember, remembered, reply_bound,
-    worth_another_attempt_or_report,
+    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, addressed, learned_key,
+    log_retry, pause_before_retry, read_in_background, refuses_the_body, remember, remembered,
+    reply_bound, worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -33,7 +33,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_net::{Egress, EgressError, Request};
+use bravebot_net::{Egress, Request};
 use protocol::{Decoded, FINISH_MAX_TOKENS, Response, WireUsage};
 use serde_json::Value;
 use std::time::Duration;
@@ -274,37 +274,15 @@ impl<'a> GenerateContentClient<'a> {
         let body =
             serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
 
-        let mut http = Request::post(url, body)
-            .with_client_certificate()
-            .header("content-type", "application/json");
-        for (name, value) in self.provider.fixed_headers() {
-            http = http.header(*name, *value);
-        }
-        if let Some(token) = self.token.as_ref().map(Secret::expose) {
-            // Attached to the socket the request was addressed to and to no other, so a hop to
-            // another host does not carry the key along. `authorization` gets that from the egress
-            // layer, which does not know this header is a credential.
-            let (name, value) = self.provider.credential_header(token);
-            http = http.socket_header(name, value);
-        }
-        // After the credential, and never over it: a name this request already set is refused
-        // where the block is read, because `Request::header` appends and a second copy of one of
-        // these would be sent rather than replace the first.
-        for (name, value) in &self.headers {
-            http = http.header(name.clone(), value.expose());
-        }
-        let bound = reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING));
-        // A stream's headers come at once and the model writes after them; a reply asked for whole
-        // is written before any of it is sent.
-        let mut http = if streaming {
-            http.stream_within(bound)
-        } else {
-            http.reply_within(bound)
-        };
-        if let Some(gap) = self.provider.patience.idle_timeout {
-            http = http.idle_within(gap);
-        }
-        Ok(http)
+        Ok(addressed(
+            url,
+            body,
+            self.provider,
+            self.token.as_ref(),
+            &self.headers,
+            streaming,
+            reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING)),
+        ))
     }
 
     /// Send a request and wait for the whole reply.
@@ -447,42 +425,21 @@ impl<'a> GenerateContentClient<'a> {
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut reply = Reply::default();
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("generateContent stream", Label::untrusted_public());
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // A read that fails once the reply has begun is the reply stopping, whatever the
-                // socket reported: the request plainly got through.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(ChatError::Incomplete);
-                }
-                // A reply cut at its deadline among them: asked for again, it runs as long.
-                Ok(Err(error)) => return Err(error.into()),
-                // Nothing has arrived yet, which is the only chance to look at anything while a
-                // reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(ChatError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a dead
-                // connection leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::Failed(error) => return Err(error.into()),
+                Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
-            began = true;
-
-            if self.pace.cancelled() {
-                return Err(ChatError::Cancelled);
-            }
 
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();

@@ -455,10 +455,10 @@ mod tests {
     struct TheTurns;
 
     impl Subscription for TheTurns {
-        fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
-            Ok(SubscriptionCredential {
+        fn next_credential(&mut self) -> SubscriptionCredential {
+            SubscriptionCredential {
                 key: bravebot_config::Secret::new("the turn's"),
-            })
+            }
         }
     }
 
@@ -570,7 +570,7 @@ mod tests {
         assert!(!carried.is_cancelled());
         stop.cancel();
         assert!(carried.is_cancelled(), "the stop is not the turn's");
-        let credential = spent.next_credential().expect("a credential");
+        let credential = spent.next_credential();
         assert_eq!(credential.key.expose(), "the turn's");
     }
 

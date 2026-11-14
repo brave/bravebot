@@ -34,10 +34,10 @@ impl PremiumKey {
 }
 
 impl Subscription for PremiumKey {
-    fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
-        Ok(SubscriptionCredential {
+    fn next_credential(&mut self) -> SubscriptionCredential {
+        SubscriptionCredential {
             key: self.key.clone(),
-        })
+        }
     }
 }
 
@@ -80,8 +80,8 @@ mod tests {
     }
 
     /// PREM-12: the key a configuration holds is the one presented, every time it is asked for. A
-    /// source that spent it, as the single-use credential it replaces was, would fail the second
-    /// request of a turn.
+    /// source that spent it, as the single-use credential it replaces was, would present something
+    /// else on the second request of a turn.
     #[test]
     fn the_key_is_presented_on_every_request() {
         let config = configured(
@@ -90,7 +90,7 @@ mod tests {
         );
         let mut held = PremiumKey::held(&config).expect("a key to present");
         for _ in 0..3 {
-            let credential = held.next_credential().expect("a key");
+            let credential = held.next_credential();
             assert_eq!(credential.key.expose(), "the-premium-key");
         }
     }

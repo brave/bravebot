@@ -1345,7 +1345,15 @@ impl Jobs {
         let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
             panic!("one pipeline");
         };
-        let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+        let running = crate::exec::start_steps_within(
+            steps,
+            &root,
+            None,
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        )
+        .unwrap();
         self.keep(
             running,
             JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
@@ -10970,9 +10978,9 @@ fn run_call<S: Sink>(
         }
     };
 
-    // Nothing waits for a background job, and nothing writes to one either: `start_steps` gives
-    // its first step an empty stdin and has nowhere to put anything else. Refused rather than
-    // ignored, so a call asking for both is told which of the two it cannot have.
+    // Nothing waits for a background job, and nothing writes to one either: `start_steps_within`
+    // gives its first step an empty stdin and has nowhere to put anything else. Refused rather
+    // than ignored, so a call asking for both is told which of the two it cannot have.
     if named_stdin.is_some() && in_the_background {
         return Err(Box::new(Produced::problem(
             "error: a background command cannot be fed a reference. Run it in the foreground, \
@@ -11963,10 +11971,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     authority.note_program_started();
 
     if in_the_background {
-        // What has to be refused is what start_steps cannot honour, and it honours no route at
-        // all, including `2>&1`, which names nothing for anybody to endorse. A route on a step
-        // inside a `$(...)` of the line is one as well, since start_steps opens it with none of
-        // the checks a foreground line makes when it opens a route.
+        // What has to be refused is what start_steps_within cannot honour, and it honours no
+        // route at all, including `2>&1`, which names nothing for anybody to endorse. A route on
+        // a step inside a `$(...)` of the line is one as well, since start_steps_within opens it
+        // with none of the checks a foreground line makes when it opens a route.
         let Some(steps) = plan.steps.unrouted_pipeline() else {
             return Produced::problem(
                 "error: a background command must be one pipeline with no redirection, \
@@ -16267,7 +16275,15 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let mut running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+            let mut running = crate::exec::start_steps_within(
+                steps,
+                &root,
+                None,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+                crate::exec::LIMIT,
+            )
+            .unwrap();
             let until = Instant::now() + Duration::from_secs(5);
             while !running.ended() {
                 assert!(Instant::now() < until, "job did not end");
@@ -16318,7 +16334,15 @@ mod tests {
         let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
             panic!("one pipeline");
         };
-        let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+        let running = crate::exec::start_steps_within(
+            steps,
+            &root,
+            None,
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        )
+        .unwrap();
         jobs.keep(
             running,
             JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
@@ -16405,7 +16429,15 @@ mod tests {
         let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
             panic!("one pipeline");
         };
-        let running = crate::exec::start_steps(steps, root, None, None).unwrap();
+        let running = crate::exec::start_steps_within(
+            steps,
+            root,
+            None,
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        )
+        .unwrap();
         jobs.keep(
             running,
             JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
@@ -16798,7 +16830,15 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+            let running = crate::exec::start_steps_within(
+                steps,
+                &root,
+                None,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+                crate::exec::LIMIT,
+            )
+            .unwrap();
             let (_, stop) = jobs.keep(
                 running,
                 JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
@@ -16872,7 +16912,15 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+            let running = crate::exec::start_steps_within(
+                steps,
+                &root,
+                None,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+                crate::exec::LIMIT,
+            )
+            .unwrap();
             let (name, stop) = jobs.keep(
                 running,
                 JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),

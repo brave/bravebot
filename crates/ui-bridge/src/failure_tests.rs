@@ -296,10 +296,6 @@ fn a_refused_premium_key_is_sent_as_any_other_unauthorized_failure() {
     assert_eq!(marked["category"], "unauthorized", "{marked}");
     assert_eq!(marked["status"], 401, "{marked}");
     assert_eq!(marked["account"], Value::Null, "{marked}");
-
-    let unusable = failed_with(ChatError::Subscription("not held".to_string()));
-    assert_eq!(unusable["category"], "unauthorized", "{unusable}");
-    assert_eq!(unusable["accountMessage"], Value::Null, "{unusable}");
 }
 
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a

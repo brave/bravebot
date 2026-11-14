@@ -203,11 +203,6 @@ export function botFolders(bot: Bot): string[] {
   return [...new Set([bot.home, ...bot.conversations.map((each) => each.directory)])]
 }
 
-/** The projects a bot has worked in, newest conversation first, without its home folder. */
-export function botProjects(bot: Bot): string[] {
-  return [...new Set(bot.conversations.map((each) => each.directory).reverse())].filter((each) => each !== bot.home)
-}
-
 export interface StoredBots {
   bots: Bot[]
 }

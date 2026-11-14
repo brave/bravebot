@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { idA, idB, installBridge, makeProfile } from './acceptance-fixture.mjs'
-import { BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
+import { BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-bot-history')
 mkdirSync(output, { recursive: true })
 const { profile, directory } = makeProfile({ conversations: [idA, '44444444-4444-4444-8444-444444444444'] })
@@ -34,7 +34,7 @@ try {
   // conversation in its home folder.
   await page.getByRole('button',{name:'Bots',exact:true}).click();
   await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();
-  await page.locator('[data-test="bot-greeting"]').waitFor();
+  await page.locator(BOT_GREETING).waitFor();
   const bots=page.getByRole('searchbox',{name:'Search bots',exact:true});
   await bots.fill('no-such-bot');
   await page.getByText('No bots match this search.',{exact:true}).waitFor();
@@ -100,9 +100,9 @@ try {
   // Playwright clicks bypass native window dragging; the arrow sits in the title row, over the drag strip.
   assert.equal(await page.locator('[data-test="earlier-back"]').evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-app-region')), 'no-drag', 'Back must receive native mouse clicks inside the draggable titlebar');
   await page.locator('[data-test="earlier-back"]').click();
-  await page.locator('[data-test="bot-greeting"]').waitFor();
+  await page.locator(BOT_GREETING).waitFor();
   await openBot();
-  await page.locator('[data-test="bot-greeting"]').waitFor();
+  await page.locator(BOT_GREETING).waitFor();
   const sent=(await app.evaluate(()=>globalThis.ux.sent.length));
   await page.getByRole('textbox',{name:COMPOSER_NAME}).fill('Start a newer conversation');
   await page.getByRole('button',{name:'Send',exact:true}).click();
@@ -131,7 +131,7 @@ try {
   if(await confirm.count()) await confirm.click();
   await page.getByRole('button',{name:'Bots',exact:true}).click();
   await openBot();
-  await page.locator('[data-test="bot-greeting"]').waitFor();
+  await page.locator(BOT_GREETING).waitFor();
   assert.equal(await made(),before+1,'opening the bot asked for a new conversation instead of reopening the archived one');
   await snap('05-new-home-after-archive');
   await overview();await searchHistory('no-such-conversation');

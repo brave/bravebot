@@ -636,7 +636,7 @@ fn a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step
     let mut steps = pipelines::steps_of(&pipeline, &[resolved]).expect("the steps");
     steps[0].environment = vec![("ACME_GATEWAY_TOKEN".into(), "the-lines-own".into())];
 
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("it starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3174,7 +3174,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     };
     link(&scratch.path, "tool", &other);
 
-    match past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None, None)) {
+    match past_text_file_busy(|| pipelines::start_steps(steps, &scratch.path, None, None)) {
         Err(ExecError::NotStarted { program, .. }) => assert_eq!(program, "./tool"),
         Err(other) => panic!("refused for the wrong reason: {other}"),
         Ok(_) => panic!("a repointed link was started in the background"),
@@ -3185,7 +3185,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     );
 
     link(&scratch.path, "tool", &approved);
-    let mut job = past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(steps, &scratch.path, None, None))
         .expect("pointed back, the line starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3350,7 +3350,7 @@ fn an_expansion_reaches_a_job_started_in_the_background() {
         ),
         expanding(&emit, &[], Vec::new()),
     ];
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3371,7 +3371,7 @@ fn an_expansion_reaches_a_job_started_in_the_background() {
             ],
         )],
     )];
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3985,7 +3985,7 @@ fn an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start
     let mut shown = Vec::new();
 
     let good = steps_using(&emit);
-    let mut job = past_text_file_busy(|| exec::start_steps(&good, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&good, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -4002,7 +4002,7 @@ fn an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start
     shown.push(format!("{:?}", job.codes()));
 
     let bad = steps_using(&fail);
-    let failed = past_text_file_busy(|| exec::start_steps(&bad, &scratch.path, None, None))
+    let failed = past_text_file_busy(|| pipelines::start_steps(&bad, &scratch.path, None, None))
         .expect_err("the failing substitution was used");
     assert!(failed.to_string().contains("emit the value"));
     shown.push(failed.to_string());
@@ -4010,7 +4010,7 @@ fn an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start
 
     let refused_steps = steps_using(&nul);
     let refused =
-        past_text_file_busy(|| exec::start_steps(&refused_steps, &scratch.path, None, None))
+        past_text_file_busy(|| pipelines::start_steps(&refused_steps, &scratch.path, None, None))
             .expect_err("a NUL reached a program's environment");
     shown.push(refused.to_string());
     shown.push(format!("{refused:?}"));
@@ -4053,7 +4053,7 @@ fn a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only() {
     let plan = plan_of(&scratch.path, steps.clone());
     let ran = run_expanding(&plan).expect("the line runs");
     assert_eq!(ran.stdout.trim(), secret);
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {

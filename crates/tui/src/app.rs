@@ -1141,33 +1141,9 @@ pub fn definition_named(
     })
 }
 
-/// Take a paste while a turn is running.
-///
-/// The same folding as the idle path, for the same reason: a stack trace pasted mid-turn would
-/// otherwise push the reply being read off the screen, and mid-turn is exactly when there is a
-/// reply worth reading. Named rather than bound inline at each working loop, because writing the
-/// same arm in each is how they came to disagree. It is written once now, in [`pump_terminal`].
-///
-/// A drop is recognised here too, since a drop reaches the terminal as a paste of the path and a
-/// running turn is when people drop a file: they are watching a reply and want to hand over the
-/// screenshot it is about. Without this the path was written out as prose, so the line said
-/// nothing about a file and the attachment was never staged.
-///
-/// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
-/// paste asks for and nothing else.
-///
-/// A wiped handoff is dropped first, as [`handle_paste`] does: a turn can begin with the brief
-/// still in the box. The rest is [`paste_into_box`]'s. Mid-turn is when the delegate view is open,
-/// since a delegate only runs inside a turn, so a paste while watching reaches this handler.
-pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
-    session.drop_a_wiped_handoff();
-    session.drop_a_wiped_enhancement();
-    paste_into_box(session, text)
-}
-
 /// Carry out what a key or a paste answered with while a turn is running.
 ///
-/// [`Action::Paste`] is the one answer either of the mid-turn handlers gives that the session
+/// [`Action::Paste`] is the one answer either handler a working loop calls gives that the session
 /// cannot carry out itself, since reading the clipboard runs the platform's own tools. Everything
 /// else they return is a redraw the loops do every frame regardless, bar [`Action::Suspend`], which
 /// needs the terminal that only [`pump_terminal`] holds. That one is handed back, and the closure
@@ -1274,7 +1250,7 @@ fn pump_terminal(
                     }
                 }
                 TermEvent::Paste(text) => {
-                    let action = handle_paste_while_working(session, &text);
+                    let action = handle_paste(session, &text);
                     // A paste never asks for a stop, so there is nothing to hand on.
                     let _ = act_while_working(session, action, crate::clipboard::paste);
                 }
@@ -1338,7 +1314,7 @@ where
     }
 }
 
-/// Interpret a paste.
+/// Interpret a paste, at rest and while a turn is running.
 ///
 /// Answer a paste the terminal delivered, which is what Command-V and the middle mouse button
 /// become by the time they reach this process. A paste is one act rather than a run of keys, which
@@ -1353,15 +1329,25 @@ where
 ///
 /// Said once per session and then not again, because a user who has been told which key carries a
 /// picture does not need telling every time they use the other one.
+///
+/// A paste mid-turn is folded as one at rest is, for the same reason: a stack trace pasted mid-turn
+/// would otherwise push the reply being read off the screen, and mid-turn is exactly when there is
+/// a reply worth reading. Every working loop reaches this through [`pump_terminal`] rather than
+/// binding a paste arm inline, because writing the same arm in each is how they came to disagree.
+/// Mid-turn is when the delegate view is open, since a delegate only runs inside a turn, so a paste
+/// while watching reaches this handler. Mid-turn, what comes back is what [`act_while_working`]
+/// carries out, which is the clipboard read an empty paste asks for and nothing else.
+///
+/// A drop is recognised mid-turn too, since a drop reaches the terminal as a paste of the path and
+/// a running turn is when people drop a file: they are watching a reply and want to hand over the
+/// screenshot it is about. Without this the path was written out as prose, so the line said
+/// nothing about a file and the attachment was never staged.
+///
+/// A wiped handoff and a wiped enhancement are dropped first, at rest and mid-turn alike: a turn
+/// can begin with the brief still in the box.
 pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     session.drop_a_wiped_handoff();
     session.drop_a_wiped_enhancement();
-    paste_into_box(session, text)
-}
-
-/// The steps a paste takes at rest and mid-turn alike, kept in one place so the two cannot disagree
-/// about them.
-fn paste_into_box(session: &mut Session, text: &str) -> Action {
     // The line is the scroller's to leave alone, and the delegate view's, the picker's, the prompt
     // search's and the menu's: a paste is not a key, so it arrives from the terminal whatever mode is open
     // and the guard that holds the box still for a keystroke never sees it. Nothing is said about
@@ -1646,13 +1632,7 @@ fn after_the_word<'a>(argument: &'a str, word: &str) -> Option<&'a str> {
 /// are counted. It is refused as a reply is: a number that is not one, no block at all, and a
 /// number past the oldest block each come back as the note that says so.
 fn block_to_copy(session: &Session, back: &str) -> Result<String, String> {
-    let steps = if back.is_empty() {
-        1
-    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
-        back.parse::<usize>().unwrap_or(usize::MAX)
-    } else {
-        0
-    };
+    let steps = steps_back(back);
     if steps == 0 {
         return Err(t!(session_copy_block_needs_a_number).to_string());
     }
@@ -1673,14 +1653,7 @@ fn reply_to_copy(session: &Session, back: &str) -> Result<String, String> {
 /// The reply `/copy` was asked for: the latest when nothing follows the word, otherwise the one
 /// that many replies back. What it refuses comes back as the note that says so (CMD-11).
 fn reply_back<'a>(session: &'a Session, back: &str) -> Result<&'a str, String> {
-    // Digits alone: `+2` is a word, and a number too long to hold is still past the oldest reply.
-    let steps = if back.is_empty() {
-        1
-    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
-        back.parse::<usize>().unwrap_or(usize::MAX)
-    } else {
-        0
-    };
+    let steps = steps_back(back);
     if steps == 0 {
         return Err(t!(session_copy_needs_a_number).to_string());
     }
@@ -1691,6 +1664,19 @@ fn reply_back<'a>(session: &'a Session, back: &str) -> Result<&'a str, String> {
     match session.replies_newest_first().count() {
         0 => Err(t!(session_copy_no_reply).to_string()),
         replies => Err(t!(session_copy_goes_no_further, replies = replies)),
+    }
+}
+
+/// How many back `/copy` and `/copy block` were asked for: 1 when nothing follows the word, and 0
+/// for a word that is not a count, which each caller refuses with its own note.
+fn steps_back(back: &str) -> usize {
+    // Digits alone: `+2` is a word, and a number too long to hold is still past the oldest reply.
+    if back.is_empty() {
+        1
+    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
+        back.parse::<usize>().unwrap_or(usize::MAX)
+    } else {
+        0
     }
 }
 
@@ -1921,22 +1907,19 @@ pub fn run(
         }
     };
 
-    // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it has
-    // begun, so leaving the screen is an ordinary session rather than nothing.
-    let start = Some(start);
-
     let result = match start {
-        // The picker refuses Enter on one of these, and `--resume` refuses it too. If a record
-        // still arrives here, loading its empty conversation as a turn would continue a run
+        // The Sessions screen refuses Enter on one of these, and `--resume` refuses it too. If a
+        // record still arrives here, loading its empty conversation as a turn would continue a run
         // that cannot be continued.
-        Some(Start::Resuming(record)) if record.manifest.is_some() => Ok(Ended::Left(None)),
-        Some(start) => {
+        Start::Resuming(record) if record.manifest.is_some() => Ok(Ended::Left(None)),
+        // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it
+        // has begun, so leaving the screen is an ordinary session rather than nothing.
+        mut start => {
             // A `/resume` ends the loop with the record it chose, and the next one begins from it
             // exactly as a session started with `--resume` does, so what comes back is what that
             // flag restores and nothing a second path decided. The servers outlive the switch:
             // they were started for this process, not for one conversation.
             let mut workspace = workspace.clone();
-            let mut start = start;
             // Only the first session is the one the command line named a definition for. A
             // session `/resume` switches to works under the definition its own record names.
             let mut named = agent;
@@ -1975,9 +1958,6 @@ pub fn run(
                 }
             }
         }
-        // Leaving at the picker resumed nothing and started nothing, so there is nothing to say
-        // about picking anything up.
-        None => Ok(Ended::Left(None)),
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
@@ -2589,7 +2569,8 @@ fn begin_session(
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
-        // Already answered before the loop was entered: the picker runs once, in `run`.
+        // These five begin a new record. `Choose` and `ChooseFromPr` open the Sessions screen over
+        // it, in `apply_the_command_line`.
         Start::Fresh
         | Start::Sending(..)
         | Start::Prefilling(..)
@@ -8137,19 +8118,13 @@ mod tests {
             assert!(session.watching().is_some(), "the view did not open");
             let said = session.transcript.len();
 
-            // Both handlers, because a delegate only runs inside a turn, so the mid-turn one is
-            // the path a paste while watching takes, and the idle one is reachable the moment the
-            // turn ends under a view left open over it.
+            // Mid-turn, because a delegate only runs inside a turn, so that is when a paste while
+            // watching arrives.
             for pasted in ["pasted", "", dropped.as_str()] {
                 assert_eq!(
                     handle_paste(&mut session, pasted),
                     Action::None,
                     "a paste of {pasted:?} was answered from inside the view"
-                );
-                assert_eq!(
-                    handle_paste_while_working(&mut session, pasted),
-                    Action::None,
-                    "a paste of {pasted:?} mid-turn was answered from inside the view"
                 );
             }
 
@@ -8593,7 +8568,7 @@ mod tests {
             assert_eq!(handle_paste(&mut session, "pasted"), Action::None);
             // The clipboard holding a picture, which arrives as a paste of nothing at all.
             assert_eq!(handle_paste(&mut session, ""), Action::None);
-            handle_paste_while_working(&mut session, &file.to_string_lossy());
+            handle_paste(&mut session, &file.to_string_lossy());
 
             handle_key(&mut session, key(KeyCode::Char('q')));
             assert_eq!(session.input(), "half a thought");
@@ -9444,7 +9419,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.status = Status::Working;
 
-            let action = handle_paste_while_working(&mut session, "");
+            let action = handle_paste(&mut session, "");
             assert!(
                 session.transcript[0].text.contains("ctrl-v"),
                 "the note did not name the key that works"
@@ -9466,7 +9441,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.status = Status::Working;
 
-            let action = handle_paste_while_working(&mut session, "some words");
+            let action = handle_paste(&mut session, "some words");
             assert_eq!(action, Action::Redraw);
             let _ = act_while_working(&mut session, action, || {
                 panic!("the clipboard was read for a paste that carried text")
@@ -10089,7 +10064,7 @@ mod tests {
             for c in "/manifest build ".chars() {
                 handle_key_while_working(&mut session, key(KeyCode::Char(c)));
             }
-            handle_paste_while_working(&mut session, &path);
+            handle_paste(&mut session, &path);
             assert_eq!(session.input(), "/manifest build [Image #1] ");
             handle_key_while_working(&mut session, key(KeyCode::Enter));
             assert!(session.input().is_empty(), "the command stayed in the box");
@@ -16646,31 +16621,27 @@ mod tests {
 
     /// A working loop is where a paste most needs folding, since a turn in flight is what the
     /// long paste would push off the screen. One of the two loops used to write the paste whole,
-    /// so this pins the folding at the seam they now share rather than at either call site.
+    /// so this pins the folding in the handler every loop calls rather than at a call site.
     #[test]
     fn a_long_paste_folds_while_a_turn_is_running() {
         let mut session = Session::new("none");
-        handle_paste_while_working(&mut session, "first\nsecond\nthird\nfourth");
+        session.status = Status::Working;
+        handle_paste(&mut session, "first\nsecond\nthird\nfourth");
 
         assert_eq!(session.input(), "[Pasted text #1 +4 lines]");
+        assert_eq!(session.status, Status::Working);
     }
 
-    /// A turn in flight is when a paste arrives with the least attention paid to it, and the
-    /// working path is a separate function from the one at rest, so each is held to the filter.
+    /// A paste the terminal delivered is held to the filter, at rest and mid-turn alike, since one
+    /// handler answers both.
     #[test]
-    fn a_paste_loses_what_a_terminal_draws_as_nothing_at_rest_and_while_a_turn_runs() {
-        let mut at_rest = Session::new("none");
-        handle_paste(&mut at_rest, "hi\u{E0041}\u{200B}");
-        assert_eq!(at_rest.input(), "hi");
+    fn a_paste_loses_what_a_terminal_draws_as_nothing() {
+        let mut session = Session::new("none");
+        handle_paste(&mut session, "hi\u{E0041}\u{200B}");
+        assert_eq!(session.input(), "hi");
 
-        let mut working = Session::new("none");
-        handle_paste_while_working(&mut working, "hi\u{E0041}\u{200B}");
-        assert_eq!(working.input(), "hi");
-
-        for session in [&at_rest, &working] {
-            let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
-            assert_eq!(said, ["removed 2 invisible characters from that paste"]);
-        }
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(said, ["removed 2 invisible characters from that paste"]);
     }
 
     /// Text off the clipboard with Ctrl-V is a paste like any other, and arrives by its own route.
@@ -16776,7 +16747,7 @@ mod tests {
         let mut session = Session::new("none").in_workspace(&directory);
         session.type_char('a');
         session.submit();
-        handle_paste_while_working(&mut session, &file.to_string_lossy());
+        handle_paste(&mut session, &file.to_string_lossy());
 
         assert_eq!(session.input(), "[Image #1] ");
         assert_eq!(session.attached().len(), 1, "nothing was staged");
@@ -21499,17 +21470,17 @@ mod tests {
     fn a_limit_in_credits_reports_the_credentials_spent() {
         struct Wallet;
         impl bravebot_agent::shared::Spends for Wallet {
-            fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
-                Ok(bravebot_aichat::SubscriptionCredential {
+            fn spend_one(&self) -> bravebot_aichat::SubscriptionCredential {
+                bravebot_aichat::SubscriptionCredential {
                     key: bravebot_config::Secret::new("value"),
-                })
+                }
             }
         }
         let mut session = Session::new("none");
         session.tokens = 9_000;
         let counted = bravebot_agent::shared::Counted::new(&Wallet, session.spend_limit().clone());
         for _ in 0..3 {
-            bravebot_agent::shared::Spends::spend_one(&counted).expect("a credential");
+            bravebot_agent::shared::Spends::spend_one(&counted);
         }
 
         dispatch_command(&mut session, commanded("/limit 5 credits"));
@@ -22846,7 +22817,7 @@ mod tests {
         );
     }
 
-    /// INPUT-9. Rejects: the working paste handler not ending a wiped brief, as the idle one does.
+    /// INPUT-9. Rejects: a paste mid-turn not ending a wiped brief, as a paste at rest does.
     #[test]
     fn a_prompt_pasted_mid_turn_after_wiping_the_brief_is_sent_as_a_prompt() {
         let mut session = a_turn_running_over_a_brief("the brief");
@@ -22855,7 +22826,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
         );
         assert!(session.input().is_empty());
-        handle_paste_while_working(&mut session, "something else");
+        handle_paste(&mut session, "something else");
         session.status = Status::Idle;
 
         assert_eq!(
@@ -29733,7 +29704,7 @@ mod tests {
         for c in "/btw what is in ".chars() {
             handle_key_while_working(&mut session, key(KeyCode::Char(c)));
         }
-        handle_paste_while_working(&mut session, &path);
+        handle_paste(&mut session, &path);
         let transcript = session.transcript.len();
 
         let root = std::path::Path::new("/work");
@@ -31567,10 +31538,7 @@ mod tests {
         }
 
         assert_eq!(handle_paste(&mut at_rest, "pasted text"), Action::None);
-        assert_eq!(
-            handle_paste_while_working(&mut mid_turn, "pasted text"),
-            Action::None
-        );
+        assert_eq!(handle_paste(&mut mid_turn, "pasted text"), Action::None);
 
         assert_eq!(at_rest.input(), "");
         assert_eq!(mid_turn.input(), "");
@@ -35272,7 +35240,7 @@ mod tests {
     /// person comes back to a different prompt with a file staged that nobody asked for. An empty
     /// paste is how a picture on the clipboard arrives, and answering it reads the clipboard into
     /// that same box. The regressions it rejects are each of those, and spending the hint an empty
-    /// paste says once a session, on the two paths a paste takes: at rest and mid-turn.
+    /// paste says once a session, at rest and mid-turn.
     #[test]
     fn a_paste_and_a_drop_do_not_reach_the_line_while_the_search_is_open() {
         let directory = crate::testutil::scratch_dir("bravebot-app-drop-while-searching");
@@ -35287,10 +35255,6 @@ mod tests {
             let press = |session: &mut Session, pressed: KeyEvent| match mid_turn {
                 true => handle_key_while_working(session, pressed),
                 false => handle_key(session, pressed),
-            };
-            let paste = |session: &mut Session, text: &str| match mid_turn {
-                true => handle_paste_while_working(session, text),
-                false => handle_paste(session, text),
             };
 
             let mut session = having_sent(&["half a thought sent before"]).in_workspace(&directory);
@@ -35312,7 +35276,7 @@ mod tests {
             let said = session.transcript.len();
             for pasted in ["pasted", "", dropped.as_str()] {
                 assert_eq!(
-                    paste(&mut session, pasted),
+                    handle_paste(&mut session, pasted),
                     Action::None,
                     "{place}: a paste of {pasted:?} was answered from inside the search"
                 );
@@ -45211,7 +45175,7 @@ mod tests {
 
         let mut session = a_turn_running_over_an_enhancement(rewrite);
         handle_key_while_working(&mut session, ctrl('u'));
-        handle_paste_while_working(&mut session, "something else");
+        handle_paste(&mut session, "something else");
         assert!(
             !session.enhanced_pending(),
             "a line pasted mid-turn was an enhancement"

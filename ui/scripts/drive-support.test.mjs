@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ASSISTANT_BUBBLE,
+  BOT_GREETING,
   BOT_OPEN_BUTTON,
   COMPOSER_IDLE,
   COMPOSER_INPUT,
@@ -153,11 +154,13 @@ test('the send, name, reply, bot and trust constants name what the renderer draw
   assert.match(read('Composer.tsx'), /aria-label="Message the agent"/)
   assert.match(read('Transcript.tsx'), /<div className="bubble assistant">/)
   assert.match(read('Bots.tsx'), /<button type="button" className="bot-open-button"/)
+  assert.match(read('Transcript.tsx'), /data-test="bot-greeting"/)
   assert.match(read('TrustPrompt.tsx'), /data-test="trust-approve"/)
   assert.equal(COMPOSER_SEND, '.composer .send')
   assert.equal(COMPOSER_NAME, 'Message the agent')
   assert.equal(ASSISTANT_BUBBLE, '.bubble.assistant')
   assert.equal(BOT_OPEN_BUTTON, '.bot-open-button')
+  assert.equal(BOT_GREETING, '[data-test="bot-greeting"]')
   assert.equal(TRUST_APPROVE, '[data-test="trust-approve"]')
 })
 

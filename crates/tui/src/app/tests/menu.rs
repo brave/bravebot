@@ -1051,10 +1051,7 @@ fn a_paste_under_the_open_menu_is_not_typed_into_the_box() {
     let _ = buffer;
     right_press(&mut session, cell);
     assert!(session.menu_open());
-    assert_eq!(
-        handle_paste_while_working(&mut session, "pasted words"),
-        Action::None
-    );
+    assert_eq!(handle_paste(&mut session, "pasted words"), Action::None);
     assert_eq!(
         session.input(),
         "",

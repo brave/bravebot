@@ -54208,13 +54208,13 @@ struct OneWallet {
 }
 
 impl bravebot_agent::shared::Spends for OneWallet {
-    fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+    fn spend_one(&self) -> bravebot_aichat::SubscriptionCredential {
         let mut handed = self.handed.lock().expect("the wallet");
         let value = format!("credential-{}", handed.len() + 1);
         handed.push(value.clone());
-        Ok(bravebot_aichat::SubscriptionCredential {
+        bravebot_aichat::SubscriptionCredential {
             key: bravebot_config::Secret::new(value),
-        })
+        }
     }
 }
 
@@ -54283,7 +54283,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
     let wallet = OneWallet::default();
     // The turn's own first round, made before it starts a delegate. What the delegate is offered
     // afterwards is the question.
-    bravebot_agent::shared::Spends::spend_one(&wallet).expect("the turn spends first");
+    bravebot_agent::shared::Spends::spend_one(&wallet);
 
     let mut sink = RecordingSink::new();
     let ended = bravebot_agent::delegate::run(
@@ -88243,7 +88243,7 @@ mod spend_limit {
         let wallet = OneWallet::default();
         let counted = bravebot_agent::shared::Counted::new(&wallet, limit.clone());
         for _ in 0..count {
-            bravebot_agent::shared::Spends::spend_one(&counted).expect("a credential");
+            bravebot_agent::shared::Spends::spend_one(&counted);
         }
         wallet
     }
@@ -88344,7 +88344,7 @@ mod spend_limit {
         let limit = SpendLimit::new(Some(Limit::credits(10)));
         let wallet = OneWallet::default();
         let counted = bravebot_agent::shared::Counted::new(&wallet, limit.clone());
-        bravebot_agent::shared::Spends::spend_one(&counted).expect("the turn spends first");
+        bravebot_agent::shared::Spends::spend_one(&counted);
         assert_eq!(limit.credits(), 1);
 
         let mut sink = RecordingSink::new();

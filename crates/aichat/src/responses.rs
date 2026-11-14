@@ -21,7 +21,7 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, Effort, SseDecoder, ToolCall, Usage};
 use crate::{
-    AccountAccess, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, WAKE,
+    AccountAccess, Arrived, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
     learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body, remember,
     remembered, reply_bound, worth_another_attempt_or_report,
 };
@@ -558,42 +558,21 @@ impl<'a> ResponsesClient<'a> {
         };
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut reply = Reply::default();
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("responses stream", Label::untrusted_public());
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // A read that fails once the reply has begun is the reply stopping, whatever the
-                // socket reported: the request plainly got through.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(ChatError::Incomplete);
-                }
-                // A reply cut at its deadline among them: asked for again, it runs as long.
-                Ok(Err(error)) => return Err(error.into()),
-                // Nothing has arrived yet, which is the only chance to look at anything while a
-                // reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(ChatError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a dead
-                // connection leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::Failed(error) => return Err(error.into()),
+                Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
-            began = true;
-
-            if self.pace.cancelled() {
-                return Err(ChatError::Cancelled);
-            }
 
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();

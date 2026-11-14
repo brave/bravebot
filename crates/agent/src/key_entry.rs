@@ -14,7 +14,6 @@ use bravebot_config::import::{Destination, Gateway, Unwritable};
 use bravebot_config::keys::{self, Keys};
 use bravebot_config::provider::Provider;
 use bravebot_config::{Config, ConfigError, Managed, Secret, brave_key, user_settings_file};
-use std::io::Write;
 use std::path::Path;
 
 /// Why a key is refused before it is typed.
@@ -155,23 +154,7 @@ pub fn ready<'i>(target: &Target<'_>, inputs: &Inputs<'i>) -> Result<Ready<'i>, 
 /// Written beside the file and renamed over it, so a write that stops part way leaves the key that
 /// was there, and created private to this account (STATE-1), because the key is a bearer token.
 pub fn store_brave_key(directory: &Path, key: &Secret) -> std::io::Result<()> {
-    let path = brave_key::file(directory);
-    home::create_directory(directory)?;
-    let temporary = path.with_file_name(format!("{}.{}.tmp", brave_key::FILE, std::process::id()));
-    // Closed at the end of the closure, before the rename, which Windows refuses while a handle is
-    // still open on either name.
-    let written = bravebot_skus::store::create_private(&temporary)
-        .and_then(|mut file| {
-            file.write_all(brave_key::to_text(key).expose().as_bytes())?;
-            // On disk before the rename, or a crash just after it can leave the name on an empty
-            // file where a filesystem orders the rename first.
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, &path));
-    if written.is_err() {
-        std::fs::remove_file(&temporary).unwrap_or_default();
-    }
-    written
+    home::replace_private(directory, brave_key::FILE, brave_key::to_text(key).expose())
 }
 
 /// Write `key` as the custom embeddings endpoint's key in `directory`, as [`store_brave_key`]
@@ -185,22 +168,11 @@ pub fn store_embeddings_key(directory: &Path, key: Option<&Secret>) -> std::io::
             _ => Ok(()),
         };
     };
-    home::create_directory(directory)?;
-    let temporary = path.with_file_name(format!(
-        "{}.{}.tmp",
+    home::replace_private(
+        directory,
         embeddings_key::FILE,
-        std::process::id()
-    ));
-    let written = bravebot_skus::store::create_private(&temporary)
-        .and_then(|mut file| {
-            file.write_all(embeddings_key::to_text(key).expose().as_bytes())?;
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, &path));
-    if written.is_err() {
-        std::fs::remove_file(&temporary).unwrap_or_default();
-    }
-    written
+        embeddings_key::to_text(key).expose(),
+    )
 }
 
 /// Why a gateway key was not stored.

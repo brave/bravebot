@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture.mjs'
-import { BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
+import { BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-ux-final')
 mkdirSync(output, { recursive: true })
 const { profile, directory } = makeProfile({ copy: true })
@@ -95,7 +95,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('.queued-messages')===null);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance+1);await done()
   // Opening a bot opens its conversation in its home folder. Its earlier conversations are a page
   // reached from that conversation's header: the list in the middle, its details and memory on the right.
-  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator(BOT_GREETING).waitFor()
   await page.locator('[data-test="earlier-conversations"]').click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
   // Playwright clicks bypass native window dragging; the arrow sits in the title row, over the drag strip.
   assert.equal(await page.locator('[data-test="earlier-back"]').evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-app-region')), 'no-drag', 'Back must receive native mouse clicks inside the draggable titlebar')
@@ -110,10 +110,10 @@ try {
   await page.getByRole('button',{name:'Setup help'}).click();await snap('36-setup-help');await page.keyboard.press('Escape')
   await app.evaluate(()=>globalThis.ux.configured=true);await page.getByRole('button',{name:'Check again'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor({state:'hidden'})
   const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="earlier-conversations"]').waitFor()}
-  await openBot();await page.locator('[data-test="bot-greeting"]').waitFor()
+  await openBot();await page.locator(BOT_GREETING).waitFor()
   await page.locator('[data-test="earlier-conversations"]').click();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();await page.locator('.transcript-head .where').waitFor()
   // Opening the bot again goes back to its home conversation, where a message goes to the bot.
-  await openBot();await page.locator('[data-test="bot-greeting"]').waitFor();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await snap('39-new-bot-conversation')
+  await openBot();await page.locator(BOT_GREETING).waitFor();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await snap('39-new-bot-conversation')
   await emit('turn.error',{kind:'chat',category:'unauthorized',message:'401 credentials rejected',turn:1,id:'33333333-3333-4333-8333-333333333333'},'s-home');await page.getByText('Authentication failed',{exact:true}).waitFor()
   await page.getByRole('button',{name:'Chats',exact:true}).click();assert.equal(await page.locator('.session').filter({hasText:'First turn failure fixture'}).count(),1);await snap('40-first-turn-failure')
   // A bot works in a project by being summoned in that project's chat, for one message (MEMORY-14).

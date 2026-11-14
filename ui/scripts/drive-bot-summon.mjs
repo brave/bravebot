@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
+import { ASSISTANT_BUBBLE, BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
 
 // Every request lists each definition's purpose among the delegate kinds, so the sentence the
 // agent adds to a turn addressed to a definition is what says which one the turn ran under. The
@@ -109,7 +109,7 @@ try {
 
   // ---- in another bot's conversation, the summoned bot answers once and the host the rest -------
   await openBot('Harbour')
-  await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator(BOT_GREETING).waitFor()
   await page.screenshot({ path: join(output, 'bot-summon-greeting.png') })
   await field.click()
   await page.keyboard.type('@')
@@ -155,7 +155,7 @@ try {
   await page.getByRole('heading', { name: 'Earlier conversations' }).waitFor()
   assert.equal(await page.locator('[data-test="bot-page"] .composer').count(), 0, 'the page has no composer')
   await page.locator('[data-test="earlier-back"]').click()
-  await page.locator('[data-test="bot-greeting"], .entries .bubble').first().waitFor()
+  await page.locator(`${BOT_GREETING}, .entries .bubble`).first().waitFor()
 
   // ---- deleting the project's conversation takes the card for the reply given in it ------------
   await page.getByRole('button', { name: 'Chats', exact: true }).click()

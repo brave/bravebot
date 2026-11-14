@@ -669,6 +669,22 @@ impl Confinement {
         !(self.mode == SandboxMode::ReadOnly && scope == Scope::Remote)
     }
 
+    /// Whether a stage carrying or asked for `scope` is lent the agent socket the stage starts
+    /// with: the remote scope where it is lent, and the signing scope for a person whose git signs
+    /// with ssh (SANDBOX-16, SANDBOX-18). The profile's rows and the sentence the planner reads
+    /// both ask this, so they cannot disagree.
+    fn lends_the_agent(&self, scope: Scope) -> bool {
+        self.lends(scope)
+            && match scope {
+                Scope::Remote => true,
+                Scope::Signing => self
+                    .home
+                    .as_deref()
+                    .is_some_and(|home| signing::read(home, self.state(), &self.place).enabled),
+                _ => false,
+            }
+    }
+
     /// Why a stage keeps the network under a closed setting, in words fixed here so the line a
     /// person reads never carries a name the plan chose.
     fn egress_reason(&self, step: &Step) -> Option<&'static str> {
@@ -1562,7 +1578,7 @@ impl Confinement {
                 if let Some(key) = self.identified(step).as_ref().and_then(Identified::key) {
                     policy = policy.allow_read(key);
                 }
-                if matches!(scope, Scope::Remote | Scope::Signing)
+                if self.lends_the_agent(scope)
                     && let Some(socket) = socket.clone()
                 {
                     policy = policy.allow_write(socket);
@@ -1586,15 +1602,10 @@ impl Confinement {
                         }
                         // A request lends the agent where the argv that signs would: only to a
                         // person whose git signs with ssh.
-                        let lends_the_agent = match scope {
-                            Scope::Remote => true,
-                            Scope::Signing => {
-                                signing::read(home, self.state(), &self.place).enabled
-                            }
-                            _ => false,
-                        };
                         match socket.clone() {
-                            Some(socket) if lends_the_agent => policy.allow_write(socket),
+                            Some(socket) if self.lends_the_agent(scope) => {
+                                policy.allow_write(socket)
+                            }
                             _ => policy,
                         }
                     }
@@ -2076,29 +2087,17 @@ impl Confinement {
     /// Whether the agent socket was lent to a step of `steps` that signs, and so what a signature
     /// that fails for want of a private key has to mean.
     ///
-    /// Decided where [`Confinement::policy`] decides the rows: a step lends the socket the stage
-    /// starts with where it carries or was asked for the remote scope, or the signing scope for a
-    /// person whose git signs with ssh. Read from that and the person's own configuration, and
-    /// never from what a program printed.
+    /// Decided by [`Confinement::lends_the_agent`], which [`Confinement::policy`] decides the rows
+    /// with: a step lends the socket the stage starts with where it carries or was asked for the
+    /// remote scope, or the signing scope for a person whose git signs with ssh. Read from that and
+    /// the person's own configuration, and never from what a program printed.
     fn signing_agent_sentence(&self, steps: &[&Step], environment: &[(String, String)]) -> String {
-        let enabled = self
-            .home
-            .as_deref()
-            .is_some_and(|home| signing::read(home, self.state(), &self.place).enabled);
-        let lends = |scope: Scope| {
-            self.lends(scope)
-                && match scope {
-                    Scope::Remote => true,
-                    Scope::Signing => enabled,
-                    _ => false,
-                }
-        };
         let reaches_the_socket = steps.iter().any(|step| {
-            self.scope_of(step).is_some_and(lends)
-                || self
-                    .requested_for(step)
-                    .iter()
-                    .any(|request| matches!(request, Requested::Scope(scope) if lends(*scope)))
+            self.scope_of(step)
+                .is_some_and(|scope| self.lends_the_agent(scope))
+                || self.requested_for(step).iter().any(|request| {
+                    matches!(request, Requested::Scope(scope) if self.lends_the_agent(*scope))
+                })
         });
         match (
             reaches_the_socket,
@@ -2669,18 +2668,9 @@ impl Container {
     }
 }
 
-/// What the planner is told about the programs `run` starts, for a turn that asks for them to be
-/// confined, or `None` for one that does not.
-///
-/// A turn that does not confine returns `None`, so a planner is never told of a boundary its
-/// programs do not have. Where the platform has no base to confine on, it is told the opposite.
-///
-/// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
-/// state. [`stated_in_the_description`] adds the one sentence those two cases do carry.
-///
-/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
-/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
-/// `loopback`, and says which routes the person has instead (SANDBOX-19).
+/// [`stated_to_the_planner_for`] for a turn whose list holds `request_path` and where somebody can
+/// be asked.
+#[cfg(test)]
 pub fn stated_to_the_planner(
     confine_runs: bool,
     mode: SandboxMode,
@@ -2695,10 +2685,23 @@ pub fn stated_to_the_planner(
     )
 }
 
-/// [`stated_to_the_planner`] for a turn whose list holds `request_path` (`request_path_listed`) or
-/// does not. Where it does not, no sentence names the tool and each says what the person can do
-/// instead, or nothing (TOOL-6). `askable` says whether anybody can be asked in this run (CLI-1),
-/// and where nobody can, no sentence names a route only a person takes (SANDBOX-19).
+/// What the planner is told about the programs `run` starts, for a turn that asks for them to be
+/// confined, or `None` for one that does not.
+///
+/// A turn that does not confine returns `None`, so a planner is never told of a boundary its
+/// programs do not have. Where the platform has no base to confine on, it is told the opposite.
+///
+/// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
+/// state. [`stated_in_the_description_for`] adds the one sentence those two cases do carry.
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
+/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
+/// `loopback`, and says which routes the person has instead (SANDBOX-19).
+///
+/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, no sentence
+/// names the tool and each says what the person can do instead, or nothing (TOOL-6). `askable` says
+/// whether anybody can be asked in this run (CLI-1), and where nobody can, no sentence names a
+/// route only a person takes (SANDBOX-19).
 pub fn stated_to_the_planner_for(
     confine_runs: bool,
     mode: SandboxMode,
@@ -12001,7 +12004,14 @@ mod tests {
         let plan = plan_of("true | echo hi", &session);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
 
-        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+        let refused = crate::exec::start_steps_within(
+            steps,
+            &session,
+            None,
+            Some(&confinement),
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        );
 
         assert!(
             matches!(
@@ -12025,7 +12035,14 @@ mod tests {
         let plan = plan_of(A_SLOW_WRITER_INTO_A_PIPE, &session);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
 
-        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+        let refused = crate::exec::start_steps_within(
+            steps,
+            &session,
+            None,
+            Some(&confinement),
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        );
 
         assert!(
             matches!(&refused, Err(ExecError::NotConfined { program, .. }) if program == "cat"),
@@ -12749,6 +12766,64 @@ mod tests {
         assert!(line.contains(SIGNING_AGENT_LENT_SENTENCE), "{line}");
         assert!(!line.contains(SIGNING_NOT_SSH_SENTENCE), "{line}");
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16 and SANDBOX-18: the sentence the planner reads says the agent socket was lent
+    /// exactly where the profile grants the socket as a write row, for every scope a `run` may ask
+    /// for and every scope an argv carries, under every mode, for a person whose git signs with
+    /// ssh and for one whose git does not.
+    #[test]
+    #[cfg(unix)]
+    fn the_sentence_says_the_agent_was_lent_exactly_where_the_rows_grant_it() {
+        use bravebot_sandbox::scope::Requested;
+        let agent = AgentSocket::at("rows-and-sentence");
+        let environment = agent.environment();
+        let script = step("/bin/sh", &["-c", "git rebase main"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let scopes = [
+            Scope::Remote,
+            Scope::Aws,
+            Scope::Kubernetes,
+            Scope::Docker,
+            Scope::Signing,
+        ];
+        let (mut lent, mut withheld) = (0, 0);
+        for (name, gitconfig) in [
+            ("rows-signs", SIGNS_WITH_A_KEY),
+            ("rows-not-signing", "[user]\nsigningkey = ~/keys/work.pub\n"),
+        ] {
+            let (home, confined) =
+                a_confinement_over_a_home_that(name, gitconfig, &["keys/work.pub"]);
+            for mode in SandboxMode::ALL {
+                let moded = confined.clone().with_mode(mode);
+                let mut cases: Vec<(String, Confinement, &Step)> = scopes
+                    .iter()
+                    .map(|scope| {
+                        (
+                            format!("requested {scope:?}"),
+                            moded.clone().with_requested(&[Requested::Scope(*scope)]),
+                            &script,
+                        )
+                    })
+                    .collect();
+                cases.push(("commit".to_string(), moded.clone(), &commit));
+                cases.push(("push".to_string(), moded.clone(), &push));
+                for (way, confined, step) in &cases {
+                    let policy = confined.policy(step, Path::new("/work/project"), &environment);
+                    let granted = writes(&policy, agent.name());
+                    let line = confined.signing_agent_sentence(&[*step], &environment);
+                    let said = line == SIGNING_AGENT_LENT_SENTENCE;
+                    assert_eq!(granted, said, "{name} {mode:?} {way}: {line}");
+                    match granted {
+                        true => lent += 1,
+                        false => withheld += 1,
+                    }
+                }
+            }
+            std::fs::remove_dir_all(&home).unwrap();
+        }
+        assert!(lent > 0 && withheld > 0, "lent {lent}, withheld {withheld}");
     }
 
     /// SANDBOX-16: a stage that carries the signing scope is always told where the key comes from

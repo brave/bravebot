@@ -407,6 +407,33 @@ pub fn replace(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
     written
 }
 
+/// Write `text` as `file` in `directory`, for a file holding a secret, through a temporary file
+/// beside it that is private to this account (STATE-1), as [`replace`] writes one. It differs from
+/// [`replace`] in creating `directory` first and in syncing the temporary file to disk before the
+/// rename.
+///
+/// The temporary file is named for this process and removed when any step fails, so a failed
+/// write leaves the file that was there and no copy of the secret beside it.
+pub(crate) fn replace_private(directory: &Path, file: &str, text: &str) -> std::io::Result<()> {
+    create_directory(directory)?;
+    let path = directory.join(file);
+    let temporary = directory.join(format!("{file}.{}.tmp", std::process::id()));
+    // The file is closed at the end of the closure, before the rename, which Windows refuses while
+    // a handle is still open on either name.
+    let written = bravebot_skus::store::create_private(&temporary)
+        .and_then(|mut file| {
+            file.write_all(text.as_bytes())?;
+            // On disk before the rename, or a crash just after it can leave the name on an empty
+            // file where a filesystem orders the rename first.
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, &path));
+    if written.is_err() {
+        std::fs::remove_file(&temporary).unwrap_or_default();
+    }
+    written
+}
+
 /// Write `contents` to a file that is not there yet, readable only by this user.
 ///
 /// Refuses, with `AlreadyExists`, a name that is taken, a link included, so a writer that must
@@ -952,6 +979,36 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["blocked", "model"]);
+    }
+
+    /// A key file holds a bearer token (STATE-1): it is private from creation, written into a
+    /// directory made for it, and a write whose rename fails leaves no copy of the key beside it.
+    #[test]
+    fn a_private_replacement_is_whole_and_private_and_a_failed_one_leaves_nothing_beside_it() {
+        let scratch = Scratch::new("home-replace-private");
+        let directory = scratch.path.join("state");
+        replace_private(&directory, "key", "one\n").expect("written");
+        replace_private(&directory, "key", "two\n").expect("replaced");
+
+        let file = directory.join("key");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "two\n");
+        assert_eq!(mode_of(&file), 0o600);
+
+        // A directory in the way makes the rename fail, after the temporary file was written.
+        std::fs::create_dir_all(directory.join("blocked").join("inside")).expect("blocker");
+        assert!(replace_private(&directory, "blocked", "secret").is_err());
+        let mut names: Vec<_> = std::fs::read_dir(&directory)
+            .expect("listed")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("utf8")
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["blocked", "key"]);
     }
 
     /// The file an older build left is the one holding the history worth protecting, so writing it

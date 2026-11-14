@@ -2351,9 +2351,9 @@ of tries: `bravebot auth status` shows the sign-in or key in use and `bravebot d
 endpoint. Every source of that category says it the same way: a status of 401 or 403, a token the
 Google Cloud CLI would not give, a sign-in AWS would not resolve, and a refusal the service reported
 as one of authentication, permission or billing. A failure of a request that carried the stored
-premium key, or of a key that could not be presented, reports that as a closed flag beside its
-category, set by the step that made the request and never read from a reply, and its line names the
-commands of [PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
+premium key reports that as a closed flag beside its category, set by the step that made the
+request and never read from a reply, and its line names the commands of
+[PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
 driver's own, so no text from a reply, header, URL or credential is in them, and a failure of the
 account of a ChatGPT or an xAI sign-in keeps its own sentence. The flag and the commands are for the
 person only: the planner is told the category and the request count and no more.
@@ -2431,6 +2431,7 @@ or an address. The flag and the wait are for the person only and are not given t
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure`
+`verified-by: bravebot_aichat::lib::a_body_read_in_the_background_says_what_arrived_and_whether_it_began`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
 `verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
@@ -2657,8 +2658,8 @@ service". Afterwards the question a person has is why the answers are bad, which
 configuration cannot be reached from.
 
 Refusing rather than letting the request go, for the reason
-[PREM-10](premium-credentials.md#PREM-10) fails a request that cannot present its key rather than
-sending it without one: what comes back from a request that was never going to be served carries no
+[PREM-10](premium-credentials.md#PREM-10) gives against a request that silently loses its key:
+what comes back from a request that was never going to be served carries no
 sign of why, and nothing about a bad session points at where a request went.
 
 Five routes rather than one, and each named by what to type, because a refusal that states the
@@ -4637,6 +4638,7 @@ short rather than refused.
 `verified-by: bravebot_aichat::client::an_ollama_reply_the_ceiling_stopped_is_kept_and_said_to_be_cut_off`
 `verified-by: bravebot_aichat::client::an_error_line_from_ollama_is_reported_rather_than_read_past`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_ollama_model_to_start_writing`
+`verified-by: bravebot_aichat::client::an_ollama_key_goes_to_the_server_the_entry_names_and_not_where_it_redirects`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_is_messages_with_the_window_and_ceiling_in_options`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_nobody_asked_anything_of_carries_only_the_conversation`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_schema_goes_in_format`

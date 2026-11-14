@@ -667,8 +667,8 @@ pub fn outside_stage_writable_with(
 
 /// What a variable that selects code to run names.
 ///
-/// The variables of one program are listed with the kind each names, and
-/// [`withhold_code_selectors`] applies [`may_be_run`] to each
+/// The variables of one program are listed with the kind each names, and a
+/// [`CodeSelectors::Checked`] start applies [`may_be_run`] to each
 /// ([PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Names {
@@ -834,23 +834,10 @@ pub mod selectors {
     pub const QT_PLUGIN_PATH: (&str, Names) = ("QT_PLUGIN_PATH", Names::Directories);
 }
 
-/// Take each variable in `selectors` off the environment `command` is started with unless
-/// [`may_be_run`] accepts the value this process holds for it. A variable this process does not
-/// hold is left alone, and so is every name not listed.
-///
-/// For a command built by [`start`], which is what hands it the rest of the environment.
-pub fn withhold_code_selectors(command: &mut Command, selectors: &[(&str, Names)]) {
-    withhold_code_selectors_with(
-        command,
-        selectors,
-        |name| std::env::var_os(name),
-        outside_stage_writable,
-    );
-}
-
-/// [`withhold_code_selectors`] against a given environment and a given judgment of which files are
-/// outside the directories a stage may write.
-pub fn withhold_code_selectors_with(
+/// Take each variable in `selectors` off `command` unless [`may_be_run`] accepts the value `held`
+/// gives for it, judged with `outside_stage_writable`. A variable `held` gives no value for is left
+/// alone, and so is every name not listed.
+fn withhold_code_selectors_with(
     command: &mut Command,
     selectors: &[(&str, Names)],
     held: impl Fn(&str) -> Option<OsString>,

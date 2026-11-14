@@ -8345,10 +8345,10 @@ fn a_stop_during_the_check_on_a_servers_answer_that_asks_to_read_ends_the_turn_s
 struct IdleWallet;
 
 impl bravebot_aichat::Subscription for IdleWallet {
-    fn next_credential(&mut self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
-        Ok(bravebot_aichat::SubscriptionCredential {
+    fn next_credential(&mut self) -> bravebot_aichat::SubscriptionCredential {
+        bravebot_aichat::SubscriptionCredential {
             key: bravebot_config::Secret::new("credential-1".to_string()),
-        })
+        }
     }
 }
 

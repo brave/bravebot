@@ -1,9 +1,10 @@
 //! Running a pipeline of already-resolved argv stages, for tests.
 //!
 //! Shipped code runs a compiled plan through `exec::run_plan_observed` and starts a background job
-//! through `exec::start_steps`. These build the plan or the steps from a pipeline and the paths its
-//! stages resolved to, and pass no confinement and no notification, as the functions they replace
-//! in `exec` did.
+//! through `exec::start_steps_within`. These build the plan or the steps from a pipeline and the
+//! paths its stages resolved to, and pass no confinement and no notification, as the functions
+//! they replace in `exec` did.
+use bravebot_agent::confine::Confinement;
 use bravebot_agent::exec::{self, ExecError};
 use bravebot_core::Pipeline;
 use bravebot_core::cancel::Cancel;
@@ -69,6 +70,24 @@ pub fn run(
     run_within(pipeline, resolved, directory, cancel, exec::LIMIT, scratch)
 }
 
+/// Start steps and leave them running, for a test with no turn behind it: a substitution in a
+/// step's assignments runs under the built-in limit and a token nobody holds.
+pub fn start_steps(
+    steps: &[Step],
+    directory: &Path,
+    scratch: Option<&Path>,
+    confinement: Option<&Confinement>,
+) -> Result<exec::Background, ExecError> {
+    exec::start_steps_within(
+        steps,
+        directory,
+        scratch,
+        confinement,
+        &Cancel::new(),
+        exec::LIMIT,
+    )
+}
+
 /// Start a pipeline and leave it running.
 pub fn start(
     pipeline: &Pipeline,
@@ -77,5 +96,5 @@ pub fn start(
     scratch: Option<&Path>,
 ) -> Result<exec::Background, ExecError> {
     let steps = steps_of(pipeline, resolved)?;
-    exec::start_steps(&steps, directory, scratch, None)
+    start_steps(&steps, directory, scratch, None)
 }

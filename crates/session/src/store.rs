@@ -217,6 +217,40 @@ fn writable() -> Option<PathBuf> {
     bravebot_agent::home::writable()
 }
 
+/// The global state directory once it exists and is readable only by its owner, or `None` where it
+/// may not be written or could not be made so.
+///
+/// Resolved through [`writable`], so an incognito session gets `None` here and every choice below
+/// writes nothing. The directory is created, or an existing one narrowed, before anything is
+/// written into it ([STATE-1](../../../docs/specs/state-directory.md#STATE-1)).
+fn ready() -> Option<PathBuf> {
+    let dir = writable()?;
+    bravebot_agent::home::create_directory(&dir).ok()?;
+    Some(dir)
+}
+
+/// Write `contents` as `file` in the global state directory, and say whether it was kept.
+///
+/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
+/// rather than half of the new one. Most callers drop the answer: a choice that could not be saved
+/// still applies to the session that made it.
+fn keep(file: &str, contents: &[u8]) -> bool {
+    ready().is_some_and(|dir| bravebot_agent::home::replace(&dir.join(file), contents).is_ok())
+}
+
+/// Remove `file` from the global state directory, and say whether it is gone.
+///
+/// A file that was not there is already gone, so that counts as done.
+fn forget(file: &str) -> bool {
+    let Some(dir) = ready() else {
+        return false;
+    };
+    match std::fs::remove_file(dir.join(file)) {
+        Ok(()) => true,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 /// Read stored prompts, oldest first.
 ///
 /// Returns an empty list when there is nothing to read, or when what is there cannot be parsed.
@@ -411,18 +445,10 @@ fn normalize_saved_model(name: &str) -> String {
 
 /// Record the model the user chose.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than a half-written name. Best-effort like everything else here: a choice that could not
-/// be saved still applies to the session that made it.
+/// Best-effort like everything else here: a choice that could not be saved still applies to the
+/// session that made it.
 pub fn save_model(model: &str) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ = bravebot_agent::home::replace(&dir.join(MODEL_FILE), format!("{model}\n").as_bytes());
+    keep(MODEL_FILE, format!("{model}\n").as_bytes());
 }
 
 /// Record the model the user chose, as `config` says it is to be recorded: the tier word where a tier
@@ -457,17 +483,9 @@ pub fn parse_theme(contents: &str) -> Option<String> {
 
 /// Record the theme the user chose.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than a half-written name. Best-effort like everything else here.
+/// Best-effort like everything else here.
 pub fn save_theme(theme: &str) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ = bravebot_agent::home::replace(&dir.join(THEME_FILE), format!("{theme}\n").as_bytes());
+    keep(THEME_FILE, format!("{theme}\n").as_bytes());
 }
 
 /// The effort level the user chose, or `None` if they never have.
@@ -523,27 +541,15 @@ pub fn effort(recorded: Option<Effort>, settings: &bravebot_config::Settings) ->
 
 /// Record the effort level the user chose, or forget the choice where they asked for none.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than a half-written word. Best-effort like everything else here.
+/// Best-effort like everything else here.
 pub fn save_effort(effort: Option<Effort>) {
-    let Some(dir) = writable() else {
-        return;
+    match effort {
+        // Removed rather than written empty. A person asking for no level is asking for the state
+        // they were in before they ever chose, and an empty file read back is the same answer
+        // either way.
+        None => forget(EFFORT_FILE),
+        Some(effort) => keep(EFFORT_FILE, format!("{}\n", effort.as_str()).as_bytes()),
     };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    // Removed rather than written empty. A person asking for no level is asking for the state they
-    // were in before they ever chose, and an empty file read back is the same answer either way.
-    let Some(effort) = effort else {
-        let _ = std::fs::remove_file(dir.join(EFFORT_FILE));
-        return;
-    };
-
-    let _ = bravebot_agent::home::replace(
-        &dir.join(EFFORT_FILE),
-        format!("{}\n", effort.as_str()).as_bytes(),
-    );
 }
 
 /// The word naming the style of editing the user chose, or `None` if they never chose one.
@@ -574,22 +580,14 @@ pub fn parse_editing(contents: &str) -> Option<String> {
 
 /// Record the style of editing the user chose.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice rather
-/// than a half-written word. Best-effort like everything else here.
+/// Best-effort like everything else here.
 ///
 /// The ordinary style is written rather than removing the file, unlike the effort level: there the
 /// absent file and the chosen absence are the same request, and here they are not. Somebody who turns
 /// vi editing off has made a choice that has to outlast the session, and removing the file would let a
 /// settings file turn it back on for them tomorrow.
 pub fn save_editing(word: &str) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ = bravebot_agent::home::replace(&dir.join(EDITING_FILE), format!("{word}\n").as_bytes());
+    keep(EDITING_FILE, format!("{word}\n").as_bytes());
 }
 
 /// The language tag the person chose with `/language`, or `None` if they never have.
@@ -633,28 +631,16 @@ pub fn parse_language(contents: &str) -> Option<String> {
 /// Record the language tag the person chose, or forget the choice where they asked for none, and
 /// say whether that was done.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than half a tag. Unlike its neighbours this answers whether the write happened, because
-/// a language applies from the next start and nothing in this session changes with it: a choice
-/// that could not be kept has no other effect for the person to notice.
+/// Unlike its neighbours this answers whether the write happened, because a language applies from
+/// the next start and nothing in this session changes with it: a choice that could not be kept has
+/// no other effect for the person to notice.
 pub fn save_language(tag: Option<&str>) -> bool {
-    let Some(dir) = writable() else {
-        return false;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return false;
+    match tag {
+        // Removed rather than written empty, as the effort level is: asking for no choice is asking
+        // for the state before there was one. A file that is not there is already that state.
+        None => forget(LANGUAGE_FILE),
+        Some(tag) => keep(LANGUAGE_FILE, format!("{tag}\n").as_bytes()),
     }
-
-    // Removed rather than written empty, as the effort level is: asking for no choice is asking for
-    // the state before there was one. A file that is not there is already that state.
-    let Some(tag) = tag else {
-        return match std::fs::remove_file(dir.join(LANGUAGE_FILE)) {
-            Ok(()) => true,
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-        };
-    };
-
-    bravebot_agent::home::replace(&dir.join(LANGUAGE_FILE), format!("{tag}\n").as_bytes()).is_ok()
 }
 
 /// The standing answer about auto-vetting, or `None` where nobody has recorded one.
@@ -700,26 +686,18 @@ pub fn parse_vetting(contents: &str) -> Option<bool> {
 
 /// Record the answer about auto-vetting the person gave.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous answer
-/// rather than half a word. Best-effort like everything else here.
+/// Best-effort like everything else here.
 ///
 /// Off is written rather than the file removed, for the reason the editing style is: the absent
 /// file and the chosen absence are not the same request here. Somebody who turned auto-vetting off
 /// has made a decision that has to outlast the session, and removing the file would let a settings
 /// file turn it back on for them tomorrow.
 pub fn save_vetting(auto: bool) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
     let word = match auto {
         true => "on",
         false => "off",
     };
-    let _ = bravebot_agent::home::replace(&dir.join(VETTING_FILE), format!("{word}\n").as_bytes());
+    keep(VETTING_FILE, format!("{word}\n").as_bytes());
 }
 
 /// Whether the person last left the info panel open, or `None` where they never pressed its key.
@@ -745,21 +723,13 @@ pub fn parse_panel(contents: &str) -> Option<bool> {
 
 /// Record whether the person left the info panel open.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice.
 /// Best-effort like everything else here.
 pub fn save_panel(open: bool) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
     let word = match open {
         true => "open",
         false => "closed",
     };
-    let _ = bravebot_agent::home::replace(&dir.join(PANEL_FILE), format!("{word}\n").as_bytes());
+    keep(PANEL_FILE, format!("{word}\n").as_bytes());
 }
 
 /// The width the person last dragged the info panel to, or `None` where they never did.
@@ -787,17 +757,9 @@ pub fn parse_panel_width(contents: &str) -> Option<u16> {
 
 /// Record the width the person dragged the info panel to.
 ///
-/// Written as [`save_panel`] is: to a temporary file and renamed, best-effort.
+/// Best-effort, as [`save_panel`] is.
 pub fn save_panel_width(width: u16) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ =
-        bravebot_agent::home::replace(&dir.join(PANEL_WIDTH_FILE), format!("{width}\n").as_bytes());
+    keep(PANEL_WIDTH_FILE, format!("{width}\n").as_bytes());
 }
 
 /// Whether the person has agreed to `/caffeinate` before, so it turns on without the explanation.
@@ -820,15 +782,9 @@ pub fn parse_caffeinate(contents: &str) -> bool {
 
 /// Record that the person read what `/caffeinate` does and turned it on.
 ///
-/// Written to a temporary file and renamed, as the panel's choice is.
+/// Best-effort, as the panel's choice is.
 pub fn save_caffeinate_confirmed() {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-    let _ = bravebot_agent::home::replace(&dir.join(CAFFEINATE_FILE), b"confirmed\n");
+    keep(CAFFEINATE_FILE, b"confirmed\n");
 }
 
 /// The embeddings endpoint the person was told about before turning retrieval on, if they were.
@@ -848,15 +804,10 @@ pub fn parse_retrieval_disclosed(contents: &str) -> Option<String> {
 
 /// Record that the person was told retrieval sends to `endpoint`, and say whether it was kept.
 pub fn save_retrieval_disclosed(endpoint: &str) -> bool {
-    let Some(dir) = writable() else {
-        return false;
-    };
-    bravebot_agent::home::create_directory(&dir).is_ok()
-        && bravebot_agent::home::replace(
-            &dir.join(RETRIEVAL_DISCLOSED_FILE),
-            format!("{}\n", endpoint.trim()).as_bytes(),
-        )
-        .is_ok()
+    keep(
+        RETRIEVAL_DISCLOSED_FILE,
+        format!("{}\n", endpoint.trim()).as_bytes(),
+    )
 }
 
 /// Encode a prompt as one line.
@@ -1129,7 +1080,10 @@ and this?
             "the merged settings do not hold the home file's key"
         );
         assert_eq!(
-            checkout.model_ignored().count(),
+            checkout
+                .not_obeyed_all()
+                .filter(|(key, _)| *key == "model")
+                .count(),
             1,
             "the checkout's key is not what is reported as ignored"
         );
