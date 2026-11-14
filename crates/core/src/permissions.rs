@@ -1593,7 +1593,8 @@ struct Stage {
     canonical: Option<Vec<Place>>,
 }
 
-/// The stage for `argv`.
+// The canonical copy is built only for a non-ASCII program word, so `CommandPattern::covers` skips
+// the canonical comparison for every other stage.
 fn stage_of<S: AsRef<str>>(argv: &[S]) -> Stage {
     let canonical = argv
         .first()
