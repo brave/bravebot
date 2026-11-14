@@ -265,6 +265,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "references" => t!(doctor_settings_references_ignored, path = path),
         "attribution" => t!(doctor_settings_attribution_ignored, path = path),
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
+        "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
@@ -2491,7 +2492,11 @@ mod tests {
             assert!(keys.contains(&required), "{required} is not in the table");
         }
         for key in keys {
-            std::fs::write(&project_file, format!(r#"{{"{key}": "stated"}}"#)).expect("project");
+            let text = match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": "stated"}}}}"#),
+                None => format!(r#"{{"{key}": "stated"}}"#),
+            };
+            std::fs::write(&project_file, text).expect("project");
             let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
             let lines = home_only_lines(&settings);
             assert_eq!(lines.len(), 1, "{key}: {lines:?}");

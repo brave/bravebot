@@ -2823,7 +2823,7 @@ pub fn state_confinement(
 /// Only the names fixed in the source are listed, from [`bravebot_config::scrub::builtin_credentials`].
 /// A name a settings file wrote is removed from the program and never said here: an entry in a
 /// provider's `env` is a free-form string that may be a key pasted into the wrong field, and
-/// `run.scrubEnv` takes names from a checkout's layer as well. The statement says such variables
+/// `run.scrubEnv` is read from the person's own file alone. The statement says such variables
 /// exist, which is what lets a planner read an unset report from one of them correctly.
 ///
 /// A fact about this machine and what follows from it, with no instruction. Without the fact a

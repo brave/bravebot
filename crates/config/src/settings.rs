@@ -179,6 +179,9 @@ impl Entitled {
 /// [`Settings::from_map`]. The layer is recorded under the key in `Settings::not_obeyed`.
 /// [`Settings::not_obeyed_all`] answers for every row, which is what `doctor` and the desktop
 /// settings view read, so a row added here is reported by both.
+///
+/// A key inside a block is written `block.name`, as it is in [`NARROW_ONLY`]: only that name is
+/// removed, and whatever else the layer's block holds stays and merges as it always did.
 const HOME_ONLY: &[(&str, Entitled)] = &[
     // The key picking which of the providers answers.
     ("model", Entitled::OwnOrNamed),
@@ -232,6 +235,11 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // A question closed on a clock is one the person was not asked, so a clock that closes the
     // person's questions is theirs to set and not the checkout's.
     ("askIdleSeconds", Entitled::OwnOrNamed),
+    // A name here is a variable no program the agent runs is handed, and a variable can restrict
+    // as well as grant: `npm_config_ignore_scripts` set by the person is what keeps a package's
+    // install scripts from running, and a checkout listing it, or a pattern holding it, runs them
+    // (BACKEND-24, RUN-12). So the list is the person's alone, and a checkout's entries are not read.
+    ("run.scrubEnv", Entitled::OwnOrNamed),
 ];
 
 /// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
@@ -2869,11 +2877,14 @@ impl Settings {
             .map(|(name, path)| (name.as_str(), path.as_path()))
     }
 
-    /// Variables this file says to keep from a program the agent runs, beyond the built-in set.
+    /// Variables the person's own file and the file `--settings` names say to keep from a program
+    /// the agent runs, beyond the built-in set.
     ///
-    /// Names only, which is the whole reason this may live in a file at all: naming a variable
-    /// takes something away from a subprocess and can grant nothing. A value here could put a
-    /// credential in front of every command instead, which is what the `env` block declines to do.
+    /// Names only: a value here could put a credential in front of every command, which is what the
+    /// `env` block declines to do. A project or local layer's list is not read ([`HOME_ONLY`]),
+    /// because withholding a variable can also grant: a program started without
+    /// `npm_config_ignore_scripts` or `PYTHONSAFEPATH` runs what the person's setting had kept it
+    /// from running (BACKEND-24, RUN-12).
     pub fn scrubbed(&self) -> impl Iterator<Item = &str> {
         self.scrub.iter().map(String::as_str)
     }
@@ -3182,8 +3193,11 @@ impl Document {
     /// What came out is kept with the rest of what was displaced rather than handed back, so that
     /// a token in it is cleared where every other dropped value is ([CRED-23]). The caller gets a
     /// presence answer, which is all deciding whether the layer was entitled to the key needs.
+    ///
+    /// A key written `block.name` is the name inside the block ([`Document::take_key`]), so the rest
+    /// of the block stays.
     fn remove(&mut self, key: &str) -> bool {
-        self.root.remove(key).is_some_and(|value| {
+        self.take_key(key).is_some_and(|value| {
             self.displaced.push(value);
             true
         })
@@ -3595,9 +3609,10 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>, granting: bool
 /// Within `tui` the settle of [`NARROW_ONLY`] has already taken `mouse` and `contextMenu` out of
 /// every layer, so the other names merge here and those two are put back as the one value in force.
 ///
-/// `run.scrubEnv` unions instead, since a name there only ever takes a variable away from a
-/// subprocess. Overriding would let a layer hand back something a weaker one withheld, which is a
-/// direction this list is not for.
+/// `run.scrubEnv` unions across the layers that reach this function, which are the person's own file
+/// and the file `--settings` names: a project or local layer's list was removed before the merge
+/// ([`HOME_ONLY`]). Overriding would let the named file hand back a name the person's own file
+/// withheld.
 fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Value>) {
     let Document {
         root: base,
@@ -3711,6 +3726,8 @@ fn merge_permissions(
 }
 
 /// The `run` block, where `scrubEnv` unions and every other name overrides.
+///
+/// A checkout's `scrubEnv` is not among what arrives: the layer loop took it out ([`HOME_ONLY`]).
 fn merge_run(
     displaced: &mut Vec<serde_json::Value>,
     under: &mut serde_json::Map<String, serde_json::Value>,
@@ -6594,18 +6611,82 @@ mod tests {
         assert_eq!(settings.get("DEPLOY_TARGET"), Some("personal"));
     }
 
-    /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
-    /// override would let a project file hand back a secret the person's own file withheld.
+    /// A variable named here is one no program the agent runs is handed, and that can restrict as
+    /// well as grant: `npm_config_ignore_scripts` or `PYTHONSAFEPATH` in the person's environment
+    /// keeps a package's scripts or a stray module from running, and a checkout listing it or a
+    /// pattern holding it would run them (BACKEND-24, RUN-12). So only the person's own file and the
+    /// file `--settings` names are read, a project or local layer's list is dropped, exact names and
+    /// patterns alike, and `doctor` names the files.
     #[test]
-    fn every_layer_adds_to_the_names_kept_from_a_program() {
-        let settings = Layers::new("scrub-union")
+    fn a_checkout_adds_nothing_to_the_names_kept_from_a_program() {
+        let layers = Layers::new("scrub-checkout")
+            .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"]}}"#)
+            .project(r#"{"run": {"scrubEnv": ["npm_config_*", "npm_config_ignore_scripts"]}}"#)
+            .local(r#"{"run": {"scrubEnv": ["PYTHONSAFEPATH"]}}"#);
+        let settings = layers.read();
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["PERSONAL_TOKEN"]);
+
+        let environment = [
+            "npm_config_ignore_scripts".to_string(),
+            "PYTHONSAFEPATH".to_string(),
+            "PERSONAL_TOKEN".to_string(),
+        ];
+        let withheld = crate::scrub::names_against(&settings, &environment);
+        assert!(
+            withheld.contains(&"PERSONAL_TOKEN".to_string()),
+            "{withheld:?}"
+        );
+        for kept in ["npm_config_ignore_scripts", "PYTHONSAFEPATH"] {
+            assert!(
+                !withheld.iter().any(|name| name == kept),
+                "{kept} was withheld on a checkout's say: {withheld:?}"
+            );
+        }
+
+        let files: Vec<PathBuf> = settings
+            .not_obeyed_all()
+            .filter(|(key, _)| *key == "run.scrubEnv")
+            .map(|(_, path)| path.to_path_buf())
+            .collect();
+        assert_eq!(
+            files,
+            [
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ]
+        );
+    }
+
+    /// Only the one name goes: a checkout that also bounds how long a program runs keeps that bound,
+    /// since the sentence about the list says nothing about the rest of the block.
+    #[test]
+    fn a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped() {
+        let settings = Layers::new("scrub-checkout-block")
+            .project(r#"{"run": {"scrubEnv": ["NOT_ME"], "maxSeconds": 60, "network": "closed"}}"#)
+            .read();
+        assert_eq!(settings.scrubbed().count(), 0);
+        assert_eq!(
+            settings.run_deadlines().ceiling,
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(settings.not_obeyed("run.scrubEnv").count(), 1);
+        assert!(!settings.is_empty());
+    }
+
+    /// The file `--settings` names is the person's wherever it sits, the project file included, so
+    /// its list is read and the person's own entries stay beside it.
+    #[test]
+    fn the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program() {
+        let settings = Layers::new("scrub-named-project")
             .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"]}}"#)
             .project(r#"{"run": {"scrubEnv": ["PROJECT_TOKEN"]}}"#)
             .local(r#"{"run": {"scrubEnv": ["MACHINE_TOKEN"]}}"#)
+            .naming_the_project_layer()
             .read();
         let mut named: Vec<&str> = settings.scrubbed().collect();
         named.sort_unstable();
-        assert_eq!(named, ["MACHINE_TOKEN", "PERSONAL_TOKEN", "PROJECT_TOKEN"]);
+        assert_eq!(named, ["PERSONAL_TOKEN", "PROJECT_TOKEN"]);
+        assert_eq!(settings.not_obeyed("run.scrubEnv").count(), 1);
     }
 
     /// A `provider` block names where a request is sent and which of the person's variables are read
@@ -9670,11 +9751,16 @@ mod tests {
         ("references", false, false),
         ("attribution", false, false),
         ("askIdleSeconds", false, false),
+        ("run.scrubEnv", false, false),
     ];
 
-    /// The text of a layer naming only `key`.
+    /// The text of a layer naming only `key`, inside its block where the key is written
+    /// `block.name`.
     fn naming_only(key: &str) -> String {
-        format!(r#"{{"{key}": "stated"}}"#)
+        match key.split_once('.') {
+            Some((block, name)) => format!(r#"{{"{block}": {{"{name}": "stated"}}}}"#),
+            None => format!(r#"{{"{key}": "stated"}}"#),
+        }
     }
 
     /// Every key of [`HOME_ONLY`] is refused to the project and local layers, admitted to the home

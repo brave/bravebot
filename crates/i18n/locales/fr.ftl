@@ -663,6 +663,11 @@ doctor-settings-retrieval-ignored =
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+# Un nom de run.scrubEnv peut empêcher une restriction de s'appliquer à un programme autant qu'un
+# secret de lui parvenir : la liste d'une copie de travail n'est pas lue et ses noms ne retirent rien.
+doctor-settings-scrub-env-ignored =
+    run.scrubEnv dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings, et aucun de ses noms n'est retiré
 doctor-settings-references-ignored =
     references dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings

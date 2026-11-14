@@ -49,8 +49,10 @@ region or a profile that is not.
 
 **What is signed, sent or granted to it.** Where a checkout's value moves a request, ask what the
 request carries: a credential's signature, a header, the conversation. Where it decides a permission,
-ask whether it can widen one. A list that can only narrow, which BACKEND-24 gives `scrubEnv` and the
-permission lists as, is sound. A value that selects or replaces is not.
+ask whether it can widen one. A list that can only narrow, which BACKEND-24 gives the
+permission lists as, is sound. `scrubEnv` is no longer one: a name in it can keep a restriction off a
+program, so BACKEND-24 reads it from the person's layers alone. A value that selects or replaces is
+not.
 
 **What it makes the program print.** A key nothing reads, an entry that does not parse, an `env` name
 and a path in a sandbox list are each printed back by `doctor`, `-p` and `--plain`, in some cases

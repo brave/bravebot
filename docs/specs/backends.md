@@ -1328,7 +1328,8 @@ every file that was found. The flag that names one, and the path it refuses, are
 |---|---|
 | `env`, `keybindings`, `search`, `tui` | per name, one level down; the value under a name is replaced whole |
 | the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
-| `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
+| `run.scrubEnv` | home layer, and the file `--settings` names, whose entries are kept together; a project or local layer's list is ignored and reported by `doctor`, and the rest of that layer's `run` block is read as before |
+| every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
 | `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
@@ -1342,9 +1343,20 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
 | anything else | the closest layer that set it wins |
 
-The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
+The keys of the rows above that a layer may not name are read from one table, so `doctor` and
 the desktop settings view each name every file that carried one, and a key added to the table is
-reported by both without an edit to either.
+reported by both without an edit to either. A key inside a block is written `block.name`, and only
+that name is removed from the layer: `run.scrubEnv` is dropped from a checkout's `run` block and the
+block's other names stay.
+
+`run.scrubEnv` is in the table because a name in it is not only a restriction. A program is started
+without every variable the list names, and a variable can hold a restriction: the person's
+`npm_config_ignore_scripts` keeps a package's install scripts from running and `PYTHONSAFEPATH` keeps
+the working directory off the module path. A checkout naming either, or a pattern holding it
+([RUN-28](tools/run.md#RUN-28)), would start every program without it. The decision is by which layer
+the file is, so nothing a file says is read to make it. The list the person's files state is
+withheld as before, and the planner is told of those names without being given them
+([RUN-12](tools/run.md#RUN-12)).
 
 The keys a project or local layer may only narrow are read from a second table (`NARROW_ONLY`), kept
 beside the first and reported through the same accessor, so `doctor` and the desktop settings view
@@ -1472,9 +1484,9 @@ answering for one must not answer for the other by omission. The chords under `k
 same case: a file moving one action's key is no statement about the other six, and a checkout
 widening a search's walk for its own size is none about how long a read may take.
 
-The lists are the exception because an entry in one only ever narrows what is possible: a name under
-`scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
-that was otherwise allowed. Overriding either would let a layer hand back what a weaker one withheld,
+The lists under `permissions` and `mcp.request` are the exception because an entry in one only ever
+narrows what is possible: a rule under `permissions` refuses something that was otherwise allowed.
+Overriding either would let a layer hand back what a weaker one withheld,
 and a permission removed by a file somebody did not open is the one outcome worth ruling out. A value
 of another shape names no entry, so letting it replace a list would remove every entry under it and
 add none. A model is one choice rather than a list, so it resolves like any other single value, and
@@ -1506,7 +1518,8 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_overrides_a_name_the_global_one_set`
 `verified-by: bravebot_config::settings::a_name_only_the_global_layer_set_survives_a_project_layer`
 `verified-by: bravebot_config::settings::the_local_layer_beats_the_one_a_checkout_carries`
-`verified-by: bravebot_config::settings::every_layer_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
 `verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_rules_takes_no_rule_away`
 `verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_names_takes_no_name_away`
@@ -1533,7 +1546,7 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_that_is_a_device_is_skipped`
 `verified-by: bravebot_config::settings::a_read_stops_one_byte_past_the_bound`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
-`verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`

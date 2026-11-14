@@ -791,6 +791,10 @@ doctor-settings-retrieval-ignored =
     retrieval in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-ask-idle-ignored =
     askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# A name in run.scrubEnv can keep a restriction off a program as well as a secret from it, so a
+# checkout's list is not read and the names in it withhold nothing.
+doctor-settings-scrub-env-ignored =
+    run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =

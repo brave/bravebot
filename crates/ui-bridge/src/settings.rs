@@ -293,8 +293,11 @@ mod tests {
             assert!(keys.contains(&required), "{required} is not in the table");
         }
         for key in keys {
-            let (directory, settings) =
-                vetting_layers(Some("{}"), Some(&format!(r#"{{"{key}": "stated"}}"#)));
+            let text = match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": "stated"}}}}"#),
+                None => format!(r#"{{"{key}": "stated"}}"#),
+            };
+            let (directory, settings) = vetting_layers(Some("{}"), Some(&text));
             let project = directory.path().join("project/.bravebot/settings.json");
             assert_eq!(
                 ignored(&settings),

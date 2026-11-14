@@ -310,7 +310,8 @@ one thing leaves everything else in force:
 | What | How the files combine |
 |---|---|
 | `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
-| `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
+| `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
+| `run.scrubEnv` | your own file and the file `--settings` names, whose entries are kept together; a project or local file's list is ignored and reported, and the rest of its `run` block is read as before |
 | `permissions.allow` | your own file's entries, the file `--settings` names, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and the file `--settings` names; a project or local file's block is ignored and reported, and a later file's block replaces an earlier one's |
@@ -329,11 +330,13 @@ list under `permissions` as something other than an array, sets nothing there: t
 block or list stays in force. A `{"permissions": null}` in a checkout therefore cannot clear the
 `deny` and `ask` rules in your own file.
 
-The lists are the exception because an entry in one only ever takes something away: a name under
-`scrubEnv` withholds a variable from a program, and a `deny` or `ask` rule refuses or asks about
-something that was otherwise allowed. Overriding them would let a file closer to your work hand back
-what a broader one withheld, and a permission removed by a file you never opened is the outcome
-worth ruling out.
+The lists are the exception because an entry in one only ever takes something away: a `deny` or
+`ask` rule refuses or asks about something that was otherwise allowed. Overriding them would let a
+file closer to your work hand back what a broader one withheld, and a permission removed by a file
+you never opened is the outcome worth ruling out. `run.scrubEnv` is not in that group for a checkout:
+a name in it can also keep a restriction off a program, such as `npm_config_ignore_scripts` or
+`PYTHONSAFEPATH` in your environment, so only your own file and the file `--settings` names are read
+for it.
 
 `allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
 entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
@@ -1137,7 +1140,8 @@ application does not, so this page and the README are where it is said for that.
 
 ### `run.scrubEnv`
 
-Variables to withhold from a program the agent runs. See [Sandbox settings](../security/sandbox.md#runscrubenv).
+Variables to withhold from a program the agent runs. Only your own file and the file `--settings`
+names are read for it. See [Sandbox settings](../security/sandbox.md#runscrubenv).
 
 ### `run.network`
 
