@@ -11,7 +11,10 @@ use crate::diff::{Change, Diff};
 use super::objects::{Entry, Side};
 use super::out::{Out, escaped, in_scope, is_binary, join};
 use super::revision::{Spec, spec};
-use super::{ABBREV, Declined, MAX_BLOB, Printed, Repository, Request, TREE_DEPTH};
+use super::{ABBREV, Declined, MAX_DIFF_BLOB, Printed, Repository, Request, TREE_DEPTH};
+
+/// Unchanged lines a hunk keeps either side of a change, as `git diff` does.
+const CONTEXT: usize = 3;
 
 impl Repository {
     pub(super) fn diff(
@@ -184,9 +187,10 @@ impl Repository {
         }
         for (_, id) in [old, new].into_iter().flatten() {
             let (_, size) = self.objects.header(&id)?.ok_or(Declined::Unreadable)?;
-            if size > MAX_BLOB {
+            if size > MAX_DIFF_BLOB {
+                let instead = out.instead();
                 out.text.line(&format!(
-                    "(not diffed: a side is {size} bytes, more than read_git diffs)"
+                    "(not diffed: a side is {size} bytes, more than read_git diffs{instead})"
                 ));
                 return Ok(());
             }
@@ -209,21 +213,26 @@ impl Repository {
         }
         out.text.line(&format!("--- {before}"));
         out.text.line(&format!("+++ {after}"));
-        let diff = Diff::compute(&escaped(&a), &escaped(&b));
+        // Only the lines that differ, with their context, are compared, so what the comparison
+        // costs follows the change and not the file. `skipped` is the lines before the region.
+        let (a_text, b_text) = (escaped(&a), escaped(&b));
+        let region = Region::of(&a_text, &b_text);
+        let skipped = region.skipped;
+        let diff = Diff::compute(region.old, region.new);
         if let Some((a_stuck, b_stuck)) = diff.unaligned_lines() {
             let (a_lines, b_lines) = diff.differing_lines();
             out.text.line(&format!(
                 "(too different to diff line by line: the sides differ between lines {}-{} of a \
                  and lines {}-{} of b, and the lines that could not be matched up lie within lines \
                  {}-{} of a and lines {}-{} of b; removing at most {} lines and adding at most {})",
-                a_lines.start + 1,
-                a_lines.end,
-                b_lines.start + 1,
-                b_lines.end,
-                a_stuck.start + 1,
-                a_stuck.end,
-                b_stuck.start + 1,
-                b_stuck.end,
+                a_lines.start + skipped + 1,
+                a_lines.end + skipped,
+                b_lines.start + skipped + 1,
+                b_lines.end + skipped,
+                a_stuck.start + skipped + 1,
+                a_stuck.end + skipped,
+                b_stuck.start + skipped + 1,
+                b_stuck.end + skipped,
                 diff.removed(),
                 diff.added()
             ));
@@ -231,15 +240,96 @@ impl Repository {
             out.text
                 .line("(the two differ only in line endings or in a final newline)");
         } else {
-            hunks(out, path, &diff);
+            hunks(out, path, &diff, skipped);
         }
         Ok(())
     }
 }
 
+/// The stretch of two texts between their common leading lines and their common trailing ones,
+/// with up to [`CONTEXT`] of each kept so a hunk drawn from it has its context.
+///
+/// Lines are compared without their terminators, as [`Diff::compute`] compares them. This is the
+/// one place in the diff that compares the bytes of two blobs before the line diff does, and it
+/// decides nothing but where the line diff starts and ends.
+struct Region<'a> {
+    old: &'a str,
+    new: &'a str,
+    /// Lines before the region, the same on both sides.
+    skipped: usize,
+}
+
+impl<'a> Region<'a> {
+    #[expect(
+        clippy::string_slice,
+        reason = "every index is a sum of whole lines' lengths counted from either end, so it is a char boundary"
+    )]
+    fn of(old: &'a str, new: &'a str) -> Self {
+        fn bare(line: &str) -> &str {
+            match line.strip_suffix('\n') {
+                Some(line) => line.strip_suffix('\r').unwrap_or(line),
+                None => line,
+            }
+        }
+        let (mut head, mut old_head, mut new_head) = (0usize, 0usize, 0usize);
+        for (a, b) in old.split_inclusive('\n').zip(new.split_inclusive('\n')) {
+            if bare(a) != bare(b) {
+                break;
+            }
+            head += 1;
+            old_head += a.len();
+            new_head += b.len();
+        }
+        let (old_rest, new_rest) = (&old[old_head..], &new[new_head..]);
+        let (mut tail, mut old_tail, mut new_tail) = (0usize, 0usize, 0usize);
+        for (a, b) in old_rest
+            .split_inclusive('\n')
+            .rev()
+            .zip(new_rest.split_inclusive('\n').rev())
+        {
+            if bare(a) != bare(b) {
+                break;
+            }
+            tail += 1;
+            old_tail += a.len();
+            new_tail += b.len();
+        }
+        let lead = head.min(CONTEXT);
+        let trail = tail.min(CONTEXT);
+        let back = |text: &str, upto: usize| -> usize {
+            text[..upto]
+                .split_inclusive('\n')
+                .rev()
+                .take(lead)
+                .map(str::len)
+                .sum()
+        };
+        let forward = |text: &str, from: usize| -> usize {
+            text[from..]
+                .split_inclusive('\n')
+                .take(trail)
+                .map(str::len)
+                .sum()
+        };
+        let (old_from, new_from) = (
+            old_head - back(old, old_head),
+            new_head - back(new, new_head),
+        );
+        let (old_tail_at, new_tail_at) = (old.len() - old_tail, new.len() - new_tail);
+        let old_to = old_tail_at + forward(old, old_tail_at);
+        let new_to = new_tail_at + forward(new, new_tail_at);
+        Region {
+            old: &old[old_from..old_to],
+            new: &new[new_from..new_to],
+            skipped: head - lead,
+        }
+    }
+}
+
 /// Print a diff's hunks, and record each hunk's shown lines as the file's on each side: the kept
-/// and added ones from the new file, the kept and removed ones from the old.
-fn hunks(out: &mut Out<'_>, path: &str, diff: &Diff) {
+/// and added ones from the new file, the kept and removed ones from the old. `skipped` is how many
+/// lines of each file come before the first line the diff covers.
+fn hunks(out: &mut Out<'_>, path: &str, diff: &Diff, skipped: usize) {
     struct Hunk {
         old_start: usize,
         new_start: usize,
@@ -254,6 +344,10 @@ fn hunks(out: &mut Out<'_>, path: &str, diff: &Diff) {
             n => format!("{start},{n}"),
         }
     }
+    #[expect(
+        clippy::string_slice,
+        reason = "`end` is what `Text::add` kept of `sign` and `line`, which it cuts at a char boundary"
+    )]
     fn flush(out: &mut Out<'_>, path: &str, hunk: &mut Option<Hunk>) {
         let Some(h) = hunk.take() else {
             return;
@@ -288,9 +382,9 @@ fn hunks(out: &mut Out<'_>, path: &str, diff: &Diff) {
             }
         }
     }
-    let (mut old_line, mut new_line) = (1usize, 1usize);
+    let (mut old_line, mut new_line) = (skipped.saturating_add(1), skipped.saturating_add(1));
     let mut hunk: Option<Hunk> = None;
-    for change in diff.condensed(3) {
+    for change in diff.condensed(CONTEXT) {
         if let Change::Elided(n) = change {
             flush(out, path, &mut hunk);
             old_line += n;

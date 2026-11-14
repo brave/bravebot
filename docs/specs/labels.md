@@ -943,7 +943,7 @@ arrives at all.
   buys them is on this list:
 
   - **Set the answer's line and byte counts.** Within the caps `read_git` keeps: 2,000 lines, 2,000
-    characters a line and 1 MiB a blob, and the count cap. The planner is shown both numbers for
+    characters a line and 1 MiB a blob, 4 MiB a side of a diff, and the count cap. The planner is shown both numbers for
     any quarantined content ([LABEL-3](#LABEL-3)), and an attacker who owns a file already sets
     them for a read of it.
   - **Make the answer report itself incomplete.** By filling a cap, or by making the walk run to

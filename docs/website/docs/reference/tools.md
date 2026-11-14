@@ -370,7 +370,7 @@ author and its subject. With `messages`, the rest of each commit's message follo
 indented. A log that stopped with commits left names the `skip` that lists the next page, and a page
 holds whole commits. `show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
-revision. `diff` compares two commits. Two edits far apart in a file show as two hunks. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
+revision. `diff` compares two commits. Two edits far apart in a file show as two hunks, and a one-line change in a file of up to 4 MiB prints its hunk at the line numbers the file has. A side past 4 MiB, and a file past 1 MiB that a `search` would read, is described by its size and named with `read_file` on the working copy and `run`, each only where the session holds it. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
 `tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision
 only those it reaches, as `--merged` does. `search` prints the lines `pattern` matches in the files
 at a revision, as `git grep -n` does. Both page with `skip` as a log does.

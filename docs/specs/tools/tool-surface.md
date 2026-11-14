@@ -240,7 +240,7 @@ sentence on git history names `read_git`, and the account of an ended job names 
 `read_file`, only where the list holds them. The notes that start a job, move a line to the
 background and remind a later turn of a kept job name `job_output` only where the list holds it,
 and keep the sentence not to start the job again. The note on a file past the size cap that
-`read_git` shows names `read_file` and `run`, and the heading over the files it could not compare
+`read_git` shows, in a file, a diff, a show of a commit or a search, names `read_file` and `run`, and the heading over the files it could not compare
 names `run`, each only where the list holds them. The refusal of an empty `old_text` names
 `write_file`, the refusal of an untrusted file by `edit_file` names `write_file`, `run` and
 `read_file` ([EDIT-2](edit-file.md#EDIT-2)), the refusal of an editor names `edit_file`, the
@@ -379,6 +379,7 @@ tool as the control.
 `verified-by: bravebot_agent::tools::tests::arguments::the_lsp_refusal_names_search_and_read_file_only_where_the_list_holds_them`
 `verified-by: bravebot_agent::tools::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::git::the_note_for_a_file_past_the_size_cap_names_only_the_tools_the_turn_holds`
+`verified-by: bravebot_agent::git::the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::the_not_compared_heading_names_run_only_where_the_turn_holds_it`
 `verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
