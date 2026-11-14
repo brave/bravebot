@@ -375,7 +375,7 @@ A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/set
 It outranks the `model` key in that file, is outranked by one in the file `--settings` named
 ([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act),
 and a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json` cannot name a model at
-all. A key spelled blank, or as something other than a string, names nothing and does not outrank a
+all, by the `model` key or by `env.BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)). A key spelled blank, or as something other than a string, names nothing and does not outrank a
 pick. It still displaces the key a lower file named, so with nothing recorded the exported variable
 or the build answers. Above all of it are `--model` and a model picked in the session that is
 running. The `/model` picker, at rest and during a turn, opens on the model in force and marks it as
@@ -385,8 +385,8 @@ settles on. The same model in force is the one the roster is read for the window
 level is read, and the one the sign-in a session makes and the refusal of a level a turn learned are asked
 about, so none of them is read for the pick alone.
 
-**Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
-lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
+**Why.** A build made with a default model bakes it in, so this value ranked like the rest of the file would
+lose on every binary made that way: the key would parse, `doctor` would report it, and nothing
 would change outside a source build.
 
 The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
@@ -407,6 +407,8 @@ and the pick is the later of the two.
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
+`verified-by: bravebot_config::settings::a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do`
+`verified-by: bravebot_config::lib::a_checkouts_default_model_does_not_reach_the_configuration`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_named_file_spelling_the_model_blank_displaces_the_home_key_and_names_nothing`
@@ -1327,7 +1329,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search`, `tui` | per name, one level down; the value under a name is replaced whole |
-| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
+| the eighteen `env` names: those of the network, Google, Bedrock and endpoint sets, and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv` | home layer, and the file `--settings` names, whose entries are kept together; a project or local layer's list is ignored and reported by `doctor`, and the rest of that layer's `run` block is read as before |
 | every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
@@ -1450,6 +1452,10 @@ cannot start the terminal reporting the mouse, or open a menu over a click, that
 off ([MOUSE-4](mouse.md#MOUSE-4), [MOUSE-52](mouse.md#MOUSE-52)). Where the person's own files and the
 file `--settings` names both state a value, the later of the two decides it, as for `limit`. A
 nested key is written as `block.name` in the table and in a report.
+
+Which of these layers are read does not depend on the answer to the directory trust question at
+startup. That answer decides the trust map ([TRUST-7](trust-map.md#TRUST-7)), so a checkout's files
+are read whichever way it is answered, and what they may set is decided by the rows above.
 
 A layer that spells `permissions`, `run` or `tui` as something other than an object, or `run.scrubEnv`
 or a list under `permissions` as something other than an array, sets nothing there: the weaker
@@ -2183,7 +2189,7 @@ something reads:
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to, in place of the one compiled in |
-| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one, read from the person's own layers alone |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
 | `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
@@ -2205,15 +2211,20 @@ something reads:
 The last six rows are the network names. Three more rows are the Google names, and six are the
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
 `ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
-`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set, and `BRAVEBOT_DEFAULT_MODEL` is a fifth of one
+name. All five come from the person's own layers
 alone, the user's settings file and the file the command line named, wherever it sits
 ([PERM-14](permissions.md#PERM-14)).
 The project and local files arrive with a clone, and a proxy or an authority they chose would decide
 where conversation content is sent and who may read it, a Google key or project, or an AWS account,
-region, profile or tier model, they chose would decide which account receives it, and an endpoint
+region, profile or tier model, they chose would decide which account receives it, an endpoint
 they chose would decide which host receives the conversation and which host the premium key is
-presented to. So one of these seventeen names in either file is reported by `doctor` with the file
+presented to, and a default model they chose would decide which of the person's configured services
+receives it, a `provider` entry's gateway or Brave's. So one of these eighteen names in either file is reported by `doctor` with the file
 that wrote it and decides nothing, and it does not displace what a layer entitled to state it said.
+That holds for the `model` key too ([BACKEND-11](#BACKEND-11)), so a checkout names a model by no
+spelling. `doctor` reports the default model's ignored file with the model, and the network names
+with the network.
 The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six Bedrock names and the two
 endpoints, so every pinnable name is read from the person's layers alone. A build that carries an
 endpoint outranks the file, as for every name ([BACKEND-35](#BACKEND-35)), and a source build
@@ -2264,6 +2275,9 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::settings::an_env_block_is_read`
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do`
+`verified-by: bravebot_config::lib::a_checkouts_default_model_does_not_reach_the_configuration`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_default_model_that_decides_nothing`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
 `verified-by: bravebot_config::settings::a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::a_named_file_states_the_network_wherever_it_sits`
@@ -3136,8 +3150,8 @@ that wants its own level for one run says so with `--effort`, the way [CLI-9](cl
 say `--model`.
 
 [BACKEND-11](#BACKEND-11)'s other half does not transfer: the `model` key sits above the baked-in
-default because every release bakes a model in, and a key ranked below it would change nothing on
-any binary anybody was given. Nothing bakes in a level, so there is no such rung here.
+default because a build made with a default model bakes it in, and a key ranked below it would change
+nothing on any binary made that way. Nothing bakes in a level, so there is no such rung here.
 
 **One rule reads both words.** Both come out of a file somebody may have edited by hand, so a
 settings file naming nonsense is read the way a hand-edited record naming nonsense is, rather than
@@ -5048,7 +5062,7 @@ cancel kills it rather than asking it to stop.
   because the credential value comes from the person's own environment under names the layer would
   choose, and a file nobody read must not pick either. The `env` names that choose the account a
   request goes to are refused from them too: the six network names, the three Google names, the
-  six Bedrock names and the two endpoints ([BACKEND-33](#BACKEND-33)). A team that shares a
+  six Bedrock names, the two endpoints and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)). A team that shares a
   development endpoint states it in each person's own file, the environment or the build, and not in
   `.bravebot/settings.json`. For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no

@@ -10247,6 +10247,66 @@ mod tests {
         )
     }
 
+    /// BACKEND-33: which of the person's services receives a conversation is the person's to choose,
+    /// so the default model is read from the home layer and the file `--settings` names, and a
+    /// checkout's project and local files neither set it nor displace the person's. `doctor` is told
+    /// the checkout's file stated it, and no layer is reported as having overridden another.
+    #[test]
+    fn a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do() {
+        let name = "BRAVEBOT_DEFAULT_MODEL";
+        let block = r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "checkout/model"}}"#;
+
+        let project = Layers::new("default-model-checkout-project")
+            .project(block)
+            .read();
+        let local = Layers::new("default-model-checkout-local")
+            .local(block)
+            .read();
+        for (file, settings) in [("project", &project), ("local", &local)] {
+            assert_eq!(settings.get(name), None, "a {file} file chose the model");
+            let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+            assert_eq!(reported, [name], "{file}");
+            assert_eq!(settings.network_values().count(), 0, "{file}");
+        }
+
+        // The person's value stands over each checkout file, and the checkout's is not reported as
+        // having overridden it.
+        for (file, layers) in [
+            (
+                "project",
+                Layers::new("default-model-home-and-project").project(block),
+            ),
+            (
+                "local",
+                Layers::new("default-model-home-and-local").local(block),
+            ),
+        ] {
+            let settings = layers
+                .global(r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "person/model"}}"#)
+                .read();
+            assert_eq!(settings.get(name), Some("person/model"), "{file}");
+            assert_eq!(settings.overridden().count(), 0, "{file}");
+            assert_eq!(settings.network_ignored().count(), 1, "{file}");
+        }
+
+        // The person's own file, and the file the command line named wherever it sits, still decide.
+        let own = Layers::new("default-model-home")
+            .global(r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "person/model"}}"#)
+            .read();
+        assert_eq!(own.get(name), Some("person/model"));
+        assert_eq!(own.network_ignored().count(), 0);
+        let named_text = r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "named/model"}}"#;
+        let outside = Layers::new("default-model-named-outside")
+            .named(named_text)
+            .read();
+        assert_eq!(outside.get(name), Some("named/model"));
+        let inside = Layers::new("default-model-named-inside")
+            .named_inside_the_workspace(named_text)
+            .read();
+        assert_eq!(inside.get(name), Some("named/model"));
+        assert_eq!(inside.network_ignored().count(), 0);
+    }
+
     /// Every name a managed layer may pin is read from the person's layers alone, so a name added
     /// to `PINNABLE` has to be placed in the person-only lists of `env_var`, which is what keeps a
     /// checkout from choosing the host that receives a conversation or a credential (BACKEND-33).
@@ -10257,7 +10317,7 @@ mod tests {
         for name in [
             crate::env_var::KEY_ID,
             crate::env_var::SIGNING_KEY,
-            crate::env_var::DEFAULT_MODEL,
+            crate::env_var::CONTEXT_BUDGET,
         ] {
             assert_eq!(a_checkouts_files_decide(name), (true, true), "{name}");
         }

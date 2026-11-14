@@ -130,18 +130,20 @@ pub const BEDROCK: [&str; 6] = [
 pub const ENDPOINTS: [&str; 2] = [ENDPOINT, PREMIUM_ENDPOINT];
 
 /// Every name a checkout's files decide nothing for: the network, Google, Bedrock and endpoint
-/// names. The one list the settings reader and [`is_person_only`] both use, so a set added here is
-/// withheld, reported and kept out of the merged `env` block everywhere at once.
+/// names, and [`DEFAULT_MODEL`], which chooses which of the person's configured services receives a
+/// conversation (BACKEND-33). The one list the settings reader and [`is_person_only`] both use, so a
+/// name added here is withheld, reported and kept out of the merged `env` block everywhere at once.
 pub fn person_only() -> impl Iterator<Item = &'static str> {
     NETWORK
         .into_iter()
         .chain(GOOGLE)
         .chain(BEDROCK)
         .chain(ENDPOINTS)
+        .chain(std::iter::once(DEFAULT_MODEL))
 }
 
-/// Whether `name` is one of the network, Google, Bedrock or endpoint names, which a checkout's
-/// files decide nothing for.
+/// Whether `name` is one of the network, Google, Bedrock or endpoint names or [`DEFAULT_MODEL`],
+/// which a checkout's files decide nothing for.
 pub fn is_person_only(name: &str) -> bool {
     person_only().any(|listed| listed == name)
 }

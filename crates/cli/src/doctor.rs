@@ -951,6 +951,21 @@ fn report_xai_sign_in(ending: &mut Ending) {
 
 /// What a run would actually request.
 fn report_model(config: &Config, settings: &bravebot_config::Settings) {
+    // A checkout's file that named the default model decides nothing (BACKEND-33). Said before the
+    // model, which is the one the person's own layers settled on.
+    for (file, _) in settings
+        .network_ignored()
+        .filter(|(_, name)| *name == env_var::DEFAULT_MODEL)
+    {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_default_model_ignored,
+                name = env_var::DEFAULT_MODEL,
+                path = progress::printable_path(file)
+            ),
+        );
+    }
     // What a run would actually request, since a choice made with `/model` overrides the
     // configured default and reporting only the default would explain the wrong thing. Not
     // where a checkout's settings outrank the choice, since naming it then would explain
@@ -2252,8 +2267,12 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         }
     }
     // A checkout's file that named one of them: read, reported and not used (BACKEND-33), since a
-    // clone would otherwise be able to choose where conversation content goes.
-    for (file, name) in settings.network_ignored() {
+    // clone would otherwise be able to choose where conversation content goes. The default model is
+    // reported with the model, where a person looking for why it was not obeyed will look.
+    for (file, name) in settings
+        .network_ignored()
+        .filter(|(_, name)| *name != env_var::DEFAULT_MODEL)
+    {
         lines.push(aligned(
             t!(doctor_network_file_ignored),
             t!(

@@ -252,9 +252,9 @@ To point a release build at a backend running locally:
 BRAVE_AI_CHAT_ENDPOINT=http://127.0.0.1:8000 bravebot doctor
 ```
 
-`BRAVEBOT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in any
-settings file and a choice made with `/model` both win over it, so this applies until somebody names
-one.
+`BRAVEBOT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in your own
+settings file or the file `--settings` names, and a choice made with `/model`, all win over it, so this applies until somebody names
+one. It is read from your own file and the file `--settings` names, and from no project or local file.
 
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
@@ -265,8 +265,9 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Seventeen names are read from your own file and the file `--settings` names, and from no
-project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
+Eighteen names are read from your own file and the file `--settings` names, and from no
+project or local file: `BRAVEBOT_DEFAULT_MODEL`, because it chooses which of your configured
+services receives a conversation, the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
 `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
 because they choose the AWS account a conversation is sent through, and `BRAVE_AI_CHAT_ENDPOINT` and

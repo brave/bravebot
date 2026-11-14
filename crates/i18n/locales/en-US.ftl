@@ -765,6 +765,8 @@ doctor-region-source-managed = AWS_REGION pinned by the machine-level file
 doctor-region-source-provider-entry = options.region of the amazon-bedrock entry under provider
 doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-default-model-ignored =
+    { $name } in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =

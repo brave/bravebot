@@ -1416,9 +1416,9 @@ fn resolve(
 /// Which model to request, from the three places that may name one.
 ///
 /// Ranked differently from every other value, which is why it is written out rather than going
-/// through [`resolve`]. The settings file sits *above* the baked-in value here: every release bakes
-/// in a default model, so a `model` key ranked below it would lose on every binary anybody was
-/// given, leaving a key that parses, is reported by `doctor`, and changes nothing outside a source
+/// through [`resolve`]. The settings file sits *above* the baked-in value here: a build made with a
+/// default model bakes it in, so a `model` key ranked below it would lose on every binary made that
+/// way, leaving a key that parses, is reported by `doctor`, and changes nothing outside a source
 /// build.
 ///
 /// It sits above an exported variable too, the one place a person's settings file outranks one. The
@@ -1426,7 +1426,8 @@ fn resolve(
 /// it, and a file that names a model is somebody choosing one. A variable ranked above the file
 /// would also rank above a saved `/model` pick, which answers as the person's own file does.
 /// `env.BRAVEBOT_DEFAULT_MODEL` is read last, below the baked-in value, because that block is
-/// variables and is ranked like them.
+/// variables and is ranked like them. It is read from the person's own layers alone, so a checkout's
+/// files name no model through it (BACKEND-33).
 fn resolve_model(
     from_env: Option<String>,
     settings: &Settings,
@@ -1546,8 +1547,8 @@ impl Config {
     /// [`Managed`]'s to decide.
     ///
     /// The `model` key is the other exception, and sits above the baked-in value rather than below
-    /// it. Every release bakes in a default model, so a `model` key ranked like the `env` block
-    /// would lose to it on every binary anybody was given: the key would parse, be reported by
+    /// it. A build made with a default model bakes it in, so a `model` key ranked like the `env`
+    /// block would lose to it on every binary made that way: the key would parse, be reported by
     /// `doctor`, and change nothing outside a source build. It outranks an exported variable too,
     /// for the reason [`resolve_model`] gives.
     ///
@@ -5590,6 +5591,41 @@ mod tests {
         assert_eq!(config.endpoint, "https://baked.invalid");
     }
 
+    /// BACKEND-33 through the composition: the model a checkout's `env` block names does not reach
+    /// the configuration, so the checkout does not choose which of the person's services receives
+    /// the conversation. The person's own file still does, and where it names none the compiled-in
+    /// default stands. Read through [`Settings::layered`], because [`Settings::parse`] is one root
+    /// and never withholds a name from a checkout.
+    #[test]
+    fn a_checkouts_default_model_does_not_reach_the_configuration() {
+        let root = testutil::scratch_dir("default-model-through-the-composition");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = settings::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            &project_file,
+            r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "checkout/model"}}"#,
+        )
+        .expect("project file");
+        let keys_only = complete_env;
+
+        let checkout = Settings::layered(Some(home.clone()), Some(&cwd), None);
+        let config = resolved(&checkout, |_| None, keys_only).expect("configured");
+        assert_eq!(config.default_model, DEFAULT_MODEL);
+
+        std::fs::write(
+            settings::user_settings_file(&home),
+            r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "person/model"}}"#,
+        )
+        .expect("user file");
+        let own = Settings::layered(Some(home), Some(&cwd), None);
+        let config = resolved(&own, |_| None, keys_only).expect("configured");
+        assert_eq!(config.default_model, "person/model");
+    }
+
     /// BACKEND-35: where the build carries nothing, a name exported blank is what the configuration
     /// holds, so the file under it is hidden and the credential is reported empty rather than
     /// answered from a file the person did not export. A composition that treated blank as absent
@@ -5648,9 +5684,9 @@ mod tests {
         assert_eq!(config.default_model, "llama-3-8b-instruct");
     }
 
-    /// The whole reason this value is ranked differently. Every release bakes a default model in, so
-    /// a `model` key ranked below it would lose on every binary anybody was given: the key would
-    /// parse, `doctor` would report it, and nothing outside a source build would change.
+    /// The whole reason this value is ranked differently. A build made with a default model bakes
+    /// it in, so a `model` key ranked below it would lose on every binary made that way: the key
+    /// would parse, `doctor` would report it, and nothing outside a source build would change.
     #[test]
     fn a_model_in_the_settings_file_outranks_the_baked_in_one() {
         let settings = Settings::parse(r#"{"model": "opus"}"#);
