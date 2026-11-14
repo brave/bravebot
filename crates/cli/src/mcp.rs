@@ -1373,25 +1373,55 @@ fn open_settings(path: &Path, directory: &Path) -> Result<Destination, Stopped> 
     Destination::open(path).map_err(|why| settings_unwritable(why, path, ""))
 }
 
-/// Refuse a link in a checkout, at `.bravebot` or at the file, rather than follow or replace it.
+/// Refuse a link in a checkout, at `.bravebot` or at the file, rather than follow or replace it,
+/// unless it leads to a file inside the same checkout.
 ///
 /// It arrives with a clone, so where it leads is whoever wrote the checkout's choice: following it
 /// would put the request in whichever of this person's files they named, and replacing it would
-/// copy what that file holds into the checkout. A file in the state directory itself is followed,
-/// as an import follows the user's: that is the user's file, and run from the directory the state
-/// directory is in, the other two.
+/// copy what that file holds into the checkout. A link that ends at a file inside the checkout
+/// names none of the person's other files, and the agent writes the files there as its job, so it
+/// is followed (see [`leads_within_the_checkout`]). A file in the state directory itself is
+/// followed, as an import follows the user's: that is the user's file, and run from the directory
+/// the state directory is in, the other two.
 fn unlinked(path: &Path, directory: &Path) -> Result<(), Stopped> {
     let project = path.parent().unwrap_or(path);
     if project == directory {
         return Ok(());
     }
     match [project, path].into_iter().find(|at| is_link(at)) {
-        Some(link) => Err((
+        Some(link) if !leads_within_the_checkout(path, project, directory) => Err((
             Ending::Configuration,
             t!(mcp_settings_link, path = file_named(link)),
         )),
-        None => Ok(()),
+        _ => Ok(()),
     }
+}
+
+/// Whether the settings file `path`, once every link on the way is resolved, is a file inside the
+/// checkout that holds `project` (its `.bravebot`).
+///
+/// Not where the checkout's `.git` is, which holds files that are not settings, and not where the
+/// checkout holds the state directory and the file is in it, since that is the person's own
+/// declarations and approvals. A link that leads nowhere does not count, since there is no file to
+/// say where it ends.
+fn leads_within_the_checkout(path: &Path, project: &Path, directory: &Path) -> bool {
+    let Some(root) = project
+        .parent()
+        .and_then(|root| std::fs::canonicalize(root).ok())
+    else {
+        return false;
+    };
+    let Ok(target) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(inside) = target.strip_prefix(&root) else {
+        return false;
+    };
+    if inside.components().any(|part| part.as_os_str() == ".git") {
+        return false;
+    }
+    let state = std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+    !(state.starts_with(&root) && target.starts_with(&state))
 }
 
 fn is_link(path: &Path) -> bool {
@@ -4517,6 +4547,81 @@ mod tests {
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(user.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(text(&theirs), WEATHER_ALONE);
+    }
+
+    /// A link that came with the clone and ends at a file in the same checkout, such as
+    /// `.bravebot/settings.json` pointing at `agents/settings.json`, is written through and stays a
+    /// link. One that ends in `.git`, nowhere, or in a state directory the checkout holds is
+    /// refused as one that leaves the checkout is.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_stays_in_the_checkout_is_written_through_and_one_that_leaves_it_is_not() {
+        let directory = scratch("cli-mcp-link-inside");
+        let checkout = checkout(&directory);
+        let (outcome, _) = typing(&directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let _ = std::fs::remove_dir_all(checkout.join(".bravebot"));
+        let shared = checkout.join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let target = shared.join("settings.json");
+        std::fs::write(&target, "{}").unwrap();
+        std::fs::create_dir_all(checkout.join(".bravebot")).unwrap();
+        let project = bravebot_config::project_settings_file(&checkout);
+        std::os::unix::fs::symlink("../shared/settings.json", &project).unwrap();
+        let enable = ["enable", "weather", "-s", "project"];
+
+        let (outcome, _) = typing(&directory, &enable, "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(project.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(text(&target), WEATHER_ALONE);
+
+        let (outcome, _) = typing(&directory, &["disable", "weather", "-s", "project"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(project.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(
+            !std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("weather")
+        );
+
+        // `.git` is inside the checkout and holds no settings.
+        let git = checkout.join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+        std::fs::write(git.join("settings.json"), "{}").unwrap();
+        std::fs::remove_file(&project).unwrap();
+        std::os::unix::fs::symlink("../.git/settings.json", &project).unwrap();
+        let (outcome, _) = typing(&directory, &enable, "");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        assert_eq!(
+            std::fs::read_to_string(git.join("settings.json")).unwrap(),
+            "{}"
+        );
+
+        // A link that ends at nothing says nowhere it stays.
+        std::fs::remove_file(&project).unwrap();
+        std::os::unix::fs::symlink("../shared/missing.json", &project).unwrap();
+        let (outcome, _) = typing(&directory, &enable, "");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        assert!(!shared.join("missing.json").exists());
+
+        // The person's own files are not the checkout's where the checkout holds the state
+        // directory, and are where it does not.
+        let enclosing = scratch("cli-mcp-link-state");
+        let state = enclosing.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("settings.json"), "{}").unwrap();
+        std::fs::create_dir_all(enclosing.join(".bravebot")).unwrap();
+        let linked = enclosing.join(".bravebot").join("settings.json");
+        std::os::unix::fs::symlink("../state/settings.json", &linked).unwrap();
+        assert!(unlinked(&linked, &state).is_err());
+        let elsewhere = scratch("cli-mcp-link-state-elsewhere");
+        assert!(unlinked(&linked, &elsewhere).is_ok());
     }
 
     /// Without `-s`, `disable` takes the alias out of every file that requests it and names each;
