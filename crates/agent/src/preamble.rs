@@ -781,7 +781,7 @@ fn jenkins_cli_guidance(present: bool) -> &'static str {
      asks for the part you are after, where the page is the whole build. Either road comes back \
      quarantined, so what differs is how much this turn then carries. `jk` may not be logged in, \
      and a Jenkins server that asks for a login refuses `fetch_url` as well: where `jk` fails for \
-     that reason, say so and ask the person to run `jk auth login`.\n"
+     that reason, say so in your answer and name `jk auth login` as what signs it in.\n"
 }
 
 /// What to do when a program fails because something it needs is missing from this machine, said
@@ -1716,6 +1716,10 @@ mod tests {
         assert!(
             said.contains("jk auth login"),
             "a jk that fails for want of a login leaves the planner with no next step: {said}"
+        );
+        assert!(
+            !said.contains("ask the person"),
+            "the planner was told to ask a person a session may not have: {said}"
         );
         assert!(
             !said.contains("fetch_url is the way"),

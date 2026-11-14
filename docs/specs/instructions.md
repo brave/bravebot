@@ -273,8 +273,8 @@ those tools are.
 What an installed Jenkins CLI is for is said on the same terms, to the same turn and not to a
 delegate: the commands that read a build's result, its stages, the end of its console log and its
 test report, where the page of a build is many times the part that was wanted. Where `jk` fails for
-want of a login, the planner says so and asks the person to run `jk auth login`. It is not sent to
-`fetch_url`, because a Jenkins server that asks for a login refuses a fetch as well. Each probe is
+want of a login, the planner says so and names `jk auth login` as what signs it in. It asks nobody,
+since a session that is not interactive has nobody to ask, and it is not sent to `fetch_url`, because a Jenkins server that asks for a login refuses a fetch as well. Each probe is
 its own: a machine with one CLI says so for that one and nothing for the other.
 
 What to do when a program fails because something it needs is missing from this machine is said on

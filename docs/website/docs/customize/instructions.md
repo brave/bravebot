@@ -340,8 +340,8 @@ with `--tail`, `--grep` or `--step` for the console log, `jk test report` for th
 [`fetch_url`](../reference/tools.md#fetch_url) fetches the page around it.
 
 Whether you have logged in with `jk` is not looked at, since that cannot be told without a request.
-Where `jk` fails for that reason the planner says so and asks you to run `jk auth login`. It does
-not fall back to `fetch_url`, because a Jenkins server that asks for a login refuses a fetch too.
+Where `jk` fails for that reason the planner says so and names `jk auth login` as what signs it in. It
+does not fall back to `fetch_url`, because a Jenkins server that asks for a login refuses a fetch too.
 A [delegate](../reference/tools.md#spawn_agent) is told the fact and not this paragraph, for the
 reason given under [The GitHub CLI](#the-github-cli).
 
