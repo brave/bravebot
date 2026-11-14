@@ -236,13 +236,17 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
 
 /// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
 ///
-/// A new kind is a variant and one arm in each of the three methods. A boolean whose `false` is the
-/// narrower answer, or a count where a lower one is, is a kind of its own and is added there.
+/// A new kind is a variant and one arm in each of the three methods. A count where a lower one is
+/// the narrower, or a boolean whose `true` is, is a kind of its own and is added there.
 #[derive(Clone, Copy)]
 enum Narrows {
     /// The session spend limit: a count of one unit ([`crate::limit::Limit`]). A figure is
     /// narrower when it is in the same unit and no larger.
     Limit,
+    /// A switch that is on unless stated otherwise, and whose `false` is the narrower answer: it
+    /// turns something off. Only a boolean states it ([`flag`]), so a quoted `"false"` states
+    /// nothing. `true` is no wider than `true` and `false` is no wider than either.
+    Off,
 }
 
 impl Narrows {
@@ -253,6 +257,7 @@ impl Narrows {
     fn usable(self, value: &serde_json::Value) -> bool {
         match self {
             Self::Limit => limit_stated(Some(value)).is_some(),
+            Self::Off => value.is_boolean(),
         }
     }
 
@@ -267,6 +272,9 @@ impl Narrows {
         match self {
             // There is no default limit: a person who stated none has a session nothing bounds.
             Self::Limit => None,
+            // On where nothing is stated, and no value is wider than that, so a checkout's `true`
+            // is what a person who wrote nothing already has and its `false` turns the switch off.
+            Self::Off => None,
         }
     }
 
@@ -278,6 +286,10 @@ impl Narrows {
                 (Some(held), Some(offered)) => {
                     held.unit == offered.unit && offered.figure <= held.figure
                 }
+                _ => false,
+            },
+            Self::Off => match (held.as_bool(), offered.as_bool()) {
+                (Some(held), Some(offered)) => !offered || held,
                 _ => false,
             },
         }
@@ -304,6 +316,9 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
     // Where a question about the person's spend is put is decided by this figure (TURN-8), so a
     // checkout cannot remove it, raise it or count in another unit.
     ("limit", Narrows::Limit, Entitled::OwnOrNamed),
+    // A checkout may turn the startup check off for whoever runs it there, and may not turn it back
+    // on over a person who turned it off.
+    ("updateCheck", Narrows::Off, Entitled::OwnOrNamed),
 ];
 
 /// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
@@ -8130,13 +8145,25 @@ mod tests {
     }
 
     /// One row for each row of [`NARROW_ONLY`], which the test below holds to be so.
-    const NARROW_ONLY_EXPECTED: &[NarrowCase] = &[NarrowCase {
-        key: "limit",
-        read: |settings| format!("{:?}", settings.limit()),
-        person: r#""200k""#,
-        wider: &["null", "0", r#""999999999999""#, r#""1 credits""#],
-        narrower: r#""100k""#,
-    }];
+    const NARROW_ONLY_EXPECTED: &[NarrowCase] = &[
+        NarrowCase {
+            key: "limit",
+            read: |settings| format!("{:?}", settings.limit()),
+            person: r#""200k""#,
+            wider: &["null", "0", r#""999999999999""#, r#""1 credits""#],
+            narrower: r#""100k""#,
+        },
+        // The one value wider than a person's `false` is `true`, and a person who wrote `true` is
+        // held to nothing wider, so the case holds the values that state no boolean over `true`.
+        // `true` over `false` is held by `a_checkout_may_turn_the_update_check_off_and_not_on`.
+        NarrowCase {
+            key: "updateCheck",
+            read: |settings| format!("{:?}", settings.update_check()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+    ];
 
     /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
     /// wider one from the project and from the local layer (naming the file once), and takes a
@@ -8187,6 +8214,119 @@ mod tests {
             );
             assert_eq!(settings.not_obeyed_all().count(), 0, "{key}");
         }
+    }
+
+    /// UPDATE-11, BACKEND-24: a project or local layer may turn the update check off and may not
+    /// turn it on over a person who turned it off, and the file that tried is reported. A
+    /// person who stated nothing, or `true`, is not held to `false`, and the file `--settings`
+    /// names is the person's own act in either direction.
+    #[test]
+    fn a_checkout_may_turn_the_update_check_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("update-check-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"updateCheck": true}"#;
+            let off = r#"{"updateCheck": false}"#;
+
+            // Over the person's `false`, `true` is not obeyed and the file is named.
+            let settings = with("on-over-off", Some(off), on);
+            assert_eq!(settings.update_check(), Some(false), "local={local}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, "updateCheck");
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert_eq!(settings.names().collect::<Vec<_>>(), ["updateCheck"]);
+            assert!(!settings.is_empty());
+
+            // A checkout's `false` turns the check off over `true` and over a person who wrote
+            // nothing, and neither is reported.
+            for global in [Some(on), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.update_check(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` or nothing changes nothing and is not reported.
+            for global in [Some(on), None] {
+                let settings = with("on", global, on);
+                assert_eq!(
+                    settings.update_check(),
+                    Some(true),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // A person's value that is not a boolean states nothing, so it does not hold a
+            // checkout to `false`, and a checkout's that is not one turns nothing off.
+            let settings = with("person-word", Some(r#"{"updateCheck": "false"}"#), on);
+            assert_eq!(settings.update_check(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with("checkout-word", None, r#"{"updateCheck": "false"}"#);
+            assert_eq!(settings.update_check(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("update-check-local-over-project")
+            .project(r#"{"updateCheck": false}"#)
+            .local(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The file the command line named is the person's own act: it turns the check on over the
+        // person's `false` and off over the person's `true`, and the named file wins over the home
+        // layer.
+        let settings = Layers::new("update-check-named-on")
+            .global(r#"{"updateCheck": false}"#)
+            .named(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        // A checkout's `false` then narrows what the person's layers settled on, the named file's
+        // `true` included, and a checkout's `true` over the person's own `false` is refused whichever
+        // layer holds it.
+        let settings = Layers::new("update-check-named-on-checkout-off")
+            .global(r#"{"updateCheck": false}"#)
+            .project(r#"{"updateCheck": false}"#)
+            .named(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("update-check-named-off-checkout-on")
+            .named(r#"{"updateCheck": false}"#)
+            .project(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+        let settings = Layers::new("update-check-named-off")
+            .global(r#"{"updateCheck": true}"#)
+            .named(r#"{"updateCheck": false}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
     }
 
     /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`

@@ -323,6 +323,32 @@ mod tests {
         assert!(ignored(&settings).is_empty(), "a lower limit was reported");
     }
 
+    /// A checkout whose `updateCheck` is `true` over the person's `false` is listed with the key and
+    /// the file, and one that turns the check off is not.
+    #[test]
+    fn a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "updateCheck"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"updateCheck": false}"#),
+            Some(r#"{"updateCheck": true}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "updateCheck", "path": project })]
+        );
+        assert_eq!(settings.update_check(), Some(false));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"updateCheck": true}"#),
+            Some(r#"{"updateCheck": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "a check turned off was reported"
+        );
+        assert_eq!(settings.update_check(), Some(false));
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,

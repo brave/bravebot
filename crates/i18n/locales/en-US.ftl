@@ -808,6 +808,10 @@ doctor-settings-home-only-ignored =
 # still put at the figure the person wrote.
 doctor-settings-limit-ignored =
     limit in { $path } is not obeyed: it may lower the limit in ~/.bravebot/settings.json and cannot remove it, raise it or count it in another unit
+# A checkout may turn the startup check for a newer release off and not on, so a `true` over the
+# person's `false` is dropped and the check stays off.
+doctor-settings-update-check-ignored =
+    updateCheck in { $path } is not obeyed: it may turn the update check off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
 # A key a checkout may only narrow that has no message of its own above, so a key added to the table
 # is reported before its words are written.
 doctor-settings-narrowed-ignored =

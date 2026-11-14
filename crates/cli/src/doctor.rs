@@ -266,6 +266,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "attribution" => t!(doctor_settings_attribution_ignored, path = path),
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
+        "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         other if bravebot_config::Settings::narrow_only_keys().any(|key| key == other) => {
             t!(doctor_settings_narrowed_ignored, key = other, path = path)
         }
@@ -2531,6 +2532,44 @@ mod tests {
                 "{written} is said in the general message: {lines:?}"
             );
         }
+    }
+
+    /// UPDATE-11, BACKEND-24: a checkout whose `updateCheck` is `true` over the person's `false` is
+    /// reported with the key and the file, in the message written for the key, and one that turns
+    /// the check off is not reported.
+    #[test]
+    fn a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("update-check-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(home.join("settings.json"), r#"{"updateCheck": false}"#).expect("home file");
+        std::fs::write(&project_file, r#"{"updateCheck": true}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.update_check(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains(&format!("updateCheck in {}", project_file.display())),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("may turn the update check off"),
+            "in the message of its own: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("read from the person's own settings only"),
+            "said as a key a checkout may not name: {lines:?}"
+        );
+
+        // A checkout that turns it off is not reported.
+        std::fs::write(&project_file, r#"{"updateCheck": false}"#).expect("project");
+        std::fs::write(home.join("settings.json"), r#"{"updateCheck": true}"#).expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.update_check(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
     }
 
     /// A key of the narrow-only table is said with its own name and the file, never as a key read

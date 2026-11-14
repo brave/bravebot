@@ -683,6 +683,10 @@ doctor-settings-home-only-ignored =
 # unité est écartée, de sorte que la question sur la dépense est posée au chiffre que la personne a écrit.
 doctor-settings-limit-ignored =
     limit dans { $path } n'est pas appliqué : il peut abaisser la limite de ~/.bravebot/settings.json et ne peut ni la supprimer, ni la relever, ni la compter dans une autre unité
+# Une copie de travail peut désactiver la vérification de mise à jour au démarrage et ne peut pas la
+# réactiver : un `true` posé sur le `false` de la personne est écarté et la vérification reste désactivée.
+doctor-settings-update-check-ignored =
+    updateCheck dans { $path } n'est pas appliqué : il peut désactiver la vérification de mise à jour et ne peut pas la réactiver une fois qu'elle a été désactivée par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
 # Une clé qu'une copie de travail ne peut que restreindre et qui n'a pas de message propre ci-dessus,
 # de sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
 doctor-settings-narrowed-ignored =

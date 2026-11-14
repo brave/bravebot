@@ -1069,6 +1069,10 @@ same, for a machine where updates are managed elsewhere, and either one is enoug
 `false` and the value `0` turn it off. It does not affect the installer's checksum and signature
 checks.
 
+A `.bravebot/settings.json` or `.bravebot/settings.local.json` in a checkout may turn the check off,
+and cannot turn it on where your own `~/.bravebot/settings.json` turned it off. `bravebot doctor`
+names a checkout file whose `true` was ignored. The file named with `--settings` is read as your own.
+
 ### `crashReports`
 
 ```json

@@ -1333,6 +1333,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
 | `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
 | `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
+| `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1365,6 +1366,13 @@ value that states nothing leaves no limit and is not reported, because it remove
 [TURN-8](turns.md#TURN-8) is why `limit` is in the table, and `askIdleSeconds` is kept to the person's
 files for the reason [ASK-9](tools/ask-user.md#ASK-9) gives, which is that the person's own clock is
 not a repository's to set.
+
+For `updateCheck`, a layer states a value when it holds a boolean; a string, a number and `null`
+state nothing. `false` is the narrower value, so a checkout's `false` is obeyed whatever the person
+stated, and its `true` is obeyed only where the person's own files do not state `false`. The check is
+on where nothing is stated, so a checkout's `true` over nothing or over the person's `true` changes
+nothing and is not reported. A checkout's `true` over the person's `false` is not obeyed and is
+reported. The startup check for a newer release is why the key is in the table.
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
 a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
@@ -1472,6 +1480,9 @@ with it.
 `verified-by: bravebot_ui_bridge::settings::a_checkout_limit_that_widens_the_persons_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::the_narrow_only_table_keys_are_unique_and_not_home_only`
 `verified-by: bravebot_config::settings::every_narrow_only_key_keeps_the_persons_value_against_a_wider_one`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_update_check_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
