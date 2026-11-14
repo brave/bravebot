@@ -4439,9 +4439,9 @@ file. A new spawn that looks a name up through
   directories under the account's real home. The application's `HOME` comes from the person's login
   session, which a stage cannot change, so the opener reads a directory a stage may write only when
   the account's home is one, and removing `HOME` does not change that.
-  On Linux under a GNOME session the application's opener therefore still reads a runtime
-  directory or a bus address that a stage may write. It no longer reads a handler a stage wrote
-  through `HOME`: `~/.config/mimeapps.list`, the `~/.config/<desktop>-mimeapps.list` files of the
+  On Linux under a GNOME session the application's opener therefore reads a runtime
+  directory or a bus address that a stage may write. The opener does not read a handler a stage
+  wrote through `HOME`: `~/.config/mimeapps.list`, the `~/.config/<desktop>-mimeapps.list` files of the
   desktops named in [SANDBOX-18](#SANDBOX-18) and `~/.local/share/applications` are persistence
   locations, so a stage is refused writing them in a session opened on the home directory, on
   `~/.config` or on `~/.local/share`, or granted writes there. A session opened on a location

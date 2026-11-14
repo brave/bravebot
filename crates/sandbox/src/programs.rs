@@ -3660,6 +3660,53 @@ mod tests {
         ));
     }
 
+    /// SANDBOX-30: the account's directory and `PYTHONUSERBASE` are judged by the bytes of their
+    /// values, and the directory named by a lossy rendering of a value is another one
+    /// ([PATH-003]). The stage directory's name is not text, and a directory named by its lossy
+    /// rendering is not a stage directory. The regression it rejects is judging a value through
+    /// `to_string_lossy`, which reads each stage directory below as its lookalike and each
+    /// lookalike as the stage directory.
+    ///
+    /// [PATH-003]: ../../../docs/best-practices/paths.md
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_user_site_is_judged_by_the_bytes_of_home_and_the_user_base_and_not_by_their_lossy_lookalikes()
+     {
+        use std::os::unix::ffi::OsStrExt;
+        let parent = scratch_dir("programs-usersite-bytes");
+        let session = parent.join(OsStr::from_bytes(b"w\xff"));
+        let lookalike = parent.join("w\u{FFFD}");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&lookalike).unwrap();
+
+        // `HOME` is the directory a stage may write, or the directory named by its lossy rendering.
+        assert!(user_site_writable(&[("HOME", &session)], &session));
+        assert!(!user_site_writable(&[("HOME", &lookalike)], &session));
+
+        // `HOME` is outside every stage directory and `.local`, where the user site is, leads into
+        // one, so the path under `HOME` decides. The home whose name is its lookalike has a
+        // `.local` of its own that a stage may not write.
+        let home = parent.join(OsStr::from_bytes(b"h\xff"));
+        let home_lookalike = parent.join("h\u{FFFD}");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(home_lookalike.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&session, home.join(".local")).unwrap();
+        assert!(user_site_writable(&[("HOME", &home)], &session));
+        assert!(!user_site_writable(&[("HOME", &home_lookalike)], &session));
+
+        // `PYTHONUSERBASE` with no `HOME` held: a base that is a stage directory is not kept, so
+        // the account's directory decides and, not being held, counts as writable. The base named
+        // by the lossy rendering is outside every stage directory and is kept.
+        assert!(user_site_writable(
+            &[("PYTHONUSERBASE", &session)],
+            &session
+        ));
+        assert!(!user_site_writable(
+            &[("PYTHONUSERBASE", &lookalike)],
+            &session
+        ));
+    }
+
     /// The regression it rejects: setting `PYTHONNOUSERSITE` for every start, which turns off the
     /// packages a person installed with `pip install --user`, or never setting it.
     #[cfg(unix)]
