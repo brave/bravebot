@@ -388,12 +388,12 @@ quotes keep every character, double quotes keep every character except that a ba
 `Bash(sh -c "*")` therefore covers `sh`, `-c` and `rm x`, `Bash(tool "x y")` covers `tool` with
 `x y` as one word or as two, `Bash(git\ push *)` and `Bash(git  push *)` cover `git push origin`,
 and `Bash(git push :*)` covers `git push origin`. A `*` keeps its meaning wherever it stands, quoted
-or not. The rule is matched in this reading and as its characters were written, so it covers
-every command it covered when its quotes were plain characters. A quote that is never closed and a
-backslash with nothing after it are what the line compiler refuses, so a `deny` or `ask` rule
-holding one is unreadable ([PERM-11](#PERM-11)). An `allow` rule is not read this way and keeps its
-characters as written: a grant that quotes could widen would let a line of a settings file permit
-more than it says.
+or not. The rule is matched in this reading and as its characters are written, so it covers every
+command its characters name as written. A quote that is never closed and a backslash with nothing
+after it are what the line compiler refuses, so a `deny` or `ask` rule holding one has no typed
+reading and is matched as written alone. It stays in force, and it is reported
+([PERM-11](#PERM-11)). An `allow` rule is not read this way and keeps its characters as written: a
+grant that quotes could widen would let a line of a settings file permit more than it says.
 
 A `deny` or `ask` rule compares the program word without regard to case and as a Windows host
 reads it: without the dots and spaces it drops from the end of a name, without a `::$DATA` stream
@@ -848,9 +848,9 @@ directory a person typed from being reachable on different terms.
 A line that is not a rule, names no family this agent has, has no anchor to resolve, holds a path
 with whitespace at an end ([PERM-3](#PERM-3)), or holds a quoted path specifier with nothing between
 the quotes (`Read("")`, which has its own wording and does not advise dropping the brackets alone)
-is dropped, and the rest of the file still applies. So is a `deny` or `ask` `Bash` rule with a quote
-that is never closed or a backslash with nothing after it ([PERM-5](#PERM-5)), since no line compiles
-to words such a rule could be about. So
+is dropped, and the rest of the file still applies. A `deny` or `ask` `Bash` rule with a quote that
+is never closed or a backslash with nothing after it ([PERM-5](#PERM-5)) is reported the same way
+but is not dropped: it is matched as its characters are written, and the report says so. So
 is an entry that is not a line at all: a number, or a rule nested one array too deep. So is a `deny`,
 `ask` or `allow` value that is not an array, and a `permissions` block that is not an object, each
 named with the keys that lead to it and the file that wrote it. Every one dropped is reported: on
@@ -887,7 +887,9 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_ui_bridge::rules::the_sentence_about_an_unreadable_rule_quotes_it_spelled`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_agent::permissions::a_rule_with_quotes_around_nothing_is_not_told_to_mean_every_use_alone`
-`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_no_line_can_be_read_from_is_reported_and_an_allow_rule_is_kept`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_no_line_can_be_read_from_is_kept_as_written_and_named`
+`verified-by: bravebot_agent::permissions::a_session_says_a_kept_rule_is_in_force_and_a_dropped_one_is_ignored`
+`verified-by: bravebot_ui_bridge::rules::a_rule_kept_as_written_is_listed_as_in_force_and_reported`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`

@@ -110,6 +110,19 @@ pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static st
     }
 }
 
+/// The line a session says about an entry of a permissions list, around `described`, which is
+/// [`describe`] of it as its front end spells it.
+///
+/// An entry the rule language dropped is ignored, and one it kept ([`Unreadable::keeps_the_rule`])
+/// is in force as written, so the two are not said as one sentence.
+pub fn said_in_a_session(rejected: &Rejected, described: String) -> String {
+    match rejected.reason.keeps_the_rule() {
+        true => t!(session_permission_rule_partly_read, problem = described),
+        false => t!(session_permission_rule_ignored, problem = described),
+    }
+    .to_string()
+}
+
 /// Every entry of the four filesystem lists with why it is not in force, or `None` where it is.
 ///
 /// An entry that resolved is still not in force where the backend cannot subtract from a grant and
@@ -919,6 +932,38 @@ mod tests {
             assert!(!words.is_empty(), "a reason with nothing to say");
             assert!(seen.insert(words), "two reasons both read '{words}'");
         }
+    }
+
+    /// A session says an entry the rule language dropped is ignored and one it kept is in force as
+    /// written. A rule reported as ignored that still refuses sends somebody to remove a rule that
+    /// protects them, and the reverse reads a dropped rule as protection.
+    #[test]
+    fn a_session_says_a_kept_rule_is_in_force_and_a_dropped_one_is_ignored() {
+        let (_, rejected) = from_settings(
+            &layered_settings(
+                "kept-and-dropped",
+                None,
+                Some(r#"{"permissions": {"deny": ["Bash(sh -c \"rm *)", "Read()"]}}"#),
+            ),
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        let said = rejected
+            .iter()
+            .map(|reject| said_in_a_session(reject, describe(reject)))
+            .collect::<Vec<_>>();
+        assert_eq!(said.len(), 2, "{said:?}");
+        let kept = said
+            .iter()
+            .find(|line| line.contains("rm *"))
+            .expect("kept");
+        let dropped = said
+            .iter()
+            .find(|line| line.contains("Read()"))
+            .expect("dropped");
+        assert!(kept.contains("in force as written"), "{kept}");
+        assert!(!kept.contains("ignoring"), "{kept}");
+        assert!(dropped.contains("ignoring"), "{dropped}");
     }
 
     /// PERM-14 at the boundary that turns lists into rules: a `Bash` allow rule a checkout wrote

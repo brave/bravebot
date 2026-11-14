@@ -1010,8 +1010,8 @@ permission-rule-unknown-family = names no family of tools this agent has; use Re
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
 permission-rule-empty-quoted-name = has double quotes around nothing, and no file has an empty name; drop the brackets to mean every use, or put the file's name between the quotes
 permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or put the whole path in double quotes to mean the name as written
-permission-rule-unclosed-quote = has a quote that is never closed, so no command line could be read the way it is written; close the quote, or write a quote that is part of a word as \' or \"
-permission-rule-trailing-backslash = ends in a backslash with nothing after it, so no command line could be read the way it is written; remove it, or write \\ for a backslash
+permission-rule-unclosed-quote = has a quote that is never closed, so it is matched only as its characters are written, not as a typed line; close the quote, or write a quote that is part of a word as \' or \"
+permission-rule-trailing-backslash = ends in a backslash with nothing after it, so it is matched only as its characters are written, not as a typed line; remove it, or write \\ for a backslash
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
@@ -3817,6 +3817,7 @@ session-bg-incognito = /bg is refused in an incognito session, which writes no r
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
+session-permission-rule-partly-read = a permission rule in settings.json is in force as written: { $problem }
 session-model-pick-set-aside = ignoring { $model }, picked with /model, because no configured service serves it
 # The other way a pick is set aside: the machine-level layer does not request it. The configured
 # model answers and the record is left as it is, for the reason the line above leaves one.

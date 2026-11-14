@@ -261,6 +261,9 @@ pub struct Rule {
     /// set after the rules are read, by whoever held the file, and is only ever handed to a report.
     /// A rule decides exactly what it decided before one was written.
     reason: Option<String>,
+    /// Why a `deny` or `ask` `Bash` rule has no typed reading, so it is matched as written alone
+    /// (PERM-5). Read only by [`Permissions::parse`], which reports it.
+    typed_unreadable: Option<Unreadable>,
 }
 
 impl Rule {
@@ -280,10 +283,11 @@ impl Rule {
 
     /// [`Rule::parse`] for a rule written in the list `ruling` names.
     ///
-    /// A `Bash` rule in `deny` or `ask` is also read as a typed line is, and one that no line can be
-    /// read from, for a quote left open or a backslash with nothing after it, is not read at all
-    /// (PERM-5, PERM-11). An `allow` rule is not read that way, so [`Rule::parse`] is the reading of
-    /// that list.
+    /// A `Bash` rule in `deny` or `ask` is also read as a typed line is. One that no line can be
+    /// read from, for a quote left open or a backslash with nothing after it, is kept and matched
+    /// as its characters are written alone, so it protects what it did before the typed reading
+    /// existed, and [`Rule::typed_unreadable`] says why it has no other reading (PERM-5, PERM-11).
+    /// An `allow` rule is not read that way, so [`Rule::parse`] is the reading of that list.
     pub fn parse_in(text: &str, anchors: &Anchors, ruling: Ruling) -> Result<Self, Rejected> {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
@@ -302,6 +306,12 @@ impl Rule {
     /// The rule as the list spelled it.
     pub fn written(&self) -> &str {
         &self.written
+    }
+
+    /// Why this rule is matched as written alone, where it is a `deny` or `ask` `Bash` rule that
+    /// no typed line can be read from.
+    pub fn typed_unreadable(&self) -> Option<Unreadable> {
+        self.typed_unreadable
     }
 
     /// Why the person wrote it, or `None` where no reason of theirs is attached (PERM-1).
@@ -354,6 +364,7 @@ impl Rule {
             return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
         }
 
+        let mut typed_unreadable = None;
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
             None | Some("*") => Pattern::Everything,
@@ -401,7 +412,10 @@ impl Rule {
                 let typed = match typed_line(specifier) {
                     _ if ruling == Ruling::Allow => None,
                     Ok(line) => Some(typed_pattern(line)).filter(|typed| *typed != written),
-                    Err(reason) => return Err(Rejected::new(text, reason)),
+                    Err(reason) => {
+                        typed_unreadable = Some(reason);
+                        None
+                    }
                 };
                 Pattern::Command(CommandPattern { written, typed })
             }
@@ -413,6 +427,7 @@ impl Rule {
             landed: Vec::new(),
             written: String::new(),
             reason: None,
+            typed_unreadable,
         })
     }
 
@@ -682,9 +697,11 @@ pub enum Unreadable {
     /// A path rule in a run with no home or settings directory to resolve it against.
     Unanchored,
     /// A `Bash` rule in `deny` or `ask` with a quote that is never closed, as `Bash(sh -c "rm *)`.
-    /// A line with one does not compile, so no line the rule could be about would be covered.
+    /// A line with one does not compile, so the rule has no typed reading. It is kept and matched
+    /// as its characters are written ([`Unreadable::keeps_the_rule`]).
     UnclosedQuote,
-    /// A `Bash` rule in `deny` or `ask` that ends in a backslash with nothing after it.
+    /// A `Bash` rule in `deny` or `ask` that ends in a backslash with nothing after it, kept the
+    /// same way.
     TrailingBackslash,
     /// A `WebFetch` rule whose specifier does not begin `domain:`.
     NotADomainRule,
@@ -699,6 +716,14 @@ pub enum Unreadable {
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
     /// neither: `null`, a string, a list in place of the block.
     NotAList,
+}
+
+impl Unreadable {
+    /// Whether the rule is still in force, matched as written, and the entry is a warning rather
+    /// than a rule that was dropped (PERM-5).
+    pub fn keeps_the_rule(self) -> bool {
+        matches!(self, Self::UnclosedQuote | Self::TrailingBackslash)
+    }
 }
 
 impl Rejected {
@@ -773,7 +798,14 @@ impl Permissions {
             texts
                 .iter()
                 .filter_map(|text| match Rule::parse_in(text, anchors, ruling) {
-                    Ok(rule) => Some(rule),
+                    Ok(rule) => {
+                        // Kept and in force as written, and said, since it is not read as a typed
+                        // line is and its writer may have meant it to be (PERM-5).
+                        if let Some(reason) = rule.typed_unreadable {
+                            rejected.push(Rejected::new(text, reason));
+                        }
+                        Some(rule)
+                    }
                     Err(problem) => {
                         rejected.push(problem);
                         None
@@ -2623,28 +2655,54 @@ mod tests {
     }
 
     /// A deny or ask rule no line can be read from, a quote never closed or a backslash with
-    /// nothing after it, is dropped and named (PERM-11), and the rules beside it are kept. A line
-    /// of that shape does not compile, so the rule would be about no line. In `allow` the same
-    /// text is a rule about those characters, which grants nothing a line could spell.
+    /// nothing after it, is kept and matches the argv its characters spell, as it did before a
+    /// typed reading existed. It is named as a warning (PERM-5, PERM-11), and the rules beside it
+    /// are kept. In `allow` the same text is a rule about those characters and is not named.
     #[test]
-    fn a_deny_or_ask_rule_no_line_can_be_read_from_is_reported_and_an_allow_rule_is_kept() {
+    fn a_deny_or_ask_rule_no_line_can_be_read_from_is_kept_as_written_and_named() {
         let cases = [
-            (r#"Bash(sh -c "rm *)"#, Unreadable::UnclosedQuote),
-            ("Bash(sh -c 'rm *)", Unreadable::UnclosedQuote),
-            (r#"Bash(echo "a\")"#, Unreadable::UnclosedQuote),
-            (r"Bash(echo a\)", Unreadable::TrailingBackslash),
+            (
+                r#"Bash(sh -c "rm *)"#,
+                Unreadable::UnclosedQuote,
+                ["sh", "-c", "\"rm x"],
+            ),
+            (
+                "Bash(sh -c 'rm *)",
+                Unreadable::UnclosedQuote,
+                ["sh", "-c", "'rm x"],
+            ),
+            (
+                r#"Bash(echo "a\")"#,
+                Unreadable::UnclosedQuote,
+                ["echo", "\"a\\\"", ""],
+            ),
+            (
+                r"Bash(echo a\)",
+                Unreadable::TrailingBackslash,
+                ["echo", "a\\", ""],
+            ),
         ];
-        for (written, reason) in cases {
+        for (written, reason, argv) in cases {
+            assert!(reason.keeps_the_rule());
+            let argv: Vec<&str> = argv.into_iter().filter(|word| !word.is_empty()).collect();
             let owned = [written.to_string(), "Bash(ls *)".to_string()];
-            for (denied, asked) in [(&owned[..], &[][..]), (&[][..], &owned[..])] {
+            for (ruling, denied, asked) in [
+                (Ruling::Deny, &owned[..], &[][..]),
+                (Ruling::Ask, &[][..], &owned[..]),
+            ] {
                 let (permissions, rejected) = Permissions::parse(denied, asked, &[], &anchors());
                 assert_eq!(rejected.len(), 1, "{written}");
                 assert_eq!(rejected[0].reason, reason, "{written}");
                 assert_eq!(rejected[0].text, written);
+                assert_eq!(
+                    permissions.for_command(&argv),
+                    Decision::Ruled(ruling),
+                    "{written} did not match the argv its characters spell"
+                );
                 assert_ne!(
                     permissions.for_command(&["ls", "x"]),
                     Decision::Unmatched,
-                    "the rule beside {written} was dropped with it"
+                    "the rule beside {written} was dropped"
                 );
             }
             let (permissions, rejected) =

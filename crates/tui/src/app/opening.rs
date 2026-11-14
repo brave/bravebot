@@ -184,9 +184,9 @@ pub(super) fn rules_from(
     // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
     // force. A misspelled deny rule reads as protection that is not there.
     for problem in &rejected {
-        session.note(t!(
-            session_permission_rule_ignored,
-            problem = bravebot_agent::permissions::describe(problem)
+        session.note(bravebot_agent::permissions::said_in_a_session(
+            problem,
+            bravebot_agent::permissions::describe(problem),
         ));
     }
     // And said out loud for the same reason: an `allow` entry a checkout wrote that nobody granted

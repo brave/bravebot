@@ -1197,10 +1197,7 @@ fn prepare_the_run(
     for problem in &rejected {
         eprintln!(
             "{}",
-            t!(
-                session_permission_rule_ignored,
-                problem = progress::described(problem)
-            )
+            bravebot_agent::permissions::said_in_a_session(problem, progress::described(problem))
         );
     }
 
