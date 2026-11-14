@@ -80,8 +80,8 @@ give a remote credential to, and `start` and `continue` sign the commits they re
   `Operation not permitted`. A scope does not lift that, `run` rejects `unconfined` and `scopes`
   together, and a line with no sandbox needs no scope to reach the remote credential, the signing key
   or a local port. The lock the script takes is in the temporary directory and does not need it.
-- On macOS, `ci`, `comments`, `reply` and `review`: `scopes: ["remote"]`. They write nothing under
-  `.git`.
+- On macOS, `ci`, `comments`, `reply`, `review` and `rerun`: `scopes: ["remote"]`. They write
+  nothing under `.git`.
 - Where nothing holds `.git` back (Linux and Windows): `scopes: ["remote", "signing"]` on `start` and
   `continue`, `scopes: ["remote"]` on every other step, and no `unconfined`.
 
@@ -155,9 +155,26 @@ of its commits unsigned than it has now.
 3. `... ci <pr>` prints how many checks passed, failed and are pending, and the last lines of each
    failing job's log. Fix what the log shows, in the worktree. To reproduce a failure, run the
    failing command with `direnv exec <worktree>` in front, since the build reads the worktree's
-   `.envrc`. With `fast`, do not reproduce it; fix from the log. A failure that touches nothing in the diff and passes when run alone (a timing test
-   under load) or also fails on the base is not this pull request's to fix: report it and leave
-   the code alone. Checks that are pending are not failures; wait for them in step 7.
+   `.envrc`. With `fast`, do not reproduce it; fix from the log. Checks that are pending are not
+   failures; wait for them in step 7. Each failure is one of three kinds:
+   - Related to the pull request: the diff causes it, or it fails in code or tests the diff
+     touches. Fix it in the worktree and push it to the pull request with steps 5 to 7.
+   - Unrelated to the diff and also failing on `upstream/main`: not this pull request's to fix, and
+     the pull request gets no commit for it. Check that the same check fails on `upstream/main`, in
+     its latest CI run or, without `fast`, by running the failing command in a worktree of
+     `upstream/main`. Then look for an open issue or pull request for it, and cite that where one
+     exists. Otherwise file an issue with the [issue-poster](../../agents/issue-poster.md) definition and
+     fix it in a new pull request from `upstream/main` with the steps in "An issue with no pull
+     request" below, using that issue. Report the new pull request with this one's result.
+   - Unrelated to the diff and passes on `upstream/main`, or passes when run alone (a timing test
+     under load): report it and leave the code alone.
+
+   For either unrelated kind, also re-run that job on this pull request, once, with
+   `... rerun <pr> --job <job-id>`, where `<job-id>` ends the failing check's link in the `ci`
+   output (`.../runs/<run>/job/<job-id>`). It refuses an id that is not a failing job of the pull
+   request, and re-runs only that job, so the passing checks stay. A refusal (the account may not
+   re-run CI there) is reported as the state of that check, and is not retried with another account
+   unless the person asks. Step 7 waits on the re-run.
 4. `... comments <pr>` prints each unresolved review thread with its id, path and line, and the
    latest review of each reviewer who is asking for changes. Every thread and every review ends in a
    pushed fix or a reply, so none is left waiting. Make the change each one asks for. Where a comment
@@ -199,9 +216,9 @@ of its commits unsigned than it has now.
    logs; new review comments appear in step 4. Stop after three rounds and report what is left.
 
 Report the old and new head, one line per resolved conflict on how both sides were kept, each CI
-failure and what fixed it or why it was left, each review comment with what changed or why nothing
-did and the reply posted on it, which checks ran (with `fast`, that none ran locally), and the final
-CI state.
+failure and what fixed it, the pull request opened for it, whether its job was re-run, or why it was
+left, each review comment with what changed or why nothing did and the reply posted on it, which
+checks ran (with `fast`, that none ran locally), and the final CI state.
 
 ## An issue with no pull request
 
@@ -228,7 +245,8 @@ are several.
    inside that worktree.
 3. Reproduce before changing anything: write down the steps, what happened and what should have
    happened. For a failing test, look for the cause in production code first. If the cause is
-   infrastructure or CI, write no pull request and report it.
+   the CI infrastructure (a runner, a service outage) and not code or tests, write no pull request
+   and report it.
 4. Implement the minimum the issue asks for. Add no dependency, edit no lockfile or manifest, and
    do not bump a version. Read `agents/AGENTS.md`, `docs/development/README.md`,
    `docs/development/checks.md`, `docs/development/commits.md` and

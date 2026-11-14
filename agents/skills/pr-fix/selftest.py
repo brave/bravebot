@@ -545,6 +545,55 @@ def test_reply_takes_a_file_and_one_pull_request_and_only_it_takes_a_thread():
             assert code == 2 and said in out, (argv, out)
 
 
+def rerun_with(job, runner):
+    real = pr_fix.run
+    pr_fix.run = runner
+    pr = SimpleNamespace(number=12, url="https://github.com/brave/bravebot/pull/12", rollup=ROLLUP)
+    try:
+        return quietly(pr_fix.rerun, pr, job)
+    finally:
+        pr_fix.run = real
+
+
+def test_rerun_re_runs_a_failing_job_of_the_pull_request_and_no_other():
+    calls = []
+
+    def ran(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    code, out = rerun_with(6, ran)
+    assert code == 0 and "re-running job 6 on https://github.com/brave/bravebot/pull/12" in out, out
+    assert calls == [("gh", "run", "rerun", "--job", "6", "--repo", "brave/bravebot")], calls
+
+    def never(*args, **kwargs):
+        raise AssertionError(f"ran {args}")
+
+    # 5 is the run, not a job; 7 is no check of the pull request; the status contexts have no job.
+    for job in (5, 7, 0):
+        code, out = rerun_with(job, never)
+        assert code == 1 and f"job {job} is not a failing job on" in out, (job, out)
+
+
+def test_a_refused_rerun_fails_the_step_with_the_reason():
+    code, out = rerun_with(
+        6, lambda *args, **kwargs: SimpleNamespace(stdout="", stderr="HTTP 403: Must have admin rights", returncode=1)
+    )
+    assert code == 1 and "could not re-run job 6 on" in out and "HTTP 403" in out, out
+
+
+def test_rerun_takes_one_job_of_one_pull_request_and_only_it_takes_a_job():
+    with in_a_git_directory():
+        for argv, said in (
+            (["rerun", "9"], "rerun needs --job"),
+            (["rerun", "12,13", "--job", "6"], "rerun takes one pull request"),
+            (["ci", "9", "--job", "6"], "only rerun takes --job"),
+        ):
+            with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]):
+                code, out = quietly(pr_fix.main)
+            assert code == 2 and said in out, (argv, out)
+
+
 def test_a_refused_review_request_fails_the_step():
     real = pr_fix.run
     pr_fix.run = lambda *args, **kwargs: SimpleNamespace(stdout="", stderr="HTTP 403", returncode=1)

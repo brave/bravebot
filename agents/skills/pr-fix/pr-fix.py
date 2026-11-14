@@ -16,6 +16,7 @@
     pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
                                         make a signed pull request unsigned
     pr-fix.py review <pr>               ask netzenbot-reviewer to review the pull request again
+    pr-fix.py rerun <pr> --job ID       re-run one failing job, the id ending its link in `ci`
     pr-fix.py kind <n or URL> ...       say for each whether it is a pull request or an issue
     pr-fix.py issue <issue>             for an issue with no pull request yet: stop if one is open, else
                                         print the issue and its comments
@@ -327,6 +328,21 @@ def ci(pr, until):
     if not rollup:
         print("GitHub has reported no checks for this head yet")
     return 1 if failing else 2 if pending or not rollup else 0
+
+
+def rerun(pr, job):
+    """Re-run job `job` on the head, which must be one of the jobs `ci` reports as failing there."""
+    failing = classify(pr.rollup)[0]
+    failing_jobs = {found[2] for _, link, _ in failing if (found := JOB_URL.search(link))}
+    if str(job) not in failing_jobs:
+        print(f"job {job} is not a failing job on {pr.url}", file=sys.stderr)
+        return 1
+    done = run("gh", "run", "rerun", "--job", str(job), "--repo", BASE_REPO, check=False)
+    if done.returncode:
+        print(f"could not re-run job {job} on {pr.url}:\n{pr_worktree.printed(done)}", file=sys.stderr)
+        return 1
+    print(f"re-running job {job} on {pr.url}")
+    return 0
 
 
 def quoted(node):
@@ -770,13 +786,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
         "step",
-        choices=["start", "continue", "ci", "comments", "check", "push", "review", "reply", "kind", *ISSUE_STEPS],
+        choices=["start", "continue", "ci", "comments", "check", "push", "review", "reply", "rerun", "kind", *ISSUE_STEPS],
     )
     parser.add_argument("prs", nargs="+", metavar="pr")
     parser.add_argument("--branch", help="the branch an issue is worked on: fix-<name>; open reads it from the issue's worktree without it")
     parser.add_argument("--title", help="the title of the pull request open creates")
     parser.add_argument("--body-file", help="the body of the pull request open creates, or the text reply posts")
     parser.add_argument("--thread", type=int, metavar="ID", help="the review thread reply answers, as comments prints it")
+    parser.add_argument("--job", type=int, metavar="ID", help="the failing job rerun re-runs, as the end of its link in ci")
     parser.add_argument("--target", action="append", default=[], help="a make target for check to run")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument(
@@ -811,6 +828,10 @@ def main():
         parser.error("open needs --title and --body-file")
     if args.step == "reply" and not args.body_file:
         parser.error("reply needs --body-file")
+    if args.job is not None and args.step != "rerun":
+        parser.error("only rerun takes --job")
+    if args.step == "rerun" and args.job is None:
+        parser.error("rerun needs --job")
     if args.step in ISSUE_STEPS and (len(args.prs) != 1 or re.search(r"[,\s]", args.prs[0].strip())):
         parser.error(f"{args.step} takes one issue")
     if args.step == "kind":
@@ -822,8 +843,8 @@ def main():
     numbers = pr_numbers(args.prs, here)
     if not numbers:
         sys.exit(0)
-    if args.step == "reply" and len(numbers) > 1:
-        parser.error("reply takes one pull request")
+    if args.step in ("reply", "rerun") and len(numbers) > 1:
+        parser.error(f"{args.step} takes one pull request")
     if args.use_existing and len(numbers) > 1:
         parser.error("--use-existing takes the one pull request whose worktree the person agreed to")
     if len(numbers) > 1:
@@ -841,6 +862,7 @@ def main():
         "push": push,
         "review": review,
         "reply": lambda pr: reply(pr, args.thread, args.body_file),
+        "rerun": lambda pr: rerun(pr, args.job),
     }
     try:
         if args.step == "start":
