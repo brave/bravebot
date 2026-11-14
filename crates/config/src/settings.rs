@@ -365,6 +365,11 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
     // off for whoever runs it there and may not turn them on, over the person's `false` or over
     // the default (INPUT-43).
     ("suggestions", Narrows::OffByDefault, Entitled::OwnOrNamed),
+    // A recap request sends the conversation for a summary nobody asked for where the person
+    // turned the automatic one off, so a checkout may turn it off for whoever runs it there and
+    // may not turn it on over the person's `false` (CMD-20). It is on where nothing is stated, so
+    // a checkout's `true` over nothing is what the person already has.
+    ("awaySummaryEnabled", Narrows::Off, Entitled::OwnOrNamed),
     // A higher threshold sends every tool definition of every approved server in full on every
     // request, so a checkout may lower the figure or state one where the person stated none and may
     // not raise it, remove it or state something that reads as no threshold (SERVERS-16).
@@ -8262,6 +8267,15 @@ mod tests {
             wider: &["null", "0", r#""false""#],
             narrower: "false",
         },
+        // The same shape as `updateCheck`: `true` over `false` is held by
+        // `a_checkout_may_turn_the_away_recap_off_and_not_on`.
+        NarrowCase {
+            key: "awaySummaryEnabled",
+            read: |settings| format!("{:?}", settings.away_summary_enabled()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
         // A count: the person's `"20k"` is not raised by a larger number or string, and a value
         // that reads as no threshold does not remove it. Lowering, stating where the person stated
         // none, and the named file are held by
@@ -8563,6 +8577,131 @@ mod tests {
             .project(r#"{"deepLinks": true}"#)
             .read();
         assert_eq!(settings.deep_links(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// CMD-20, BACKEND-24: a project or local layer may turn the automatic away recap off and may
+    /// not turn it on over a person who turned it off, and the file that tried is reported. A
+    /// person who stated nothing, or `true`, is not held to `false`, and the file `--settings`
+    /// names is the person's own act in either direction. The idle time stays a key the closest
+    /// layer decides.
+    #[test]
+    fn a_checkout_may_turn_the_away_recap_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("away-recap-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"awaySummaryEnabled": true}"#;
+            let off = r#"{"awaySummaryEnabled": false}"#;
+
+            // Over the person's `false`, `true` is not obeyed and the file is named.
+            let settings = with("on-over-off", Some(off), on);
+            assert_eq!(
+                settings.away_summary_enabled(),
+                Some(false),
+                "local={local}"
+            );
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, "awaySummaryEnabled");
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert_eq!(settings.names().collect::<Vec<_>>(), ["awaySummaryEnabled"]);
+            assert!(!settings.is_empty());
+
+            // A checkout's `false` turns the recap off over `true` and over a person who wrote
+            // nothing, and neither is reported.
+            for global in [Some(on), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.away_summary_enabled(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` or nothing turns off nothing and is not
+            // reported.
+            for global in [Some(on), None] {
+                let settings = with("on", global, on);
+                assert_eq!(
+                    settings.away_summary_enabled(),
+                    Some(true),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // A person's value that is not a boolean states nothing, so it does not hold a
+            // checkout to `false`, and a checkout's that is not one turns off nothing.
+            let settings = with(
+                "person-word",
+                Some(r#"{"awaySummaryEnabled": "false"}"#),
+                on,
+            );
+            assert_eq!(settings.away_summary_enabled(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with("checkout-word", None, r#"{"awaySummaryEnabled": "false"}"#);
+            assert_eq!(settings.away_summary_enabled(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("away-recap-local-over-project")
+            .project(r#"{"awaySummaryEnabled": false}"#)
+            .local(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The file the command line named is the person's own act: it turns the recap on over the
+        // person's `false`.
+        let settings = Layers::new("away-recap-named-on")
+            .global(r#"{"awaySummaryEnabled": false}"#)
+            .named(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        // A checkout's `false` then narrows what the person's layers settled on, and a checkout's
+        // `true` over the named file's `false` is refused.
+        let settings = Layers::new("away-recap-named-on-checkout-off")
+            .global(r#"{"awaySummaryEnabled": false}"#)
+            .project(r#"{"awaySummaryEnabled": false}"#)
+            .named(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("away-recap-named-off-checkout-on")
+            .named(r#"{"awaySummaryEnabled": false}"#)
+            .project(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+
+        // The idle time is not in the table: the closest layer that named one wins, with the
+        // recap turned off by the person and a checkout's `true` refused.
+        let settings = Layers::new("away-recap-idle-stays-nearest")
+            .global(r#"{"awaySummaryEnabled": false, "awaySummaryIdleSeconds": 90}"#)
+            .project(r#"{"awaySummaryEnabled": true, "awaySummaryIdleSeconds": 600}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert_eq!(settings.away_summary_idle_seconds(), Some(600));
         assert_eq!(settings.not_obeyed_all().count(), 1);
     }
 

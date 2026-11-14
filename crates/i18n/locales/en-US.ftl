@@ -821,6 +821,18 @@ doctor-settings-deep-links-ignored =
 # state nothing.
 doctor-settings-suggestions-ignored =
     suggestions in { $path } is not obeyed: it may leave suggestions off and cannot turn them on, which only ~/.bravebot/settings.json and the file --settings names can
+# A checkout may turn the automatic recap of an away session off and not on, so a `true` over the
+# person's `false` is dropped and no recap is requested when the terminal is focused again.
+doctor-settings-away-summary-ignored =
+    awaySummaryEnabled in { $path } is not obeyed: it may turn the automatic recap off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may turn the capture of the mouse off and not on, so a `true` over the person's `false`
+# is dropped and the terminal keeps its own selection and wheel.
+doctor-settings-tui-mouse-ignored =
+    tui.mouse in { $path } is not obeyed: it may turn mouse capture off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may turn the right-click menu off and not on, so a `true` over the person's `false` is
+# dropped and a right click opens no menu.
+doctor-settings-tui-context-menu-ignored =
+    tui.contextMenu in { $path } is not obeyed: it may turn the right-click menu off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
 # A checkout may lower the size past which a server's tools are offered by name, and may not raise it
 # or state a value that reads as no size, so a figure that does is dropped and the person's own size
 # stays in force.

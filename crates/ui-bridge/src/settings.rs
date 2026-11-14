@@ -375,6 +375,32 @@ mod tests {
         assert_eq!(settings.deep_links(), Some(false));
     }
 
+    /// A checkout whose `awaySummaryEnabled` is `true` over the person's `false` is listed with the
+    /// key and the file, and one that turns the recap off is not.
+    #[test]
+    fn a_checkout_away_recap_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "awaySummaryEnabled"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"awaySummaryEnabled": false}"#),
+            Some(r#"{"awaySummaryEnabled": true}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "awaySummaryEnabled", "path": project })]
+        );
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"awaySummaryEnabled": true}"#),
+            Some(r#"{"awaySummaryEnabled": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "a recap turned off was reported"
+        );
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+    }
+
     /// A checkout whose `suggestions` is `true` is listed with the key and the file over the
     /// person's `false` and over nothing, and one that leaves suggestions off is not.
     #[test]

@@ -41437,6 +41437,49 @@ mod tests {
         assert!(suggest_next(&failed, &config, &conversation, &trust).is_none());
     }
 
+    /// CMD-20, BACKEND-24: a session started where a checkout's settings file turned the away recap
+    /// on over the person's `false` owes no recap, and one where the person's own file or nothing
+    /// states the recap on still owes it.
+    #[test]
+    fn a_checkouts_away_recap_does_not_turn_the_recap_on() {
+        use std::time::{Duration, Instant};
+        let root = crate::testutil::scratch_dir("bravebot-app-checkout-away-recap");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
+        std::fs::write(
+            cwd.join(".bravebot").join("settings.json"),
+            r#"{"awaySummaryEnabled": true}"#,
+        )
+        .expect("write the project layer");
+        let owes_a_recap = |home_text: &str| {
+            std::fs::write(home.join("settings.json"), home_text).expect("write the home layer");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let mut session = Session::new("none");
+            adopt_settings(&mut session, &settings, None);
+            let start = Instant::now();
+            session.away.turn_done(start);
+            session.away.focus(false);
+            session.away.due(
+                start + crate::away::IDLE + Duration::from_secs(1),
+                crate::away::FEWEST_TURNS,
+            )
+        };
+
+        assert!(
+            !owes_a_recap(r#"{"awaySummaryEnabled": false}"#),
+            "over the person's false"
+        );
+        assert!(owes_a_recap("{}"), "over nothing");
+        assert!(
+            owes_a_recap(r#"{"awaySummaryEnabled": true}"#),
+            "the person's own true"
+        );
+    }
+
     /// A session starts with suggestions off where a checkout's settings file turned them on and
     /// the person's own did not (BACKEND-24), over the person's `false` and over nothing, and
     /// stays on where the person's own file turned them on.

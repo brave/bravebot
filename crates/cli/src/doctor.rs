@@ -269,6 +269,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
         "suggestions" => t!(doctor_settings_suggestions_ignored, path = path),
+        "awaySummaryEnabled" => t!(doctor_settings_away_summary_ignored, path = path),
         "deferMcpToolsAbove" => t!(doctor_settings_defer_mcp_tools_ignored, path = path),
         "promptCacheTtl" => t!(doctor_settings_prompt_cache_ttl_ignored, path = path),
         other if bravebot_config::Settings::narrow_only_keys().any(|key| key == other) => {
@@ -2611,6 +2612,52 @@ mod tests {
         std::fs::write(home.join("settings.json"), r#"{"deepLinks": true}"#).expect("home file");
         let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
         assert_eq!(settings.deep_links(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// CMD-20, BACKEND-24: a checkout whose `awaySummaryEnabled` is `true` over the person's `false`
+    /// is reported with the key and the file, in the message written for the key, and one that
+    /// turns the recap off is not reported.
+    #[test]
+    fn a_checkout_away_recap_that_turns_it_on_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("away-recap-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"awaySummaryEnabled": false}"#,
+        )
+        .expect("home file");
+        std::fs::write(&project_file, r#"{"awaySummaryEnabled": true}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains(&format!("awaySummaryEnabled in {}", project_file.display())),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("may turn the automatic recap off"),
+            "in the message of its own: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("read from the person's own settings only"),
+            "said as a key a checkout may not name: {lines:?}"
+        );
+
+        // A checkout that turns the recap off is not reported.
+        std::fs::write(&project_file, r#"{"awaySummaryEnabled": false}"#).expect("project");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"awaySummaryEnabled": true}"#,
+        )
+        .expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.away_summary_enabled(), Some(false));
         assert!(home_only_lines(&settings).is_empty());
     }
 

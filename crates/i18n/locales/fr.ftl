@@ -696,6 +696,20 @@ doctor-settings-deep-links-ignored =
 # personne indiquent `false` ou n'indiquent rien.
 doctor-settings-suggestions-ignored =
     suggestions dans { $path } n'est pas appliqué : il peut laisser les suggestions désactivées et ne peut pas les activer, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
+# Une copie de travail peut désactiver le récapitulatif automatique d'une session laissée de côté et
+# ne peut pas le réactiver : un `true` posé sur le `false` de la personne est écarté et aucun
+# récapitulatif n'est demandé au retour dans le terminal.
+doctor-settings-away-summary-ignored =
+    awaySummaryEnabled dans { $path } n'est pas appliqué : il peut désactiver le récapitulatif automatique et ne peut pas le réactiver une fois qu'il a été désactivé par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver la capture de la souris et ne peut pas la réactiver : un
+# `true` posé sur le `false` de la personne est écarté et le terminal garde sa propre sélection et sa
+# propre molette.
+doctor-settings-tui-mouse-ignored =
+    tui.mouse dans { $path } n'est pas appliqué : il peut désactiver la capture de la souris et ne peut pas la réactiver une fois qu'elle a été désactivée par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver le menu du clic droit et ne peut pas le réactiver : un `true`
+# posé sur le `false` de la personne est écarté et un clic droit n'ouvre aucun menu.
+doctor-settings-tui-context-menu-ignored =
+    tui.contextMenu dans { $path } n'est pas appliqué : il peut désactiver le menu du clic droit et ne peut pas le réactiver une fois qu'il a été désactivé par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
 # Une copie de travail peut abaisser la taille au-delà de laquelle les outils d'un serveur sont proposés
 # par leur nom, et ne peut ni la relever ni indiquer une valeur lue comme une absence de taille : une
 # telle valeur est écartée et la taille de la personne reste en vigueur.

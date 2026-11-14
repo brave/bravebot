@@ -1336,6 +1336,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
 | `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
 | `suggestions` | the same as `limit`, with the default bound: a project or local layer may leave it off and may not turn it on, over the person's `false` or over nothing |
+| `awaySummaryEnabled` | the same as `updateCheck`: a project or local layer may turn the automatic recap off and may not turn it on over the person's `false` |
 | `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
 | `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
 | anything else | the closest layer that set it wins |
@@ -1391,6 +1392,15 @@ only where the person's own files state `true`, which changes nothing, and is ot
 and is reported, so a checkout cannot start a request after each turn that the person did not ask
 for ([INPUT-43](terminal-input.md#INPUT-43)). A value that is not a boolean states nothing, is
 absence, and is not reported.
+
+`awaySummaryEnabled` is read the same way as `updateCheck`: only a boolean states it, `false` is the
+narrower value, and a checkout's `true` over the person's `false` is not obeyed and is reported. The
+recap is on where nothing is stated, so a checkout's `true` over nothing or over the person's `true`
+changes nothing and is not reported. A checkout's `false` is obeyed whatever the person stated. A
+checkout therefore cannot cause a request that sends the conversation for a summary the person
+turned off ([CMD-20](commands.md#CMD-20)). `awaySummaryIdleSeconds` is not in the table: the closest
+layer that names a whole count decides it, because it only moves the time at which the recap is made
+when the recap is on.
 
 For `deferMcpToolsAbove`, a layer states a value when it holds a whole number above zero or a count
 string such as `"20k"`. `null`, zero, a negative or fractional number, a boolean and a string that
@@ -1530,6 +1540,9 @@ with it.
 `verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
 `verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_away_recap_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_away_recap_turned_on_over_the_persons_off_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
 `verified-by: bravebot_cli::doctor::a_checkout_deferral_threshold_that_raises_the_persons_is_reported_with_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored`

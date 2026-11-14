@@ -880,6 +880,10 @@ It needs a terminal that reports when it is left. `false` turns the automatic re
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
 
+A `.bravebot/settings.json` or `.bravebot/settings.local.json` in a checkout may turn the recap off,
+and cannot turn it on where your own `~/.bravebot/settings.json` turned it off. `bravebot doctor`
+names a checkout file whose `true` was ignored. The file named with `--settings` is read as your own.
+
 ### `awaySummaryIdleSeconds`
 
 ```json
