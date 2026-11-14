@@ -157,6 +157,7 @@ at, that a control keeps keyboard focus through an animation.
 | --- | --- |
 | `pnpm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
 | `pnpm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
+| `node scripts/drive-close-chat.mjs` (after `pnpm run bridge && pnpm exec electron-vite build`) | **Close Chat** on a chat row's right-click menu, through the real menu and command router against a mocked bridge: a chat still working behind the open one is closed from its own row (the agent is told to close its handle, its working mark goes, the open chat stays open), as is a draft behind the open one, whose row id is the draft's and not a record's; the open draft's own row closes it; a row nothing is open for closes nothing |
 | `pnpm run drive:window-fault` | A failure of the page ([DIAG-10](../../docs/specs/diagnostic-log.md#DIAG-10)), in a real window with a real agent and a scratch state directory: the browser refuses one `removeChild` with a `NotFoundError`, as it does when a node React expects to find has gone, and the window shows the fault screen, as an alert, with the error and the components React was drawing, writes one `window.fault` line holding the kind and the error's name and nothing of its message, and comes back on **Reload**. Screenshots in light and dark |
 | `pnpm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
 | `pnpm run drive:columns` | Folding each side column, and what is remembered |
@@ -250,7 +251,7 @@ at a time, and a driver replaces only its own rows inside a shared key such as `
 
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-summon`, `drive-connectors`,
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-summon`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
 `drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
