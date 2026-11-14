@@ -2676,6 +2676,42 @@ impl Container {
     }
 }
 
+/// The facts the statements about a turn's programs are built from, passed by name so that the two
+/// adjacent `bool`s cannot be swapped.
+///
+/// `confine_runs` says the turn asks for its programs to be confined; a turn that does not is
+/// never told of a boundary.
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
+/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
+/// `loopback`, and says which routes the person has instead (SANDBOX-19).
+///
+/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, no sentence
+/// names the tool and each says what the person can do instead, or nothing (TOOL-6). `askable` says
+/// whether anybody can be asked in this run (CLI-1), and where nobody can, no sentence names a
+/// route only a person takes (SANDBOX-19).
+///
+/// The default is a turn whose list holds `request_path` and where somebody can be asked, with
+/// neither confinement nor requests; a caller sets `confine_runs` and `requests_offered`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunStatement {
+    pub confine_runs: bool,
+    pub requests_offered: bool,
+    pub request_path_listed: bool,
+    pub askable: Askable,
+}
+
+impl Default for RunStatement {
+    fn default() -> Self {
+        Self {
+            confine_runs: false,
+            requests_offered: false,
+            request_path_listed: true,
+            askable: Askable::Somebody,
+        }
+    }
+}
+
 /// [`stated_to_the_planner_for`] for a turn whose list holds `request_path` and where somebody can
 /// be asked.
 #[cfg(test)]
@@ -2685,11 +2721,12 @@ pub fn stated_to_the_planner(
     requests_offered: bool,
 ) -> Option<String> {
     stated_to_the_planner_for(
-        confine_runs,
         mode,
-        requests_offered,
-        true,
-        Askable::Somebody,
+        RunStatement {
+            confine_runs,
+            requests_offered,
+            ..RunStatement::default()
+        },
     )
 }
 
@@ -2702,29 +2739,13 @@ pub fn stated_to_the_planner(
 /// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
 /// state. [`stated_in_the_description_for`] adds the one sentence those two cases do carry.
 ///
-/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
-/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
-/// `loopback`, and says which routes the person has instead (SANDBOX-19).
-///
-/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, no sentence
-/// names the tool and each says what the person can do instead, or nothing (TOOL-6). `askable` says
-/// whether anybody can be asked in this run (CLI-1), and where nobody can, no sentence names a
-/// route only a person takes (SANDBOX-19).
-pub fn stated_to_the_planner_for(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
-) -> Option<String> {
+/// What `facts` says is described on [`RunStatement`].
+pub fn stated_to_the_planner_for(mode: SandboxMode, facts: RunStatement) -> Option<String> {
     let said = stated_listing(
-        confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
-        requests_offered,
-        request_path_listed,
-        askable,
+        facts,
     )?;
     Some(with_temporary_held_back_said(
         said,
@@ -2733,9 +2754,9 @@ pub fn stated_to_the_planner_for(
     ))
 }
 
-/// What the `run` description says of its programs: [`stated_to_the_planner`], or for a turn that
-/// does not confine its runs and for the mode `off` the one sentence that `request_path` is refused
-/// and nobody is asked (SANDBOX-19).
+/// What the `run` description says of its programs: [`stated_to_the_planner_for`], or for a turn
+/// that does not confine its runs and for the mode `off` the one sentence that `request_path` is
+/// refused and nobody is asked (SANDBOX-19).
 ///
 /// The sentence is the same in both cases, in every permission mode and whether or not the
 /// workspace is trusted, because the tool is refused in all of them. It says nothing of a boundary,
@@ -2743,44 +2764,18 @@ pub fn stated_to_the_planner_for(
 /// start with no profile, and the last two are accepted and ignored there (SANDBOX-26). It is built
 /// from the two arguments and nothing a program printed or a file held.
 ///
-/// A turn whose list lacks `request_path` (`request_path_listed`) is told nothing of it, since a
-/// tool it cannot call needs no refusal: it gets no sentence, and a mode that confines gets the
-/// text without the sentences that name the tool.
-#[cfg(test)]
-pub fn stated_in_the_description(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-) -> Option<String> {
-    stated_in_the_description_for(
-        confine_runs,
-        mode,
-        requests_offered,
-        request_path_listed,
-        Askable::Somebody,
-    )
-}
-
-/// [`stated_in_the_description`] for a run where nobody can be asked (`Askable::Nobody`, CLI-1) or
-/// somebody can. Where nobody can, the description names neither trusting the workspace nor
-/// `/add-dir`, the same fact the sentence after a failed step reads (SANDBOX-19).
-pub fn stated_in_the_description_for(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
-) -> Option<String> {
-    match !confine_runs || mode == SandboxMode::Off {
-        true => request_path_listed.then(|| REQUEST_PATH_REFUSED_SENTENCE.to_string()),
-        false => stated_to_the_planner_for(
-            confine_runs,
-            mode,
-            requests_offered,
-            request_path_listed,
-            askable,
-        ),
+/// A turn whose list lacks `request_path` (`facts.request_path_listed`) is told nothing of it,
+/// since a tool it cannot call needs no refusal: it gets no sentence, and a mode that confines gets
+/// the text without the sentences that name the tool.
+///
+/// Where nobody can be asked (`Askable::Nobody`, CLI-1), the description names neither trusting the
+/// workspace nor `/add-dir`, the same fact the sentence after a failed step reads (SANDBOX-19).
+pub fn stated_in_the_description_for(mode: SandboxMode, facts: RunStatement) -> Option<String> {
+    match !facts.confine_runs || mode == SandboxMode::Off {
+        true => facts
+            .request_path_listed
+            .then(|| REQUEST_PATH_REFUSED_SENTENCE.to_string()),
+        false => stated_to_the_planner_for(mode, facts),
     }
 }
 
@@ -2800,66 +2795,39 @@ const REQUEST_PATH_REFUSED_SENTENCE: &str =
 /// named, is now refused. A turn that confines none of its runs was never told of a boundary, so it
 /// is told nothing.
 ///
-/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, the notice
-/// for `off` does not say the tool is now refused, and a confining mode is stated without it.
+/// `facts.request_path_listed` says the turn's list holds `request_path`. Where it does not, the
+/// notice for `off` does not say the tool is now refused, and a confining mode is stated without
+/// it. A run where nobody can be asked (`Askable::Nobody`, CLI-1) is stated as
+/// [`stated_in_the_description_for`] states it.
 ///
 /// Built from the two modes and the platform alone, so it carries nothing a program printed or a
 /// file held.
-#[cfg(test)]
-pub fn change_notice(
-    confine_runs: bool,
-    from: SandboxMode,
-    to: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-) -> Option<String> {
-    change_notice_for(
-        confine_runs,
-        from,
-        to,
-        requests_offered,
-        request_path_listed,
-        Askable::Somebody,
-    )
-}
-
-/// [`change_notice`] for a run where nobody can be asked (`Askable::Nobody`, CLI-1) or somebody
-/// can, stated as [`stated_in_the_description_for`] states it.
 pub fn change_notice_for(
-    confine_runs: bool,
     from: SandboxMode,
     to: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
+    facts: RunStatement,
 ) -> Option<String> {
-    if !confine_runs || from == to {
+    if !facts.confine_runs || from == to {
         return None;
     }
     let said = match to {
         SandboxMode::Off => format!(
             " Programs `run` starts from now on start with no sandbox profile, so the limits its \
              description states do not apply to them.{}",
-            if request_path_listed {
+            if facts.request_path_listed {
                 " The `request_path` tool is now refused and nobody is asked."
             } else {
                 ""
             },
         ),
-        mode => stated_to_the_planner_for(
-            confine_runs,
-            mode,
-            requests_offered,
-            request_path_listed,
-            askable,
-        )
-        .map(|stated| {
-            format!(
-                " It applies to the programs `run` starts from now on, in place of anything \
+        mode => stated_to_the_planner_for(mode, facts)
+            .map(|stated| {
+                format!(
+                    " It applies to the programs `run` starts from now on, in place of anything \
                      the `run` description says of them. {stated}"
-            )
-        })
-        .unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default(),
     };
     Some(format!(
         "The user changed the sandbox mode to `{}` while this turn was running.{said} A program \
@@ -3411,13 +3379,14 @@ fn stated(
     requests_offered: bool,
 ) -> Option<String> {
     stated_listing(
-        confine_runs,
         prelude,
         network,
         mode,
-        requests_offered,
-        true,
-        Askable::Somebody,
+        RunStatement {
+            confine_runs,
+            requests_offered,
+            ..RunStatement::default()
+        },
     )
 }
 
@@ -3448,17 +3417,20 @@ fn widens(clause: &'static str, askable: Askable) -> &'static str {
 }
 
 /// The statement of a turn's programs for a turn whose list holds `request_path`
-/// (`request_path_listed`) or does not, in a run where nobody can be asked (`Askable::Nobody`) or
-/// somebody can.
+/// (`facts.request_path_listed`) or does not, in a run where nobody can be asked
+/// (`Askable::Nobody`) or somebody can.
 fn stated_listing(
-    confine_runs: bool,
     prelude: Option<Prelude>,
     network: Network,
     mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
+    facts: RunStatement,
 ) -> Option<String> {
+    let RunStatement {
+        confine_runs,
+        requests_offered,
+        request_path_listed,
+        askable,
+    } = facts;
     if !confine_runs || mode == SandboxMode::Off {
         return None;
     }
@@ -4324,17 +4296,45 @@ mod tests {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
 
         assert_eq!(
-            change_notice(true, Strict, Strict, true, true),
+            change_notice_for(
+                Strict,
+                Strict,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                }
+            ),
             None,
             "no change"
         );
         assert_eq!(
-            change_notice(false, Strict, Off, true, true),
+            change_notice_for(
+                Strict,
+                Off,
+                RunStatement {
+                    confine_runs: false,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                }
+            ),
             None,
             "a turn that confines none of its runs"
         );
 
-        let off = change_notice(true, WorkspaceWrite, Off, true, true).expect("told of off");
+        let off = change_notice_for(
+            WorkspaceWrite,
+            Off,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told of off");
         assert!(
             off.contains("to `off`") && off.contains("no sandbox profile"),
             "{off}"
@@ -4343,15 +4343,45 @@ mod tests {
         assert!(!off.contains(&stated), "{off}");
 
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true, true).expect("told");
+            let notice = change_notice_for(
+                Off,
+                to,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told");
             let stated = stated_to_the_planner(true, to, true).expect("stated");
             assert!(
                 notice.contains(&format!("to `{}`", to.name())) && notice.contains(&stated),
                 "{notice}"
             );
         }
-        let strict = change_notice(true, Off, Strict, true, true).expect("told");
-        let workspace_write = change_notice(true, Off, WorkspaceWrite, true, true).expect("told");
+        let strict = change_notice_for(
+            Off,
+            Strict,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told");
+        let workspace_write = change_notice_for(
+            Off,
+            WorkspaceWrite,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told");
         assert!(!strict.contains("may read this machine"), "{strict}");
         assert!(
             workspace_write.contains("may read this machine"),
@@ -4370,21 +4400,53 @@ mod tests {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
 
         for from in [Strict, ReadOnly, WorkspaceWrite] {
-            let off = change_notice(true, from, Off, true, true).expect("told of off");
+            let off = change_notice_for(
+                from,
+                Off,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told of off");
             assert!(
                 off.contains("The `request_path` tool is now refused and nobody is asked."),
                 "{from:?}: {off}"
             );
         }
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true, true).expect("told");
+            let notice = change_notice_for(
+                Off,
+                to,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told");
             assert!(!notice.contains("is now refused"), "{to:?}: {notice}");
             assert!(
                 notice.contains("asked for with the `request_path` tool"),
                 "{to:?}: {notice}"
             );
         }
-        assert_eq!(change_notice(false, WorkspaceWrite, Off, true, true), None);
+        assert_eq!(
+            change_notice_for(
+                WorkspaceWrite,
+                Off,
+                RunStatement {
+                    confine_runs: false,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                }
+            ),
+            None
+        );
     }
 
     fn step(resolved: &str, args: &[&str]) -> Step {
@@ -4915,23 +4977,27 @@ mod tests {
                 for offered in [false, true] {
                     let at = format!("{prelude:?} {mode:?} offered={offered}");
                     let asked = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        true,
-                        Askable::Somebody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            askable: Askable::Somebody,
+                        },
                     )
                     .expect("says something");
                     let unattended = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        true,
-                        Askable::Nobody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            askable: Askable::Nobody,
+                        },
                     )
                     .expect("says something");
                     assert!(asked.contains("`/add-dir`"), "{at}: {asked}");
@@ -8693,7 +8759,15 @@ mod tests {
         for offered in [true, false] {
             described.push((
                 "off",
-                stated_in_the_description(true, SandboxMode::Off, offered, true),
+                stated_in_the_description_for(
+                    SandboxMode::Off,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: true,
+                        ..RunStatement::default()
+                    },
+                ),
             ));
             for mode in [
                 SandboxMode::Strict,
@@ -8703,7 +8777,15 @@ mod tests {
             ] {
                 described.push((
                     "not confined",
-                    stated_in_the_description(false, mode, offered, true),
+                    stated_in_the_description_for(
+                        mode,
+                        RunStatement {
+                            confine_runs: false,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            ..RunStatement::default()
+                        },
+                    ),
                 ));
             }
         }
@@ -8743,8 +8825,16 @@ mod tests {
             SandboxMode::WorkspaceWrite,
         ] {
             for offered in [true, false] {
-                let said =
-                    stated_in_the_description(true, mode, offered, true).expect("says something");
+                let said = stated_in_the_description_for(
+                    mode,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: true,
+                        ..RunStatement::default()
+                    },
+                )
+                .expect("says something");
                 let at = format!("{mode:?} offered={offered}");
                 assert!(
                     !said.contains(REQUEST_PATH_REFUSED_SENTENCE),
@@ -8760,8 +8850,16 @@ mod tests {
                     "{at}: a confining mode's description is the one it had"
                 );
             }
-            let accepted =
-                stated_in_the_description(true, mode, true, true).expect("says something");
+            let accepted = stated_in_the_description_for(
+                mode,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("says something");
             assert!(
                 accepted.contains("asked for with the `request_path` tool"),
                 "{mode:?}: {accepted}"
@@ -8883,17 +8981,54 @@ mod tests {
         // tool and not said, in place of nothing, for one that does not.
         for offered in [true, false] {
             assert_eq!(
-                stated_in_the_description(true, Off, offered, true).as_deref(),
+                stated_in_the_description_for(
+                    Off,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: true,
+                        ..RunStatement::default()
+                    }
+                )
+                .as_deref(),
                 Some(REQUEST_PATH_REFUSED_SENTENCE),
             );
-            assert_eq!(stated_in_the_description(true, Off, offered, false), None);
+            assert_eq!(
+                stated_in_the_description_for(
+                    Off,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: false,
+                        ..RunStatement::default()
+                    }
+                ),
+                None
+            );
             for mode in [Strict, ReadOnly, WorkspaceWrite, Off] {
                 assert_eq!(
-                    stated_in_the_description(false, mode, offered, true).as_deref(),
+                    stated_in_the_description_for(
+                        mode,
+                        RunStatement {
+                            confine_runs: false,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            ..RunStatement::default()
+                        }
+                    )
+                    .as_deref(),
                     Some(REQUEST_PATH_REFUSED_SENTENCE),
                 );
                 assert_eq!(
-                    stated_in_the_description(false, mode, offered, false),
+                    stated_in_the_description_for(
+                        mode,
+                        RunStatement {
+                            confine_runs: false,
+                            requests_offered: offered,
+                            request_path_listed: false,
+                            ..RunStatement::default()
+                        }
+                    ),
                     None,
                     "{mode:?}"
                 );
@@ -8906,23 +9041,27 @@ mod tests {
                 for offered in [true, false] {
                     let at = format!("{prelude:?} {mode:?} offered={offered}");
                     let listed = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        true,
-                        Askable::Somebody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            askable: Askable::Somebody,
+                        },
                     )
                     .expect("says something");
                     let unlisted = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        false,
-                        Askable::Somebody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: false,
+                            askable: Askable::Somebody,
+                        },
                     )
                     .expect("says something");
                     assert!(listed.contains("`request_path`"), "{at}: {listed}");
@@ -8964,13 +9103,43 @@ mod tests {
         }
 
         // The notice for a move to `off` and to a confining mode.
-        let off = change_notice(true, WorkspaceWrite, Off, true, false).expect("told of off");
+        let off = change_notice_for(
+            WorkspaceWrite,
+            Off,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: false,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told of off");
         assert!(off.contains("no sandbox profile"), "{off}");
         assert!(!off.contains("request_path"), "{off}");
-        let off_listed = change_notice(true, WorkspaceWrite, Off, true, true).expect("told of off");
+        let off_listed = change_notice_for(
+            WorkspaceWrite,
+            Off,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told of off");
         assert!(off_listed.contains("The `request_path` tool is now refused"));
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true, false).expect("told");
+            let notice = change_notice_for(
+                Off,
+                to,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: false,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told");
             assert!(!notice.contains("request_path"), "{to:?}: {notice}");
             assert!(notice.contains("`scopes`"), "{to:?}: {notice}");
         }
@@ -10985,8 +11154,16 @@ mod tests {
     /// not a claim about what the programs can reach.
     #[test]
     fn a_turn_that_does_not_confine_states_no_boundary_in_the_description() {
-        let described = stated_in_the_description(false, SandboxMode::WorkspaceWrite, true, true)
-            .expect("says the one sentence");
+        let described = stated_in_the_description_for(
+            SandboxMode::WorkspaceWrite,
+            RunStatement {
+                confine_runs: false,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("says the one sentence");
         assert_eq!(described, REQUEST_PATH_REFUSED_SENTENCE);
         for boundary in [
             "confined",

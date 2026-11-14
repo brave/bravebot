@@ -227,16 +227,18 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // planner before the next request, in words the driver wrote from the two modes.
     let sandbox = task.sandbox.get();
     if let Some(notice) = crate::confine::change_notice_for(
-        task.confine_runs,
         state.told_sandbox,
         sandbox,
-        tools::requests_are_accepted(
-            task.confine_runs,
-            sandbox,
-            tools::workspace_is_trusted(policy, workspace),
-        ) && task.permission_mode.answers_requests(),
-        plan.beside.holds(tools::Named::RequestPath),
-        crate::confine::Askable::nobody_when(task.permission_mode.nobody_to_ask()),
+        crate::confine::RunStatement {
+            confine_runs: task.confine_runs,
+            requests_offered: tools::requests_are_accepted(
+                task.confine_runs,
+                sandbox,
+                tools::workspace_is_trusted(policy, workspace),
+            ) && task.permission_mode.answers_requests(),
+            request_path_listed: plan.beside.holds(tools::Named::RequestPath),
+            askable: crate::confine::Askable::nobody_when(task.permission_mode.nobody_to_ask()),
+        },
     ) {
         conversation.push_composed_from(
             Message::user(&notice),

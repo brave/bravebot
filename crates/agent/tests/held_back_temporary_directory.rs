@@ -70,11 +70,13 @@ fn the_settled_setting_holds_the_temporary_directory_back_from_run_and_is_told_t
     );
 
     let said = bravebot_agent::confine::stated_to_the_planner_for(
-        true,
         SandboxMode::WorkspaceWrite,
-        true,
-        true,
-        bravebot_agent::confine::Askable::Somebody,
+        bravebot_agent::confine::RunStatement {
+            confine_runs: true,
+            requests_offered: true,
+            request_path_listed: true,
+            askable: bravebot_agent::confine::Askable::Somebody,
+        },
     )
     .expect("a statement");
     assert!(
