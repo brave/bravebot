@@ -47645,6 +47645,75 @@ fn old_tool_results_are_dropped_before_a_summary_is_asked_for() {
     );
 }
 
+/// COMPACT-18, READ-8: the stub tells the planner that calling the tool again returns the result,
+/// so a read repeated after its result was dropped has to send the lines and not a notice that the
+/// file has not changed since it was shown.
+#[test]
+fn a_read_repeated_after_its_result_was_dropped_sends_the_lines_again() {
+    let scratch = Scratch::new("compact-read-after-drop");
+    let lines: String = (0..500)
+        .map(|n| format!("LINE-MARK-{n:04} {}\n", "x".repeat(84)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), lines).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("read it"),
+    ]);
+    take_a_turn(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt"),
+    )
+    .expect("first turn runs");
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("carry on", "carrying on"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    // About what the read amounts to, plus a little: dropping it is the way under 1,000.
+    conversation.measured(12_500);
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    take_a_turn(
+        &config_with_budget(&endpoint, 1_000),
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt again"),
+    )
+    .expect("second turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        bodies[0].contains("is no longer in the request") && !bodies[0].contains("LINE-MARK"),
+        "the first read was not dropped: {}",
+        bodies[0]
+    );
+    assert!(
+        !bodies[1].contains("has not changed since it was shown"),
+        "the repeat was answered with a notice for lines the planner no longer holds: {}",
+        bodies[1]
+    );
+    assert_eq!(
+        bodies[1].matches("LINE-MARK-0499").count(),
+        1,
+        "the repeat did not send the lines: {}",
+        bodies[1]
+    );
+}
+
 /// COMPACT-16: no list, nothing added.
 #[test]
 fn a_compaction_adds_no_task_list_where_the_planner_never_wrote_one() {

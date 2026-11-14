@@ -573,10 +573,11 @@ benchmarks` says what the summary must keep.
 
 When the budget calls for a compaction, the results of tool calls older than the last two exchanges
 (or the last six rounds, whichever is later) are dropped from the request first, each replaced by a
-fixed line naming the tool and the size dropped. A summary is asked for only if the conversation is
+fixed line naming the tool and the size dropped. The line says the result is no longer in the request
+and that calling the tool again returns it, so the model reads a file again, for only the lines it
+needs, and does not repeat a call that changes something. A summary is asked for only if the conversation is
 still over the budget. This is done only when it frees about 4,000 tokens, and it leaves short results
-and the planner's latest task list alone. The record and the transcript keep the whole result, and
-the model reads a file again if it needs those lines.
+and the planner's latest task list alone. The record and the transcript keep the whole result.
 
 The budget is the window the endpoint advertises for **whichever model is in force**, where it
 advertises one, so a one-shot run and a session both get the window of the model they are asking for.
