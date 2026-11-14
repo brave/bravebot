@@ -175,6 +175,66 @@ fn each_pass_of_the_loop_hands_herdr_the_id_once_the_record_is_written() {
     );
 }
 
+/// PANEL-9, through `open_the_record`, which sending a first prompt calls before the turn runs.
+/// Rejects: a first turn that leaves the session with no record until it ends, so the panel has no
+/// id to show for as long as the turn runs; a second write for a record already on disk; and a
+/// record written before any prompt is sent.
+#[test]
+fn sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends() {
+    use bravebot_session::sessions;
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    let root = crate::test_profile::project("bravebot-app-first-prompt-record");
+    std::fs::create_dir_all(&root).expect("create");
+    let workspace = Workspace::new(&root).expect("a workspace");
+    let mut session = Session::new("none");
+    session.toggle_panel();
+    let mut stored =
+        sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+    assert_eq!(
+        stored.resumable(),
+        None,
+        "the session had an id before any prompt was sent"
+    );
+
+    let conversation = Conversation::new();
+    let trust = TrustStore::new(&root);
+    let programs = TrustedPrograms::new();
+    let open = |session: &mut Session, stored: &mut sessions::Handle| {
+        open_the_record(
+            session,
+            &conversation,
+            stored,
+            &trust,
+            &programs,
+            &workspace,
+            "fix the gate",
+        )
+    };
+    assert!(open(&mut session, &mut stored), "no record was written");
+    assert_eq!(stored.title(), "fix the gate");
+    assert_eq!(stored.resumable(), Some(stored.id()));
+    // The turn's loop draws until the turn ends and names neither, so a panel with an id and a
+    // name still to be given would show neither for as long as the turn runs.
+    assert!(
+        !name_the_id(&mut session, &stored),
+        "the panel was not given the id"
+    );
+    assert!(
+        !session.identify(
+            stored.title(),
+            crate::status::abbreviate(workspace.root()),
+            stored.branch()
+        ),
+        "the panel was not given the name"
+    );
+    assert!(
+        !open(&mut session, &mut stored),
+        "a record already on disk was written again"
+    );
+}
+
 /// HERDR-12, through the end of `run`. Rejects: a run that ends by handing the terminal back the
 /// way an editor or a stop does, which is what it did before it knew about herdr, and so never
 /// tells herdr it has gone.

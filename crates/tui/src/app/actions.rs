@@ -23,7 +23,8 @@ use super::directories::{
 };
 use super::opening::{Answers, Beginning, clear_session, opening_trust, switch_session};
 use super::records::{
-    carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted, with_standing,
+    carry_out_hunks, list_rewind_points, open_the_record, rewind, rewind_point, save_compacted,
+    with_standing,
 };
 use super::side_requests::{
     compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
@@ -902,6 +903,18 @@ impl Held<'_> {
             let _ = self.workspace.take_backups();
             self.session.rewind.open(point, prompt.clone());
             self.session.rewind.bind_coverage(self.workspace);
+
+            // After the rewind point took `was_wrote`, so rewinding past this turn still removes
+            // the record.
+            open_the_record(
+                self.session,
+                self.conversation,
+                self.stored,
+                &self.answers.trust,
+                &self.answers.programs,
+                self.workspace,
+                &prompt,
+            );
 
             // Everything the session holds is lent for the turn and taken back: a turn that
             // writes untrusted data into a trusted path records that, and the next turn must
