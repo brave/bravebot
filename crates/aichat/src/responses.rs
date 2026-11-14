@@ -18,12 +18,12 @@ pub mod protocol;
 
 use crate::anthropic::protocol::Failure;
 use crate::anthropic::what_was_written;
-use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
+use crate::call::{CallState, Concession, Driven, Plan, drive};
 use crate::protocol::{ChatRequest, Effort, SseDecoder, ToolCall, Usage};
 use crate::{
-    AccountAccess, Arrived, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
-    learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body, remember,
-    remembered, reply_bound, worth_another_attempt_or_report,
+    AccountAccess, Arrived, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress,
+    learned_key, pause_before_retry, read_in_background, refuses_the_body, reply_bound,
+    worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -82,7 +82,6 @@ struct AccountRequests<'a> {
 
 /// One client for one request, to a service that takes the Responses protocol.
 pub struct ResponsesClient<'a> {
-    spent: Spent,
     egress: &'a Egress,
     provider: &'a Provider,
     /// What the service calls the model, which is the name the body carries.
@@ -96,13 +95,12 @@ pub struct ResponsesClient<'a> {
     account: Option<AccountRequests<'a>>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    /// What this model has refused so far in the call in progress, loaded and settled by
+    /// What this call has spent, how it waits and learns that it should stop, and what this model
+    /// has refused so far in the call in progress, loaded and settled by
     /// [`call::drive`](crate::call::drive). Requests carry the level a turn asks for until the
-    /// model refuses it, which is the only way to find out that it reads none.
-    refusals: Refusals,
-    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
-    /// unless a test shortens it.
-    pace: Pace,
+    /// model refuses it, which is the only way to find out that it reads none. The wait before the
+    /// first retry is [`BACKOFF`] unless a test shortens it.
+    call: CallState,
 }
 
 impl Driven for ResponsesClient<'_> {
@@ -112,28 +110,12 @@ impl Driven for ResponsesClient<'_> {
         ChatError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
-    }
-
-    fn recall(&self, key: &str) -> Refusals {
-        remembered(key)
-    }
-
-    fn remember(&self, key: &str, found: Refusals) {
-        remember(key, found);
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     /// Only a refusal of the body is answered by giving something up, and only the level, and only
@@ -165,11 +147,7 @@ impl Driven for ResponsesClient<'_> {
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
-        pause_before_retry(self.pace.backoff, failures, error)
-    }
-
-    fn log_retry(&self, attempt: u32, pause: Duration) {
-        log_retry(attempt, pause);
+        pause_before_retry(self.call.pace.backoff, failures, error)
     }
 
     /// A token the host refused is replaced once and the request sent again at once: the token may
@@ -194,15 +172,13 @@ impl<'a> ResponsesClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             egress,
             provider,
             model: model.into(),
             token,
             account: None,
             headers: Vec::new(),
-            refusals: Refusals::default(),
-            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -262,28 +238,28 @@ impl<'a> ResponsesClient<'a> {
 
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, in order.
     pub fn conceded(&self) -> crate::call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -302,7 +278,7 @@ impl<'a> ResponsesClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
@@ -325,7 +301,8 @@ impl<'a> ResponsesClient<'a> {
             &self.model,
             &request.messages,
             request.tools.as_deref(),
-            self.level_for(request).filter(|_| !self.refusals.effort),
+            self.level_for(request)
+                .filter(|_| !self.call.refusals.effort),
             self.stated_ceiling(),
         )
     }
@@ -497,7 +474,7 @@ impl<'a> ResponsesClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         if let Some(account) = self.account.as_mut() {
             account.sent = None;
             account.replaced = false;
@@ -545,13 +522,13 @@ impl<'a> ResponsesClient<'a> {
             None => self.token.clone(),
         };
         let http = self.build(body, token.as_ref());
-        self.spent.sent();
+        self.call.spent.sent();
         let started = Instant::now();
         let stream = match self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         ) {
             Ok(stream) => stream,
             Err(error) => return Err(crate::failure_of_refusal(policy, error)),
@@ -566,7 +543,7 @@ impl<'a> ResponsesClient<'a> {
         let decoding = policy.decode_transport("responses stream", Label::untrusted_public());
 
         loop {
-            let piece = match arriving.next(&self.pace) {
+            let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
                 Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
@@ -594,7 +571,7 @@ impl<'a> ResponsesClient<'a> {
                     // reply was cut off" and a request nothing can fix is asked for twice more.
                     Decoded::Event(Event::Failed(failure, carrier)) => {
                         if failure == Failure::Unknown {
-                            log_unlisted(carrier, started, self.spent.attempts);
+                            log_unlisted(carrier, started, self.call.spent.attempts);
                         }
                         return Err(ChatError::Reported { failure });
                     }
@@ -611,7 +588,7 @@ impl<'a> ResponsesClient<'a> {
                                 retry_after: None,
                             })
                         } else {
-                            log_unlisted(carrier, started, self.spent.attempts);
+                            log_unlisted(carrier, started, self.call.spent.attempts);
                             ChatError::Reported {
                                 failure: Failure::Unknown,
                             }
@@ -622,7 +599,7 @@ impl<'a> ResponsesClient<'a> {
                     Decoded::Ignored => {}
                 }
                 if reply.ending.is_some() && reply.reported.is_some() {
-                    self.spent.record(Some(reply.usage()));
+                    self.call.spent.record(Some(reply.usage()));
                 }
             }
 

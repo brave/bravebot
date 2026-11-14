@@ -43,7 +43,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request};
-use call::{Concession, Driven, Pace, Plan, Spent, drive};
+use call::{CallState, Concession, Driven, Pace, Plan, drive};
 use protocol::{ChatChunk, ChatRequest, ChatResponse, STREAM_DONE, SseDecoder, StreamAccumulator};
 use std::fmt;
 use std::time::Duration;
@@ -461,7 +461,19 @@ impl fmt::Debug for SubscriptionCredential {
 }
 
 pub struct AichatClient<'a> {
-    spent: Spent,
+    /// What this call has spent, how it waits between attempts and learns that it should stop, and
+    /// what this service has refused for the model of the call in progress. The wait is
+    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    ///
+    /// Nothing is refused until a service says so, because there is no field in this protocol's model
+    /// listings, or in Brave's, that answers whether a service reads a breakpoint, a cache lifetime or
+    /// a level: a settings block names its models and never their parameters. Asking costs one extra
+    /// round trip against a service that refuses, once per process; not asking costs the whole prompt
+    /// on every request against every service that would have cached it.
+    ///
+    /// Brave's own endpoint is never sent a lifetime, a lifetime being a choice about a gateway's
+    /// account. Loaded and settled by [`call::drive`].
+    call: CallState,
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
@@ -475,24 +487,10 @@ pub struct AichatClient<'a> {
     /// and does not set it.
     premium_key: bool,
     gateway: Option<Gateway<'a>>,
-    /// What this service has refused for the model of the call in progress.
-    ///
-    /// Nothing is refused until a service says so, because there is no field in this protocol's model
-    /// listings, or in Brave's, that answers whether a service reads a breakpoint, a cache lifetime or
-    /// a level: a settings block names its models and never their parameters. Asking costs one extra
-    /// round trip against a service that refuses, once per process; not asking costs the whole prompt
-    /// on every request against every service that would have cached it.
-    ///
-    /// Brave's own endpoint is never sent a lifetime, a lifetime being a choice about a gateway's
-    /// account. Loaded and settled by [`call::drive`].
-    refusals: Refusals,
     /// The `prompt_cache_key` a gateway request carries, where its block set `options.setCacheKey`
     /// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)). Made for the session by whoever
     /// holds the session and never read from the conversation.
     cache_key: Option<String>,
-    /// The stop to watch for and how long to wait between attempts, which is [`BACKOFF`] unless
-    /// overridden by [`Self::with_backoff`].
-    pace: Pace,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -530,12 +528,12 @@ struct Gateway<'a> {
 impl<'a> AichatClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, in order.
     pub fn conceded(&self) -> call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Whether a request of this client was routed to the premium host with the stored key, which
@@ -547,25 +545,23 @@ impl<'a> AichatClient<'a> {
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<protocol::Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             config,
             egress,
             subscription: None,
             premium_key: false,
             gateway: None,
-            refusals: Refusals::default(),
             cache_key: None,
-            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -654,7 +650,7 @@ impl<'a> AichatClient<'a> {
     /// watches the rest of the answer arrive first, which is the whole of what they asked to
     /// stop. A caller that offers no way to say so is never stopped.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -672,7 +668,7 @@ impl<'a> AichatClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
@@ -710,12 +706,12 @@ impl<'a> AichatClient<'a> {
     /// request only. The level is dropped from the encoded body for the same reason, the request the
     /// caller holds still being the level they asked for.
     fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
-        let mut body = match self.refusals.caching {
+        let mut body = match self.call.refusals.caching {
             false => request.marked_body(self.cache_ttl_asked()),
             true => serde_json::to_value(request),
         }
         .map_err(|e| ChatError::Encode(e.to_string()))?;
-        if self.refusals.effort
+        if self.call.refusals.effort
             && let Some(fields) = body.as_object_mut()
         {
             fields.remove(protocol::EFFORT_FIELD);
@@ -744,7 +740,7 @@ impl<'a> AichatClient<'a> {
         self.gateway
             .as_ref()
             .and(self.config.prompt_cache_ttl)
-            .filter(|_| !self.refusals.cache_ttl)
+            .filter(|_| !self.call.refusals.cache_ttl)
     }
 
     /// The order a refusal of the body is answered in, in both loops.
@@ -879,7 +875,7 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let key = self.refusal_key(request);
         let plan = Plan {
             key: &key,
@@ -903,7 +899,7 @@ impl<'a> AichatClient<'a> {
     ) -> Result<Completion, ChatError> {
         let http = self.prepare(request)?;
 
-        self.spent.sent();
+        self.call.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // Decoding the transport envelope needs the raw bytes, so the kernel releases them
@@ -918,7 +914,7 @@ impl<'a> AichatClient<'a> {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
         // Usage belongs to the completed transport response, even if its tool calls are invalid.
-        self.spent.record(reported_usage(&envelope));
+        self.call.spent.record(reported_usage(&envelope));
         let parsed: ChatResponse =
             serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -961,7 +957,7 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let request = request.clone().streamed();
         let key = self.refusal_key(&request);
         let plan = Plan {
@@ -1002,12 +998,12 @@ impl<'a> AichatClient<'a> {
             .header("accept", "text/event-stream")
             .patient_on_this_machine();
 
-        self.spent.sent();
+        self.call.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
@@ -1021,7 +1017,7 @@ impl<'a> AichatClient<'a> {
         let decoding = policy.decode_transport("chat stream", Label::untrusted_public());
 
         loop {
-            let piece = match arriving.next(&self.pace) {
+            let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
                 Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
@@ -1075,7 +1071,7 @@ impl<'a> AichatClient<'a> {
 
             // Protocol completion establishes usage even if the server keeps the socket open.
             if accumulated.ended() {
-                self.spent.record(reported);
+                self.call.spent.record(reported);
             }
 
             let thinking = accumulated.take_thinking();
@@ -1104,7 +1100,7 @@ impl<'a> AichatClient<'a> {
 
         let (content, model, calls, usage) = accumulated.finish();
         let usage = reported.unwrap_or(usage);
-        self.spent.record(reported);
+        self.call.spent.record(reported);
         if malformed {
             return Err(ChatError::Decode {
                 detail: "the completed stream contained a malformed response frame".to_string(),
@@ -1459,20 +1455,12 @@ impl Driven for AichatClient<'_> {
         ChatError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     /// What the model is remembered to refuse, with the breakpoints given up from the start where
@@ -1493,10 +1481,6 @@ impl Driven for AichatClient<'_> {
         }
     }
 
-    fn remember(&self, key: &str, found: Refusals) {
-        remember(key, found);
-    }
-
     /// Only a refusal of the body is answered by giving something up, and only where the request
     /// carried what would be given up, so a service that answers this status for its own reasons
     /// cannot make a retry loop out of it. The lifetime is only in question while breakpoints are
@@ -1504,7 +1488,9 @@ impl Driven for AichatClient<'_> {
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
         refuses_the_body(error)
             && match concession {
-                Concession::CacheTtl => !self.refusals.caching && self.cache_ttl_asked().is_some(),
+                Concession::CacheTtl => {
+                    !self.call.refusals.caching && self.cache_ttl_asked().is_some()
+                }
                 Concession::Breakpoints => true,
                 Concession::Effort => request.effort.is_some(),
                 Concession::Ceiling
@@ -1526,11 +1512,7 @@ impl Driven for AichatClient<'_> {
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
-        pause_before_retry(self.pace.backoff, failures, error)
-    }
-
-    fn log_retry(&self, attempt: u32, pause: Duration) {
-        log_retry(attempt, pause);
+        pause_before_retry(self.call.pace.backoff, failures, error)
     }
 }
 
@@ -2475,7 +2457,7 @@ mod tests {
 
         let mut refused =
             AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
-        refused.refusals.cache_ttl = true;
+        refused.call.refusals.cache_ttl = true;
         assert_eq!(
             cache_controls(&refused),
             [plain(), plain()],
@@ -2509,7 +2491,7 @@ mod tests {
                 AichatClient::new(&config, &egress).for_gateway(provider, "gpt-4o-mini", None);
             let key = client.refusal_key(&asked);
             let recalled = client.recall(&key);
-            client.refusals = recalled;
+            client.call.refusals = recalled;
             let body = client.body(&asked).expect("a body").to_string();
             (recalled.caching, body.contains("cache_control"))
         };

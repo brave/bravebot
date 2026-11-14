@@ -25,7 +25,7 @@ pub mod protocol;
 
 #[cfg(test)]
 use bravebot_aichat::ATTEMPTS;
-use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
+use bravebot_aichat::call::{CallState, Concession, Driven, Plan, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
     Arrived, Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff,
@@ -289,26 +289,24 @@ impl From<credentials::CredentialError> for BedrockError {
 }
 
 pub struct BedrockClient<'a> {
-    spent: Spent,
-    // Tests replace signing and credentials while exercising the real HTTP and retry paths.
-    #[cfg(test)]
-    test_request: Option<Request>,
-    config: &'a Bedrock,
-    egress: &'a Egress,
-    /// What this client's model has refused so far in the call in progress, loaded and settled by
-    /// [`bravebot_aichat::call::drive`].
+    /// What this call has spent, how it waits and learns that it should stop, and what this
+    /// client's model has refused so far in the call in progress, loaded and settled by
+    /// [`bravebot_aichat::call::drive`]. The wait before the first retry is [`BACKOFF`] unless a
+    /// test shortens it.
     ///
     /// Nothing is refused until a model says so, which is the only way to find out: an
     /// inference-profile ARN does not say which model is behind it, so nothing says whether it
     /// does prompt caching, reads a lifetime on a breakpoint, defines an effort field, allows the
     /// assumed ceiling, takes the ask for arguments as they are written, or takes the ask to show
     /// thinking. A model that refuses the ceiling is sent the fallback.
-    refusals: Refusals,
+    call: CallState,
+    // Tests replace signing and credentials while exercising the real HTTP and retry paths.
+    #[cfg(test)]
+    test_request: Option<Request>,
+    config: &'a Bedrock,
+    egress: &'a Egress,
     /// The model the refusals were loaded for, so what is learned is written back under it.
     learned_for: String,
-    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
-    /// unless a test shortens it.
-    pace: Pace,
 }
 
 impl Driven for BedrockClient<'_> {
@@ -318,20 +316,12 @@ impl Driven for BedrockClient<'_> {
         BedrockError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     fn recall(&self, key: &str) -> Refusals {
@@ -352,7 +342,7 @@ impl Driven for BedrockClient<'_> {
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &BedrockError) -> bool {
         match concession {
             Concession::CacheTtl => {
-                !self.refusals.caching
+                !self.call.refusals.caching
                     && self.config.cache_ttl().is_some()
                     && error.may_refuse_caching()
             }
@@ -387,14 +377,14 @@ impl Driven for BedrockClient<'_> {
 
     fn pause(&self, failures: u32, error: &BedrockError) -> Duration {
         match error {
-            BedrockError::Egress(e) => pause_after_failure(self.pace.backoff, failures, e),
+            BedrockError::Egress(e) => pause_after_failure(self.call.pace.backoff, failures, e),
             // A throttle reported inside the stream names no wait, so it is paused for as a 429
             // that named none is.
             BedrockError::Reported { .. } if throttled_without_wait(error) => {
-                rate_limit_backoff(self.pace.backoff, failures)
-                    .max(backoff(self.pace.backoff, failures))
+                rate_limit_backoff(self.call.pace.backoff, failures)
+                    .max(backoff(self.call.pace.backoff, failures))
             }
-            _ => backoff(self.pace.backoff, failures),
+            _ => backoff(self.call.pace.backoff, failures),
         }
     }
 
@@ -406,35 +396,33 @@ impl Driven for BedrockClient<'_> {
 impl<'a> BedrockClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, in order.
     pub fn conceded(&self) -> bravebot_aichat::call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     pub fn new(config: &'a Bedrock, egress: &'a Egress) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             #[cfg(test)]
             test_request: None,
             config,
             egress,
-            refusals: Refusals::default(),
             learned_for: String::new(),
-            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -443,13 +431,13 @@ impl<'a> BedrockClient<'a> {
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -459,7 +447,7 @@ impl<'a> BedrockClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let model = self.model_for(request)?;
         self.learned_for = model.clone();
         let plan = Plan {
@@ -512,7 +500,7 @@ impl<'a> BedrockClient<'a> {
     fn ceiling_for(&self, model: &str) -> u64 {
         self.config
             .stated_output_limit(model)
-            .unwrap_or(if self.refusals.ceiling {
+            .unwrap_or(if self.call.refusals.ceiling {
                 bravebot_config::bedrock::OUTPUT_LIMIT_FALLBACK
             } else {
                 bravebot_config::bedrock::OUTPUT_LIMIT
@@ -526,7 +514,7 @@ impl<'a> BedrockClient<'a> {
     /// that an argument parses.
     fn streams_arguments(&self, request: &ChatRequest, streaming: bool) -> bool {
         streaming
-            && !self.refusals.arguments_as_written
+            && !self.call.refusals.arguments_as_written
             && request
                 .tools
                 .as_deref()
@@ -557,7 +545,7 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
         let (http, model) = self.build(request, false)?;
-        self.spent.sent();
+        self.call.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backend: the bytes come out
@@ -573,7 +561,8 @@ impl<'a> BedrockClient<'a> {
             serde_json::from_slice(&bytes).map_err(|e| BedrockError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
-        self.spent
+        self.call
+            .spent
             .record(reported_usage(&envelope).map(Usage::from));
 
         let parsed: protocol::ConverseResponse =
@@ -693,7 +682,7 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let model = self.model_for(request)?;
         self.learned_for = model.clone();
         let plan = Plan {
@@ -722,12 +711,12 @@ impl<'a> BedrockClient<'a> {
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
         let (http, model) = self.build(request, true)?;
-        self.spent.sent();
+        self.call.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
@@ -739,7 +728,7 @@ impl<'a> BedrockClient<'a> {
         let decoding = policy.decode_transport("converse stream", Label::untrusted_public());
 
         loop {
-            let piece = match arriving.next(&self.pace) {
+            let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
                 Arrived::StoppedPartWay => return Err(self.stopped_part_way(request)),
@@ -775,7 +764,7 @@ impl<'a> BedrockClient<'a> {
                     }
                 }
                 if reply.ended && reply.counted {
-                    self.spent.record(Some(reply.usage));
+                    self.call.spent.record(Some(reply.usage));
                 }
             }
 
@@ -843,15 +832,19 @@ impl<'a> BedrockClient<'a> {
     ) -> protocol::ConverseRequest {
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.ceiling_for(model))
-            .with_effort(request.effort.filter(|_| !self.refusals.effort))
-            .with_cache_ttl(self.config.cache_ttl().filter(|_| !self.refusals.cache_ttl));
+            .with_effort(request.effort.filter(|_| !self.call.refusals.effort))
+            .with_cache_ttl(
+                self.config
+                    .cache_ttl()
+                    .filter(|_| !self.call.refusals.cache_ttl),
+            );
         let converse = if self.streams_arguments(request, streaming) {
             converse.with_arguments_as_written()
         } else {
             converse
         };
         // A whole reply is sent once written, so its thinking leaves no gap in it to fill.
-        let converse = if streaming && !self.refusals.thinking_shown {
+        let converse = if streaming && !self.call.refusals.thinking_shown {
             converse.with_thinking_shown()
         } else {
             converse
@@ -861,7 +854,7 @@ impl<'a> BedrockClient<'a> {
         } else {
             converse.without_the_conversation_breakpoint()
         };
-        if self.refusals.caching {
+        if self.call.refusals.caching {
             converse.without_breakpoints()
         } else {
             converse
@@ -1272,9 +1265,9 @@ mod tests {
 
         // The next turn builds a new client and starts from what the last one found.
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         assert!(
-            next.refusals.caching && next.refusals.effort,
+            next.call.refusals.caching && next.call.refusals.effort,
             "it asked all over again"
         );
     }
@@ -2418,7 +2411,7 @@ mod tests {
             "a request offering no tool asked about tool arguments"
         );
 
-        client.refusals.arguments_as_written = true;
+        client.call.refusals.arguments_as_written = true;
         assert_eq!(
             asks(&client, &offering, true),
             None,
@@ -2455,7 +2448,7 @@ mod tests {
             );
         }
 
-        client.refusals.thinking_shown = true;
+        client.call.refusals.thinking_shown = true;
         assert!(
             body(&client, &bare, true)
                 .get("additionalModelRequestFields")
@@ -2689,7 +2682,7 @@ mod tests {
             matches!(client.stopped_part_way(&bare), BedrockError::Incomplete),
             "a reply with no tool to hold back was not asked for again"
         );
-        client.refusals.arguments_as_written = true;
+        client.call.refusals.arguments_as_written = true;
         assert!(matches!(
             client.stopped_part_way(&offering),
             BedrockError::Stalled
@@ -2747,7 +2740,7 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         let body = serde_json::to_value(next.converse_for(&request, model, true)).expect("a body");
         assert!(
             body.get("additionalModelRequestFields").is_none(),
@@ -2864,7 +2857,7 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         let body = serde_json::to_value(next.converse_for(&request, model, true)).expect("a body");
         assert_eq!(
             carried(&body),
@@ -2959,7 +2952,7 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         assert_eq!(
             next.converse_for(&request, model, true)
                 .inference_config
@@ -3785,7 +3778,7 @@ mod tests {
             "a higher ceiling was given no longer than a lower one"
         );
 
-        client.refusals.ceiling = true;
+        client.call.refusals.ceiling = true;
         assert_eq!(
             given(&client, "unstated"),
             bravebot_net::Timeouts::default().reply,
@@ -4689,7 +4682,7 @@ mod tests {
         let chosen = config().with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
         let mut client = BedrockClient::new(&chosen, &egress);
         assert_eq!(ttl_of(&client), Some(json!("1h")));
-        client.refusals.cache_ttl = true;
+        client.call.refusals.cache_ttl = true;
         assert_eq!(
             ttl_of(&client),
             None,
@@ -4741,9 +4734,9 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         assert!(
-            next.refusals.cache_ttl && !next.refusals.caching,
+            next.call.refusals.cache_ttl && !next.call.refusals.caching,
             "it asked all over again"
         );
     }
