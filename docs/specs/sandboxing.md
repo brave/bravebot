@@ -3493,7 +3493,17 @@ a refusal of a write. `*` and `?` in an entry of `allowRead` or `denyRead` are e
 confinement is built, by listing each directory once without following a link, within a bound of
 entries and of depth; a glob that matches nothing is not an error, and one that reaches the bound
 names nothing known and is refused. A file made after the listing is outside what a glob named. A
-wildcard in a write list is refused.
+wildcard in a write list is refused. A glob in `denyRead` also meets a name that a volume folding case
+and Unicode form opens as the name the glob spells: `*.pem` names `SERVER.PEM` as much as
+`server.pem`, and `R\u{e9}sum\u{e9}*` names a file stored in the decomposed form. A `?` is one
+letter as a person reads it: a letter with its marks, a Hangul syllable written as its jamo, or a
+letter such as the sharp s whose case fold is two letters. Only a segment that holds a wildcard is
+compared this way; a name without one is resolved by the volume. The comparison is
+the name as written, or both sides in canonical decomposition with case folded out as
+[TRUST-2](trust-map.md#TRUST-2) folds it, whatever the volume does, since asking the volume would
+need a file made in the tree and a refusal that names a file the volume holds apart errs toward holding
+back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
+person did not write.
 
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
@@ -3548,6 +3558,13 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confine::an_allow_read_over_the_home_directory_is_not_a_row_on_windows`
 `verified-by: bravebot_sandbox::rules::a_glob_is_expanded_by_listing_and_applies_to_reads`
 `verified-by: bravebot_sandbox::rules::a_glob_over_a_tree_deeper_than_the_walk_goes_is_refused_and_not_cut_short`
+`verified-by: bravebot_sandbox::rules::a_deny_glob_meets_a_name_in_any_case`
+`verified-by: bravebot_sandbox::rules::a_deny_glob_meets_a_directory_in_any_case`
+`verified-by: bravebot_sandbox::rules::a_deny_glob_meets_a_name_in_either_normalisation_form`
+`verified-by: bravebot_sandbox::rules::a_question_mark_in_a_deny_glob_meets_a_letter_with_its_marks`
+`verified-by: bravebot_sandbox::rules::a_question_mark_in_a_deny_glob_meets_a_syllable_and_a_letter_that_folds_to_two`
+`verified-by: bravebot_sandbox::rules::a_deny_glob_still_meets_every_name_it_met_as_written`
+`verified-by: bravebot_sandbox::rules::an_allow_glob_meets_names_exactly`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
 `verified-by: bravebot_sandbox::rules::a_denial_decides_the_path_it_names_and_a_pinned_one_what_is_beneath`
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
