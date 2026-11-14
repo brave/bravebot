@@ -385,6 +385,9 @@ struct Answering {
     stop: Option<Cancel>,
     /// How long the person takes to answer the list question.
     list_delay: std::time::Duration,
+    /// How long the list questions took, measured here. A loaded machine wakes the sleep late, so
+    /// each can take longer than `list_delay`.
+    listed_for: std::time::Duration,
 }
 
 impl Answering {
@@ -404,6 +407,7 @@ impl Answering {
             asked: 0,
             stop: None,
             list_delay: std::time::Duration::ZERO,
+            listed_for: std::time::Duration::ZERO,
         }
     }
 }
@@ -461,11 +465,13 @@ impl Confirmer for Answering {
     }
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let began = std::time::Instant::now();
         self.lists.push(request.clone());
         std::thread::sleep(self.list_delay);
         if let Some(stop) = &self.stop {
             stop.cancel();
         }
+        self.listed_for += began.elapsed();
         self.list
     }
 
@@ -8417,6 +8423,9 @@ fn a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_anothe
 /// is: the checks, made together, are not part of it (SESSION-12, SERVERS-8). The regressions it
 /// rejects are a settle that charges only the first question's wait or drops the waits of the
 /// questions drawn after a check returned, and one that charges the checks' own wait to the person.
+/// The figure is held to the wait the person double measured, not to the delay it was given,
+/// because a loaded machine wakes each sleep late and three late wakes can add up to more than the
+/// margin. A check's wait charged to the person adds [`A_CHECK_TAKES`], and the margin is half that.
 #[test]
 fn the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once() {
     let scratch = Scratch::new("checks-together-wait");
@@ -8432,15 +8441,15 @@ fn the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once
         &Cancel::new(),
     );
     let timing = result.expect("the turn runs").timing;
-    let waited = 3 * 400;
+    let waited = reading.listed_for.as_millis() as u64;
     assert_eq!(reading.lists.len(), 3, "a list was not put to the person");
     assert!(
         timing.stalled_ms >= waited,
-        "the waits on the lists were not all charged to the person: {timing:?}"
+        "the waits on the lists were not all charged to the person, who waited {waited} ms: {timing:?}"
     );
     assert!(
-        timing.stalled_ms < waited + 400,
-        "the wait on the checks was charged to the person: {timing:?}"
+        timing.stalled_ms < waited + A_CHECK_TAKES.as_millis() as u64 / 2,
+        "the wait on the checks was charged to the person, who waited {waited} ms: {timing:?}"
     );
     assert!(
         timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
