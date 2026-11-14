@@ -171,7 +171,7 @@ enum Pattern {
     /// A path pattern against an absolute path.
     Absolute(PathPattern),
     /// A command pattern, matched against one stage's argv.
-    Command(String),
+    Command(CommandPattern),
     /// A host name, from a `domain:` specifier, matched against a URL's host and its subdomains.
     /// The second is the name's ASCII form ([`crate::punycode::to_ascii`]) where a label is outside
     /// ASCII, so the rule covers the host in either spelling.
@@ -182,6 +182,47 @@ enum Pattern {
     Server(String),
     /// One tool of one server, from `Mcp(weather:get_forecast)`.
     Tool(String, String),
+}
+
+/// A command specifier, in the readings a stage is matched against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandPattern {
+    /// The specifier's characters as written, a trailing `:*` read as ` *`. The only reading an
+    /// `allow` rule has (PERM-5).
+    written: String,
+    /// The specifier read as a typed line is, so a quote, a backslash escape and a run of spaces
+    /// mean what they mean in a line ([`typed_line`]). Only a `deny` or `ask` rule is matched
+    /// against it, in addition to `written`, so a rule covers everything it covered before.
+    /// `None` where it reads as `written` does, or for a rule no line can be read from, which an
+    /// `allow` rule keeps as it was.
+    typed: Option<String>,
+}
+
+impl CommandPattern {
+    /// Whether this covers one stage.
+    ///
+    /// A rule that restricts is also matched with the program word of both sides in canonical
+    /// form, so a program named in one Unicode spelling is covered in another, which a volume
+    /// opens as the same file (PERM-5, PERM-7). Arguments are compared as written.
+    fn covers(&self, stage: &Stage, restricting: bool) -> bool {
+        if !restricting {
+            return command_matches(&self.written, &stage.written, false);
+        }
+        std::iter::once(self.written.as_str())
+            .chain(self.typed.as_deref())
+            .any(|reading| {
+                if command_matches(reading, &stage.written, true) {
+                    return true;
+                }
+                let (program, rest) = reading.split_at(reading.find(' ').unwrap_or(reading.len()));
+                if stage.canonical.is_none() && program.is_ascii() {
+                    return false;
+                }
+                let canonical = format!("{}{rest}", crate::canonical::decompose(program));
+                let stage = stage.canonical.as_deref().unwrap_or(&stage.written);
+                command_matches(&canonical, stage, true)
+            })
+    }
 }
 
 /// A path pattern and whether it was written anchored.
@@ -220,6 +261,9 @@ pub struct Rule {
     /// set after the rules are read, by whoever held the file, and is only ever handed to a report.
     /// A rule decides exactly what it decided before one was written.
     reason: Option<String>,
+    /// Why a `deny` or `ask` `Bash` rule has no typed reading, so it is matched as written alone
+    /// (PERM-5). Read only by [`Permissions::parse`], which reports it.
+    typed_unreadable: Option<Unreadable>,
 }
 
 impl Rule {
@@ -234,10 +278,21 @@ impl Rule {
     /// name where a path is bytes and as likely padding inside the brackets, and a rule read either
     /// way would be about a file the person may not have meant ([`Unreadable::WhitespaceAtAnEnd`]).
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
+        Self::parse_in(text, anchors, Ruling::Allow)
+    }
+
+    /// [`Rule::parse`] for a rule written in the list `ruling` names.
+    ///
+    /// A `Bash` rule in `deny` or `ask` is also read as a typed line is. One that no line can be
+    /// read from, for a quote left open or a backslash with nothing after it, is kept and matched
+    /// as its characters are written alone, so it protects what it did before the typed reading
+    /// existed, and [`Rule::typed_unreadable`] says why it has no other reading (PERM-5, PERM-11).
+    /// An `allow` rule is not read that way, so [`Rule::parse`] is the reading of that list.
+    pub fn parse_in(text: &str, anchors: &Anchors, ruling: Ruling) -> Result<Self, Rejected> {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
         // find in their file, and a report that trimmed them names neither.
-        Self::parse_trimmed(text.trim(), anchors)
+        Self::parse_trimmed(text.trim(), anchors, ruling)
             .map(|rule| Self {
                 written: text.trim().to_string(),
                 ..rule
@@ -253,13 +308,19 @@ impl Rule {
         &self.written
     }
 
+    /// Why this rule is matched as written alone, where it is a `deny` or `ask` `Bash` rule that
+    /// no typed line can be read from.
+    pub fn typed_unreadable(&self) -> Option<Unreadable> {
+        self.typed_unreadable
+    }
+
     /// Why the person wrote it, or `None` where no reason of theirs is attached (PERM-1).
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
     }
 
     /// [`Rule::parse`] on text with its surrounding space already removed.
-    fn parse_trimmed(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
+    fn parse_trimmed(text: &str, anchors: &Anchors, ruling: Ruling) -> Result<Self, Rejected> {
         if text.is_empty() {
             return Err(Rejected::new(text, Unreadable::Empty));
         }
@@ -303,6 +364,7 @@ impl Rule {
             return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
         }
 
+        let mut typed_unreadable = None;
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
             None | Some("*") => Pattern::Everything,
@@ -345,7 +407,18 @@ impl Rule {
             }
             Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
                 .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
-            Some(specifier) => Pattern::Command(command_pattern(specifier)),
+            Some(specifier) => {
+                let written = command_pattern(specifier);
+                let typed = match typed_line(specifier) {
+                    _ if ruling == Ruling::Allow => None,
+                    Ok(line) => Some(typed_pattern(line)).filter(|typed| *typed != written),
+                    Err(reason) => {
+                        typed_unreadable = Some(reason);
+                        None
+                    }
+                };
+                Pattern::Command(CommandPattern { written, typed })
+            }
         };
 
         Ok(Self {
@@ -354,6 +427,7 @@ impl Rule {
             landed: Vec::new(),
             written: String::new(),
             reason: None,
+            typed_unreadable,
         })
     }
 
@@ -520,10 +594,10 @@ impl Rule {
     /// Whether this rule covers running one stage, `argv` its program word and arguments.
     ///
     /// `restricting` selects what a space in the pattern covers, which differs between the lists.
-    fn covers_command(&self, argv: &[Place], restricting: bool) -> bool {
+    fn covers_command(&self, stage: &Stage, restricting: bool) -> bool {
         match &self.pattern {
             Pattern::Everything => true,
-            Pattern::Command(pattern) => command_matches(pattern, argv, restricting),
+            Pattern::Command(pattern) => pattern.covers(stage, restricting),
             Pattern::Relative(_)
             | Pattern::Absolute(_)
             | Pattern::Domain(..)
@@ -622,6 +696,13 @@ pub enum Unreadable {
     WhitespaceAtAnEnd,
     /// A path rule in a run with no home or settings directory to resolve it against.
     Unanchored,
+    /// A `Bash` rule in `deny` or `ask` with a quote that is never closed, as `Bash(sh -c "rm *)`.
+    /// A line with one does not compile, so the rule has no typed reading. It is kept and matched
+    /// as its characters are written ([`Unreadable::keeps_the_rule`]).
+    UnclosedQuote,
+    /// A `Bash` rule in `deny` or `ask` that ends in a backslash with nothing after it, kept the
+    /// same way.
+    TrailingBackslash,
     /// A `WebFetch` rule whose specifier does not begin `domain:`.
     NotADomainRule,
     /// `WebFetch(domain:)`, which names no host.
@@ -635,6 +716,14 @@ pub enum Unreadable {
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
     /// neither: `null`, a string, a list in place of the block.
     NotAList,
+}
+
+impl Unreadable {
+    /// Whether the rule is still in force, matched as written, and the entry is a warning rather
+    /// than a rule that was dropped (PERM-5).
+    pub fn keeps_the_rule(self) -> bool {
+        matches!(self, Self::UnclosedQuote | Self::TrailingBackslash)
+    }
 }
 
 impl Rejected {
@@ -705,11 +794,18 @@ impl Permissions {
         anchors: &Anchors,
     ) -> (Self, Vec<Rejected>) {
         let mut rejected = Vec::new();
-        let mut read = |texts: &[String]| -> Vec<Rule> {
+        let mut read = |texts: &[String], ruling: Ruling| -> Vec<Rule> {
             texts
                 .iter()
-                .filter_map(|text| match Rule::parse(text, anchors) {
-                    Ok(rule) => Some(rule),
+                .filter_map(|text| match Rule::parse_in(text, anchors, ruling) {
+                    Ok(rule) => {
+                        // Kept and in force as written, and said, since it is not read as a typed
+                        // line is and its writer may have meant it to be (PERM-5).
+                        if let Some(reason) = rule.typed_unreadable {
+                            rejected.push(Rejected::new(text, reason));
+                        }
+                        Some(rule)
+                    }
                     Err(problem) => {
                         rejected.push(problem);
                         None
@@ -718,9 +814,9 @@ impl Permissions {
                 .collect()
         };
         let permissions = Self {
-            deny: read(deny),
-            ask: read(ask),
-            allow: read(allow),
+            deny: read(deny, Ruling::Deny),
+            ask: read(ask, Ruling::Ask),
+            allow: read(allow, Ruling::Allow),
             backslash_separates: anchors.backslash_separates,
             folds_case: anchors.folds_case,
         };
@@ -917,24 +1013,24 @@ impl Permissions {
     /// The rule that decides [`Permissions::for_command`] for one stage.
     pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
         let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
-        let argv = places(&words);
+        let argv = stage_of(&words);
         // The stage as run is the only one an `allow` rule is matched against, as written. A list
         // that restricts is also matched against what is left after each leading wrapper
         // (PERM-20), and against each of those with the program word read as a host that ignores
         // its dots, spaces, stream suffix and `.exe`, `.com`, `.cmd` or `.bat` reads it (PERM-5).
         let mut stages = vec![words.clone()];
         stages.extend(wrapped_commands(&words));
-        let mut read_as: Vec<Vec<Place>> = Vec::new();
+        let mut read_as: Vec<Stage> = Vec::new();
         for (at, stage) in stages.iter().enumerate() {
             if at > 0 {
-                read_as.push(places(stage));
+                read_as.push(stage_of(stage));
             }
             if let Some((program, rest)) = stage.split_first()
                 && let Some(bare) = without_suffixes(program)
             {
                 let mut bare_stage = vec![bare];
                 bare_stage.extend_from_slice(rest);
-                read_as.push(places(&bare_stage));
+                read_as.push(stage_of(&bare_stage));
             }
         }
         self.deciding(|rule, restricting| {
@@ -1419,6 +1515,104 @@ fn command_pattern(specifier: &str) -> String {
     match specifier.strip_suffix(":*") {
         Some(head) => format!("{head} *"),
         None => specifier.to_string(),
+    }
+}
+
+/// A command specifier read as a typed line is, with its quoting resolved.
+///
+/// The rule is written the way a line is typed, and a stage's argv is what that line compiled to,
+/// so `Bash(sh -c "*")` and `Bash(git\ push *)` are about the words `sh`, `-c` and anything, and
+/// `git push` and anything. What is resolved is what the line compiler resolves
+/// (`crates/agent/src/cmdline.rs`): whitespace outside quotes ends a word and a run of it is one
+/// gap, single quotes keep every character, double quotes keep every character except that a
+/// backslash before `"`, `\`, `$` or a backtick is that character, and a backslash outside quotes
+/// is the character after it. The words are joined by one space, which in a rule that restricts
+/// covers a gap and a space inside a word alike (PERM-5), so a quoted word holding a space is
+/// covered whether the stage has it as one word or as two.
+///
+/// A `*` keeps its meaning wherever it stands, quoted or not: the rule covers more than the line
+/// the quotes spelled, which is the direction a rule that restricts may err in (PERM-4). A
+/// quote that is never closed and a backslash with nothing after it are what the line compiler
+/// refuses, so no line is a reading of them.
+fn typed_line(specifier: &str) -> Result<String, Unreadable> {
+    let mut out = String::new();
+    let mut chars = specifier.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => loop {
+                match chars.next() {
+                    Some('\'') => break,
+                    Some(c) => out.push(c),
+                    None => return Err(Unreadable::UnclosedQuote),
+                }
+            },
+            '"' => loop {
+                match chars.next() {
+                    Some('"') => break,
+                    Some('\\') => match chars.next() {
+                        Some(c @ ('"' | '\\' | '$' | '`')) => out.push(c),
+                        Some(c) => {
+                            out.push('\\');
+                            out.push(c);
+                        }
+                        None => return Err(Unreadable::UnclosedQuote),
+                    },
+                    Some(c) => out.push(c),
+                    None => return Err(Unreadable::UnclosedQuote),
+                }
+            },
+            '\\' => match chars.next() {
+                Some(c) => out.push(c),
+                None => return Err(Unreadable::TrailingBackslash),
+            },
+            c if c.is_whitespace() => {
+                while chars.next_if(|next| next.is_whitespace()).is_some() {}
+                out.push(' ');
+            }
+            c => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+/// [`command_pattern`] for a line [`typed_line`] read: a trailing `:*` is a trailing ` *`, with the
+/// space a person typed before it taken as the same gap.
+fn typed_pattern(line: String) -> String {
+    match line.strip_suffix(":*") {
+        Some(head) => format!("{} *", head.trim_end()),
+        None => line,
+    }
+}
+
+/// A stage's argv in the readings a pattern is matched against.
+struct Stage {
+    /// The words as the compiler split them.
+    written: Vec<Place>,
+    /// The same with the program word in canonical form, where it holds a character outside ASCII,
+    /// so that `caf\u{e9}` and `cafe\u{301}` are one program, which APFS starts as one file.
+    canonical: Option<Vec<Place>>,
+}
+
+// The canonical copy is built only for a non-ASCII program word, so `CommandPattern::covers` skips
+// the canonical comparison for every other stage.
+fn stage_of<S: AsRef<str>>(argv: &[S]) -> Stage {
+    let canonical = argv
+        .first()
+        .filter(|program| !program.as_ref().is_ascii())
+        .map(|program| {
+            let mut places: Vec<Place> = crate::canonical::decompose(program.as_ref())
+                .chars()
+                .map(Place::Program)
+                .collect();
+            for word in &argv[1..] {
+                places.push(Place::Gap);
+                places.extend(word.as_ref().chars().map(Place::Char));
+            }
+            places
+        });
+    Stage {
+        written: places(argv),
+        canonical,
     }
 }
 
@@ -2330,6 +2524,249 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "the bare command a deny rule names was not covered when it came as one word"
         );
+    }
+
+    /// The same rule, written in `deny` and in `ask`: the two lists that restrict.
+    fn restricting(rule: &str) -> [(Ruling, Permissions); 2] {
+        [
+            (Ruling::Deny, rules(&[rule], &[], &[])),
+            (Ruling::Ask, rules(&[], &[rule], &[])),
+        ]
+    }
+
+    /// A rule is written the way a line is typed and a stage is what the line compiled to, so a
+    /// quote, a backslash escape and a run of spaces in a deny or ask rule mean what they mean in a
+    /// line (PERM-5). Read as plain characters, `Bash(sh -c "*")` needed a `"` in the argv, which
+    /// the compiler never leaves there, and refused nothing.
+    #[test]
+    fn a_deny_or_ask_rule_written_as_a_typed_line_covers_the_words_that_line_compiles_to() {
+        let cases: &[(&str, Argvs, Argvs)] = &[
+            (
+                r#"Bash(sh -c "*")"#,
+                &[&["sh", "-c", "rm x"], &["sh", "-c", ""]],
+                &[&["sh", "-x", "rm x"], &["bash", "-c", "rm x"], &["sh"]],
+            ),
+            (
+                r#"Bash(tool "x y")"#,
+                &[&["tool", "x y"], &["tool", "x", "y"]],
+                &[&["tool", "x yz"], &["tool", "x"], &["tool", "y"]],
+            ),
+            (
+                "Bash(tool 'x y')",
+                &[&["tool", "x y"], &["tool", "x", "y"]],
+                &[&["tool", "x yz"], &["tool", "x"]],
+            ),
+            (
+                r"Bash(git\ push *)",
+                &[&["git", "push", "origin"], &["git", "push"]],
+                &[&["git", "pull", "origin"], &["gitpush", "origin"]],
+            ),
+            (
+                "Bash(git  push *)",
+                &[&["git", "push", "origin"], &["git", "push"]],
+                &[&["git", "fetch", "origin"]],
+            ),
+            (
+                "Bash(git push :*)",
+                &[&["git", "push", "origin"], &["git", "push"]],
+                &[&["git", "pull", "origin"]],
+            ),
+            (
+                r#"Bash(echo "a\"b")"#,
+                &[&["echo", "a\"b"]],
+                &[&["echo", "ab"], &["echo", "a\\\"b"]],
+            ),
+            (
+                r"Bash(echo 'a\b')",
+                &[&["echo", r"a\b"]],
+                &[&["echo", "ab"]],
+            ),
+            (
+                r#"Bash(echo "a\b")"#,
+                &[&["echo", r"a\b"]],
+                &[&["echo", "ab"]],
+            ),
+            (
+                r"Bash(echo a\ b)",
+                &[&["echo", "a b"], &["echo", "a", "b"]],
+                &[&["echo", "ab"]],
+            ),
+            (
+                r#"Bash(echo "a*")"#,
+                &[&["echo", "abc"], &["echo", "a"]],
+                &[&["echo", "ba"]],
+            ),
+        ];
+        for (rule, matching, not_matching) in cases {
+            for (ruling, permissions) in restricting(rule) {
+                for argv in *matching {
+                    assert_eq!(
+                        permissions.for_command(argv),
+                        Decision::Ruled(ruling),
+                        "{ruling:?} {rule} should cover {argv:?}"
+                    );
+                }
+                for argv in *not_matching {
+                    assert_eq!(
+                        permissions.for_command(argv),
+                        Decision::Unmatched,
+                        "{ruling:?} {rule} should not cover {argv:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A rule that restricts keeps covering the words it covered when its characters were compared
+    /// as written, so a quote the planner put into an argument is still covered by the rule that
+    /// names it, and the typed reading adds to what the rule covers.
+    #[test]
+    fn a_deny_or_ask_rule_with_quotes_still_covers_an_argument_holding_those_quotes() {
+        for (ruling, permissions) in restricting(r#"Bash(echo "x")"#) {
+            for argv in [&["echo", "\"x\""][..], &["echo", "x"]] {
+                assert_eq!(
+                    permissions.for_command(argv),
+                    Decision::Ruled(ruling),
+                    "{ruling:?} did not cover {argv:?}"
+                );
+            }
+        }
+    }
+
+    /// An allow rule grants the words its characters name and nothing a typed line would read it
+    /// as, so a rule with a quote, an escape or two spaces grants no command the quotes would have
+    /// spelled. Reading it as a line would let one line of a settings file grant more than it says.
+    #[test]
+    fn an_allow_rule_is_not_read_as_a_typed_line() {
+        assert_allow_rules_cover(&[
+            (
+                r#"Bash(tool "x y")"#,
+                &[],
+                &[&["tool", "x y"], &["tool", "x", "y"]],
+            ),
+            (r"Bash(git\ push *)", &[], &[&["git", "push", "origin"]]),
+            ("Bash(git  push *)", &[], &[&["git", "push", "origin"]]),
+            ("Bash(git push :*)", &[], &[&["git", "push", "origin"]]),
+            (
+                r#"Bash(sh -c "*")"#,
+                &[&["sh", "-c", "\"rm x\""]],
+                &[&["sh", "-c", "rm x"]],
+            ),
+        ]);
+    }
+
+    /// A deny or ask rule no line can be read from, a quote never closed or a backslash with
+    /// nothing after it, is kept and matches the argv its characters spell, as it did before a
+    /// typed reading existed. It is named as a warning (PERM-5, PERM-11), and the rules beside it
+    /// are kept. In `allow` the same text is a rule about those characters and is not named.
+    #[test]
+    fn a_deny_or_ask_rule_no_line_can_be_read_from_is_kept_as_written_and_named() {
+        let cases = [
+            (
+                r#"Bash(sh -c "rm *)"#,
+                Unreadable::UnclosedQuote,
+                ["sh", "-c", "\"rm x"],
+            ),
+            (
+                "Bash(sh -c 'rm *)",
+                Unreadable::UnclosedQuote,
+                ["sh", "-c", "'rm x"],
+            ),
+            (
+                r#"Bash(echo "a\")"#,
+                Unreadable::UnclosedQuote,
+                ["echo", "\"a\\\"", ""],
+            ),
+            (
+                r"Bash(echo a\)",
+                Unreadable::TrailingBackslash,
+                ["echo", "a\\", ""],
+            ),
+        ];
+        for (written, reason, argv) in cases {
+            assert!(reason.keeps_the_rule());
+            let argv: Vec<&str> = argv.into_iter().filter(|word| !word.is_empty()).collect();
+            let owned = [written.to_string(), "Bash(ls *)".to_string()];
+            for (ruling, denied, asked) in [
+                (Ruling::Deny, &owned[..], &[][..]),
+                (Ruling::Ask, &[][..], &owned[..]),
+            ] {
+                let (permissions, rejected) = Permissions::parse(denied, asked, &[], &anchors());
+                assert_eq!(rejected.len(), 1, "{written}");
+                assert_eq!(rejected[0].reason, reason, "{written}");
+                assert_eq!(rejected[0].text, written);
+                assert_eq!(
+                    permissions.for_command(&argv),
+                    Decision::Ruled(ruling),
+                    "{written} did not match the argv its characters spell"
+                );
+                assert_ne!(
+                    permissions.for_command(&["ls", "x"]),
+                    Decision::Unmatched,
+                    "the rule beside {written} was dropped"
+                );
+            }
+            let (permissions, rejected) =
+                Permissions::parse(&[], &[], &[written.to_string()], &anchors());
+            assert_eq!(rejected, Vec::new(), "{written} in allow");
+            assert!(!permissions.is_empty());
+        }
+    }
+
+    /// A program is one program under every spelling of its name that a volume opens as one file
+    /// (PERM-5): on APFS `cafe` and a combining acute accent starts the file named `caf` and the
+    /// precomposed letter. Both sides are put in the one form, so the rule covers the program in
+    /// either spelling whichever one it is written in, in any case, and under a wrapper.
+    #[test]
+    fn a_deny_or_ask_rule_covers_a_program_in_every_canonical_spelling_of_its_name() {
+        let nfc = "caf\u{e9}";
+        let nfd = "cafe\u{301}";
+        for rule in [format!("Bash({nfc} *)"), format!("Bash({nfd} *)")] {
+            for (ruling, permissions) in restricting(&rule) {
+                for argv in [
+                    vec![nfc, "x"],
+                    vec![nfd, "x"],
+                    vec!["CAFE\u{301}", "x"],
+                    vec!["CAF\u{c9}"],
+                    vec!["timeout", "5", nfd, "x"],
+                ] {
+                    assert_eq!(
+                        permissions.for_command(&argv),
+                        Decision::Ruled(ruling),
+                        "{ruling:?} {rule} did not cover {argv:?}"
+                    );
+                }
+                for argv in [vec!["cafe", "x"], vec!["caf\u{e8}", "x"], vec!["x", nfd]] {
+                    assert_eq!(
+                        permissions.for_command(&argv),
+                        Decision::Unmatched,
+                        "{ruling:?} {rule} covered {argv:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Only the program word is put in canonical form: an argument is a name the program is handed
+    /// and compared as written, as PERM-5 says of every word after it, and an allow rule is matched
+    /// as written whatever it names.
+    #[test]
+    fn only_a_deny_or_ask_rules_program_word_is_compared_in_canonical_form() {
+        for (ruling, permissions) in restricting("Bash(echo caf\u{e9})") {
+            assert_eq!(
+                permissions.for_command(&["echo", "caf\u{e9}"]),
+                Decision::Ruled(ruling)
+            );
+            assert_eq!(
+                permissions.for_command(&["echo", "cafe\u{301}"]),
+                Decision::Unmatched
+            );
+        }
+        assert_allow_rules_cover(&[(
+            "Bash(caf\u{e9} *)",
+            &[&["caf\u{e9}", "x"]],
+            &[&["cafe\u{301}", "x"]],
+        )]);
     }
 
     /// The shapes of the documented table, read as a deny or an ask rule: wherever the pattern puts

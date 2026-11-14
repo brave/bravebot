@@ -97,7 +97,11 @@ impl SettingsRules {
         let readable = |lines: &[String]| -> Vec<String> {
             lines
                 .iter()
-                .filter(|line| !rejected.iter().any(|reject| &reject.text == *line))
+                .filter(|line| {
+                    !rejected
+                        .iter()
+                        .any(|reject| &reject.text == *line && !reject.reason.keeps_the_rule())
+                })
                 .cloned()
                 .collect()
         };
@@ -522,6 +526,22 @@ mod tests {
             "{}",
             unreadable.said
         );
+    }
+
+    /// PERM-5, PERM-11: a deny rule with a quote never closed is still in force as written, so it
+    /// is listed as in force and also reported, where a dropped entry is only reported.
+    #[test]
+    fn a_rule_kept_as_written_is_listed_as_in_force_and_reported() {
+        let (dir, settings) = layers(
+            Some(r#"{"permissions": {"deny": ["Bash(sh -c \"rm *)"]}}"#),
+            None,
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+        assert_eq!(rules.deny, [r#"Bash(sh -c "rm *)"#]);
+        let [unreadable] = rules.unreadable.as_slice() else {
+            panic!("{:?}", rules.unreadable);
+        };
+        assert_eq!(unreadable.rule, r#"Bash(sh -c "rm *)"#);
     }
 
     /// PERM-11: an unreadable line with surrounding space is left out of the list in force and is

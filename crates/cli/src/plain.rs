@@ -325,9 +325,9 @@ fn run(
         say_the_set_aside_pick(&mut asking, &recorded, refused.as_deref());
     }
     for problem in &rejected {
-        asking.say(&t!(
-            session_permission_rule_ignored,
-            problem = crate::progress::described(problem)
+        asking.say(&bravebot_agent::permissions::said_in_a_session(
+            problem,
+            crate::progress::described(problem),
         ));
     }
     // And the `allow` entries a checkout wrote, which are dropped wherever the file is read

@@ -381,6 +381,20 @@ lines. A `*` covers any text in every list, spaces and gaps included, so `Bash(l
 `Bash(python3 my script.py)` names three words, and only a `*` in the space's place covers
 `python3 "my script.py"`.
 
+A `deny` or `ask` rule is also read as a typed line is, so a rule written the way the line is typed
+means what the line means. Whitespace outside quotes ends a word and a run of it is one gap, single
+quotes keep every character, double quotes keep every character except that a backslash before `"`,
+`\`, `$` or a backtick is that character, and a backslash outside quotes is the character after it.
+`Bash(sh -c "*")` therefore covers `sh`, `-c` and `rm x`, `Bash(tool "x y")` covers `tool` with
+`x y` as one word or as two, `Bash(git\ push *)` and `Bash(git  push *)` cover `git push origin`,
+and `Bash(git push :*)` covers `git push origin`. A `*` keeps its meaning wherever it stands, quoted
+or not. The rule is matched in this reading and as its characters are written, so it covers every
+command its characters name as written. A quote that is never closed and a backslash with nothing
+after it are what the line compiler refuses, so a `deny` or `ask` rule holding one has no typed
+reading and is matched as written alone. It stays in force, and it is reported
+([PERM-11](#PERM-11)). An `allow` rule is not read this way and keeps its characters as written: a
+grant that quotes could widen would let a line of a settings file permit more than it says.
+
 A `deny` or `ask` rule compares the program word without regard to case and as a Windows host
 reads it: without the dots and spaces it drops from the end of a name, without a `::$DATA` stream
 suffix, and with one `.exe`, `.com`, `.cmd` or `.bat` taken off, so `Bash(touch *)` covers
@@ -404,6 +418,11 @@ the respelling as the program the rule names. A letter that a volume does not op
 letter but that the fold joins is covered anyway, which is the direction [PERM-4](#PERM-4) allows.
 A program given by a path (`/usr/bin/touch x`) is not read this way and is not covered by
 `Bash(touch *)`. An `allow` rule is matched as written and grants none of the respellings.
+
+A `deny` or `ask` rule also compares the program word by canonical equivalence, as path rules are
+compared ([PERM-7](#PERM-7)): `Bash(caf\u{e9} *)` covers `cafe\u{301} x`, and the reverse, because
+APFS starts the file named `caf\u{e9}` under either spelling. Only the program word is compared
+this way. An argument keeps the spelling it has, and an `allow` rule is matched as written.
 
 An 8.3 short name (`POWERS~1`, `POWERS~1.EXE`) names a file that cannot be read off the word, and
 the matcher asks the file system nothing. While a `deny` or `ask` command rule is in force, a stage
@@ -443,6 +462,11 @@ evaluated on would make the same settings file refuse a line on one machine and 
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_core::permissions::a_trailing_colon_star_is_a_trailing_wildcard_and_a_colon_elsewhere_is_not`
 `verified-by: bravebot_core::permissions::a_space_in_an_allow_rule_covers_only_the_gap_between_two_words`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_written_as_a_typed_line_covers_the_words_that_line_compiles_to`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_with_quotes_still_covers_an_argument_holding_those_quotes`
+`verified-by: bravebot_core::permissions::an_allow_rule_is_not_read_as_a_typed_line`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_a_program_in_every_canonical_spelling_of_its_name`
+`verified-by: bravebot_core::permissions::only_a_deny_or_ask_rules_program_word_is_compared_in_canonical_form`
 `verified-by: bravebot_core::permissions::a_space_in_a_deny_or_ask_rule_covers_a_space_inside_a_word_too`
 `verified-by: bravebot_core::permissions::a_star_in_an_allow_rule_covers_any_text_and_a_space_after_it_only_a_gap`
 `verified-by: bravebot_core::policy::an_allow_rule_does_not_cover_a_program_whose_name_holds_a_space`
@@ -824,7 +848,9 @@ directory a person typed from being reachable on different terms.
 A line that is not a rule, names no family this agent has, has no anchor to resolve, holds a path
 with whitespace at an end ([PERM-3](#PERM-3)), or holds a quoted path specifier with nothing between
 the quotes (`Read("")`, which has its own wording and does not advise dropping the brackets alone)
-is dropped, and the rest of the file still applies. So
+is dropped, and the rest of the file still applies. A `deny` or `ask` `Bash` rule with a quote that
+is never closed or a backslash with nothing after it ([PERM-5](#PERM-5)) is reported the same way
+but is not dropped: it is matched as its characters are written, and the report says so. So
 is an entry that is not a line at all: a number, or a rule nested one array too deep. So is a `deny`,
 `ask` or `allow` value that is not an array, and a `permissions` block that is not an object, each
 named with the keys that lead to it and the file that wrote it. Every one dropped is reported: on
@@ -861,6 +887,9 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_ui_bridge::rules::the_sentence_about_an_unreadable_rule_quotes_it_spelled`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_agent::permissions::a_rule_with_quotes_around_nothing_is_not_told_to_mean_every_use_alone`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_no_line_can_be_read_from_is_kept_as_written_and_named`
+`verified-by: bravebot_agent::permissions::a_session_says_a_kept_rule_is_in_force_and_a_dropped_one_is_ignored`
+`verified-by: bravebot_ui_bridge::rules::a_rule_kept_as_written_is_listed_as_in_force_and_reported`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
