@@ -270,6 +270,8 @@ fn home_only_line(key: &str, path: String) -> String {
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
         "suggestions" => t!(doctor_settings_suggestions_ignored, path = path),
         "awaySummaryEnabled" => t!(doctor_settings_away_summary_ignored, path = path),
+        "tui.mouse" => t!(doctor_settings_tui_mouse_ignored, path = path),
+        "tui.contextMenu" => t!(doctor_settings_tui_context_menu_ignored, path = path),
         "deferMcpToolsAbove" => t!(doctor_settings_defer_mcp_tools_ignored, path = path),
         "promptCacheTtl" => t!(doctor_settings_prompt_cache_ttl_ignored, path = path),
         other if bravebot_config::Settings::narrow_only_keys().any(|key| key == other) => {
@@ -2658,6 +2660,67 @@ mod tests {
         .expect("home file");
         let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
         assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// MOUSE-4, MOUSE-52, BACKEND-24: a checkout whose `tui.mouse` or `tui.contextMenu` is `true`
+    /// over the person's `false` is reported with the key and the file, in the message written for
+    /// the key, and one that turns either off is not reported. The checkout's other names in the
+    /// block are not reported.
+    #[test]
+    fn a_checkout_tui_key_that_turns_it_on_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("tui-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"tui": {"mouse": false, "contextMenu": false}}"#,
+        )
+        .expect("home file");
+        std::fs::write(
+            &project_file,
+            r#"{"tui": {"mouse": true, "contextMenu": true, "wheelRows": 3}}"#,
+        )
+        .expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let path = project_file.display();
+        assert!(
+            lines.contains(&format!(
+                "tui.mouse in {path} is not obeyed: it may turn mouse capture off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off"
+            )),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&format!(
+                "tui.contextMenu in {path} is not obeyed: it may turn the right-click menu off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off"
+            )),
+            "{lines:?}"
+        );
+
+        // A checkout that turns them off, or names only the wheel, is not reported.
+        std::fs::write(
+            &project_file,
+            r#"{"tui": {"mouse": false, "contextMenu": false, "wheelRows": 3}}"#,
+        )
+        .expect("project");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"tui": {"mouse": true, "contextMenu": true}}"#,
+        )
+        .expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+        std::fs::write(&project_file, r#"{"tui": {"wheelRows": 3}}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.tui_mouse(), Some(true));
         assert!(home_only_lines(&settings).is_empty());
     }
 

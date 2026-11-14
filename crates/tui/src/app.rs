@@ -41480,6 +41480,60 @@ mod tests {
         );
     }
 
+    /// MOUSE-4, MOUSE-52, BACKEND-24: a session started in a checkout whose settings file has a `tui`
+    /// block keeps the person's mouse capture and right-click menu off, whether the block names the
+    /// wheel only or turns either on, and one where the person stated nothing or `true` still
+    /// captures the mouse and opens the menu.
+    #[test]
+    fn a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on() {
+        let root = crate::testutil::scratch_dir("bravebot-app-checkout-tui");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
+        let session_in = |home_text: &str, project_text: &str| {
+            std::fs::write(home.join("settings.json"), home_text).expect("write the home layer");
+            std::fs::write(cwd.join(".bravebot").join("settings.json"), project_text)
+                .expect("write the project layer");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let mut session = Session::new("none");
+            adopt_settings(&mut session, &settings, None);
+            (session.mouse_captured(), session.context_menu_on())
+        };
+        let off = r#"{"tui": {"mouse": false, "contextMenu": false, "wheelRows": 5}}"#;
+
+        assert_eq!(
+            session_in(off, r#"{"tui": {"wheelRows": 3}}"#),
+            (false, false),
+            "a block naming only the wheel"
+        );
+        assert_eq!(
+            session_in(off, r#"{"tui": {"mouse": true, "contextMenu": true}}"#),
+            (false, false),
+            "a block turning both on"
+        );
+        assert_eq!(
+            session_in("{}", r#"{"tui": {"mouse": false, "contextMenu": false}}"#),
+            (false, false),
+            "a checkout turning both off"
+        );
+        assert_eq!(
+            session_in("{}", r#"{"tui": {"mouse": true}}"#),
+            (true, true),
+            "over nothing"
+        );
+        assert_eq!(
+            session_in(
+                r#"{"tui": {"mouse": true, "contextMenu": true}}"#,
+                r#"{"tui": {"wheelRows": 3}}"#
+            ),
+            (true, true),
+            "the person's own true"
+        );
+    }
+
     /// A session starts with suggestions off where a checkout's settings file turned them on and
     /// the person's own did not (BACKEND-24), over the person's `false` and over nothing, and
     /// stays on where the person's own file turned them on.

@@ -174,7 +174,10 @@ dragging its border does, since the text then wraps into other rows ([MOUSE-34](
 
 `tui.mouse` set to the boolean `false`, in any settings file, stops the interface asking the terminal
 to report the mouse: the wheel and a drag are the terminal's own, and the interface does no selecting
-of its own. Any other value, including the string `"false"`, leaves capture on. While the mouse is
+of its own. Any other value, including the string `"false"`, leaves capture on. A project or local
+layer may state `false` and may not state `true` over the person's `false` in `~/.bravebot/settings.json`
+or the file `--settings` names, which is dropped and reported ([BACKEND-24](backends.md#BACKEND-24)); capture
+is on where nothing is stated, and a layer naming another key of `tui` does not remove this one. While the mouse is
 reported the `?` list names the drag that selects and the terminal's bypass modifier, Shift on most
 terminals and Option on macOS iTerm2 and Terminal.app, and the right click while the menu it opens is
 on ([MOUSE-52](#MOUSE-52)). With `tui.mouse` false it names none of them, since the terminal's own
@@ -183,6 +186,9 @@ stand for a click either, which no click reaches: the word that copies a fenced 
 ([MOUSE-27](#MOUSE-27)) and the label that leaves a delegate's view ([MOUSE-24](#MOUSE-24)).
 
 `verified-by: bravebot_config::settings::only_a_boolean_turns_mouse_capture_off`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
+`verified-by: bravebot_tui::app::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
 `verified-by: bravebot_tui::app::a_session_with_the_mouse_off_never_asks_for_mouse_reporting`
 `verified-by: bravebot_tui::app::the_mouse_is_captured_unless_the_settings_turn_it_off`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_terminals_own_selection`
@@ -1994,10 +2000,14 @@ The menu has no key of its own, since it is a convenience over commands and clic
 one: `/copy`, `/copy text`, `/branch` and Ctrl-L are the keyboard path, and a selection, which only the
 mouse makes, is copied as it is for a drag ([MOUSE-1](#MOUSE-1)). `tui.contextMenu` set to the boolean `false`,
 in any settings file, opens no menu, and any other value, including the string `"false"`, leaves it on.
+A project or local layer may state `false` and may not state `true` over the person's `false`, as for
+`tui.mouse` ([MOUSE-4](#MOUSE-4)).
 It is a setting apart from `tui.mouse` because terminals disagree about a right click: macOS Terminal
 reports ctrl-click as one, and some terminals keep a right click for a menu of their own, while the
 wheel and the drag the interface reads are wanted anyway.
 
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_tui::app::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
 `verified-by: bravebot_tui::app::tests::menu::a_right_press_opens_the_menu_of_what_is_under_it_and_nowhere_else`
 `verified-by: bravebot_tui::app::tests::menu::with_a_selection_held_and_the_pointer_inside_it_the_menu_copies_the_selection`
 `verified-by: bravebot_tui::app::tests::menu::the_menu_is_drawn_inside_the_screen_wherever_the_pointer_is_and_wraps_nothing`

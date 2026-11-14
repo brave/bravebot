@@ -1000,6 +1000,12 @@ and scrollback wheel then work as they do outside a session, and the session's o
 and wheel scrolling do not (use the keys and the scroller instead). Only the boolean `false` does
 this: `"false"` in quotes or any other value leaves capture on. Read when the session opens.
 
+A `.bravebot/settings.json` or `.bravebot/settings.local.json` in a checkout may turn capture off,
+and cannot turn it on where your own `~/.bravebot/settings.json` turned it off. `bravebot doctor`
+names a checkout file whose `true` was ignored. The file named with `--settings` is read as your
+own. The `tui` block combines key by key, so a checkout that sets only `tui.wheelRows` leaves your
+`tui.mouse` in force.
+
 While capture is on, most terminals still select natively if you hold a modifier while dragging:
 Shift on most, Option on macOS iTerm2 and Terminal.app. [The mouse](../using/transcript.md#the-mouse)
 says what the session does with it while it is captured.
@@ -1053,6 +1059,10 @@ block or a selection you hold. The mouse is still captured, so the wheel and the
 working, and a terminal that keeps the right click for a menu of its own, or that reports a ctrl-click
 as one, as macOS Terminal does, can then have it. Only the boolean `false` does this: `"false"` in
 quotes or any other value leaves the menu on. Read when the session opens.
+
+A checkout's settings file may turn the menu off, and cannot turn it on where your own
+`~/.bravebot/settings.json` turned it off. `bravebot doctor` names a checkout file whose `true` was
+ignored. The file named with `--settings` is read as your own.
 
 ### `tui.wheelRows`
 

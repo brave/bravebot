@@ -1326,7 +1326,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| `env`, `keybindings`, `search`, `tui` | per name, one level down; the value under a name is replaced whole |
 | the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
@@ -1337,6 +1337,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
 | `suggestions` | the same as `limit`, with the default bound: a project or local layer may leave it off and may not turn it on, over the person's `false` or over nothing |
 | `awaySummaryEnabled` | the same as `updateCheck`: a project or local layer may turn the automatic recap off and may not turn it on over the person's `false` |
+| `tui.mouse`, `tui.contextMenu` | the same as `updateCheck`, each key apart: a project or local layer may turn mouse capture or the right-click menu off and may not turn it back on over the person's `false` |
 | `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
 | `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
 | anything else | the closest layer that set it wins |
@@ -1425,9 +1426,22 @@ removes nothing and is not reported. The file `--settings` names is the person's
 state either, inside the workspace or outside it ([PERM-14](permissions.md#PERM-14)). The two
 checkout files are held to this in turn.
 
-A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
-a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
-block or list stays in force.
+`tui.mouse` and `tui.contextMenu` are read the same way as `updateCheck`: only a boolean states
+either, `false` is the narrower value, and a checkout's `true` over the person's `false` is not
+obeyed and is reported with the key spelled as written in the file (`tui.mouse`). Capture and the
+menu are on where nothing is stated, so a checkout's `true` over nothing or over the person's `true`
+changes nothing and is not reported. A checkout's `false` is obeyed whatever the person stated. The
+`tui` block combines per name, so a checkout naming one key of it leaves the person's other names in
+force, and a checkout's `tui` does not take the person's `tui.mouse` with it. The two keys are settled
+one at a time: a checkout turning one off changes nothing about the other. A checkout therefore
+cannot start the terminal reporting the mouse, or open a menu over a click, that the person turned
+off ([MOUSE-4](mouse.md#MOUSE-4), [MOUSE-52](mouse.md#MOUSE-52)). Where the person's own files and the
+file `--settings` names both state a value, the later of the two decides it, as for `limit`. A
+nested key is written as `block.name` in the table and in a report.
+
+A layer that spells `permissions`, `run` or `tui` as something other than an object, or `run.scrubEnv`
+or a list under `permissions` as something other than an array, sets nothing there: the weaker
+layers' block or list stays in force.
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
 layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
@@ -1542,6 +1556,10 @@ with it.
 `verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
 `verified-by: bravebot_cli::doctor::a_checkout_away_recap_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_tui_key_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_tui_key_turned_on_over_the_persons_off_is_listed_as_ignored`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_away_recap_turned_on_over_the_persons_off_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
 `verified-by: bravebot_cli::doctor::a_checkout_deferral_threshold_that_raises_the_persons_is_reported_with_the_file`

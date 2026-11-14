@@ -381,6 +381,14 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
         Narrows::Word(CACHE_TTL_WORDS),
         Entitled::OwnOrNamed,
     ),
+    // A checkout may turn mouse capture off for whoever runs it there, which hands the wheel and
+    // the drag back to the terminal, and may not turn it back on over a person who turned it off
+    // (MOUSE-4). Capture is on where nothing is stated, so a `true` over nothing changes nothing.
+    // A key inside a block is written `block.name`: the other names in the block are not part of
+    // the row and merge per name.
+    ("tui.mouse", Narrows::Off, Entitled::OwnOrNamed),
+    // The same shape as `tui.mouse` for the menu a right click opens (MOUSE-52).
+    ("tui.contextMenu", Narrows::Off, Entitled::OwnOrNamed),
 ];
 
 /// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
@@ -452,7 +460,7 @@ impl Narrowed {
             }
         }
         if let Some(value) = held {
-            document.root.insert(key.to_string(), value);
+            document.put_key(key, value);
         }
         refused
     }
@@ -1252,7 +1260,7 @@ impl LayerFacts {
         named_here: bool,
     ) {
         for ((key, _, entitled), held) in NARROW_ONLY.iter().zip(self.narrowed.iter_mut()) {
-            let Some(value) = root.root.remove(*key) else {
+            let Some(value) = root.take_key(key) else {
                 continue;
             };
             if entitled.admits(own, named_here) {
@@ -3180,6 +3188,45 @@ impl Document {
             true
         })
     }
+
+    /// The value of a key of [`NARROW_ONLY`] out of this document, handed to the caller to hold.
+    ///
+    /// A key written `block.name` is the name inside the block, which stays in the document with
+    /// whatever else it holds, so a layer's other names under the block still reach the merge. A
+    /// block that is not an object holds no name.
+    fn take_key(&mut self, key: &str) -> Option<serde_json::Value> {
+        match key.split_once('.') {
+            None => self.root.remove(key),
+            Some((block, name)) => match self.root.get_mut(block) {
+                Some(serde_json::Value::Object(inside)) => inside.remove(name),
+                _ => None,
+            },
+        }
+    }
+
+    /// Put the value in force for a key of [`NARROW_ONLY`] into this document, where
+    /// [`Document::take_key`] takes it from.
+    ///
+    /// A block that is not an object states nothing a name could be read from, so it is replaced
+    /// by one holding the name, and what it was is kept with what the merge displaced.
+    fn put_key(&mut self, key: &str, value: serde_json::Value) {
+        let Some((block, name)) = key.split_once('.') else {
+            self.root.insert(key.to_string(), value);
+            return;
+        };
+        let entry = self
+            .root
+            .entry(block.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !entry.is_object() {
+            let replaced =
+                std::mem::replace(entry, serde_json::Value::Object(serde_json::Map::new()));
+            self.displaced.push(replaced);
+        }
+        if let serde_json::Value::Object(inside) = entry {
+            inside.insert(name.to_string(), value);
+        }
+    }
 }
 
 impl std::ops::Deref for Document {
@@ -3536,13 +3583,17 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>, granting: bool
 
 /// Lay one settings root over another, a name at a time.
 ///
-/// One level deep, which is Claude Code's rule rather than a general merge: `env`, `provider` and
-/// `attribution` combine per name, and a value inside one of those names is replaced whole. So a
-/// project file may restate an inherited `env` name or move a keybinding, and cannot reach inside
-/// an inherited entry to change part of it while keeping the rest. A deeper merge would make what a
-/// request carries the product of two files, and no single place to read would say where it came
-/// from. (`provider` is merged here too, but a layer other than the home one has already had its
-/// block removed before the merge sees it; this arm only answers for the home layer's own file.)
+/// One level deep, which is Claude Code's rule rather than a general merge: `env`, `provider`,
+/// `attribution` and `tui` combine per name, and a value inside one of those names is replaced
+/// whole. So a project file may restate an inherited `env` name or move a keybinding, and cannot
+/// reach inside an inherited entry to change part of it while keeping the rest. A deeper merge
+/// would make what a request carries the product of two files, and no single place to read would
+/// say where it came from. (`provider` is merged here too, but a layer other than the home one
+/// has already had its block removed before the merge sees it; this arm only answers for the home
+/// layer's own file.)
+///
+/// Within `tui` the settle of [`NARROW_ONLY`] has already taken `mouse` and `contextMenu` out of
+/// every layer, so the other names merge here and those two are put back as the one value in force.
 ///
 /// `run.scrubEnv` unions instead, since a name there only ever takes a variable away from a
 /// subprocess. Overriding would let a layer hand back something a weaker one withheld, which is a
@@ -3567,6 +3618,7 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "keybindings"
                     || key == "sessionsKeys"
                     || key == "search"
+                    || key == "tui"
                     || key == "download" =>
             {
                 for (name, value) in above {
@@ -3588,8 +3640,10 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
             {
                 merge_permissions(displaced, under, above);
             }
-            // Either block spelled as anything but an object holds no list, so it removes none.
-            (Some(serde_json::Value::Object(_)), value) if key == "run" || key == "permissions" => {
+            // Any of these blocks spelled as anything but an object holds no name, so it removes none.
+            (Some(serde_json::Value::Object(_)), value)
+                if key == "run" || key == "permissions" || key == "tui" =>
+            {
                 displaced.push(value);
             }
             (_, value) => {
@@ -5226,7 +5280,8 @@ mod tests {
     }
 
     /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key
-    /// leaves the wheel and the drag working, and the nearest layer that named it wins.
+    /// leaves the wheel and the drag working. A checkout's `false` turns it off over a person who
+    /// stated `true` or nothing.
     #[test]
     fn only_a_boolean_turns_mouse_capture_off() {
         let settings = Settings::parse(r#"{"tui": {"mouse": false}}"#);
@@ -5263,7 +5318,8 @@ mod tests {
     }
 
     /// MOUSE-52: only a real `false` turns the context menu off, so a quoted `"false"` or a misplaced
-    /// key leaves the right click opening it, and the nearest layer that named it wins.
+    /// key leaves the right click opening it. A checkout's `false` turns it off over a person who
+    /// stated `true` or nothing.
     #[test]
     fn only_a_boolean_turns_the_context_menu_off() {
         let settings = Settings::parse(r#"{"tui": {"contextMenu": false}}"#);
@@ -8309,6 +8365,22 @@ mod tests {
             ],
             narrower: r#""5m""#,
         },
+        // The same shape as `updateCheck`, inside the `tui` block: `true` over `false` is held by
+        // `a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`.
+        NarrowCase {
+            key: "tui.mouse",
+            read: |settings| format!("{:?}", settings.tui_mouse()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+        NarrowCase {
+            key: "tui.contextMenu",
+            read: |settings| format!("{:?}", settings.tui_context_menu()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
     ];
 
     /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
@@ -8324,7 +8396,10 @@ mod tests {
         );
         for case in NARROW_ONLY_EXPECTED {
             let key = case.key;
-            let object = |value: &str| format!(r#"{{"{key}": {value}}}"#);
+            let object = |value: &str| match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": {value}}}}}"#),
+                None => format!(r#"{{"{key}": {value}}}"#),
+            };
             let kept = (case.read)(
                 &Layers::new(&format!("narrow-{key}-person"))
                     .global(&object(case.person))
@@ -8703,6 +8778,191 @@ mod tests {
         assert_eq!(settings.away_summary_enabled(), Some(false));
         assert_eq!(settings.away_summary_idle_seconds(), Some(600));
         assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// MOUSE-4, MOUSE-52, SCROLL-3: a checkout's `tui` block combines with the person's a name at a
+    /// time, so a checkout that names only the wheel leaves the person's `mouse` and `contextMenu`
+    /// in force, in the project file and in the local file, and still sets the wheel.
+    #[test]
+    fn a_checkouts_tui_block_does_not_replace_the_persons() {
+        let home = r#"{"tui": {"mouse": false, "contextMenu": false, "wheelRows": 5}}"#;
+        for local in [false, true] {
+            let layers = Layers::new(&format!("tui-block-{local}")).global(home);
+            let settings = if local {
+                layers.local(r#"{"tui": {"wheelRows": 3}}"#).read()
+            } else {
+                layers.project(r#"{"tui": {"wheelRows": 3}}"#).read()
+            };
+            assert_eq!(settings.tui_mouse(), Some(false), "local={local}");
+            assert_eq!(settings.tui_context_menu(), Some(false), "local={local}");
+            assert_eq!(settings.wheel_rows(), Some(3), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0, "local={local}");
+            assert_eq!(settings.unread_keys().count(), 0, "local={local}");
+            let mut names: Vec<_> = settings.names().collect();
+            names.sort_unstable();
+            assert_eq!(
+                names,
+                ["tui.contextMenu", "tui.mouse", "tui.wheelRows"],
+                "local={local}"
+            );
+        }
+
+        // A checkout's `tui` that is not an object holds no name and removes none.
+        let settings = Layers::new("tui-block-not-an-object")
+            .global(home)
+            .project(r#"{"tui": 5}"#)
+            .read();
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        assert_eq!(settings.wheel_rows(), Some(5));
+
+        // The wheel is a number and not a flag, so the nearest layer that named one still wins.
+        let settings = Layers::new("tui-block-wheel")
+            .global(home)
+            .project(r#"{"tui": {"wheelRows": 3}}"#)
+            .local(r#"{"tui": {"wheelRows": 4}}"#)
+            .read();
+        assert_eq!(settings.wheel_rows(), Some(4));
+    }
+
+    /// MOUSE-4, MOUSE-52, BACKEND-24: a project or local layer may turn mouse capture and the
+    /// right-click menu off and may not turn either on over a person who turned it off, and the file
+    /// that tried is reported. A person who stated nothing, or `true`, is not held to `false`, the
+    /// two keys are settled apart, and the file `--settings` names is the person's own act in either
+    /// direction. The other names in the block are not part of the row.
+    #[test]
+    fn a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on() {
+        type Read = fn(&Settings) -> Option<bool>;
+        let keys: [(&str, Read); 2] = [
+            ("mouse", Settings::tui_mouse),
+            ("contextMenu", Settings::tui_context_menu),
+        ];
+        for (key, read) in keys {
+            let name = format!("tui.{key}");
+            let block = |value: &str| format!(r#"{{"tui": {{"{key}": {value}}}}}"#);
+            for local in [false, true] {
+                let file = if local {
+                    LOCAL_SETTINGS_FILE
+                } else {
+                    SETTINGS_FILE
+                };
+                let with = |case: &str, global: Option<String>, written: String| {
+                    let layers = Layers::new(&format!("tui-{key}-{case}-{local}"));
+                    let layers = match &global {
+                        Some(text) => layers.global(text),
+                        None => layers,
+                    };
+                    if local {
+                        layers.local(&written).read()
+                    } else {
+                        layers.project(&written).read()
+                    }
+                };
+
+                // Over the person's `false`, `true` is not obeyed and the file is named, with
+                // the checkout's wheel figure still taken.
+                let settings = with(
+                    "on-over-off",
+                    Some(block("false")),
+                    format!(r#"{{"tui": {{"{key}": true, "wheelRows": 3}}}}"#),
+                );
+                assert_eq!(read(&settings), Some(false), "{key} local={local}");
+                assert_eq!(settings.wheel_rows(), Some(3), "{key} local={local}");
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{key} local={local}");
+                assert_eq!(reported[0].0, name);
+                assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+                assert_eq!(settings.unread_keys().count(), 0);
+                assert_eq!(settings.names().filter(|n| *n == name).count(), 1);
+
+                // A checkout's `false` turns it off over `true`, over nothing and over a person
+                // who wrote other keys, and none of them is reported.
+                for global in [
+                    Some(block("true")),
+                    None,
+                    Some(r#"{"tui": {"wheelRows": 5}}"#.to_string()),
+                ] {
+                    let settings = with("off", global.clone(), block("false"));
+                    assert_eq!(
+                        read(&settings),
+                        Some(false),
+                        "{key} {global:?} local={local}"
+                    );
+                    assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+                }
+
+                // `true` where the person wrote `true` or nothing changes nothing and is not
+                // reported.
+                for global in [Some(block("true")), None] {
+                    let settings = with("on", global.clone(), block("true"));
+                    assert_eq!(read(&settings), Some(true), "{key} {global:?}");
+                    assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+                }
+
+                // A value that is not a boolean states nothing: a checkout's is absence and is not
+                // reported, and a person's does not hold a checkout to `false`.
+                let settings = with("person-word", Some(block(r#""false""#)), block("true"));
+                assert_eq!(read(&settings), Some(true), "{key} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0);
+                let settings = with("checkout-word", None, block(r#""false""#));
+                assert_eq!(read(&settings), None, "{key} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0);
+
+                // The other key is not settled by this one: the person's `false` for it is not
+                // lifted or reported by a checkout stating this one.
+                let other = if key == "mouse" {
+                    "contextMenu"
+                } else {
+                    "mouse"
+                };
+                let settings = with(
+                    "other",
+                    Some(format!(r#"{{"tui": {{"{other}": false}}}}"#)),
+                    block("true"),
+                );
+                assert_eq!(read(&settings), Some(true), "{key} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0);
+            }
+
+            // The project file's `false` is not lifted by the local file's `true`, which is
+            // reported.
+            let settings = Layers::new(&format!("tui-{key}-local-over-project"))
+                .project(&block("false"))
+                .local(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "{key}");
+            assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+            // The file the command line named is the person's own act: it turns the key on over
+            // the person's `false` and off over the person's `true`.
+            let settings = Layers::new(&format!("tui-{key}-named-on"))
+                .global(&block("false"))
+                .named(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(true), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = Layers::new(&format!("tui-{key}-named-on-checkout-off"))
+                .global(&block("false"))
+                .project(&block("false"))
+                .named(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = Layers::new(&format!("tui-{key}-named-off-checkout-on"))
+                .named(&block("false"))
+                .project(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 1);
+            let settings = Layers::new(&format!("tui-{key}-named-off"))
+                .global(&block("true"))
+                .named(&block("false"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
     }
 
     /// INPUT-43, BACKEND-24: a project or local layer may leave suggestions off and may not turn
