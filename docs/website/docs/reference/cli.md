@@ -192,7 +192,8 @@ Opens a one-shot run in the accepting-edits mode, so a script that only needs to
 not have to take the larger grant. Writes go through unasked. A command, a fetch, vouching for a
 directory, a write the credential scan found a value in and a write to a
 [protected path](../security/permission-modes.md) are refused, because nobody can be asked.
-A `deny` rule still holds, and an allow rule still decides nothing in a one-shot run.
+A `deny` rule still holds, and an `allow` rule decides a command or a fetch here as it does in a
+one-shot run without the flag ([Non-interactive use](../using/headless.md#nothing-is-approved)).
 
 ```sh
 bravebot --accept-edits -p "apply the lint fixes"
@@ -355,7 +356,7 @@ must not end up better trusted than the project. The trust approves no effect: a
 refused as any write in an unattended run is. A directory a settings file declares under
 `references` is reachable the same way and is never trusted with it.
 
-The path must be absolute, must exist, must be a directory, and must not already sit inside the
+The path may be relative, and is resolved against the working directory as [`/add-dir`](../security/trust.md#add-dir) resolves one, so `--add-dir ../notes` opens the directory beside the working one. A leading `~` is not expanded here; the shell ordinarily does that before bravebot sees the path. The resolved path must exist, must be a directory, and must not already sit inside the
 working one. Anything else is refused by name and the run stops before the turn, rather than failing
 further in over a file it was told it could open.
 

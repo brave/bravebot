@@ -149,7 +149,11 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   or without it. A line with no network access connects to a port of the machine only with it, and
   then to no other address. On Linux and Windows nothing reads that request. Also on macOS, only `git`
   itself writes a `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or
-  clone is refused. On Windows a program runs in a container that reaches only the directories the
+  clone is refused. In a linked worktree or a submodule, whose `.git` is a file naming a git directory
+  outside the session directory, even `git commit` is refused unless a write grant covers that
+  directory, and the failure note says so and names the routes your session accepts. A `gh` command
+  writes gh's own cache, `~/.cache/gh` on Linux and macOS, never its login. On macOS that happens
+  only where `~/.cache` already exists, and under `strict` only for a command that is, or asked for, `gh`. On Windows a program runs in a container that reaches only the directories the
   session was opened on, its scratch directory, the system temporary directory, the system and
   program directories, git's configuration files, its toolchain's caches and the credential scope
   its command names, so in no sandbox mode but `off` does it read the rest of the machine. A
@@ -495,13 +499,47 @@ those same entries only, in the order written, so a program any of them starts b
 shebang, an `$EDITOR` of `env vim`, or a bare `credential_process` command) is not found in a
 directory a stage may write. A program the editor, a hook, the CLI or a clipboard tool needs that lives only in such a directory,
 for example a tool run from a project's `node_modules/.bin`, is not found by it. Every command leaves out the directory it ran in and the checkout
-holding it, so `bravebot schedule`, `bravebot auth login` and `bravebot auth status` start no program found only there.
+holding it, and so does a session for each directory it is opened in, given with `/add-dir` or moved to with `/cd`. The checkout is the nearest of that directory and its ancestors that holds a `.git`, so a session started below a checkout's root no longer starts a program planted in the checkout's `bin`, and an approved MCP server named by a bare program name is looked up the same way. A program kept only in the `bin` of that checkout reads as not installed. A checkout at your account home leaves out every `bin` under it, and an outer repository that merely contains the checkout is not left out. `bravebot schedule`, `bravebot auth login` and `bravebot auth status` start no program found only there.
 `bravebot doctor --push-identity` looks up
 `ssh-keygen`, `ssh` and `git` the same way, reports one found only there as absent, and starts them without Brave Bot's own credentials and
 with a `PATH` of those same entries only, so a `ProxyCommand` in your ssh configuration that names a bare
 program does not find one a stage wrote. The inhibitor `/caffeinate` starts is given a `PATH` of those
 same entries only as well, so a program `systemd-inhibit` starts by name is not found in a directory a
 stage may write.
+
+**Variables that make a program run code are removed from the programs Brave Bot starts itself.**
+For the browser opener (`open`, `xdg-open` or `rundll32`) that a sign-in uses, and for the programs
+behind the clipboard, `/caffeinate` and `doctor --sandbox-check`, Brave Bot removes the variables
+that choose which code a program runs, such as `LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS` and every
+`GIT_CONFIG_` name, unless the value names a program or file outside every directory a stage may
+write. The opener also has `BROWSER`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_DIRS` and
+`XDG_CONFIG_DIRS` checked this way, and a `BROWSER` with arguments, a second command or a shell line
+is removed whole. The opener also has `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` checked, since they
+name the session bus that `gio open` connects to: `XDG_RUNTIME_DIR` is kept only if it is an existing
+directory outside every directory a stage may write, and `DBUS_SESSION_BUS_ADDRESS` only if every
+entry is a `unix:path=` socket path outside those directories (or `unix:runtime=yes`). An address of
+another transport, an abstract socket or a path that does not exist is removed whole. The same address
+check applies to the clipboard tool `wl-copy` on Linux, whose helper programs read it. `systemctl --user`
+(used by `bravebot schedule`) and `systemd-inhibit` (used by `/caffeinate`) have neither
+`DBUS_SESSION_BUS_ADDRESS` nor `DBUS_SYSTEM_BUS_ADDRESS` whatever they hold, so no `unixexec:` address
+reaches them. The `make` that `doctor --sandbox-check` starts also has the variables and special
+targets that make it run a program removed, including `CPP`, `TARGET_MACH` and `.SHELLFLAGS`. The desktop app removes
+the five names above, and not these two, before it opens an address or a file.
+Every other variable reaches the opener unchanged. If your own `BROWSER` or `XDG_*` setting points
+into a directory a stage may write, the opener ignores it and uses the system default. `HOME` is
+removed for the AWS CLI and the opener, and also for an asdf or pyenv shim (a file directly in a
+`shims` directory inside `.asdf` or `.pyenv`, or in the one `ASDF_DATA_DIR` or `PYENV_ROOT` names) when
+`HOME` is a directory a stage may write or holds an `.asdf` or `.pyenv` that leads into one. The program
+the shim stands for then runs with no `HOME` and finds no configuration there.
+
+The AWS CLI that Brave Bot starts for a Bedrock sign-in has `AWS_CONFIG_FILE`,
+`AWS_SHARED_CREDENTIALS_FILE`, `OPENSSL_CONF`, `OPENSSL_CONF_INCLUDE`, `OPENSSL_ENGINES`,
+`OPENSSL_MODULES` and `BROWSER` removed unless the value is an absolute path outside every directory a
+stage may write (an existing file, or for the last three, an existing directory; `BROWSER` may also be
+a bare program name). `gcloud` is held to the same rule for its own list, which is on the
+[Google Vertex page](../customize/providers/google-vertex.md). `bravebot doctor --push-identity` starts
+`ssh-keygen`, `ssh` and `git` without `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `SSH_SK_PROVIDER` and
+`SSH_SK_HELPER`, with `SHELL` set to `/bin/sh`, and with `DEVELOPER_DIR` kept only if it passes that rule.
 
 **The remote scope can write `~/.ssh/known_hosts`.** A stage that carries it can add a host key or a
 `@cert-authority` line to that file, and your own ssh trusts the line afterwards. Read the
@@ -520,13 +558,19 @@ the configured key. It does not mean the key file is missing or that the sandbox
 `ssh-add` on the key and try again. Where the session accepts it, the agent is also told the one commit
 line can be run with `unconfined: true`, which you are asked to approve.
 
-**On macOS a write grant does not reach a `.git`.** git runs the commands a repository's
+**On macOS a write grant does not reach a `.git` or the other protected names.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, so a confined process
 that could write one could run code outside its confinement. A grant to write a directory refuses a
-write to any `.git` beneath it, in any case. A program `run` starts is held to that unless the
+write to any `.git` beneath it, in any case, and to a `.bravebot` or `.husky` directory and what is
+in it and to a `.gitmodules`, `.gitconfig` or `.pre-commit-config.yaml` file, which are the names a
+file write asks you about. A grant that is itself inside one of those directories, such as a
+server's home under `~/.bravebot/mcp-home`, is written as any other, and a protected name beneath it
+is refused. A program `run` starts is held to that unless the
 program is `git` itself, so an install script, a build or a test cannot plant a hook or a setting
-for git to run later, and a build that clones a git dependency fails there. On Linux and Windows
-nothing holds a `.git` back from a program `run` starts.
+for git to run later, and a build that clones a git dependency fails there. An installer of hooks
+that has to write a `.husky` or `.bravebot` file under a grant is refused too, and you make that edit
+through a tool that asks. On Linux and Windows
+nothing holds these names back from a program `run` starts.
 On every platform an MCP server is also refused a
 directory inside a repository. Linux's Landlock cannot hold one directory back from a grant, so there
 a `.git` beneath a server's directory, its home or the temporary directory is one it may write.

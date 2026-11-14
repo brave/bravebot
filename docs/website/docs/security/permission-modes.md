@@ -65,6 +65,11 @@ or `.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit
 wherever they are. A file there is code that runs later with your own rights, such as a git hook the
 next `git commit` starts. Accepting edits does not answer a write to one, and neither does an `allow`
 rule or a vouched path. Only bypassing does, and where nobody can be asked the write is refused.
+A `run` line that redirects with `>` or `>>` into a protected path is put to you in the same way,
+whether it names the path or reaches it through a symbolic or hard link, including a link an earlier part of
+the same line made. No rule, trusted directory or remembered line answers it, auto mode's classifier is not
+asked, and your answer is not kept for later lines. A program that sends input lines, an editor and an unattended run are not offered it as a question to answer for good, and an
+unattended run refuses it. Under bypassing it is approved unasked.
 Putting old bytes back with `/undo`, `/rewind` or `/hunks` is such a write: it is asked the same way,
 and the desktop app, which has no question for it, refuses it.
 
@@ -105,8 +110,9 @@ that reads standard input from a reference, or one with a `git` stage, which may
 repository's hooks and configuration and so is put to you as in asking. On Linux and Windows nothing
 holds a `.git` back from a program that is not `git`, so the classifier can answer a command whose
 program writes one there. It is not asked about `download_url`, a redirect to
-another host, a delegate's questions, or any question once the planner's context holds private
-content or has met something untrusted. The questions that stay with you in every mode, and the other
+another host, a delegate's questions, or any question once the planner's context has met something
+untrusted. It is asked whether or not the planner's context holds private content, since the request
+goes to the model the planner is already running on. The questions that stay with you in every mode, and the other
 questions a mode may not answer, are put to you as in asking.
 
 Shift-Tab reaches auto after plan mode and before bypassing, and a click on the mode under the input
@@ -227,9 +233,10 @@ number.
 
 ## In the desktop application
 
-The control beside the model in the composer offers asking, accepting edits and plan mode, and
-`⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Auto is not offered, and
-neither is bypassing: the desktop has no command line for the flag to be given on. The mode belongs to the open session and
+The session controls menu beside the model in the composer offers asking, accepting edits, plan mode
+and auto in its Approvals group, and `⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that
+order, from auto back to asking. Bypassing is not offered: the desktop has no command line for the
+flag to be given on. The mode belongs to the open session and
 every session opens asking, a resumed one and a fork included. A change made while a turn
 runs applies to the rest of that turn.
 

@@ -679,7 +679,7 @@ prompt and while a turn runs, and Escape puts it away. Left is the caret's as so
 | Up / Down | move through the list |
 | n / p | in a delegate, step to the next or previous one without going back to the list; in a command, the next or previous command |
 | x | in a delegate that is working, stop that delegate and no other: it answers with what it has and the turn goes on |
-| q, Escape | back to the list from a delegate, then out |
+| q, Escape | back to the list from a row opened from the list, then out. From a row opened without the list (an away recap, a `/recap` or `/btw` answer, a click on a delegate's block) they close the view and put the transcript back where it was, and the footer says `q closes` |
 | Ctrl-C | close the mode, leaving the turn in flight running |
 
 In the transcript itself, each [delegate](../how-it-works.md#delegates) gets a **block of its own**,

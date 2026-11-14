@@ -341,8 +341,13 @@ write or a fetch on your behalf. Entries in those two files are instead **propos
 in the project lists them in one box with the file each came from, and only your yes puts them in
 force. The answer is kept per project in `~/.bravebot/granted/`, so you are asked once rather than at
 every launch, and a rule the project edits afterwards is asked about again. `bravebot doctor` names
-every such entry and says whether it is granted. A file `--settings` names is yours wherever it sits,
-inside the project included, since you typed the path.
+every such entry and says whether it is granted. A file `--settings` names is yours only where it sits
+outside the working directory, every directory the session has been in, and the checkout holding each
+of them (the nearest folder above with a `.git`). Inside any of those it is read as a project file, so
+its `allow` rules and its names for the keys above that only your own files may set are ignored and
+reported. A `.git` at your home directory makes everything under it a checkout, so a dotfiles
+repository there makes a `--settings` file beneath it a project file as well: keep it outside, or in
+`~/.bravebot/settings.json`.
 
 **The project files are read from the directory you started bravebot in, and from no directory above
 it.** Searching upward would make what configures a session depend on which directory you happened to

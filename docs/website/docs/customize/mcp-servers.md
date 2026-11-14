@@ -589,8 +589,9 @@ printed:
 note: weather offers no tool in this session: its list was not approved
 ```
 
-A call that would be put to you is refused, and an `allow` rule decides nothing there, as it decides
-nothing for any tool in a one-shot run. A tool you answered 2 for in this project is still called,
+A call that would be put to you is refused, unless an `allow` rule decides it, as an `allow` rule
+decides every tool in a one-shot run ([Non-interactive use](../using/headless.md#nothing-is-approved)).
+A tool you answered 2 for in this project is still called,
 since that answer was given at the question and names one tool in one project, unless something
 private was [let out of quarantine](#each-call) earlier in the session, when the call is refused.
 

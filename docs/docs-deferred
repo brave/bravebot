@@ -18,3 +18,8 @@ bde5d3328608ff42b409ed65f927df490d9d6135 desktop bot behaviour: no page describe
 ef30af9290f7c64519440a1417db260b9dc7653a desktop bot behaviour: no page describes a desktop or bridge front end; fold in when one exists
 fae7fdfdce5a7096d638fb2eb50ccfabaaec48cb MEMORY-11 is not built per its spec (definition-memory.md); fold in when the migration ships
 128df4ef5889060593646eabed57ca9890f09c1f Connector definitions (manifest runs fetching and acting through installed connector definitions) have no page: docs/specs/connectors.md says documented-by none. Write a page on installing a connector definition and the authority it carries, then resolve.
+29a53caf6ee762ea54b7a4f07d14bb6b34205924 no website page documents the session-record file format or its per-turn timing.activity counts, or the <id>.digest.json file; add when a session-record reference page exists
+15306db1b85241093a076e11ff0efb4aa0aee36c retrieval.enabled belongs to bot conversations (desktop-only); retrieval.md documented-by is none and RETRIEVE-11 is unverified; add a retrieval page when the setting ships
+27372e2071b479260b18c50b849d072b0f242e07 desktop-only bots feature (bots.json rows, bot.list and bot.replace bridge methods); bots.md is status: proposed; fold in when the bots layer goes normative
+688a9400e97d490edfb727d2aa24f061ae41d3ad AI Chat endpoints made person-only was not read by the docs run; check whether the change is user-facing and which page covers AI Chat endpoints, then document or resolve
+3cb1f871b966348a4cbdfc093174fc682351e450 full versus simple case folding in trust and allow rules (an Edit(claß.md) allow rule no longer reaching class.md) not checked against permission-rules.md; add a sentence if the page says otherwise, then resolve

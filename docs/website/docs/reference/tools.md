@@ -376,7 +376,9 @@ only those it reaches, as `--merged` does. `search` prints the lines `pattern` m
 at a revision, as `git grep -n` does. Both page with `skip` as a log does.
 `status` lists staged, unstaged and untracked paths as `git status --short --no-renames` does. It
 detects no renames, and lists a file an attribute or `core.autocrlf` would convert, or a
-submodule, as not compared.
+submodule, as not compared. A `status` that runs out of time says it can be narrowed with a `path`
+and that `search.maxSeconds` sets the deadline, and names `git status` through `run` where the session
+holds `run`.
 
 **Why not just run git.** git runs programs its configuration names: an alias, a pager, a diff
 driver, `core.fsmonitor`, and `include.path` pulls configuration in from any file. That configuration
@@ -468,6 +470,12 @@ reference holds. It applies only while nothing has written that file since the r
 processor's answer about the file filled, or any write after a `run` line, is put to you as usual, even
 where that `run` line wrote nothing.
 
+**A yes is not spent if the path may have changed while you were asked.** If the file was written, or
+a `run` line started, after the preview was drawn, a yes writes nothing and leaves the file as it was.
+The agent is told the path may have changed while you were being asked, and to read it again and
+repeat the call. Any `run` line that started during the question has this effect, even one that wrote
+nothing. `edit_file` and `download_url` follow the same rule.
+
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
@@ -489,6 +497,11 @@ errors it found and on which lines, and how many warnings. A write never starts 
 server's own messages are never shown, only counts and line numbers. A server that has not finished
 indexing, or that did not answer in a few seconds, is reported as such rather than as "no errors". A
 file written from a `contents_ref` reports nothing.
+
+A destination that is a named pipe is written to as before. It has no earlier contents, so the diff
+shows an empty file and no backup is kept, and a `run` redirection into one is passed over by the scan
+of what the line leaves. Reading the destination does not wait for a writer, so the write does not
+hold up the other file tools.
 
 ## `edit_file`
 
@@ -981,8 +994,7 @@ request during the wait instead of one per report. A line you send still wakes t
 does another call reaching its own count. The result of the call says which of these the planner
 is waiting for. A delegate that starts delegates of its own is not woken by a line you send, so
 its description and result leave that out. The figure decides only when the planner is asked again, so you are not asked about
-it. Delegates that end close together are not joined into one wake unless they end within one
-20 ms check, which is left as a cost of the default.
+it. Delegates that end within one 20 ms check are not joined into one wake.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
@@ -1001,6 +1013,8 @@ still answered by the same rules. A delegate started that way is narrowed to wha
 the message that says it has started names what it was started without, for example "It was started
 without writing files, because the run that started it does not hold it." For a call with `each`
 the sentence is said once and begins "Each was".
+
+A delegate that cannot write is refused a `write_file` or `edit_file` call at once, with no prompt, and the audit trail records it under `capability`.
 
 The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
 size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply
@@ -1078,7 +1092,7 @@ Nothing but the report crosses back: the exchange, the tool results and the quar
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
 [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
 to you, replaces nothing on your screen, and reaches no host.
-Naming one of them anyway is refused rather than run, since a model naming a tool it was never offered
+Naming one of those tools anyway is refused rather than run, since a model naming a tool it was never offered
 is ordinary. What it could not settle goes in the report, and the planner asks.
 
 A delegate is offered this tool itself, down to three levels below the turn. One at the bottom is
@@ -1087,8 +1101,7 @@ leaves this one out. A call from either anyway is refused. Every delegate in the
 turn's one ceiling, and each is approved and narrowed by the run that started it.
 
 Fetching is out because a delegate reaching a website would stop you to approve a host for a sub-task
-you never set up. Every kind does reach the network, since a planner is a model call and that request
-is egress like any other, and that is the whole of what the capability buys it.
+you never set up. Every kind still reaches the network, since each planner request is egress.
 
 :::note
 The confirmation for a write shows the path and the diff, as it always does, but it does not say that
@@ -1177,6 +1190,14 @@ In the terminal, a series of more than one ends in a review that lists each ques
 answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
 reopens that question from the review, and either brings back what you had answered. A single
 question has no review.
+
+In the terminal, a question is drawn a line of the box for each line it was written in, with its
+inline markdown styled: bold, emphasis, code and headings lose the markers that make them so, and
+a fenced block is drawn as written. The choices, the typing field and the keys always keep their rows.
+A question taller than what is left of the box keeps at least three rows and scrolls with PgUp and
+PgDn, including while the typing field is open. One row says how many lines are below, or that the end
+is reached and how many are above, and the key hints name PgDn only while the question is cut. A long
+plan put by [`propose_plan`](#propose_plan) is drawn the same way, so every choice stays on the screen.
 
 With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
 that sits that long with no key pressed, and every question behind it. The planner is told that no
