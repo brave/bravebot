@@ -603,10 +603,27 @@ impl Session {
     /// is a handle on text only the session holding it can undo, so it goes no further than the box
     /// whatever the command does with its argument.
     pub fn take_command(&mut self) -> Commanded {
+        self.take_command_remembered_as(|line| line.to_string())
+    }
+
+    /// [`Session::take_command`], with the history given `recalled` of the line instead of the line.
+    ///
+    /// The command is remembered here, as the prompt a person sent is, so that Up and Ctrl-R bring
+    /// it back and Enter on it is a command again (CMD-1, CMD-8). One that waited in the queue was
+    /// remembered when it joined, and it comes out of the queue by another road, so it is not
+    /// remembered a second time. A line that a pick addresses is remembered as the `/agent` line the
+    /// queue holds it as, which `recalled` writes, since the marker is a handle only this session
+    /// holds. Remembered before the line's markers are settled, because the history writes a
+    /// dropped file as its name and drops a picture's marker, and neither can be read afterwards.
+    pub(super) fn take_command_remembered_as(
+        &mut self,
+        recalled: impl FnOnce(&str) -> String,
+    ) -> Commanded {
         let typed = self.input.clone();
         let pasted = self.pasted_named(&typed);
         let attached = self.attachments_named(&typed);
         let line = self.unfolded(&typed);
+        self.remember(recalled(&line).trim());
         self.settle_staged();
         // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
         // out while a turn runs (CMD-8) leaves the box as one carried out at rest does.

@@ -45364,6 +45364,7 @@ mod tests {
     mod box_text;
     mod chrome;
     mod clicks;
+    mod command_history;
     mod completions;
     #[cfg(unix)]
     mod herdr;

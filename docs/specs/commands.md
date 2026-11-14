@@ -434,7 +434,10 @@ as after them. `/branch` copies the session's record and goes on in the copy, fo
 answers no record keeps and ends the paths programs were let reach. It starts no program, leaves the
 working directory where it is and neither reads nor writes the file the answer is kept in or a `.git`
 entry, so it withdraws the same answers before it as after it. A
-command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
+command carried out as it is typed comes off the box and is remembered in the prompt history as it
+is at rest: as the words typed, with a folded paste put back to its words, and as the `/agent` line
+a pick addresses. Up and Ctrl-R bring it back, and Enter on it is a command again (CMD-1). A command
+that waits is remembered when it is typed and not again when it is carried out. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
 
@@ -627,6 +630,11 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_carried_out_at_rest_is_recalled_and_runs_again`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_carried_out_mid_turn_is_remembered`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_that_waited_is_remembered_once_and_not_when_it_is_released`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_with_a_paste_is_remembered_as_the_words_pasted`
+`verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_is_remembered_as_the_agent_line_it_addresses`
 `verified-by: bravebot_tui::app::a_session_renamed_mid_turn_is_renamed_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 `verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`

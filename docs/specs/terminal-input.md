@@ -2251,6 +2251,13 @@ prompts through the search (INPUT-19).
 
 `bravebot --incognito` stores nothing, so the prompts Up walks are the ones this session sent.
 
+While a stored prompt is on screen, Up and Down walk the history even where a list of what could
+be typed is open under the line: a command carried out is stored ([CMD-8](commands.md#CMD-8)), and a recalled command is
+a lone slash word that opens the list of commands, as a recalled prompt ending in `@` and a few
+letters opens the list of files. Editing the line ends the walk and gives the arrows back to the
+list, and so does Down past the newest prompt. Tab and Enter take what the list offers as they do
+for a typed line.
+
 **Why.** A person who presses Up is looking for something said before, and which session said it
 is not what they know. The walk reaches all of it by default, and the narrow scope is one chord
 away for a person who wants only this conversation's last prompts. The scope holds once chosen,
@@ -2263,6 +2270,10 @@ to remember, and the search answers to the same three scopes so that what a pers
 one carries to the other.
 
 `verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::app::tests::command_history::up_and_down_walk_past_a_recalled_command_while_the_list_is_open`
+`verified-by: bravebot_tui::app::tests::command_history::up_walks_past_a_recalled_command_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::command_history::up_walks_past_a_recalled_prompt_while_the_file_list_is_open`
+`verified-by: bravebot_tui::app::tests::command_history::the_arrows_return_to_the_list_once_a_recalled_command_is_edited`
 `verified-by: bravebot_tui::history::the_scope_cycles_everywhere_project_session_and_back`
 `verified-by: bravebot_tui::history::a_scope_switch_before_every_prompt_of_the_scope_lands_on_the_oldest`
 `verified-by: bravebot_tui::history::a_prompt_with_no_recorded_project_is_in_the_everywhere_scope_only`

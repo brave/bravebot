@@ -1531,12 +1531,15 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         // While the list is open the arrows walk it. History and scrolling get them back the moment
-        // it closes, which is as soon as the line stops being a lone half-typed command.
-        KeyCode::Up if session.is_completing() => {
+        // it closes, which is as soon as the line stops being a lone half-typed command. Not while
+        // the line is a recalled history entry (INPUT-40): a recalled command is a lone word, so
+        // the list is open under it, and the arrows would stop the walk at the newest command.
+        // Editing the line leaves the walk and gives them back to the list.
+        KeyCode::Up if session.is_completing() && !session.history.is_browsing() => {
             session.previous_completion();
             Action::Redraw
         }
-        KeyCode::Down if session.is_completing() => {
+        KeyCode::Down if session.is_completing() && !session.history.is_browsing() => {
             session.next_completion();
             Action::Redraw
         }
