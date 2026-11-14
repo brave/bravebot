@@ -68,6 +68,8 @@ fr:doctor-retrieval
 fr:doctor-retrieval-off
 fr:doctor-retrieval-off-from
 fr:doctor-retrieval-on
+fr:doctor-settings-repeated
+fr:doctor-settings-repeated-key
 fr:doctor-settings-shared-skill-directories-ignored
 fr:doctor-skills-shared-not-read
 fr:editor-file-exited-badly

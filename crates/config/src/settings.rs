@@ -885,6 +885,13 @@ pub struct Settings {
     /// set. Names only, for the reason [`Settings::names`] carries names: a value here may be a
     /// credential.
     unread: Vec<(PathBuf, String)>,
+    /// The keys a layer wrote twice in one object, with the layer's file and the key's path
+    /// (BACKEND-36).
+    ///
+    /// Settled per layer for the reason `unread` is: a key written once in each of two files is an
+    /// override and not a repeat, and only the file itself can say which it was. Paths only, never
+    /// values, since a value may be a credential.
+    repeated: Vec<(PathBuf, String)>,
     /// The file that stated each of [`crate::env_var::NETWORK`]'s names that is in force, the value
     /// being the one in `env`.
     ///
@@ -1222,6 +1229,9 @@ struct LayerFacts {
     /// Settled per layer because the merge cannot say which file a key came from, and a key
     /// nothing reads is only worth reporting against the file somebody has to edit to remove it.
     unread: Vec<(PathBuf, String)>,
+    /// Settled per layer for the same reason: a key one file wrote twice is a repeat, and one
+    /// written in two files is the layering the merge is for.
+    repeated: Vec<(PathBuf, String)>,
     /// Settled per layer for the reason `model` is: the merge keeps whichever file spoke last,
     /// and these names are the person's to state and not a checkout's (BACKEND-33).
     network: Vec<(String, String, PathBuf)>,
@@ -1533,6 +1543,13 @@ impl LayerFacts {
         }
     }
 
+    /// The keys this layer's file wrote twice in one object, named by key path and never by value.
+    fn repeated(&mut self, root: &Document, path: &Path) {
+        for key in root.repeated() {
+            self.repeated.push((path.to_path_buf(), key.clone()));
+        }
+    }
+
     /// The `deny` and `ask` rules, which anchor the layer's `/x` rules in `root` on the way, so
     /// what the merge takes from it is the anchored text.
     fn deny_and_ask_rules(&mut self, root: &mut Document, path: &Path, own: bool, anchor: &str) {
@@ -1603,6 +1620,7 @@ impl LayerFacts {
         settings.mcp_declared = self.mcp_declared;
         settings.mcp_requested = self.mcp_requested;
         settings.unread = self.unread;
+        settings.repeated = self.repeated;
         // Put back to what the entitled layers said, a checkout's value having been merged in earlier
         // under the same name. Scrubbed on the way, the values being a proxy address that may carry
         // a credential.
@@ -1863,6 +1881,7 @@ impl Settings {
             facts.misshapen_rules(&root, &path);
             facts.env(&root, &path, granting);
             facts.unread(&root, &path, granting);
+            facts.repeated(&root, &path);
             found.push(path.clone());
             facts.deny_and_ask_rules(&mut root, &path, own, &anchor);
             merge(&mut merged, root.take());
@@ -2491,6 +2510,19 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), key.as_str()))
     }
 
+    /// The keys a layer wrote twice in one object, with the file and the key's path, weakest layer
+    /// first (BACKEND-36).
+    ///
+    /// The file still applies, read as [`Document`] reads a repeat: two blocks combine, a list that
+    /// only refuses keeps both, and anything else is the later value. A key written once in each of
+    /// two files is an override and is not named here. Paths only, for the reason
+    /// [`Settings::unread_keys`] names keys only.
+    pub fn repeated_keys(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.repeated
+            .iter()
+            .map(|(path, key)| (path.as_path(), key.as_str()))
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
@@ -2745,6 +2777,8 @@ impl Settings {
             // And a file whose only key is one nothing here reads: `doctor` names that file, so
             // reporting it as no settings at all would contradict the line under it.
             && self.unread.is_empty()
+            // And a file whose only fault is a key written twice, which `doctor` names too.
+            && self.repeated.is_empty()
             // And a file that named a key of [`HOME_ONLY`] from a layer not entitled to, which
             // `doctor` names for the reason it names the two above.
             && self.not_obeyed.values().all(Vec::is_empty)
@@ -3134,6 +3168,11 @@ pub(crate) struct Document {
     /// reads that entry again. Kept here rather than dropped there, so that the whole of what a
     /// read parsed is cleared in one place, which is this document going.
     displaced: Vec<serde_json::Value>,
+    /// The path of every key the text wrote twice in one object, at any depth, each once.
+    ///
+    /// Key names only, as [`Trace::shown`] spells them, so a report built from it never holds a
+    /// value (BACKEND-36).
+    repeated: Vec<String>,
 }
 
 /// Why a file does not hold a settings document, for a caller that has to say which way it is wrong.
@@ -3174,20 +3213,59 @@ fn retention_days(stated: &serde_json::Value) -> Option<NonZeroU32> {
 
 impl Document {
     /// The document some text holds, or which way the text is not one.
+    ///
+    /// A key written twice in one object is read as [`Trace::combine`] says and its path is kept in
+    /// [`Document::repeated`], where serde_json would have kept the last value and said nothing.
     fn of(text: &str) -> Result<Self, NotADocument> {
-        match serde_json::from_str(text) {
+        use serde::de::DeserializeSeed;
+        let trace = std::cell::RefCell::new(Trace::default());
+        let parsed = {
+            let mut reader = serde_json::Deserializer::from_str(text);
+            match Seed(&trace).deserialize(&mut reader) {
+                Ok(value) => match reader.end() {
+                    Ok(()) => Ok(value),
+                    // Text after the value is not a document, and the value read before it is
+                    // cleared here for the reason a value that is not an object is.
+                    Err(error) => {
+                        let mut value = value;
+                        crate::scrub_value(&mut value);
+                        Err(error)
+                    }
+                },
+                Err(error) => Err(error),
+            }
+        };
+        let Trace {
+            repeated,
+            mut displaced,
+            ..
+        } = trace.into_inner();
+        match parsed {
             Ok(serde_json::Value::Object(root)) => Ok(Self {
                 root,
-                displaced: Vec::new(),
+                displaced,
+                repeated,
             }),
             // A parse that is not a document still holds whatever the file put in it, so it is
             // cleared here: this is the one exit that has a value and no document to keep it in.
+            // So is what the combining of a repeated key set aside, on a text that then failed.
             Ok(mut other) => {
                 crate::scrub_value(&mut other);
+                displaced.iter_mut().for_each(crate::scrub_value);
                 Err(NotADocument::NotAnObject)
             }
-            Err(_) => Err(NotADocument::NotJson),
+            Err(_) => {
+                displaced.iter_mut().for_each(crate::scrub_value);
+                Err(NotADocument::NotJson)
+            }
         }
+    }
+
+    /// The path of each key the file wrote twice in one object, such as `models` or
+    /// `permissions.deny`, each once. An element of an array is named by its position, as in
+    /// `mcp.servers[0].command`. Names only, so a value never reaches a report.
+    pub(crate) fn repeated(&self) -> &[String] {
+        &self.repeated
     }
 
     /// The document a file's text holds, clearing the text whatever the parse made of it.
@@ -3314,6 +3392,247 @@ impl Drop for Document {
     fn drop(&mut self) {
         crate::scrub_document(&mut self.root);
         self.displaced.iter_mut().for_each(crate::scrub_value);
+    }
+}
+
+/// The lists a repeated key unions, by the names of the keys down to each from the root.
+///
+/// Every list here only refuses or removes: a rule or a name in one takes capability away. A repeat
+/// that kept the last list would let a second snippet pasted below the first erase what the first
+/// refused, so both lists stand (BACKEND-36).
+const REPEAT_UNIONS: &[&[&str]] = &[
+    &["permissions", "deny"],
+    &["permissions", "ask"],
+    &["models", "deny"],
+    &["mcp", "deny"],
+    &["sandbox", "filesystem", "denyRead"],
+    &["sandbox", "filesystem", "denyWrite"],
+    &["sandbox", "network", "deniedHosts"],
+    &["run", "scrubEnv"],
+];
+
+/// The lists a repeated key intersects, which are the allow lists that bound what a request or a
+/// server may be.
+///
+/// What a repeat of one of these keeps is what both lists name. The union would allow an entry one
+/// of the two blocks never gave, and the last list alone would drop the limit the first wrote, so
+/// the intersection is the one reading that allows nothing a single write of either block would
+/// not have (BACKEND-36). Every other `allow` list grants reach and is read as the last one written.
+const REPEAT_INTERSECTIONS: &[&[&str]] = &[&["models", "allow"], &["mcp", "allow"]];
+
+/// One step of the way down to a value, for naming a key that was written twice.
+enum Step {
+    Key(String),
+    Index(usize),
+}
+
+/// What a parse noticed and set aside on the way down.
+#[derive(Default)]
+struct Trace {
+    /// The way from the root to the value being read.
+    path: Vec<Step>,
+    /// The path of each key found written twice in one object, each once.
+    repeated: Vec<String>,
+    /// What combining the two values of a repeated key left out of the result.
+    ///
+    /// A value a settings file wrote may be a gateway token, so none of it is dropped here: it goes
+    /// to [`Document::displaced`] and is cleared with the rest of the document (CRED-23).
+    displaced: Vec<serde_json::Value>,
+}
+
+impl Trace {
+    /// The path as a report spells it: key names joined by a dot, and `[n]` for an array element.
+    fn shown(&self) -> String {
+        let mut shown = String::new();
+        for step in &self.path {
+            match step {
+                Step::Key(key) => {
+                    if !shown.is_empty() {
+                        shown.push('.');
+                    }
+                    shown.push_str(key);
+                }
+                Step::Index(at) => shown.push_str(&format!("[{at}]")),
+            }
+        }
+        shown
+    }
+
+    /// Whether the key being read is, by the names alone, one of `lists`.
+    ///
+    /// A position in an array is not a name, so a list inside an array element is never one of
+    /// them: those lists are all read from a fixed place in the document.
+    fn is_one_of(&self, lists: &[&[&str]]) -> bool {
+        lists.iter().any(|list| {
+            list.len() == self.path.len()
+                && list
+                    .iter()
+                    .zip(&self.path)
+                    .all(|(name, step)| matches!(step, Step::Key(key) if key == name))
+        })
+    }
+
+    /// Records the path being read as one written twice, once however many times it is.
+    fn note_repeat(&mut self) {
+        let shown = self.shown();
+        if !self.repeated.contains(&shown) {
+            self.repeated.push(shown);
+        }
+    }
+
+    /// The value a key written twice is read as, the key being the one at the end of `path`.
+    ///
+    /// Two blocks combine name by name, so a later `{}` cannot erase an earlier block. A list in
+    /// [`REPEAT_UNIONS`] keeps the entries of both, earlier first, and one in
+    /// [`REPEAT_INTERSECTIONS`] keeps those both name. At one of those a list beside a value that is
+    /// not a list stays, and a block stays beside a value that is not a block, so a repeat spelled
+    /// wrongly cannot take away what the other wrote. Anything else is the later value, as it was
+    /// before a repeat was noticed.
+    fn combine(
+        &mut self,
+        earlier: serde_json::Value,
+        later: serde_json::Value,
+    ) -> serde_json::Value {
+        use serde_json::Value::{Array, Object};
+        match (earlier, later) {
+            (Object(mut under), Object(above)) => {
+                for (key, value) in above {
+                    match under.remove(&key) {
+                        Some(held) => {
+                            self.path.push(Step::Key(key.clone()));
+                            self.note_repeat();
+                            let combined = self.combine(held, value);
+                            self.path.pop();
+                            under.insert(key, combined);
+                        }
+                        None => {
+                            under.insert(key, value);
+                        }
+                    }
+                }
+                Object(under)
+            }
+            (Array(mut kept), Array(more)) if self.is_one_of(REPEAT_UNIONS) => {
+                for entry in more {
+                    match kept.contains(&entry) {
+                        true => self.displaced.push(entry),
+                        false => kept.push(entry),
+                    }
+                }
+                Array(kept)
+            }
+            (Array(first), Array(second)) if self.is_one_of(REPEAT_INTERSECTIONS) => {
+                let (both, only_first): (Vec<_>, Vec<_>) =
+                    first.into_iter().partition(|entry| second.contains(entry));
+                self.displaced.extend(only_first);
+                self.displaced.extend(second);
+                Array(both)
+            }
+            (kept @ Array(_), other) | (other, kept @ Array(_))
+                if self.is_one_of(REPEAT_UNIONS) || self.is_one_of(REPEAT_INTERSECTIONS) =>
+            {
+                self.displaced.push(other);
+                kept
+            }
+            (kept @ Object(_), other) | (other, kept @ Object(_)) => {
+                self.displaced.push(other);
+                kept
+            }
+            (earlier, later) => {
+                self.displaced.push(earlier);
+                later
+            }
+        }
+    }
+}
+
+/// Reads JSON into a [`serde_json::Value`] as serde_json does, and records a key written twice in
+/// one object in the [`Trace`] it holds.
+///
+/// The reader is serde_json's own, so its limit of 128 nested levels still refuses a file that
+/// would overflow the stack, and numbers are read by the same code and come out as the same values.
+struct Seed<'a>(&'a std::cell::RefCell<Trace>);
+
+impl<'de> serde::de::DeserializeSeed<'de> for Seed<'_> {
+    type Value = serde_json::Value;
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, reader: D) -> Result<Self::Value, D::Error> {
+        reader.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Seed<'_> {
+    type Value = serde_json::Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("any valid JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::from(value))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::from(value))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(serde_json::Number::from_f64(value).map_or(serde_json::Value::Null, Into::into))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::String(value))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut items = Vec::new();
+        loop {
+            self.0.borrow_mut().path.push(Step::Index(items.len()));
+            let next = seq.next_element_seed(Seed(self.0));
+            self.0.borrow_mut().path.pop();
+            match next? {
+                Some(item) => items.push(item),
+                None => return Ok(serde_json::Value::Array(items)),
+            }
+        }
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut access: A,
+    ) -> Result<Self::Value, A::Error> {
+        let mut map = serde_json::Map::new();
+        while let Some(key) = access.next_key::<String>()? {
+            self.0.borrow_mut().path.push(Step::Key(key.clone()));
+            let value = access.next_value_seed(Seed(self.0));
+            let value = {
+                let mut trace = self.0.borrow_mut();
+                let value = value?;
+                let value = match map.remove(&key) {
+                    Some(earlier) => {
+                        trace.note_repeat();
+                        trace.combine(earlier, value)
+                    }
+                    None => value,
+                };
+                trace.path.pop();
+                value
+            };
+            map.insert(key, value);
+        }
+        Ok(serde_json::Value::Object(map))
     }
 }
 
@@ -3746,6 +4065,7 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
     let Document {
         root: base,
         displaced,
+        ..
     } = document;
     for (key, value) in over {
         match (base.get_mut(&key), value) {
@@ -7796,6 +8116,147 @@ mod tests {
         // The key is reported and the file still applies, which is every other key reported this
         // way and is what keeps an older binary starting on a newer release's file.
         assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+    }
+
+    /// BACKEND-36 for a repeated key: a person's file that writes a key twice in one object is named
+    /// with its file and the key's path, at the top, nested, and inside an array element.
+    ///
+    /// The fault it rejects is the old parse, which kept the last value and said nothing. The home
+    /// file and the project and local layers are each fixtures, because the report is built per file
+    /// and a layer that went unread would be unnamed.
+    #[test]
+    fn a_key_a_file_writes_twice_is_named_with_the_file_and_the_key_path() {
+        let layers = Layers::new("repeated-keys")
+            .global(r#"{"model": "a", "model": "b"}"#)
+            .project(r#"{"permissions": {"deny": ["Read(x)"], "deny": []}}"#)
+            .local(r#"{"env": {"ONE": "1", "ONE": "2"}, "hooks": [{"c": 1, "c": 2}]}"#);
+        let settings = layers.read();
+        let project = layers.cwd.join(PROJECT_DIR);
+        let repeated: Vec<(PathBuf, &str)> = settings
+            .repeated_keys()
+            .map(|(path, key)| (path.to_path_buf(), key))
+            .collect();
+        assert_eq!(
+            repeated,
+            [
+                (layers.home.join(SETTINGS_FILE), "model"),
+                (project.join(SETTINGS_FILE), "permissions.deny"),
+                (project.join(LOCAL_SETTINGS_FILE), "env.ONE"),
+                (project.join(LOCAL_SETTINGS_FILE), "hooks[0].c"),
+            ]
+        );
+    }
+
+    /// A key written once in each of two files is an override, which is what the layers are for, and
+    /// a key written once in a file is not a repeat. A report naming either would make the line
+    /// mean nothing.
+    #[test]
+    fn a_key_in_two_layers_or_once_in_a_file_is_not_a_repeat() {
+        let settings = Layers::new("repeated-keys-none")
+            .global(r#"{"model": "a", "permissions": {"deny": ["Read(x)"]}}"#)
+            .project(r#"{"model": "b", "permissions": {"deny": ["Read(y)"]}}"#)
+            .read();
+        assert_eq!(settings.repeated_keys().count(), 0);
+    }
+
+    /// A file whose only fault is a repeat still said something, so it is not read as no settings:
+    /// `doctor` names it.
+    #[test]
+    fn a_file_whose_only_fault_is_a_repeat_is_not_read_as_no_settings() {
+        let settings = Layers::new("repeated-only")
+            .global(r#"{"language": "en-US", "language": "en-US"}"#)
+            .read();
+        assert_eq!(settings.repeated_keys().count(), 1);
+        assert!(!settings.is_empty());
+    }
+
+    /// A `deny` or `ask` list written twice in a person's file keeps both lists, earlier entries
+    /// first, so a rule in the first block is not erased by a second. The fault it rejects is the
+    /// last list winning, which left `permissions.deny: []` denying nothing.
+    #[test]
+    fn a_rule_list_written_twice_in_one_file_keeps_every_rule() {
+        let settings = Layers::new("repeated-rules")
+            .global(
+                r#"{"permissions": {"deny": ["Read(.env)"], "deny": ["Read(.pem)"], "ask": ["Edit(a)"]},
+                    "permissions": {"ask": ["Edit(b)"]}}"#,
+            )
+            .read();
+        assert_eq!(settings.permissions().deny, ["Read(.env)", "Read(.pem)"]);
+        assert_eq!(settings.permissions().ask, ["Edit(a)", "Edit(b)"]);
+    }
+
+    /// Anything that does not only refuse is the later value, as before the repeat was noticed, and
+    /// the repeat is still named. A rule list beside a value that is not a list is kept.
+    #[test]
+    fn a_key_that_does_not_only_refuse_keeps_the_later_value_and_is_reported() {
+        let settings = Layers::new("repeated-scalar")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2", "AWS_REGION": "eu-west-1"}}"#)
+            .read();
+        assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
+        assert_eq!(
+            settings
+                .repeated_keys()
+                .map(|(_, key)| key)
+                .collect::<Vec<_>>(),
+            ["env.AWS_REGION"]
+        );
+        let kept = Layers::new("repeated-rules-misshapen")
+            .global(r#"{"permissions": {"deny": ["Read(.env)"], "deny": null}}"#)
+            .read();
+        assert_eq!(kept.permissions().deny, ["Read(.env)"]);
+    }
+
+    /// The value a repeat sets aside is kept in the document, which clears it when it goes, and not
+    /// dropped: a settings file may hold a gateway token (CRED-23). Read through the document itself
+    /// because a value cleared on drop cannot be observed after it.
+    #[test]
+    fn a_value_a_repeat_sets_aside_stays_in_the_document_to_be_cleared() {
+        let document = Document::of(r#"{"env": {"TOKEN": "first-secret", "TOKEN": "second"}}"#)
+            .expect("a document");
+        assert_eq!(document.repeated(), ["env.TOKEN"]);
+        assert!(
+            document
+                .displaced
+                .contains(&serde_json::Value::String("first-secret".into()))
+        );
+        let merged = Document::of(r#"{"models": {"deny": ["a"]}, "models": {"deny": ["a", "b"]}}"#)
+            .expect("a document");
+        assert_eq!(
+            merged.get("models"),
+            Some(&serde_json::json!({"deny": ["a", "b"]}))
+        );
+        let intersected = Document::of(r#"{"models": {"allow": ["a", "b"], "allow": ["a", "c"]}}"#)
+            .expect("a document");
+        assert_eq!(
+            intersected.get("models"),
+            Some(&serde_json::json!({"allow": ["a"]}))
+        );
+        assert_eq!(intersected.displaced.len(), 3);
+    }
+
+    /// The depth bound is serde_json's and a document under it parses as it did: a file nested past
+    /// 128 levels is refused rather than overflowing the stack, one under it is read, and numbers
+    /// keep their values.
+    #[test]
+    fn a_deeply_nested_file_is_refused_and_an_ordinary_one_reads_as_before() {
+        let deep = format!("{{\"a\": {}{}}}", "[".repeat(200), "]".repeat(200));
+        assert!(matches!(Document::of(&deep), Err(NotADocument::NotJson)));
+        let shallow = format!("{{\"a\": {}{}}}", "[".repeat(100), "]".repeat(100));
+        assert!(Document::of(&shallow).is_ok());
+        let plain =
+            r#"{"n": [1, -2, 3.5, 18446744073709551615, 1e3], "s": "x", "t": true, "z": null}"#;
+        let document = Document::of(plain).expect("a document");
+        let expected: serde_json::Value = serde_json::from_str(plain).expect("json");
+        assert_eq!(serde_json::Value::Object(document.root.clone()), expected);
+        assert_eq!(document.repeated().len(), 0);
+        assert!(matches!(
+            Document::of("[1]"),
+            Err(NotADocument::NotAnObject)
+        ));
+        assert!(matches!(
+            Document::of(r#"{"a": 1} trailing"#),
+            Err(NotADocument::NotJson)
+        ));
     }
 
     /// Every key this build reads, in one file, reported as unread: none.

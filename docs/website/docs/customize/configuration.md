@@ -348,6 +348,13 @@ a name in it can also keep a restriction off a program, such as `npm_config_igno
 `PYTHONSAFEPATH` in your environment, so only your own file and the file `--settings` names are read
 for it.
 
+A key written twice inside one file is read the same way, since a JSON parser would keep the last copy
+and say nothing. Two blocks written under one key are combined, a list that only refuses keeps the
+entries of both (`permissions.deny`, `permissions.ask`, `run.scrubEnv`, `sandbox.filesystem.denyRead`
+and `denyWrite`, `sandbox.network.deniedHosts`), and any other repeated key is read as the later copy.
+`bravebot doctor` names each repeated key with the file and the key's path, and never its value. A key
+written once in each of two files is the layering above and is not a repeat.
+
 `allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
 entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
 `.bravebot/settings.local.json` would let whoever last edited the repository approve a command, a
