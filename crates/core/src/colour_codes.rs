@@ -28,6 +28,10 @@ pub const MOST_PARAMETERS: usize = 64;
 /// private-mode setting (`ESC [ > 4 ; 2 m` has a parameter outside that set), a window title, a
 /// code cut short by the end of the line. Those can move the cursor, repaint what was drawn or
 /// ask the terminal something, so the person is shown every byte of them.
+#[expect(
+    clippy::string_slice,
+    reason = "every index is the start of an ESC found by `find`, the end of a parameter run, or one byte past an ASCII `m`, so it is a char boundary"
+)]
 pub fn without(text: &str) -> (String, usize) {
     if !text.contains('\u{1b}') {
         return (text.to_string(), 0);
