@@ -679,7 +679,8 @@ impl StoredReference {
         }
     }
 
-    /// The reference this stands for, or `None` where a part is not one [`Reference::new`] allows.
+    /// The reference this stands for, or `None` where a part is not one [`Reference::new`] allows,
+    /// or where the kind was assumed and the repository is named like a file.
     pub fn read(&self) -> Option<Reference> {
         let kind = match self.kind.as_str() {
             "issue" => LinkKind::Issue,
@@ -687,10 +688,15 @@ impl StoredReference {
             _ => return None,
         };
         let reference = Reference::new(&self.owner, &self.repo, self.number, kind)?;
-        Some(match self.kind_named {
-            true => reference,
-            false => reference.assumed(),
-        })
+        if self.kind_named {
+            return Some(reference);
+        }
+        // An assumed item came from the shorthand, which does not read a file name (PANEL-16).
+        // A record an older build wrote can hold one.
+        match bravebot_agent::links::names_a_file(&self.repo) {
+            true => None,
+            false => Some(reference.assumed()),
+        }
     }
 }
 
@@ -7156,6 +7162,33 @@ mod tests {
         .expect("reads");
         let reference = without_the_flag.read().expect("valid");
         assert!(!reference.kind_named());
+    }
+
+    /// A record written before the reader skipped file names can hold `src/main.rs#12` as an assumed
+    /// issue. A resume drops it, and keeps one whose kind was named, which a full address gave.
+    ///
+    /// The fault it rejects: a read that keeps every assumed item whose parts are well formed, so a
+    /// path listed by an older build stays in the panel after a resume.
+    #[test]
+    fn an_assumed_item_whose_repository_names_a_file_is_dropped_on_reading() {
+        let written = |owner: &str, repo: &str, number: u64, kind_named: bool| StoredReference {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            number,
+            kind: "issue".to_string(),
+            kind_named,
+        };
+        let held = [
+            written("src", "main.rs", 12, false),
+            written("src", "main.rs", 13, true),
+            written("vercel", "next.js", 14, false),
+            written("brave", "bravebot", 15, false),
+        ];
+        let read: Vec<u64> = read_references(&held)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(read, [13, 14, 15]);
     }
 
     /// The picker searches the links, so the list has to carry them, and a record that holds
