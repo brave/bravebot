@@ -29,6 +29,7 @@ pub mod ask;
 pub mod cancel;
 mod canonical;
 pub mod capability;
+pub mod colour_codes;
 pub mod command;
 pub mod credentials;
 pub mod delegate;

@@ -374,7 +374,34 @@ mod tests {
         assert!(!withheld("BROWSER", "/safe/bin/fire\u{fffd}ox %s"));
     }
 
+    /// How long a test waits for the installed `xdg-open` to end. It ends in well under a second
+    /// where it works. A host busy enough to take longer than this is not one the test can judge.
+    /// A program that has not ended by then fails the test and is killed with what it started.
+    #[cfg(unix)]
+    const OPENER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+    /// How long a test waits for a child run of this test binary: the deadline of the opener it
+    /// starts, and the time the binary needs to start and to report. A child that is past it is
+    /// hung in something other than the opener, whose own wait is bounded in the child.
+    #[cfg(unix)]
+    const CHILD_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// The deadline the child run by [`helper_run_by`] and its callers gives the opener: the
+    /// number of milliseconds in `BRAVEBOT_TEST_BROWSER_DEADLINE_MS` when a test sets it, so a test
+    /// of the deadline itself does not wait for [`OPENER_DEADLINE`].
+    #[cfg(unix)]
+    fn the_deadline_the_child_gives_the_opener() -> std::time::Duration {
+        std::env::var("BRAVEBOT_TEST_BROWSER_DEADLINE_MS")
+            .ok()
+            .and_then(|milliseconds| milliseconds.parse().ok())
+            .map_or(OPENER_DEADLINE, std::time::Duration::from_millis)
+    }
+
     /// Whether this process is the child of [`helper_run_by`], which has done what it is for.
+    ///
+    /// The opener is waited for at most [`the_deadline_the_child_gives_the_opener`]. One that has not
+    /// ended by then is killed with every program it started, and this panics, which fails the
+    /// child and so the test that ran it.
     #[cfg(unix)]
     fn is_the_child_of_helper_run_by() -> bool {
         const SESSION: &str = "BRAVEBOT_TEST_BROWSER_SESSION";
@@ -386,14 +413,25 @@ mod tests {
         bravebot_sandbox::programs::keep_out(Path::new(&session));
         let address = std::env::var("BRAVEBOT_TEST_BROWSER_ADDRESS")
             .unwrap_or_else(|_| "https://example.invalid/".to_string());
-        let status = opening(
-            &Resolved::found_earlier(std::path::PathBuf::from(opener)),
-            &[address],
-        )
-        .status()
-        .unwrap();
+        let status = crate::testutil::status_within(
+            &mut opening(
+                &Resolved::found_earlier(std::path::PathBuf::from(opener)),
+                &[address],
+            ),
+            the_deadline_the_child_gives_the_opener(),
+            "the opener",
+        );
         println!("opener ended: {status}");
         true
+    }
+
+    /// The child run of this test binary that `command` starts, waited for at most
+    /// [`CHILD_BACKSTOP`]. A child that does not end fails the test with `what` in the message, and
+    /// `what` names the variable or case under test. Its output is returned as
+    /// [`std::process::Command::output`] returns it.
+    #[cfg(unix)]
+    fn output_of_child(command: &mut std::process::Command, what: &str) -> std::process::Output {
+        crate::testutil::output_within(command, CHILD_BACKSTOP, what)
     }
 
     /// The opener's command run with `BROWSER` naming a helper that records it ran, once with the
@@ -463,10 +501,10 @@ mod tests {
                 for (name, set) in desktop {
                     command.env(name, set);
                 }
-                let child = command.output().unwrap();
+                let child = output_of_child(&mut command, &format!("BROWSER in {name}"));
                 assert!(
                     child.status.success(),
-                    "{}",
+                    "BROWSER in {name}: {}",
                     String::from_utf8_lossy(&child.stderr)
                 );
             }
@@ -690,12 +728,31 @@ mod tests {
     ///
     /// `BROWSER` names a command, so each side holds a `helper.sh` that records it ran and
     /// `BROWSER` is that path followed by ` %s`, which replaces the stand-in above.
+    ///
+    /// The opener is waited for at most [`OPENER_DEADLINE`], in the child run of this test binary.
+    /// An opener that has not ended by then is killed with every program it started, and the test
+    /// fails with `variable` in the message, on every host: a handler that does not exit is not a
+    /// reason to skip. The wait on the child run is bounded by [`CHILD_BACKSTOP`] for the same
+    /// reason.
     #[cfg(unix)]
     fn handler_run_by(
         test: &str,
         variable: &str,
         desktop: &[(&str, &str)],
         opener: &Path,
+    ) -> (bool, bool) {
+        handler_run_by_within(test, variable, desktop, opener, OPENER_DEADLINE)
+    }
+
+    /// [`handler_run_by`] with the time the child gives the opener to end set by the caller, so a
+    /// test of the deadline does not wait [`OPENER_DEADLINE`].
+    #[cfg(unix)]
+    fn handler_run_by_within(
+        test: &str,
+        variable: &str,
+        desktop: &[(&str, &str)],
+        opener: &Path,
+        deadline: std::time::Duration,
     ) -> (bool, bool) {
         use std::os::unix::fs::PermissionsExt;
 
@@ -792,6 +849,10 @@ mod tests {
                     .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
                     .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
                     .env(
+                        "BRAVEBOT_TEST_BROWSER_DEADLINE_MS",
+                        deadline.as_millis().to_string(),
+                    )
+                    .env(
                         "BRAVEBOT_TEST_BROWSER_ADDRESS",
                         format!("{scheme}://example.invalid/"),
                     )
@@ -831,9 +892,8 @@ mod tests {
                 }
                 command
                     .env("XDG_UTILS_DEBUG_LEVEL", "3")
-                    .env(variable, value)
-                    .output()
-                    .unwrap()
+                    .env(variable, value);
+                output_of_child(&mut command, variable)
             };
             logs.push(format!(
                 "{variable} in {}:\nstdout:\n{}\nstderr:\n{}",
@@ -843,7 +903,7 @@ mod tests {
             ));
             assert!(
                 child.status.success(),
-                "{}",
+                "{variable}: {}",
                 String::from_utf8_lossy(&child.stderr)
             );
         }
@@ -1064,10 +1124,10 @@ mod tests {
                 .env_remove("GIO_MODULE_DIR")
                 .env_remove("GIO_LAUNCH_DESKTOP")
                 .env(variable, value);
-            let child = command.output().unwrap();
+            let child = output_of_child(&mut command, variable);
             assert!(
                 child.status.success(),
-                "{}",
+                "{variable}: {}",
                 String::from_utf8_lossy(&child.stderr)
             );
         }
@@ -1155,6 +1215,10 @@ mod tests {
     /// `/etc/xdg/mimeapps.list` exists, since a removed `XDG_CONFIG_DIRS` falls back to it and it could
     /// name a real browser. The `XDG_CONFIG_DIRS` case is the variable under test, so the run cannot
     /// point it at an empty directory to avoid the file, and the skip stays on CI too.
+    ///
+    /// A handler that does not exit fails the test and does not skip it or stall the run:
+    /// [`handler_run_by`] bounds the wait on the installed `xdg-open`, which on a host whose
+    /// `xprop` or `xdg-mime` does not return would otherwise never end.
     #[cfg(unix)]
     #[test]
     fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode() {
@@ -1204,6 +1268,151 @@ mod tests {
                 ran => assert_eq!(ran, (false, true), "{variable}"),
             }
         }
+    }
+
+    /// The deadline on the installed `xdg-open` (#4230). The regression it rejects: a test that
+    /// waits for the opener with no bound, so an `xdg-open` that never ends stalls the run (it did
+    /// for 16 and 48 minutes on a GNOME session, in `xprop`); a deadline that returns or skips
+    /// where it should fail; a failure that does not name the variable; and a kill of the opener
+    /// alone, which leaves the program it started running.
+    ///
+    /// The opener is a stand-in that starts a background program, which writes `survived` after
+    /// three seconds, and then runs `sleep 600`. The deadline is one second. The test passes when
+    /// the call fails within seconds with the variable and the deadline in the message, and nothing
+    /// the stand-in started has written `survived` once the three seconds have passed.
+    #[cfg(unix)]
+    #[test]
+    fn an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let directory = crate::testutil::scratch_dir("opener-deadline");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let survived = directory.join("survived");
+        let stand_in = directory.join("xdg-open");
+        std::fs::write(
+            &stand_in,
+            format!(
+                "#!/bin/sh\n(sleep 3; : > '{}') &\nexec sleep 600\n",
+                survived.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let started = std::time::Instant::now();
+        // The call runs on a thread that this test waits for at most 30 seconds, so a call with no
+        // deadline fails this test and does not stall the run.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opener = stand_in.clone();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(|| {
+                handler_run_by_within(
+                    "opener::tests::an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started",
+                    "XDG_DATA_HOME",
+                    &[("DISPLAY", ":9999")],
+                    &opener,
+                    std::time::Duration::from_secs(1),
+                )
+            });
+            let _ = sender.send(result);
+        });
+        let failed = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| {
+                panic!("the call did not return within 30 seconds for an opener that never ends")
+            });
+        let waited = started.elapsed();
+        let message = match failed {
+            Ok(ran) => panic!("the call returned {ran:?} for an opener that never ends"),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_string())
+                })
+                .unwrap_or_default(),
+        };
+        assert!(
+            waited < std::time::Duration::from_secs(30),
+            "the call took {waited:?}: {message}"
+        );
+        assert!(
+            message.contains("XDG_DATA_HOME") && message.contains("did not end within 1s"),
+            "{message}"
+        );
+
+        // The background program writes `survived` three seconds after the stand-in started, if
+        // nothing ended it. The stand-in started at the latest when the call began.
+        let until = started + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let left_running = survived.exists();
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(
+            !left_running,
+            "a program the opener started was still running after the deadline"
+        );
+    }
+
+    /// The wait on a child run of this test binary is bounded too (#4230). The regression it
+    /// rejects: [`output_of_child`] and [`crate::testutil::output_within`] waiting with no bound, so
+    /// a child that hangs before it reaches the opener stalls the run. A command that does not end
+    /// is killed at the deadline and fails with the name the caller gave it, and a command that
+    /// ends in time returns what it wrote.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_does_not_end_is_killed_at_the_deadline_and_one_that_ends_is_not() {
+        let mut quick = std::process::Command::new("sh");
+        quick.args(["-c", "echo out; echo err >&2; exit 3"]);
+        let output = crate::testutil::output_within(
+            &mut quick,
+            std::time::Duration::from_secs(20),
+            "a quick command",
+        );
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
+
+        let started = std::time::Instant::now();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(|| {
+                let mut never = std::process::Command::new("sh");
+                never.args(["-c", "sleep 600"]);
+                crate::testutil::output_within(
+                    &mut never,
+                    std::time::Duration::from_millis(300),
+                    "a command that never ends",
+                )
+            });
+            let _ = sender.send(result);
+        });
+        let failed = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("a command with a deadline of 300ms was waited on for 30s"));
+        let message = match failed {
+            Ok(output) => panic!("a command that never ends returned {:?}", output.status),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default(),
+        };
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the wait took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            message.contains("a command that never ends did not end within 300ms"),
+            "{message}"
+        );
     }
 
     /// SANDBOX-30, through the installed `xdg-open` under KDE (`XDG_CURRENT_DESKTOP=KDE` and
@@ -1364,7 +1573,7 @@ mod tests {
             .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
             .env("BRAVEBOT_TEST_BROWSER_OPENER", &stand_in);
         without_a_desktop(&mut through_the_opener);
-        let child = through_the_opener.output().unwrap();
+        let child = output_of_child(&mut through_the_opener, "XDG_DATA_DIRS");
 
         let seen = std::fs::read_to_string(&log).unwrap_or_default();
         let report = String::from_utf8_lossy(&child.stderr).into_owned();
@@ -1667,10 +1876,10 @@ mod tests {
             command.env(chosen, set);
         }
         command.env(variable, &value);
-        let child = command.output().unwrap();
+        let child = output_of_child(&mut command, variable);
         assert!(
             child.status.success(),
-            "{}",
+            "{variable}: {}",
             String::from_utf8_lossy(&child.stderr)
         );
         let seen = std::fs::read_to_string(&log).ok();
@@ -1979,19 +2188,14 @@ mod tests {
             };
             command.env(name, value);
         }
-        let mut child = command.spawn().unwrap();
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let mut status = child.try_wait().unwrap();
-        while status.is_none() && std::time::Instant::now() < until {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            status = child.try_wait().unwrap();
-        }
-        let ended = status.map_or_else(
-            || "still running after 30 seconds, then killed".to_string(),
-            |status| format!("ended with {status}"),
+        // A `kde-open` that does not end within the deadline is killed with every program it
+        // started, and the test fails naming the variable under test, as it does for `xdg-open`.
+        let status = crate::testutil::status_within(
+            &mut command,
+            OPENER_DEADLINE,
+            variable.map_or("the baseline run", |(name, _)| name),
         );
-        let _ = child.kill();
-        let _ = child.wait();
+        let ended = format!("ended with {status}");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while !session.join("genuine-ran").exists()
             && !session.join("planted-ran").exists()
@@ -3005,7 +3209,7 @@ mod tests {
         if !removed {
             command.env(variable, &value);
         }
-        let _ = command.output().unwrap();
+        let _ = crate::testutil::output_within(&mut command, OPENER_DEADLINE, variable);
         let ran = (log.join("planted").exists(), log.join("genuine").exists());
         let _ = std::fs::remove_dir_all(&root);
         ran

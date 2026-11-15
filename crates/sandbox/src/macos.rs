@@ -599,6 +599,9 @@ impl Sandbox for SeatbeltSandbox {
     ) -> Result<Command, SandboxError> {
         let mut wrapped = Self::wrapping(program, args, policy, environment)?;
         crate::process::apply_environment(&mut wrapped, environment);
+        // The same property the Linux backend gives with `setsid` in its pre-exec: `sandbox-exec`
+        // and the program it runs are one process, so the session is the program's (RUN-11).
+        crate::process::leading_a_session(&mut wrapped);
         Ok(wrapped)
     }
 }

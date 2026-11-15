@@ -14,7 +14,7 @@ anything, so that sentence is no reason to drop a candidate about them. This lan
 permission, a program that starts or a string that is shown?**
 
 `BACKEND-24` says which layer answers for which name, and `BACKEND-33` names the variables an `env`
-block sets and the eighteen read from the person's layers alone:
+block sets and the twenty read from the person's layers alone:
 
 {layer_clauses}
 

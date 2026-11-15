@@ -1213,6 +1213,9 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// Whether the model in force is recorded as refusing the cache breakpoints, so that its
+    /// requests carry none (BACKEND-27). Noted at the end of each turn and run, and on a pick.
+    breakpoints_given_up: bool,
     /// The lookup that settles the budget of the model the session opened on, while its answer is
     /// still on the way (BACKEND-64).
     awaited_listing: Option<accounts::AwaitedListing>,
@@ -1575,6 +1578,7 @@ impl Session {
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
+            breakpoints_given_up: false,
             awaited_listing: None,
             model_is_account: false,
             account: bravebot_agent::chatgpt::AccountSession::begin(),

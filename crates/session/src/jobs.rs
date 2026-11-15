@@ -743,8 +743,8 @@ pub enum Stopped {
 /// Make this process the leader of a session and process group of its own, with no terminal.
 ///
 /// What lets it outlive the terminal it was started from, and what lets [`Roster::stop`] reach
-/// what it started with one signal. A stage of `run` is not among that, since it leads a process
-/// group of its own (RUN-11).
+/// what it started with one signal. A stage of `run` is not among that, since it leads a session
+/// and process group of its own with no terminal (RUN-11).
 pub fn leave_the_terminal() {
     #[cfg(unix)]
     let _ = rustix::process::setsid();

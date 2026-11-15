@@ -435,6 +435,15 @@ may call it on any reference it holds, so asking with `read` gives it nothing it
 have. The manifest path ([MANIFEST-15](../manifest.md#MANIFEST-15)) never presents a result to the
 planner and takes no `read`.
 
+A reference that stands for a file a listing or a search found is opened when `vet_content` is given
+it. Under bypass the file is opened with the reach a call of `read_file` for its path has, so a file
+in a directory beside the workspace is opened without a request, and in any other mode it is refused
+as outside the workspace ([PATHREQ-7](request-path.md#PATHREQ-7)). The reference keeps its label.
+
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
+`verified-by: bravebot_agent::turn::under_bypass_opening_a_listed_file_releases_nothing_the_check_did_not`
+`verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
+
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result`
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_where_the_check_finds_nothing_is_answered_in_the_same_result`

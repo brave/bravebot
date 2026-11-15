@@ -1219,7 +1219,8 @@ would cost it the field that keeps a long argument from being cut off and still 
 ceiling goes before the ask for arguments because, given up wrongly, it costs a model its replies
 longer than the fallback, where the ask costs it every long argument, written into a silence the
 idle bound cuts. Where the request that answered had given up more than one, all of them are
-remembered, as on a gateway. A request refused with nothing left to give up settles nothing, and
+remembered, as on a gateway, except that the breakpoints are held back: they are remembered only as
+BACKEND-27 says. A request refused with nothing left to give up settles nothing, and
 what an earlier request settled for that model stands.
 
 **Why.** The judgment is the only description these services offer, and throwing it away leaves the
@@ -1232,6 +1233,14 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
+`verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
+`verified-by: bravebot_bedrock::lib::a_first_refusal_is_forgotten_with_the_record`
+`verified-by: bravebot_bedrock::lib::taking_the_thinking_refusal_from_an_earlier_session_counts_no_breakpoint_refusal`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
 `verified-by: bravebot_bedrock::lib::the_ask_to_show_thinking_is_given_up_before_the_level`
 `verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
@@ -1329,7 +1338,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search`, `tui` | per name, one level down; the value under a name is replaced whole |
-| the eighteen `env` names: those of the network, Google, Bedrock and endpoint sets, and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
+| the twenty `env` names: those of the network, Google, Bedrock, Bedrock patience and endpoint sets, and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv` | home layer, and the file `--settings` names, whose entries are kept together; a project or local layer's list is ignored and reported by `doctor`, and the rest of that layer's `run` block is read as before |
 | every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
@@ -1675,11 +1684,28 @@ into a `Usage`. Without that a cached round reads as a conversation that shrank 
 are also carried through separately, which is what BACKEND-31 requires and the only way anything can
 say whether this clause is working.
 
-**A model that refuses them is not sent them again.** Prompt caching is not something every model
-this backend can reach offers, and one that does not refuses the whole request rather than reading
-past the breakpoints. A request refused on its contents is therefore sent once more without them,
-and where that answers, no later request in the session carries them. Only a refusal does this:
-every other failure leaves the breakpoints in place.
+**A model that refuses them is not sent them again, once it has refused twice.** Prompt caching is
+not something every model this backend can reach offers, and one that does not refuses the whole
+request rather than reading past the breakpoints. A request refused on its contents is therefore
+sent once more without them. The status that refuses them is the one an expired credential or a
+burst of requests also gets, so one refusal that the next request answers is not proof of anything:
+it is held as a doubt, and the request that answered is the only one that goes without them. The
+model is recorded as refusing them when a request that began after that doubt was held is refused
+the same way. Requests that began together count once however many of them are refused, so a burst
+of concurrent requests cannot record a model. A request that carried them and the lifetime, and was
+answered, clears the doubt. After that record, no later request carries them until the record has
+lapsed, which it does after thirty minutes, and a request after that carries them again. The record
+is kept in the process only ([BACKEND-63](#BACKEND-63)). Only a refusal does any of this: every
+other failure leaves the breakpoints in place. The decision is made from the status and a count,
+never from the body of a reply.
+
+**A model recorded as refusing them says so.** A prefix sent without breakpoints is read at the full
+rate on every request and draws no cache figure, since the figures are drawn only above zero
+([BACKEND-31](#BACKEND-31)). So that the person is not left to infer it from a bill, the status
+report and the info panel ([PANEL-8](info-panel.md#PANEL-8)) say that the caching is off for the
+model in force while it is recorded, a fixed sentence from the catalog. The front end asks the
+backend crate through `bravebot_agent::backend::breakpoints_given_up`, which holds a status and a
+count and no content, and notes the answer after each turn and run, on a pick, and at start.
 
 **Why ask rather than know.** An inference-profile ARN does not say which model is behind it, which
 is the same fact that makes one figure stand in for every tier's context window. Asking costs one
@@ -1700,6 +1726,14 @@ file and from the file `--settings` names. A project or local layer may state `5
 `1h`, which is dropped and reported ([BACKEND-24](#BACKEND-24)), so a repository cannot make every
 request in it carry the dearer lifetime. The value comes from the settings and
 never from message content, so no branch depends on an untrusted byte.
+
+**The same setting bounds one `job_output` wait.** A request sent after the cached prefix expired
+writes the whole conversation again and reads none of it, so the longest wait the tool accepts is 30
+seconds under the lifetime in force: 270 seconds where the setting is `5m` or absent, 600 where it
+is `1h` ([RUN-17](tools/run.md#RUN-17)). Absent is treated as `5m`, whichever service answers,
+including the Brave endpoint and `api.openai.com`, which cache without being asked and whose
+lifetime is not stated here: the shorter bound is the one that cannot cost a rewrite where the
+lifetime is five minutes, and costs only an extra call where it is longer.
 
 **A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
 a lifetime on it refuses the request in the same way a model without caching does. A refusal of a
@@ -1727,6 +1761,12 @@ for one that does not.
 `verified-by: bravebot_bedrock::protocol::no_lifetime_is_sent_where_none_was_chosen`
 `verified-by: bravebot_bedrock::lib::the_chosen_lifetime_is_sent_until_the_model_refuses_it`
 `verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
+`verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
+`verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
 `verified-by: bravebot_config::lib::a_checkouts_long_cache_lifetime_reaches_no_account`
@@ -1975,7 +2015,10 @@ figure reports one or the other.
 cache exactly as much as it says a round whose cache missed, and nothing here distinguishes them.
 Whatever presents these figures presents nothing when they are zero, rather than presenting a miss
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
-read nothing back reports the write and says nothing about the read.
+read nothing back reports the write and says nothing about the read. The one exception is a model
+recorded as refusing the cache breakpoints ([BACKEND-27](#BACKEND-27)), whose requests carry none
+and so can report no figure: the status report and the info panel say that the caching is off for
+it, in place of figures.
 
 **The status panel and footer report the last turn's.** A turn in flight reports its own running
 totals from the first round that completed a request ([PANEL-8](info-panel.md#PANEL-8)), and the
@@ -1996,7 +2039,8 @@ before it on the panel.
 setting and not a reading: no reply says how long a service kept a prefix, and a model that refuses
 the field is sent the request without it (BACKEND-27, BACKEND-32). The line is drawn from the setting
 whichever service answered ([Known costs](#known-costs)). It sits there because a read of
-zero after a pause means a different thing under five minutes than under an hour.
+zero after a pause means a different thing under five minutes than under an hour. The same setting
+bounds the longest `job_output` wait (BACKEND-27).
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
@@ -2040,6 +2084,8 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`
 `verified-by: bravebot_aichat::client::an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
 `verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 
 <a id="BACKEND-32"></a>
 ### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
@@ -2178,7 +2224,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these twenty-two variables
+### BACKEND-33: an `env` block names these twenty-four variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -2198,6 +2244,8 @@ something reads:
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the tier word `opus` names |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
+| `BRAVEBOT_BEDROCK_MAX_RETRIES` | how many times a request to that account is sent again, at most 7, where `0` sends each request once ([BACKEND-55](#BACKEND-55)) |
+| `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` | how many milliseconds a reply from that account may go quiet before it is given up on, at most 600000 ([BACKEND-55](#BACKEND-55)) |
 | `GOOGLE_API_KEY` | the key a request to Google Vertex AI is sent with |
 | `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under, where there is one |
 | `VERTEX_LOCATION` | the location it is made in, where that is not `global`, and not read with no project |
@@ -2210,17 +2258,25 @@ something reads:
 
 The last six rows are the network names. Three more rows are the Google names, and six are the
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
-`ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
-`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set, and `BRAVEBOT_DEFAULT_MODEL` is a fifth of one
-name. All five come from the person's own layers
+`ANTHROPIC_DEFAULT_*_MODEL` tiers. The two `BRAVEBOT_BEDROCK_*` rows are a further set of two, the
+Bedrock patience names: they choose no account, and state how many times a request to the account
+the six names configure is sent again and how long a reply from it may go quiet. They are held to
+the bounds a `provider` entry's `maxRetries` and `idleTimeoutMs` are ([BACKEND-55](#BACKEND-55)): a
+value that is not a whole number states nothing, a count above 7 is 7, a gap above 600000 is
+600000, and a gap of `0` states nothing, while a count of `0` is a statement. The endpoint rows,
+`BRAVE_AI_CHAT_ENDPOINT` and
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a further set, and `BRAVEBOT_DEFAULT_MODEL` is a set of one
+name. All six come from the person's own layers
 alone, the user's settings file and the file the command line named, wherever it sits
 ([PERM-14](permissions.md#PERM-14)).
 The project and local files arrive with a clone, and a proxy or an authority they chose would decide
 where conversation content is sent and who may read it, a Google key or project, or an AWS account,
-region, profile or tier model, they chose would decide which account receives it, an endpoint
+region, profile or tier model, they chose would decide which account receives it, a retry count or an
+idle gap they chose would raise the requests billed to the person's account or hold their turn on a
+dead connection, an endpoint
 they chose would decide which host receives the conversation and which host the premium key is
 presented to, and a default model they chose would decide which of the person's configured services
-receives it, a `provider` entry's gateway or Brave's. So one of these eighteen names in either file is reported by `doctor` with the file
+receives it, a `provider` entry's gateway or Brave's. So one of these twenty names in either file is reported by `doctor` with the file
 that wrote it and decides nothing, and it does not displace what a layer entitled to state it said.
 That holds for the `model` key too ([BACKEND-11](#BACKEND-11)), so a checkout names a model by no
 spelling. `doctor` reports the default model's ignored file with the model, and the network names
@@ -2258,7 +2314,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a twenty-third variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a twenty-fifth variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -2433,11 +2489,21 @@ before backoff does not count until it starts. Cancelling that wait retains the 
 Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
 messages do not enter these details. Processor failures use a fixed category in their tool results;
 delegate failures tell the planner that the delegate did not finish and nothing about the failure
-beyond that, except that a delegate that ended rate-limited or unavailable is told so in a sentence
-this driver writes for each of the two categories, and says that starting the same delegate again
-meets the same limit ([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
+beyond that, except that a delegate that ended rate-limited, unavailable, transport or incomplete is
+told so in a sentence this driver writes for each of the four categories. The first two say that
+starting the same delegate again meets the same limit. The other two say that no refusal came from
+the service, that starting the same delegate again on the same task may meet the same silence or
+stop, and that the task should be split so that each delegate makes smaller replies or writes
+([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
 closed category name the trail records, so no word of the service's answer is carried, and every
-other category is still not named to the planner. Where the run had spent its round bound, the
+other category is still not named to the planner. A delegate ends transport when a request did not
+reach the service, when the connection was dropped or went silent before any of the reply's body
+arrived (including the Bedrock case below), when the time to begin a reply that was streamed ran
+out, and when a redirect chain did not end or named no location. It ends incomplete when any of the
+reply's body arrived and the reply then stopped, went silent for longer than the gap allowed or ran
+out of time, and when a reply asked for whole was still being written at the time its request stated
+for it, whether or not any of it had arrived. The endings are set out under "Each ending of a
+request" below. Where the run had spent its round bound, the
 driver's own count of that bound is said too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a
 number this process fixed before the run started rather than anything read out of the answer that
 failed. Compaction failure messages also use the category, except that one that failed on the
@@ -2479,7 +2545,9 @@ names map to incomplete. Retry eligibility is unchanged.
 A streamed Bedrock reply that stops arriving once any of its body has arrived is incomplete, and
 never a request that did not get through, whatever the transport said about the read that failed.
 A read that fails before any of the body has arrived stays a transport failure and is not sent
-again. A reply that stopped is sent again where its request asked for tool arguments as they are
+again. A Bedrock reply that never began is therefore not sent again, and a delegate that met it on
+every request is told it ended transport, so the planner splits the task rather than starting the
+same delegate again. A reply that stopped is sent again where its request asked for tool arguments as they are
 written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered one without the ask:
 there the silence may be the service holding an argument back until the model has finished it, and a
 second request waits out the same silence and is billed for it.
@@ -2493,6 +2561,29 @@ that died, and it sends the request again as it did before either was told apart
 A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET-5)) is incomplete
 too, streamed or asked for whole, and never a request that did not get through: the service had the
 request and was still writing. It is not asked for again, since the same reply takes as long again.
+
+**Each ending of a request.** The transport (`bravebot-net`) ends a request in one of these ways,
+and the category follows from which one, chosen from the kind of error and never from a reply, a
+header or an address:
+
+| The request ended because | Error | Told as |
+|---|---|---|
+| the name did not resolve, the connection did not open or was refused, or sending the request timed out | transport | transport |
+| the wait for a streamed reply to begin ran past its bound ([NET-5](network-egress.md#NET-5)) | transport | transport |
+| a reply asked for whole was still being written at the time its request stated for it, before any header arrived | out of time | incomplete |
+| the reply as a whole ran past its bound after its headers arrived, streamed or whole | out of time | incomplete |
+| nothing arrived for longer than the gap allowed ([BACKEND-55](#BACKEND-55)), before any of the body | transport | transport |
+| nothing arrived for longer than the gap allowed, or the connection dropped, after some of the body arrived | transport, told by the client that read it as a reply that stopped | incomplete |
+| a redirect chain did not end or named no location | too many redirects, missing location | transport |
+| the person stopped the request | stopped | not a failure: reported as a stop before a category is chosen |
+
+The first two rows and the idle row before the body are what "transport" means to a person: nothing
+arrived, so the network, proxy or TLS roots are what to check. The `Stopped` ending names the
+withdrawn request. The client reports it as a stop, so it is never told to a person or a planner as
+a category, and the transport mapping of `Stopped` exists only to keep the match exhaustive. A
+delegate that ended after a time near the sum of the connection and reply bounds, or in its third
+round, ended by one of the rows above, and the category it was told is the row's. The category says
+which bound fired and never why the service was slow.
 
 A failure the service reported inside a stream and whose code or type is not on the list this build
 holds is neither a refusal nor a reply that stopped. It is the unrecognised category, the one
@@ -2536,21 +2627,26 @@ driver's own, so no text from a reply, header, URL or credential is in them, and
 account of a ChatGPT or an xAI sign-in keeps its own sentence. The flag and the commands are for the
 person only: the planner is told the category and the request count and no more.
 
-A failure of the category rate-limited ends with its next step after the status and the count. A
-request sent to a backend that has a `provider` entry is told to raise `maxRetries` in that entry
-([BACKEND-55](#BACKEND-55)) and to set `fallbackModel` ([BACKEND-53](#BACKEND-53)). A request sent to
-any other backend (the Brave endpoint, an AWS account reached through the tier variables, the Vertex
+A failure of the category rate-limited ends with its next step after the status and the count. The
+sentence is one of three, chosen by where the backend states its retry count ([BACKEND-55](#BACKEND-55)).
+A request sent to a backend that has a `provider` entry is told to raise `maxRetries` in that entry
+and to set `fallbackModel` ([BACKEND-53](#BACKEND-53)). A request sent to an AWS account reached
+through the tier variables is told to raise `BRAVEBOT_BEDROCK_MAX_RETRIES` ([BACKEND-33](#BACKEND-33))
+and to set `fallbackModel`. A request sent to any other backend (the Brave endpoint, the Vertex
 service the environment names, and the ChatGPT and xAI accounts) is told `fallbackModel` and to try
-again later, because there is no `maxRetries` for it to raise. A request to a `provider` entry that
-failed on a 429 whose wait is past the two minutes [BACKEND-54](#BACKEND-54) takes is told the same
-two things, because that call ends on its first request and no `maxRetries` changes it. Which
-sentence is said depends on a closed flag the driver sets from the variant that sent the request and
-the configuration it was selected with, and on the parsed wait, never on text from a reply, a header
-or an address. The flag and the wait are for the person only and are not given to the planner.
+again later, because there is no retry count for it to raise. A request to a backend with either
+setting that failed on a 429 whose wait is past the two minutes [BACKEND-54](#BACKEND-54) takes is told
+the same two things as a request to a backend with none, because that call ends on its first request
+and no retry count changes it. Which
+sentence is said depends on a closed setting the driver chooses from the variant that sent the request
+and the configuration it was selected with, and on the parsed wait, never on text from a reply, a
+header or an address. The setting and the wait are for the person only and are not given to the
+planner.
 
 `verified-by: bravebot_session::sessions::a_rate_limit_ends_with_the_setting_that_lengthens_the_wait`
 `verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
-`verified-by: bravebot_agent::backend::only_a_backend_reached_through_a_provider_entry_has_a_retry_setting`
+`verified-by: bravebot_agent::backend::each_backend_names_the_place_it_states_max_retries_in`
+`verified-by: bravebot_agent::backend::each_ending_of_a_request_is_told_as_transport_or_as_incomplete`
 `verified-by: bravebot_config::bedrock::only_an_account_a_block_named_has_a_place_for_max_retries`
 `verified-by: bravebot_config::provider::only_a_provider_written_in_an_entry_has_a_place_for_max_retries`
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
@@ -2619,8 +2715,8 @@ or an address. The flag and the wait are for the person only and are not given t
 `verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
 `verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
-`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
-`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way`
 
 <a id="BACKEND-38"></a>
 ### BACKEND-38: one machine-level file pins a destination above everything a person can set
@@ -3755,8 +3851,13 @@ in either direction, and does not move the bound on the reply as a whole.
 The block is read from the person's own settings, from the file `--settings` names and from the
 machine-level file, and from no project or local layer ([BACKEND-24](#BACKEND-24)): a layer that
 names a `provider` block with these keys is dropped whole and `doctor` names the file. The model
-Brave's endpoint serves, and an account the tier variables alone configure, have no entry to state
-them in and are held to the defaults. A streamed reply from a gateway on this machine is waited on
+Brave's endpoint serves has no entry to state them in and is held to the defaults. An account the
+tier variables alone configure states the count and the gap with `BRAVEBOT_BEDROCK_MAX_RETRIES` and
+`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` ([BACKEND-33](#BACKEND-33)), which are held to the same bounds
+and states: a count above seven is seven, a count of zero is a statement, a gap above ten minutes
+is ten minutes, and a gap of zero or a value that is not a whole number states nothing. They are
+read from the person's own layers and the environment alone, so a checkout's `env` block cannot
+set them. There is no variable for the window, so that account keeps the default window. A streamed reply from a gateway on this machine is waited on
 through any silence while a person can stop it ([NET-10](network-egress.md#NET-10)), so a stated
 gap does not reach it, and a stated count and window do.
 
@@ -3785,6 +3886,9 @@ figures are read as numbers and set a count and timers, so a service has no say 
 `verified-by: bravebot_config::provider::a_block_states_how_long_a_failed_connection_is_retried_and_an_hour_is_the_most`
 `verified-by: bravebot_config::provider::a_window_replaces_the_count_only_where_nothing_or_a_window_was_stated`
 `verified-by: bravebot_config::provider::an_aws_entry_states_the_same_three_figures`
+`verified-by: bravebot_config::provider::the_tier_variables_state_the_count_and_the_gap_as_an_entry_does`
+`verified-by: bravebot_config::bedrock::a_tier_account_reads_its_retry_count_and_idle_gap_from_its_variables`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_change_the_tier_accounts_retry_count_or_idle_gap`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap`
 `verified-by: bravebot_config::lib::a_managed_gateway_states_its_own_retry_count_and_idle_gap`
 `verified-by: bravebot_aichat::client::a_gateway_stating_no_retries_is_asked_once`
@@ -3908,7 +4012,8 @@ this API is likeliest to refuse them: without the level, with the fallback ceili
 [BACKEND-41](#BACKEND-41), without the lifetime, without the breakpoints and last without the ask for
 arguments ([BACKEND-44](#BACKEND-44)). What answered is remembered as
 [BACKEND-22](#BACKEND-22) remembers the level, and a request refused with every concession given up
-settles nothing.
+settles nothing. The change that holds back the record of the breakpoints, [BACKEND-27](#BACKEND-27),
+is made in the Bedrock client alone: this entry and the gateway remember them on the answer.
 
 A reply is read whole or as server-sent events. A stream is complete once it says so, and one that
 stops before is a reply that did not finish, which is sent again. A failure the service reports part
@@ -5165,7 +5270,10 @@ cancel kills it rather than asking it to stop.
 - **An ephemeral cache entry expires on inactivity, and nothing here tracks it.** The lifetime is
   the provider's default of a few minutes unless the `promptCacheTtl` setting chooses one (BACKEND-27,
   BACKEND-32), and the longer one is charged at a higher write rate, which is why nothing is sent until
-  a person chooses. A person who thinks between turns misses more often than the token arithmetic
+  a person chooses. A wait the tool offers is bounded under the lifetime in force (BACKEND-27), so
+  that cost is not paid by a `job_output` wait, and a `run` deadline of five minutes or more is
+  not bounded and its description names the cost. A person who thinks between turns misses more
+  often than the token arithmetic
   suggests, and a miss looks identical to a service that reports nothing: the reply carries a zero
   read either way.
   Neither figure says when the last request was, so nothing can distinguish a prefix that expired
@@ -5420,13 +5528,14 @@ cancel kills it rather than asking it to stop.
   Anthropic's key. A name picked from `/model` is recorded qualified, as
   `openrouter/anthropic/claude-sonnet-4.5`, and is not affected.
 
-- **Brave's endpoint and an account the tier variables alone configure take neither figure of
-  BACKEND-55.** Both figures live in a `provider` entry's `options`. The model Brave's endpoint
-  serves has no entry, and the tier variables of BACKEND-33 have no block to state anything in, so a
-  person reaching either is held to two retries (five after a rate limit that carried no wait) and a
-  two minute gap. Tier words that resolve
-  through an `amazon-bedrock` entry take that entry's figures. Stating them for the tier variables
-  would take a name in BACKEND-33's table or a top-level key, and neither is decided here.
+- **Brave's endpoint takes neither figure of BACKEND-55, and an account the tier variables alone
+  configure takes two of them from variables.** The figures live in a `provider` entry's `options`.
+  The model Brave's endpoint has no entry, so a person reaching it is held to two retries (five after
+  a rate limit that carried no wait) and a two minute gap. The tier variables of BACKEND-33 have no
+  block, so `BRAVEBOT_BEDROCK_MAX_RETRIES` and `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` state the count
+  and the gap for an account they alone configure. There is no variable for the window, so that
+  account keeps the five minute window. Tier words that resolve
+  through an `amazon-bedrock` entry take that entry's figures.
 
 - **A stated gap does not lengthen the bound on a gateway's reply as a whole.** A reply whose
   request states no length is ended ten minutes after it began

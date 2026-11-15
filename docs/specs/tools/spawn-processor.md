@@ -30,6 +30,15 @@ holds no text, so it is no path, body or document to read: named in `reads`, in 
 `path_ref` or `contents_ref` or in `read_file`'s `path_ref`, it is refused in the words used for a
 name nothing holds.
 
+A reference that stands for a file a listing or a search found is opened when it is named in
+`reads`. Under bypass the file is opened with the reach a call of `read_file` for its path has,
+judged as a read, so a file in a directory beside the workspace is opened without a request. In any
+other mode, or once the mode has left bypass, it is refused as outside the workspace
+([PATHREQ-7](request-path.md#PATHREQ-7)). The reference keeps its label.
+
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
+`verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
+`verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_reference_to_a_listed_file_is_opened`
 `verified-by: bravebot_core::policy::only_the_slots_it_was_given_reach_a_processor`
 `verified-by: bravebot_core::policy::a_reference_to_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_processor_with_nothing_to_read_is_refused`

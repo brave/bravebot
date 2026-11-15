@@ -209,7 +209,9 @@ asked for is opened and vouched for without being put either, and so is a direct
 ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A path outside the workspace that a tool names is
 reachable to the file tools, to `run`'s `directory` and to a redirection with no call and no
 directory opened, wherever the account can reach it and outside the refusals a granted request
-has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
+has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). The file a reference to a listed or searched
+file stands for is opened under the same reach, so `vet_content` and `spawn_processor`
+are given the file where a call of `read_file` for its path would be. So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)), except a call to a server
 whose declaration says every call is asked about, which is put to the person in this mode as in every
@@ -315,6 +317,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
+`verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
+`verified-by: bravebot_agent::turn::a_reference_made_under_bypass_is_refused_once_the_mode_leaves_bypass`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
 `verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`

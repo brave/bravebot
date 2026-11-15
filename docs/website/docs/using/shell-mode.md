@@ -36,6 +36,13 @@ and marked as waiting, and it is run when the turn ends. It is never sent to the
 because the mode is how you said the line was for a shell. Taking the queue back gives it to the box
 as words, so running it then takes arming the mode again.
 
+Typing `!` while a turn runs does not arm the mode: the character is part of the line. Enter on a
+line that begins with `!` or `!!` leaves it in the box and says that shell mode is available at an
+idle prompt only, and nothing is sent to the model or run. Ctrl-Enter does the same and does not stop
+the turn. Press Enter again when the turn has ended and the line is sent as words, or clear it and
+arm the mode at the empty prompt. A line with a `!` anywhere after its first character is queued as
+any prompt is.
+
 ## Nothing asks
 
 `! rm -rf build` runs, with no approval prompt. The approval prompt exists so that a person endorses
@@ -53,7 +60,9 @@ responsibility, and nothing inspected anything.
 
 A command that colours its output is drawn without its colour codes, with a row under the output
 saying how many were left out ([the transcript](transcript.md)). That changes what the screen draws
-and not what the model is sent.
+and not what the model is sent by a command you type. The output of a command the model runs is a
+separate path: its colour codes are taken out and counted in what the model reads
+([the run tool](../reference/run-tool.md)).
 
 ## A command that starts a background process
 

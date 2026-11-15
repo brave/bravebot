@@ -257,6 +257,7 @@ pub(super) fn manifest_animated(
     // reports whether a level is in force.
     let refused = refused_level_in_force(session, config, bravebot_agent::backend::refused_a_level);
     note_a_refused_level(session, refused);
+    note_breakpoints_given_up(session, config);
 
     let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
 
@@ -926,6 +927,7 @@ pub(super) fn finish_turn(
     // and both describe the model the next turn is sent to (`Session::update_budget`).
     let refused = refused_level_in_force(session, config, bravebot_agent::backend::refused_a_level);
     note_a_refused_level(session, refused);
+    note_breakpoints_given_up(session, config);
 
     let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
         let typed = line.as_typed(session.standing_definition());

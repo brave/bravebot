@@ -1052,6 +1052,10 @@ struct Job {
     /// How long it had run when the person's stop was carried out, so a look after the account
     /// says the person stopped it and not how a killed program exited.
     stopped_by_the_person: Option<std::time::Duration>,
+    /// How long it had run when a stage of it was found stopped by a signal and the job was ended
+    /// for that, and the signal's name where it is one that stops a process (RUN-17). Kept so a
+    /// look after the account says what stopped it and not how a killed program exited.
+    stopped_by_a_signal: Option<(std::time::Duration, Option<&'static str>)>,
     /// What its programs were confined to, where they were, told with a failure so the planner
     /// reads a refusal as the sandbox's and not the file's.
     confinement: Option<String>,
@@ -1146,6 +1150,40 @@ impl Job {
         self.running.ended();
         self.stopped_by_the_person = Some(ran_for);
         ran_for
+    }
+
+    /// Whether a stage of the job is stopped by a signal, ending the job at the first look that
+    /// finds it so (RUN-17).
+    ///
+    /// A stopped process runs nothing and exits nothing, so a job left alone is reported as running
+    /// for as long as anybody asks. The state is the kernel's account of a child the driver
+    /// started, and nothing the job printed is read. A job the person already stopped, or whose
+    /// steps have all exited, is not asked: their exit codes are the account. Ended as the person's
+    /// stop is, before the output is taken, so what is handed over is all it printed.
+    fn stopped_by_a_signal(&mut self) -> bool {
+        if self.stopped_by_a_signal.is_some() {
+            return true;
+        }
+        if self.stopped_by_the_person.is_some() || self.running.steps_exited() {
+            return false;
+        }
+        let Some(signal) = self.running.stopped_by_signal() else {
+            return false;
+        };
+        let ran_for = self.running.ran_for();
+        self.running.kill();
+        self.running.ended();
+        self.stopped_by_a_signal = Some((ran_for, signal.name()));
+        true
+    }
+
+    /// The outcome of a job a stage of which was found stopped by a signal.
+    ///
+    /// Only asked once [`Job::stopped_by_a_signal`] has said so, and falls back to the job having
+    /// run no time at all rather than failing where it was not.
+    fn signal_outcome(&self) -> crate::report::Outcome {
+        let (ran_for, signal) = self.stopped_by_a_signal.unwrap_or_default();
+        crate::report::Outcome::StoppedBySignal { ran_for, signal }
     }
 
     /// The label this job's output may carry now, rather than the one fixed before it started.
@@ -1357,6 +1395,7 @@ impl Jobs {
         &mut self,
         policy: &mut Policy<'_, S>,
         call: &ToolCall,
+        deadlines: crate::exec::Deadlines,
     ) -> bool {
         if strip_namespace(&call.function.name) != "job_output" {
             return false;
@@ -1374,7 +1413,7 @@ impl Jobs {
         if read_asked_of(&arguments).is_err() {
             return false;
         }
-        let Ok(Some(wait)) = wait_from(&arguments) else {
+        let Ok(Some(wait)) = wait_from(&arguments, deadlines) else {
             return false;
         };
         if until_exit_from(&arguments, Some(wait), kill).is_err() {
@@ -1423,6 +1462,7 @@ impl Jobs {
                 read_asked: false,
                 stop: stop.clone(),
                 stopped_by_the_person: None,
+                stopped_by_a_signal: None,
                 confinement: None,
                 tree: None,
             },
@@ -1517,9 +1557,12 @@ impl Jobs {
                 crate::report::Outcome::StoppedByTheUser(ran_for)
             } else if job.stop_asked() {
                 crate::report::Outcome::StoppedByTheUser(job.stop_for_the_person())
+            } else if job.stopped_by_a_signal() {
+                job.signal_outcome()
             } else if job.running.ended() {
                 how_it_ended(
                     job.running.codes(),
+                    job.running.signals(),
                     &job.running.closed(),
                     job.confinement.as_deref(),
                 )
@@ -1617,6 +1660,7 @@ impl Jobs {
                     name,
                     outcome: how_it_ended(
                         job.running.codes(),
+                        job.running.signals(),
                         &job.running.closed(),
                         job.confinement.as_deref(),
                     ),
@@ -1707,7 +1751,7 @@ fn write_it_yourself(beside: Beside) -> &'static str {
     }
 }
 
-/// How a job that has ended finished, read off the exit code of each of its steps.
+/// How a job that has ended finished, read off the exit code and the signal of each of its steps.
 ///
 /// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
 /// than succeeded where a step did not exit zero, because a planner that waited for a build and was
@@ -1715,10 +1759,11 @@ fn write_it_yourself(beside: Beside) -> &'static str {
 /// is the only account of it the planner ever gets.
 fn how_it_ended(
     codes: &[Option<i32>],
+    signals: &[Option<i32>],
     closed: &[bool],
     confinement: Option<&str>,
 ) -> crate::report::Outcome {
-    let failed = failed_steps(codes, closed);
+    let failed = failed_steps(codes, signals, closed);
     if !failed.is_empty() {
         crate::report::Outcome::Failed {
             detail: failed,
@@ -1742,17 +1787,30 @@ fn how_it_ended(
 /// joined by commas. A step ended by `SIGPIPE` after a later step of its pipeline exited zero is
 /// not one of them (RUN-13): `closed` marks it.
 ///
-/// Read off the exit codes and the pipeline layout alone, so no byte of what the steps printed
-/// reaches it. Empty where every step exited zero or was closed by a later step.
-fn failed_steps(codes: &[Option<i32>], closed: &[bool]) -> String {
+/// A step that exited says its code. A step a signal ended says the signal's number and, where the
+/// system names it, the name, so a planner can tell a program the kernel killed for memory
+/// (`SIGKILL`) from one that was asked to end (`SIGTERM`) or that crashed (`SIGSEGV`). A step with
+/// neither, which is one whose status could not be read, says only that it ended without an exit
+/// code, since a signal that was not read is not one to name.
+///
+/// Read off the exit codes, the signals and the pipeline layout alone, so no byte of what the steps
+/// printed reaches it. Empty where every step exited zero or was closed by a later step.
+fn failed_steps(codes: &[Option<i32>], signals: &[Option<i32>], closed: &[bool]) -> String {
     codes
         .iter()
         .enumerate()
         .filter(|(at, code)| **code != Some(0) && !closed.get(*at).copied().unwrap_or(false))
-        .map(|(at, code)| match code {
-            Some(code) => format!("step {} exited {code}", at + 1),
-            None => format!("step {} was killed", at + 1),
-        })
+        .map(
+            |(at, code)| match (code, signals.get(at).copied().flatten()) {
+                (Some(code), _) => format!("step {} exited {code}", at + 1),
+                (None, Some(signal)) => format!(
+                    "step {} was ended by {}",
+                    at + 1,
+                    crate::exec::signal_phrase(signal)
+                ),
+                (None, None) => format!("step {} ended without an exit code", at + 1),
+            },
+        )
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -4011,20 +4069,29 @@ fn deadline_from(
 /// deadline. A deadline cut short still ends the run it was given for and the answer says how long
 /// that took, so the caller can see what it got. A wait cut short hands back the silence of a
 /// window nobody asked about, and silence is read as an answer.
-fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static str> {
-    let bounds =
-        crate::exec::WAIT_FLOOR.as_secs() as i64..=crate::exec::WAIT_CEILING.as_secs() as i64;
+fn wait_from(
+    arguments: &Value,
+    deadlines: crate::exec::Deadlines,
+) -> Result<Option<std::time::Duration>, String> {
+    let longest = deadlines
+        .wait_ceiling
+        .as_secs()
+        .max(crate::exec::WAIT_FLOOR.as_secs());
+    let bounds = crate::exec::WAIT_FLOOR.as_secs() as i64..=longest as i64;
     match arguments.get("wait_seconds") {
         Some(value) if !value.is_null() => match value.as_i64() {
             Some(seconds) if bounds.contains(&seconds) => {
                 Ok(Some(std::time::Duration::from_secs(seconds as u64)))
             }
-            Some(_) => Err(
-                "error: 'wait_seconds' must be between 1 and 600, and a value outside \
-                            that is refused rather than adjusted: a wait quietly shortened hands \
-                            back silence about a window nobody watched.",
-            ),
-            None => Err("error: 'wait_seconds' must be a whole number of seconds"),
+            Some(_) => Err(format!(
+                "error: 'wait_seconds' must be between {} and {longest}, and a value outside \
+                 that is refused rather than adjusted: a wait quietly shortened hands back \
+                 silence about a window nobody watched. The longest wait is held under the \
+                 prompt cache lifetime, because the request after a longer wait writes the \
+                 whole conversation to the cache again. To keep watching, make another call.",
+                crate::exec::WAIT_FLOOR.as_secs()
+            )),
+            None => Err("error: 'wait_seconds' must be a whole number of seconds".to_string()),
         },
         _ => Ok(None),
     }
@@ -4745,6 +4812,22 @@ pub(crate) fn materialise<S: Sink>(
     // reads on the screen were the planner's, which are the ones that read nothing.
     // Exclusive: `Policy::materialise` emits the slot's `SlotWritten` and trail lines inside
     // this closure, and a shared capture must emit nothing while it is held.
+    let nobody_to_ask = policy.nobody_to_ask();
+    // The reach the call holds, judged as a read: a reference is opened to be read whatever the
+    // call goes on to do with it, and a call that holds no reach (outside bypass) is given none.
+    workspace.reading_under_the_reach(|| {
+        materialise_held(policy, workspace, slots, tool, wanted, nobody_to_ask)
+    })
+}
+
+fn materialise_held<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    slots: &mut SlotStore,
+    tool: &str,
+    wanted: &[SlotId],
+    nobody_to_ask: bool,
+) -> Result<Vec<String>, String> {
     policy.capture_files(|policy, _capture| {
         let mut opened = Vec::new();
         for slot in wanted {
@@ -4770,10 +4853,9 @@ pub(crate) fn materialise<S: Sink>(
                         None => read_into_slot(workspace, path),
                     }
                     .map_err(|e| {
-                        if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = &e {
-                            escaped = Some(*remedy);
-                        }
-                        e.describe(&slot.to_string())
+                        let (said, remedy) = describe_for(&e, &slot.to_string(), nobody_to_ask);
+                        escaped = remedy;
+                        said
                     })
                 });
             // Recorded here rather than where it is worded, which is inside the policy's read.
@@ -5051,10 +5133,48 @@ fn workspace_failure<S: Sink>(
     e: &crate::workspace::WorkspaceError,
     named: &str,
 ) -> String {
-    if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = e {
-        record_confinement_refusal(policy, &format!("{tool}.{field}"), named, *remedy);
+    let (said, remedy) = describe_for(e, named, policy.nobody_to_ask());
+    if let Some(remedy) = remedy {
+        record_confinement_refusal(policy, &format!("{tool}.{field}"), named, remedy);
     }
-    e.describe(named)
+    said
+}
+
+/// Said after a refusal for leaving the workspace whose remedy named a route only a person can
+/// take, where nobody can be asked in this run (CLI-1, TRUST-10). Names no directory to open and
+/// no file to drop, and tells the planner what it can do instead.
+const NOBODY_TO_ASK: &str = ". Nobody can be asked in this run, so nothing this session accepts \
+     makes that path reachable: say in the reply which path the work needs and what for";
+
+/// `e` worded about `named`, and the remedy the planner was told where `e` is a refusal for
+/// leaving the workspace, so the trail records what the planner read (TRACE-1).
+///
+/// Where nobody can be asked, a remedy that names `/add-dir`, `--add-dir` or a file drop is said as
+/// the remedy that names none, followed by [`NOBODY_TO_ASK`] (TRUST-10). Decided from the remedy and
+/// the session's setting, never from anything a file or a program holds.
+fn describe_for(
+    e: &crate::workspace::WorkspaceError,
+    named: &str,
+    nobody_to_ask: bool,
+) -> (String, Option<crate::workspace::Remedy>) {
+    use crate::workspace::WorkspaceError;
+    let WorkspaceError::Escapes { path, remedy } = e else {
+        return (e.describe(named), None);
+    };
+    match nobody_to_ask
+        .then(|| remedy.when_nobody_can_be_asked())
+        .flatten()
+    {
+        Some(instead) => {
+            let said = WorkspaceError::Escapes {
+                path: path.clone(),
+                remedy: instead,
+            }
+            .describe(named);
+            (format!("{said}{NOBODY_TO_ASK}"), Some(instead))
+        }
+        None => (e.describe(named), Some(*remedy)),
+    }
 }
 
 /// Put the refusal of a path the workspace's confinement turned away into the trail, worded as the
@@ -10025,6 +10145,14 @@ pub(crate) const TOOLS_NAMING_A_PATH: &[(&str, &str, bool)] = &[
     ("watch_file", "path", false),
 ];
 
+/// The tools that open a reference to a file the driver has not read yet, with the argument that
+/// names it (MODE-4, PATHREQ-7). The reference stands for a path a listing or a search found, and
+/// opening it resolves that path through the workspace, so the call is given the reach a call of
+/// `read_file` is given, judged as a read. A tool that is also in [`TOOLS_NAMING_A_PATH`] is read
+/// from there, and [`materialise`] judges the opening of a reference as a read in either case.
+pub(crate) const TOOLS_READING_A_REFERENCE: &[(&str, &str)] =
+    &[("vet_content", "ref"), ("spawn_processor", "reads")];
+
 /// The tools that take a path, or a directory, and are given no reach by the mode, each with why.
 #[cfg(test)]
 pub(crate) const TOOLS_NAMING_A_PATH_WITHOUT_REACH: &[(&str, &str)] = &[
@@ -10083,9 +10211,16 @@ impl ReachFacts<'_> {
             return None;
         }
         let tool = strip_namespace(tool);
-        let &(_, field, write) = TOOLS_NAMING_A_PATH
+        let (field, write) = TOOLS_NAMING_A_PATH
             .iter()
-            .find(|(named, _, _)| *named == tool)?;
+            .find(|(named, _, _)| *named == tool)
+            .map(|&(_, field, write)| (field, write))
+            .or_else(|| {
+                TOOLS_READING_A_REFERENCE
+                    .iter()
+                    .find(|(named, _)| *named == tool)
+                    .map(|&(_, field)| (field, false))
+            })?;
         let person = bravebot_sandbox::rules::resolve(
             &bravebot_config::sandbox_filesystem(),
             self.profile,
@@ -10437,45 +10572,6 @@ fn unconfined_way_out<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> &'s
     }
 }
 
-/// A redirection refused for leaving the workspace, as the planner is told of it, and what it is
-/// told it can do where no person can open the directory (CMDLINE-5, TRUST-10, CLI-1).
-///
-/// The remedy is the one the file tools give, chosen by [`crate::workspace::Workspace::confines`],
-/// so the refusal names `/add-dir` alone and not `request_path`, whose grant a redirection does not
-/// pass (PATHREQ-7). Where nobody can be asked in this run, opening a directory is not a route
-/// anyone can take, so a remedy that names one is said as none, with what the planner can do
-/// instead. Decided from the remedy and the session's settings, never from anything a file or a
-/// program holds.
-fn redirection_route(
-    tools: &Tools<'_>,
-    escape: crate::workspace::WorkspaceError,
-) -> (crate::workspace::WorkspaceError, &'static str) {
-    use crate::workspace::{Remedy, WorkspaceError};
-    let WorkspaceError::Escapes { path, remedy } = escape else {
-        return (escape, "");
-    };
-    let opens = matches!(
-        remedy,
-        Remedy::Open
-            | Remedy::OpenEndsCheckouts
-            | Remedy::OpenItself
-            | Remedy::OpenItselfEndsCheckouts
-    );
-    if opens && tools.permission_mode.nobody_to_ask() {
-        let escape = WorkspaceError::Escapes {
-            path,
-            remedy: Remedy::Nothing,
-        };
-        return (escape, REDIRECTION_NOBODY_TO_ASK);
-    }
-    (WorkspaceError::Escapes { path, remedy }, "")
-}
-
-/// Said after a refused redirection whose directory could be opened, where nobody can be asked in
-/// this run (CLI-1). Worded to follow [`crate::workspace::WorkspaceError::describe`].
-const REDIRECTION_NOBODY_TO_ASK: &str = ". Nobody can be asked in this run, so nothing this \
-     session accepts opens that directory: say in the reply which path the work needs and what for";
-
 /// Whether the redirection targets of a `run` line may leave the workspace (CMDLINE-5).
 ///
 /// The confinement of a target exists because this process opens the file and not the stage, so a
@@ -10687,7 +10783,6 @@ fn check_the_plan_before_asking<S: Sink>(
     for path in &plan.writes {
         if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
             let target = told(path);
-            let (escape, route) = redirection_route(tools, escape);
             let way_out = match escape {
                 crate::workspace::WorkspaceError::Escapes { .. } => {
                     unconfined_way_out(policy, tools)
@@ -10695,7 +10790,7 @@ fn check_the_plan_before_asking<S: Sink>(
                 _ => "",
             };
             return Err(Box::new(Produced::problem(format!(
-                "refused: {}{route}{way_out}",
+                "refused: {}{way_out}",
                 workspace_failure(policy, "run", "command", &escape, &target)
             ))));
         }
@@ -12272,11 +12367,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                         &plan.directory,
                         (!at_the_root).then_some(told_directory.as_str()),
                     );
-                    let (escape, route) = redirection_route(tools, escape);
-                    let detail = format!(
-                        "{}{route}",
-                        workspace_failure(policy, "run", "command", &escape, &target)
-                    );
+                    let detail = workspace_failure(policy, "run", "command", &escape, &target);
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
                         detail,
@@ -12553,7 +12644,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // Said in the driver's own words, from the exit codes and the clock, which are
             // structure rather than content: nothing here reads a byte of what the program
             // printed.
-            let outcome = if let Some(after) = ran.stopped {
+            let outcome = if let Some(signal) = ran.stopped_by_signal {
+                crate::report::Outcome::StoppedBySignal {
+                    ran_for: ran.stopped.unwrap_or_default(),
+                    signal: signal.name(),
+                }
+            } else if let Some(after) = ran.stopped {
                 crate::report::Outcome::Stopped(after)
             } else {
                 // The codes and not `ended_well`: that is the verdict of the part that ran last, so
@@ -12563,7 +12659,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     confinement
                         .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
                 });
-                how_it_ended(&ran.codes, &ran.closed, confinement.as_deref())
+                how_it_ended(
+                    &ran.codes,
+                    &ran.signals,
+                    &ran.closed,
+                    confinement.as_deref(),
+                )
             };
             let lines = text.lines().count();
             let mut note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
@@ -13309,8 +13410,10 @@ fn job_output<S: Sink, R: Reporter>(
         Err(refusal) => return *refusal,
     };
 
-    let (wait, until_exit) = match wait_from(arguments).and_then(|wait| {
-        until_exit_from(arguments, wait, kill).map(|until_exit| (wait, until_exit))
+    let (wait, until_exit) = match wait_from(arguments, tools.deadlines).and_then(|wait| {
+        until_exit_from(arguments, wait, kill)
+            .map(|until_exit| (wait, until_exit))
+            .map_err(String::from)
     }) {
         Ok(asked) => asked,
         Err(refusal) => return Produced::problem(refusal),
@@ -13378,6 +13481,10 @@ fn job_output<S: Sink, R: Reporter>(
         });
 
     let ended = job.running.ended();
+    // A stage found stopped by a signal is ended before the output is taken, as the person's stop
+    // is, and said so at this look and at every later one (RUN-17).
+    let held = !ended && !job.reported && job.stopped_by_a_signal();
+    let ended = ended || held;
     // The person's stop, read at this step as at a round's (RUN-27), and carried out before the
     // output is taken and the finish reported. One already reported has been given its account
     // and killed.
@@ -13398,9 +13505,12 @@ fn job_output<S: Sink, R: Reporter>(
     // person stopped is said to be theirs at every look, since its exit codes are the kill's.
     let outcome = if let Some(after) = job.stopped_by_the_person {
         crate::report::Outcome::StoppedByTheUser(after)
+    } else if job.stopped_by_a_signal.is_some() {
+        job.signal_outcome()
     } else if ended {
         how_it_ended(
             job.running.codes(),
+            job.running.signals(),
             &job.running.closed(),
             job.confinement.as_deref(),
         )
@@ -17436,14 +17546,45 @@ mod tests {
 
     /// The planner is told which step failed and how, and acts on that number: a step counted
     /// among the failures rather than among the steps, or a killed step left out, sends it to fix
-    /// the wrong program.
+    /// the wrong program. A step a signal ended names the signal, since a program killed for memory
+    /// and one asked to end call for different next steps, and a step whose status was not read says
+    /// no signal, since none was read.
     #[test]
     fn each_failed_step_is_named_by_its_place_and_how_it_ended() {
         assert_eq!(
-            failed_steps(&[Some(2), Some(0), None], &[false, false, false]),
-            "step 1 exited 2, step 3 was killed"
+            failed_steps(
+                &[Some(2), Some(0), None],
+                &[None, None, Some(9)],
+                &[false, false, false]
+            ),
+            "step 1 exited 2, step 3 was ended by signal 9 (SIGKILL)"
         );
-        assert_eq!(failed_steps(&[Some(0), Some(0)], &[false, false]), "");
+        assert_eq!(
+            failed_steps(&[Some(0), Some(0)], &[None, None], &[false, false]),
+            ""
+        );
+        assert_eq!(
+            failed_steps(&[None], &[None], &[false]),
+            "step 1 ended without an exit code"
+        );
+        assert_eq!(
+            failed_steps(&[None], &[], &[false]),
+            "step 1 ended without an exit code"
+        );
+    }
+
+    /// RUN-13: a signal with no name on this system is still told by its number, and a signal a
+    /// stage exited with a code beside is not told, since the code is what the step did.
+    #[test]
+    fn a_signal_with_no_name_is_told_by_its_number_alone() {
+        assert_eq!(
+            failed_steps(&[None], &[Some(9999)], &[false]),
+            "step 1 was ended by signal 9999"
+        );
+        assert_eq!(
+            failed_steps(&[Some(3)], &[Some(9)], &[false]),
+            "step 1 exited 3"
+        );
     }
 
     /// RUN-13: a step `SIGPIPE` ended because a later step closed its input is not named as a
@@ -17453,17 +17594,20 @@ mod tests {
     #[test]
     fn a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is() {
         let closed = [true, false, false];
-        assert_eq!(failed_steps(&[None, Some(0), Some(0)], &closed), "");
         assert_eq!(
-            failed_steps(&[None, None, Some(0)], &closed),
-            "step 2 was killed"
+            failed_steps(&[None, Some(0), Some(0)], &[Some(13), None, None], &closed),
+            ""
+        );
+        assert_eq!(
+            failed_steps(&[None, None, Some(0)], &[Some(13), Some(9), None], &closed),
+            "step 2 was ended by signal 9 (SIGKILL)"
         );
         assert!(matches!(
-            how_it_ended(&[None, Some(0)], &[true, false], None),
+            how_it_ended(&[None, Some(0)], &[Some(13), None], &[true, false], None),
             crate::report::Outcome::Closed { steps } if steps == [1]
         ));
         assert!(matches!(
-            how_it_ended(&[None, None], &[false, false], None),
+            how_it_ended(&[None, None], &[Some(9), Some(9)], &[false, false], None),
             crate::report::Outcome::Failed { .. }
         ));
     }
@@ -17600,6 +17744,132 @@ mod tests {
             .collect();
         assert!(required.contains(&"path") && required.contains(&WHY));
         assert!(!required.contains(&"write"));
+    }
+
+    /// MODE-4, PATHREQ-7: the tools that open a reference to a file not read yet are given a reach
+    /// under bypass, judged as a read, and none in any other mode or in a workspace that is not
+    /// trusted. The regression it rejects is a tool of the list that reaches nothing under bypass
+    /// (the deferred read of a listed file beside the workspace is refused), one judged as a write,
+    /// or one given a reach where the mode is not bypass.
+    #[test]
+    fn the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass() {
+        let root =
+            std::env::temp_dir().join(format!("bravebot-reference-reach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let workspace = Workspace::new(root.canonicalize().expect("canonical")).expect("workspace");
+        let facts = |mode| ReachFacts {
+            permission_mode: crate::LiveMode::new(mode),
+            profile: None,
+        };
+        for &(tool, field) in TOOLS_READING_A_REFERENCE {
+            let reach = facts(crate::PermissionMode::Bypass)
+                .reach_for(tool, &workspace, || true)
+                .unwrap_or_else(|| panic!("{tool} reaches nothing under bypass"));
+            assert_eq!((reach.tool.as_str(), reach.field), (tool, field));
+            assert!(!reach.write, "{tool} is judged as a write");
+            assert!(
+                facts(crate::PermissionMode::Bypass)
+                    .reach_for(tool, &workspace, || false)
+                    .is_none(),
+                "{tool} reaches in a workspace that is not trusted"
+            );
+            for mode in [
+                crate::PermissionMode::Ask,
+                crate::PermissionMode::AcceptEdits,
+                crate::PermissionMode::Plan,
+            ] {
+                assert!(
+                    facts(mode).reach_for(tool, &workspace, || true).is_none(),
+                    "{tool} reaches outside bypass"
+                );
+            }
+        }
+        // OUTPUT-2: `read_output` refuses a reference to a file and opens none, so it is given no
+        // reach under bypass, whatever the workspace.
+        for trusted in [true, false] {
+            assert!(
+                facts(crate::PermissionMode::Bypass)
+                    .reach_for("read_output", &workspace, || trusted)
+                    .is_none(),
+                "read_output is given a reach under bypass (trusted: {trusted})"
+            );
+        }
+    }
+
+    /// MODE-4, PATHREQ-7: the reach is set before each call and cleared after it, as the dispatcher
+    /// does with [`ReachFacts::for_call`] and `hold_bypass_reach`. A path beside the workspace
+    /// resolves while a tool that opens a reference holds the reach, and does not after the call is
+    /// over or in the next call of any tool that is in neither list. The regression it rejects is a
+    /// reach left held by the call that had it, which a later call of a tool the mode gives no
+    /// reach finds, and a tool outside both lists that is given one.
+    #[test]
+    fn a_tool_outside_the_tables_called_after_one_holding_the_reach_gets_none() {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-homes")
+            .join(format!("reach-cleared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        let session = top.join("session");
+        let beside = top.join("beside");
+        let home = top.join("home");
+        std::fs::create_dir_all(&session).expect("session");
+        std::fs::create_dir_all(&beside).expect("beside");
+        std::fs::create_dir_all(home.join(".ssh")).expect("home");
+        std::fs::write(beside.join("notes.txt"), "NOTES").expect("a file beside");
+        let home = home.canonicalize().expect("canonical home");
+        let beside_file = beside
+            .canonicalize()
+            .expect("canonical")
+            .join("notes.txt")
+            .display()
+            .to_string();
+        let workspace =
+            Workspace::new(session.canonicalize().expect("canonical")).expect("session");
+        let facts = ReachFacts {
+            permission_mode: crate::LiveMode::new(crate::PermissionMode::Bypass),
+            profile: Some(home.as_path()),
+        };
+        let reaches = |workspace: &Workspace| workspace.resolve(&beside_file).is_ok();
+        assert!(!reaches(&workspace), "the control: nothing is held yet");
+
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let mut checked = 0;
+        for holder in TOOLS_READING_A_REFERENCE.iter().map(|(tool, _)| *tool) {
+            for tool in &offered {
+                let name = tool.function.name.as_str();
+                let listed = TOOLS_NAMING_A_PATH
+                    .iter()
+                    .any(|(named, _, _)| *named == name)
+                    || TOOLS_READING_A_REFERENCE
+                        .iter()
+                        .any(|(named, _)| *named == name);
+                if listed {
+                    continue;
+                }
+                workspace.hold_bypass_reach(facts.reach_for(holder, &workspace, || true));
+                assert!(reaches(&workspace), "{holder} held no reach for its call");
+                // The call is over: the dispatcher holds none before the next call is made.
+                workspace.hold_bypass_reach(None);
+                assert!(
+                    !reaches(&workspace),
+                    "{holder}: the reach outlived its call"
+                );
+                // The next call is of a tool outside both lists.
+                workspace.hold_bypass_reach(facts.reach_for(name, &workspace, || true));
+                assert!(
+                    !reaches(&workspace),
+                    "{name} found a reach after {holder} held one"
+                );
+                workspace.hold_bypass_reach(None);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no tool outside the lists was offered");
     }
 
     /// MODE-4, PATHREQ-7: the tools that name a path are one list. A tool offered with an argument
@@ -18779,7 +19049,9 @@ mod tests {
              ends, and the account of the job's start says whether it is killed then or kept. \
              Repeated waits on a job that is still running are not held. The same job_output \
              call without wait_seconds, or on a job that has ended, is held at the third in a \
-             row."
+             row. A wait longer than the prompt cache lifetime makes the next request write the \
+             whole conversation to the cache again, so wait_seconds is bounded under that \
+             lifetime: call again to keep watching."
         );
         let run = description_of(&everything, "run");
         assert!(
@@ -21017,40 +21289,159 @@ mod tests {
     fn a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened() {
         use std::time::Duration;
 
+        let held = Deadlines::BUILT_IN;
+
         // Nothing asked for is no wait, which is what every call before this one did.
-        assert_eq!(wait_from(&json!({})).unwrap(), None);
-        assert_eq!(wait_from(&json!({"wait_seconds": null})).unwrap(), None);
+        assert_eq!(wait_from(&json!({}), held).unwrap(), None);
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": null}), held).unwrap(),
+            None
+        );
 
         assert_eq!(
-            wait_from(&json!({"wait_seconds": 30})).unwrap(),
+            wait_from(&json!({"wait_seconds": 30}), held).unwrap(),
             Some(Duration::from_secs(30))
         );
         // Both ends are inside, and written out as seconds rather than as the constants they come
         // from: the numbers here are the ones the description and the refusal quote to the planner,
         // so a test that reads them from the same constants would agree with itself while every
-        // sentence the planner sees had gone wrong.
+        // sentence the planner sees had gone wrong. The upper end is under the five minutes a
+        // provider keeps a prefix when nobody chose a lifetime.
         assert_eq!(
-            wait_from(&json!({"wait_seconds": 1})).unwrap(),
+            wait_from(&json!({"wait_seconds": 1}), held).unwrap(),
             Some(Duration::from_secs(1))
         );
         assert_eq!(
-            wait_from(&json!({"wait_seconds": 600})).unwrap(),
-            Some(Duration::from_secs(600))
+            wait_from(&json!({"wait_seconds": 270}), held).unwrap(),
+            Some(Duration::from_secs(270))
         );
 
-        for outside in [0, -1, 601, 86_400] {
-            let refusal = wait_from(&json!({"wait_seconds": outside}))
+        for outside in [0, -1, 271, 300, 600, 601, 86_400] {
+            let refusal = wait_from(&json!({"wait_seconds": outside}), held)
                 .expect_err("a wait outside the bounds is refused");
             assert!(
-                refusal.contains("between 1 and 600"),
+                refusal.contains("between 1 and 270"),
                 "the refusal does not say what is allowed: {refusal}"
+            );
+            assert!(
+                refusal.contains("prompt cache"),
+                "the refusal does not say why the bound is there: {refusal}"
             );
         }
 
-        assert!(wait_from(&json!({"wait_seconds": "a while"})).is_err());
-        assert!(wait_from(&json!({"wait_seconds": 12.5})).is_err());
-        assert!(wait_from(&json!({"wait_seconds": true})).is_err());
-        assert!(wait_from(&json!({"wait_seconds": [30]})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": "a while"}), held).is_err());
+        assert!(wait_from(&json!({"wait_seconds": 12.5}), held).is_err());
+        assert!(wait_from(&json!({"wait_seconds": true}), held).is_err());
+        assert!(wait_from(&json!({"wait_seconds": [30]}), held).is_err());
+    }
+
+    /// The longest wait follows the cache lifetime the person chose, and nothing else. Unset and
+    /// `5m` are held under five minutes, since the provider drops the prefix then; `1h` keeps the
+    /// built-in ten minutes, which is under an hour.
+    /// Rejects: a bound that stays at 600 whatever the setting says (the unset and `5m` rows), and
+    /// one that ignores a chosen `1h` and holds every wait to 270 (the `1h` row).
+    #[test]
+    fn the_longest_wait_follows_the_cache_lifetime_chosen() {
+        use bravebot_config::CacheTtl;
+        use std::time::Duration;
+
+        for (lifetime, longest) in [
+            (None, 270),
+            (Some(CacheTtl::FiveMinutes), 270),
+            (Some(CacheTtl::OneHour), 600),
+        ] {
+            let held = Deadlines::BUILT_IN.waiting_under(lifetime);
+            assert_eq!(
+                held.wait_ceiling,
+                Duration::from_secs(longest),
+                "{lifetime:?}"
+            );
+            assert_eq!(
+                wait_from(&json!({"wait_seconds": longest}), held).unwrap(),
+                Some(Duration::from_secs(longest)),
+                "{lifetime:?}"
+            );
+            assert!(
+                wait_from(&json!({"wait_seconds": longest + 1}), held).is_err(),
+                "{lifetime:?}"
+            );
+        }
+
+        // Under five minutes where that is the lifetime, and under an hour where it is that.
+        assert!(Deadlines::BUILT_IN.wait_ceiling < Duration::from_secs(300));
+        assert!(
+            Deadlines::BUILT_IN
+                .waiting_under(Some(CacheTtl::OneHour))
+                .wait_ceiling
+                > Duration::from_secs(270)
+        );
+        assert!(
+            Deadlines::BUILT_IN
+                .waiting_under(Some(CacheTtl::OneHour))
+                .wait_ceiling
+                < Duration::from_secs(3600)
+        );
+
+        // Resolved from the settings the caller read, the way the run block is, and only the
+        // lifetime moves the wait: a raised run ceiling leaves it where it was.
+        let from_file =
+            |text: &str| Deadlines::from_settings(&bravebot_config::Settings::parse(text));
+        assert_eq!(from_file("{}"), Deadlines::BUILT_IN);
+        assert_eq!(
+            from_file(r#"{"promptCacheTtl": "1h"}"#).wait_ceiling,
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            from_file(r#"{"run": {"maxSeconds": 1800}}"#).wait_ceiling,
+            Duration::from_secs(270)
+        );
+    }
+
+    /// The description quotes the bound in force and the cache cost of a longer wait, and says the same
+    /// of a foreground deadline, for each cache lifetime.
+    /// Rejects: a description that still says a long wait is free, one that quotes 270 under `1h`
+    /// (or 600 under `5m`), and one that leaves the cache cost out of `run`'s `deadline_seconds`.
+    #[test]
+    fn the_descriptions_quote_the_wait_in_force_and_its_cache_cost() {
+        use bravebot_config::CacheTtl;
+
+        for (lifetime, longest) in [
+            (None, "Between 1 and 270."),
+            (Some(CacheTtl::FiveMinutes), "Between 1 and 270."),
+            (Some(CacheTtl::OneHour), "Between 1 and 600."),
+        ] {
+            let offered = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN.waiting_under(lifetime),
+                Running::Offered,
+            );
+            let job_output = offered
+                .iter()
+                .find(|t| t.function.name == "job_output")
+                .expect("job_output is offered");
+            let said = job_output.function.parameters.to_string();
+            assert!(said.contains(longest), "{lifetime:?}: {said}");
+            assert!(
+                said.contains("prompt cache lifetime"),
+                "{lifetime:?}: wait_seconds does not give the cache cost: {said}"
+            );
+            assert!(
+                job_output.function.description.contains("prompt cache"),
+                "{lifetime:?}: the job_output description does not give the cache cost"
+            );
+            let run = offered
+                .iter()
+                .find(|t| t.function.name == "run")
+                .expect("run is offered");
+            assert!(
+                run.function
+                    .parameters
+                    .to_string()
+                    .contains("prompt cache lifetime"),
+                "{lifetime:?}: deadline_seconds does not give the cache cost"
+            );
+        }
     }
 
     /// Without a way to wait, watching a job costs one whole turn per look: the planner calls, is
@@ -21072,12 +21463,12 @@ mod tests {
         let wait = &tool.function.parameters["properties"]["wait_seconds"];
         assert_eq!(wait["type"], "integer", "wait_seconds is not offered");
         let said = wait["description"].as_str().expect("it is described");
-        // Built from the constants rather than written out, so raising either bound fails here
-        // instead of leaving the planner told a number that is no longer the one enforced.
+        // Built from the figures in force rather than written out, so changing the bound fails
+        // here instead of leaving the planner told a number that is no longer the one enforced.
         let bounds = format!(
             "Between {} and {}",
             crate::exec::WAIT_FLOOR.as_secs(),
-            crate::exec::WAIT_CEILING.as_secs()
+            Deadlines::BUILT_IN.wait_ceiling.as_secs()
         );
         for stated in [bounds.as_str(), "refused rather than adjusted"] {
             assert!(
@@ -21085,18 +21476,23 @@ mod tests {
                 "wait_seconds no longer says '{stated}': {said}"
             );
         }
-        let refusal = wait_from(&json!({"wait_seconds": 0})).expect_err("zero is refused");
+        let refusal = wait_from(&json!({"wait_seconds": 0}), Deadlines::BUILT_IN)
+            .expect_err("zero is refused");
         assert!(
             refusal.contains(&format!(
                 "between {} and {}",
                 crate::exec::WAIT_FLOOR.as_secs(),
-                crate::exec::WAIT_CEILING.as_secs()
+                Deadlines::BUILT_IN.wait_ceiling.as_secs()
             )),
             "the refusal quotes bounds that are not the ones enforced: {refusal}"
         );
         assert!(
             said.contains("as soon as"),
-            "wait_seconds does not say a long wait is free when the thing happens early: {said}"
+            "wait_seconds does not say the wait ends when the thing happens early: {said}"
+        );
+        assert!(
+            !said.contains("costs nothing"),
+            "wait_seconds still says a long wait is free: {said}"
         );
         assert!(
             said.contains("the user types a line"),

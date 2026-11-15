@@ -997,19 +997,23 @@ pub fn failure_reason_with_model(
         );
     }
     // A rate limit ends with the settings that lengthen the wait or move the turn to another model.
-    // Which of the two sentences is chosen by whether the backend that sent the request has a
-    // `provider` entry, a fact the driver set from the variant, and nothing the service wrote is in
-    // either (BACKEND-37). A wait past the longest one the client sits through ends the call on its
-    // first request, so no `maxRetries` changes the outcome and only the other two remedies are
-    // named (BACKEND-54).
+    // Which of the three sentences is chosen by where the backend that sent the request lets a person
+    // state `maxRetries` (a `provider` entry, `BRAVEBOT_BEDROCK_MAX_RETRIES`, or nowhere), a fact the
+    // driver set from the variant, and nothing the service wrote is in any of them (BACKEND-37). A
+    // wait past the longest one the client sits through ends the call on its first request, so no
+    // `maxRetries` changes the outcome and only the other two remedies are named (BACKEND-54).
     if diagnosis.category == Category::RateLimited {
         let past_the_ceiling = diagnosis
             .retry_after
             .is_some_and(|wait| wait > bravebot_aichat::LONGEST_WAIT);
-        let next = if diagnosis.retry_setting && !past_the_ceiling {
-            t!(failure_rate_limited_entry_next)
-        } else {
-            t!(failure_rate_limited_next)
+        let next = match diagnosis.retry_setting {
+            bravebot_agent::RetrySetting::Entry if !past_the_ceiling => {
+                t!(failure_rate_limited_entry_next)
+            }
+            bravebot_agent::RetrySetting::Variable if !past_the_ceiling => {
+                t!(failure_rate_limited_variable_next)
+            }
+            _ => t!(failure_rate_limited_next),
         };
         said = t!(failure_with_next, what = said, next = next);
     }
@@ -4544,15 +4548,17 @@ mod tests {
     }
 
     /// BACKEND-37: a rate-limited line ends with the next step. A request to a provider entry is
-    /// told to raise `maxRetries` in that entry and to set `fallbackModel`; a request to any
-    /// backend with no entry is told only `fallbackModel` and to try later, because there is no
-    /// `maxRetries` to raise. Other categories do not carry the sentence.
+    /// told to raise `maxRetries` in that entry and to set `fallbackModel`; a request to an AWS
+    /// account reached through the tier variables is told to raise `BRAVEBOT_BEDROCK_MAX_RETRIES`
+    /// and to set `fallbackModel`; a request to any backend with neither is told only
+    /// `fallbackModel` and to try later. Other categories do not carry the sentence.
     ///
     /// The faults this rejects: no next step, `maxRetries` named for the Brave endpoint or a
-    /// tier-variable account, and the same sentence for a rate limit and a refusal.
+    /// tier-variable account, the variable named for an entry or for the Brave endpoint, and the same
+    /// sentence for a rate limit and a refusal.
     #[test]
     fn a_rate_limit_ends_with_the_setting_that_lengthens_the_wait() {
-        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_agent::{Category, Diagnosis, RetrySetting};
 
         let rate_limited = || {
             Diagnosis::of(Category::RateLimited)
@@ -4560,23 +4566,42 @@ mod tests {
                 .after(7)
         };
 
-        let entry = failure_reason(rate_limited().with_retry_setting(), None);
+        let entry = failure_reason(rate_limited().with_retry_setting(RetrySetting::Entry), None);
         assert!(entry.contains("`maxRetries`"), "{entry}");
         assert!(entry.contains("`fallbackModel`"), "{entry}");
         assert!(entry.starts_with("error: "), "{entry}");
 
+        let variable = failure_reason(
+            rate_limited().with_retry_setting(RetrySetting::Variable),
+            None,
+        );
+        assert!(
+            variable.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable}"
+        );
+        assert!(!variable.contains("`maxRetries`"), "{variable}");
+        assert!(variable.contains("`fallbackModel`"), "{variable}");
+
         let no_entry = failure_reason(rate_limited(), None);
         assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(!no_entry.contains("MAX_RETRIES"), "{no_entry}");
         assert!(no_entry.contains("`fallbackModel`"), "{no_entry}");
         assert!(no_entry.contains("try again later"), "{no_entry}");
 
         let unavailable = failure_reason(
             Diagnosis::of(Category::Unavailable)
                 .with_status(503)
-                .with_retry_setting(),
+                .with_retry_setting(RetrySetting::Entry),
             None,
         );
         assert!(!unavailable.contains("maxRetries"), "{unavailable}");
+        let unavailable = failure_reason(
+            Diagnosis::of(Category::Unavailable)
+                .with_status(503)
+                .with_retry_setting(RetrySetting::Variable),
+            None,
+        );
+        assert!(!unavailable.contains("MAX_RETRIES"), "{unavailable}");
     }
 
     /// BACKEND-37, BACKEND-54: a 429 that asked for a wait past the longest one the client sits
@@ -4584,23 +4609,26 @@ mod tests {
     /// person to raise `maxRetries`, even for a request to a provider entry. A wait the client
     /// would sit through (the ceiling itself included) keeps the sentence that names it.
     ///
-    /// The fault this rejects: choosing the sentence from the provider entry alone, which sends a
-    /// person to raise a count that has no effect on a call that is never sent again.
+    /// The faults this rejects: choosing the sentence from the provider entry alone, which sends a
+    /// person to raise a count that has no effect on a call that is never sent again, and the same
+    /// choice from the tier variables alone, which names `BRAVEBOT_BEDROCK_MAX_RETRIES` for it.
     #[test]
     fn a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries() {
-        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_agent::{Category, Diagnosis, RetrySetting};
         use bravebot_aichat::LONGEST_WAIT;
         use std::time::Duration;
 
-        let said = |wait: Duration, entry: bool| {
+        let said_for = |wait: Duration, setting: Option<RetrySetting>| {
             let mut diagnosis = Diagnosis::of(Category::RateLimited)
                 .with_status(429)
                 .asking_for_a_wait_of(wait);
-            if entry {
-                diagnosis = diagnosis.with_retry_setting();
+            if let Some(setting) = setting {
+                diagnosis = diagnosis.with_retry_setting(setting);
             }
             failure_reason(diagnosis, None)
         };
+        let said =
+            |wait: Duration, entry: bool| said_for(wait, entry.then_some(RetrySetting::Entry));
 
         let past = said(LONGEST_WAIT + Duration::from_secs(1), true);
         assert!(!past.contains("maxRetries"), "{past}");
@@ -4618,6 +4646,25 @@ mod tests {
         let no_entry = said(LONGEST_WAIT + Duration::from_secs(1), false);
         assert!(!no_entry.contains("maxRetries"), "{no_entry}");
         assert!(no_entry.contains("try again later"), "{no_entry}");
+
+        let variable_past = said_for(
+            LONGEST_WAIT + Duration::from_secs(1),
+            Some(RetrySetting::Variable),
+        );
+        assert!(!variable_past.contains("MAX_RETRIES"), "{variable_past}");
+        assert!(variable_past.contains("`fallbackModel`"), "{variable_past}");
+        assert!(variable_past.contains("try again later"), "{variable_past}");
+
+        let variable_at = said_for(LONGEST_WAIT, Some(RetrySetting::Variable));
+        assert!(
+            variable_at.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable_at}"
+        );
+        let variable_under = said_for(Duration::from_secs(5), Some(RetrySetting::Variable));
+        assert!(
+            variable_under.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable_under}"
+        );
     }
 
     /// A refusal that names the account, with neither a status nor a wait.
@@ -4772,7 +4819,7 @@ mod tests {
                 context_tokens: None,
                 conceded: Default::default(),
                 backend: None,
-                retry_setting: false,
+                retry_setting: bravebot_agent::RetrySetting::None,
                 cause: Box::new(BackendError::from(ChatError::Account(failure))),
             };
             failure_reason(error.diagnosis(), None)

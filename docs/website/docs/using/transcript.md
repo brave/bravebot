@@ -81,6 +81,8 @@ to stderr, the codes are left out and a row under the text says how many,
 for example `14 colour codes not drawn`. Every other control character and escape sequence, such as
 one that moves the cursor or erases a line, is still replaced by a visible picture. A prompt asking
 you to approve text, a block's heading, and a file name draw every byte, colour codes included.
+The text of a command's output that the model reads also has its codes taken out and counted, so the
+model is not sent them ([the run tool](../reference/run-tool.md)).
 
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.

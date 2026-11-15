@@ -5,6 +5,8 @@
 # `python3 contrib/check-verus-contracts.py --write` and say in the pull request why the contract
 # changed. docs/development/verification.md says how a contract is written and run.
 
+crates/core/src/colour_codes.rs::code_end: r => requires start + 2 <= bytes.len(), ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
+crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
 crates/core/src/label.rs::meet: r => ensures r == crate::spec::meet(self, other),
 crates/core/src/label.rs::join: r => ensures r == crate::spec::join(self, other),
 crates/core/src/label.rs::degrades_to: r => ensures r == crate::spec::degrades(self, other),

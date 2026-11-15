@@ -945,6 +945,11 @@ fn head(session: &Session, text: usize, refs_room: usize) -> Body {
         context.push(row(rate, dim()));
     }
     // A zero is a service that reported nothing as much as a cache that missed, so it draws nothing.
+    // A model recorded as refusing the breakpoints draws nothing either, and that is the case the
+    // row below says so for.
+    if session.breakpoints_given_up() {
+        context.push(row(t!(panel_cache_given_up).to_string(), dim()));
+    }
     if let Some(cached) = session.cached().filter(Cached::any) {
         if cached.read_tokens > 0 {
             context.push(row(
@@ -2589,6 +2594,25 @@ mod tests {
                     || row.contains(&t!(panel_cache_written, tokens = "").to_string())
             })
             .count()
+    }
+
+    /// A model recorded as refusing the cache breakpoints has a prompt that is not cached and so no
+    /// figure to draw, which would leave the person paying full price with nothing to say so. The row
+    /// is drawn without a figure, and not otherwise (BACKEND-27, PANEL-8).
+    #[test]
+    fn the_panel_says_when_the_breakpoints_were_given_up() {
+        let mut session = Session::new("none");
+        let said = t!(panel_cache_given_up).to_string();
+        let drawn = |session: &Session| {
+            texts(&lines(session, WIDTH, 30))
+                .iter()
+                .any(|row| row.contains(&said))
+        };
+        assert!(!drawn(&session));
+        session.note_breakpoints_given_up(true);
+        assert!(drawn(&session));
+        session.note_breakpoints_given_up(false);
+        assert!(!drawn(&session));
     }
 
     /// A zero says a service that reported nothing exactly as much as it says a missed cache, so

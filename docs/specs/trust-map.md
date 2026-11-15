@@ -1087,6 +1087,18 @@ same line as typed writes the file. Where the path as the line wrote it, with ea
 is inside the workspace or an opened directory, a link carried it out and it is offered nothing.
 Where nobody can be asked in the run, a remedy that opens a directory is given as none
 ([CMDLINE-5](tools/command-line.md#CMDLINE-5)).
+Every file tool's refusal for leaving the workspace is worded the same way where nobody can be asked
+in the run ([CLI-1](cli.md#CLI-1)): a remedy that names `/add-dir`, `--add-dir` or a drop on the
+window is given as the remedy that names none, since nobody is there to type or drop, and the
+refusal says nobody can be asked in this run and that the planner should say in its reply which
+path the work needs and what for. This holds for a read, a list, a search, a write, an edit and a
+`run` directory alike. A remedy for a read that is a drop alone, and one for a credential location
+that is a drop alone, are given as none. The warning that opening the directory ends checkouts is
+not said, since nothing opens the directory. A credential location and
+`permissions.readsStayInWorkspace` keep their meaning. The refusal names no `--add-dir`: nothing the
+planner or a person can do inside the run opens the directory, and a start-up option is not
+offered to a run that has already started. The choice reads the remedy and the session's setting
+and never a byte a file or a program holds, and the trail records the remedy the planner was told.
 A climb that lands inside the root stays refused even where a directory holding the root is open,
 since the relative spelling reaches the file. It does not leave the workspace, and the refusal does
 not say it does, whether the path is typed relative or from the top of the file system. It says the
@@ -1198,6 +1210,9 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_redirection_outside_where_reads_stay_inside_is_offered_no_directory`
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
 `verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
+`verified-by: bravebot_agent::turn::a_read_outside_the_workspace_nobody_can_be_asked_in_names_no_persons_route`
+`verified-by: bravebot_agent::turn::an_unattended_turn_refused_outside_by_read_file_and_by_run_is_given_one_answer`
+`verified-by: bravebot_agent::tools::tests::confinement::file_tools_with_nobody_to_ask_name_no_route_and_record_none`
 
 <a id="TRUST-11"></a>
 ### TRUST-11: the map does not govern `~/.bravebot`

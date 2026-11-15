@@ -131,7 +131,7 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         context_tokens: None,
         conceded: Default::default(),
         backend: None,
-        retry_setting: false,
+        retry_setting: bravebot_agent::RetrySetting::None,
         cause: Box::new(BackendError::from(ChatError::Account(
             AccountFailure::Ended,
         ))),

@@ -32,7 +32,8 @@ tool tells the planner that a path resolves outside the workspace, the trail rec
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
 reference, the path otherwise. A `run` line's redirection refused for leaving the workspace is
 recorded the same way, with the remedy the planner was told, which is none where nobody can be asked
-in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A path inside the workspace that is refused for not being named
+in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). The same holds for every file tool's
+refusal for leaving the workspace ([TRUST-10](trust-map.md#TRUST-10)). A path inside the workspace that is refused for not being named
 relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
 relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
 write call the permission mode refuses before the tool runs
@@ -405,8 +406,9 @@ ok      delegate: d2: ended after 1559.0s and 37 of 120 rounds: it did not finis
 The cause comes from which way the result came back, the run's round count and the failure's
 category. None of it is text a service or a tool produced, so the entry holds no content (TRACE-2).
 The note the person sees when the delegate finishes names the same cause. The planner is told only
-that the delegate did not finish, except for a rate-limited or unavailable ending, which it is told
-by name and with the sentence that starting the same delegate again meets the same limit
+that the delegate did not finish, except for a rate-limited, unavailable, transport or incomplete
+ending, which it is told by name and with the sentence that starting the same delegate again meets
+the same limit, silence or stop
 ([BACKEND-37](backends.md#BACKEND-37), [DELEGATE-26](delegation.md#DELEGATE-26)).
 
 **Why.** Without it, a delegate that ran for 26 minutes and then did not finish leaves the reader of
@@ -418,7 +420,7 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
 `verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
-`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
 
 <a id="TRACE-9"></a>
 ### TRACE-9: `/request` shows the request already built, each span with where its words came from

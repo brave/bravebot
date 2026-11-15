@@ -48,3 +48,11 @@ replace: if label.is_trusted() { => if true {
 mutation: Policy::read_trusted_content hands over content without asking whether it is trusted
 file: crates/core/src/policy.rs
 replace: self.refuse_untrusted("trusted-read", tool, value.label())?; => let _ = self.refuse_untrusted("trusted-read", tool, value.label());
+
+mutation: code_end scans past the most parameters a colour code has
+file: crates/core/src/colour_codes.rs
+replace: while taken < room && taken <= most { => while taken < room {
+
+mutation: code_end returns the offset of a byte that is not the m ending the code
+file: crates/core/src/colour_codes.rs
+replace: if byte == b'm' { => if true {

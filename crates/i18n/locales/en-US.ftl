@@ -2965,6 +2965,10 @@ status-cache-lifetime = lifetime asked of the service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 hour
 status-cache-lifetime-service-default = none, the service's own
+# Shown in place of the figures when the model has refused the cache breakpoints on two requests, so
+# that requests to it carry none and the whole prompt is read at the full rate every turn. Nothing
+# else says so: a prompt that is not cached draws no figure.
+status-cache-given-up = off for this model, which refused it
 # The latest turn's cache read as a share of its prompt tokens, on the footer.
 hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
@@ -3409,6 +3413,8 @@ panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
+# The model in force refused the cache breakpoints twice, so its prompt is read in full each turn.
+panel-cache-given-up = cache off, model refused it
 # Where the info panel has no room for the whole plan, a row after the rows it draws says how many
 # rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
 # The forms of the other two are the same in English and differ in other languages.
@@ -4169,8 +4175,11 @@ failure-with-next = { $what }. { $next }
 failure-unauthorized-next = Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint
 failure-premium-key-next = Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout brave` to send requests to the free endpoint instead. `bravebot auth status` shows the key in use
 # Said last after a rate limit. The first is for a request to a provider entry, which can state
-# `maxRetries` in its options, and the second for every backend that has no entry to state it in.
+# `maxRetries` in its options, the second for an AWS account reached through the tier variables, which
+# states the count in `BRAVEBOT_BEDROCK_MAX_RETRIES`, and the third for every backend that has no
+# place to state it.
 failure-rate-limited-entry-next = Raise `maxRetries` in the options of this provider entry to wait longer, or set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model
+failure-rate-limited-variable-next = Raise `BRAVEBOT_BEDROCK_MAX_RETRIES` to wait longer, or set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model
 failure-rate-limited-next = Set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model, or try again later
 # A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
 # reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
@@ -4636,6 +4645,9 @@ paste-files-refused =
     a copied file's name is not text or holds a line break, so none of the files were pasted
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
+# Said when Enter is pressed mid-turn on a line that begins with `!`. The line stays in the box.
+shell-mode-idle-only =
+    shell mode is available at an idle prompt only, so this line was not sent: it stays in the box
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
 suspend-not-pressed =

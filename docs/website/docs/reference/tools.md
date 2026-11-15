@@ -688,7 +688,7 @@ Refused for a reference to nothing and for a call from a delegate. A
 picture is also refused where the model in use takes no pictures, or where there is nowhere to put a
 copy of it for you to open. A reference to a file nothing has read
 yet is opened rather than refused, since naming one is the ordinary way to ask about a file the planner
-may not read.
+may not read. Under bypass the file is opened with the reach `read_file` has for its path, so a file in a directory beside the workspace is opened without a request, and in any other mode it is refused as outside the workspace.
 
 See [Vetting](../security/vetting.md) for what the check is, what it may say, and what
 [auto-vetting](../security/vetting.md) changes.
@@ -761,9 +761,14 @@ often it is repeated. A call with no `wait_seconds`, a call that kills the job, 
 on a job that has ended are refused at the third. The refusal says that the end of a background
 job arrives in a message of its own and that a shell loop that sleeps is not a way to wait.
 
-Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
+Between 1 second and the longest the prompt cache allows, and **a value outside that is refused
+rather than quietly shortened**.
+The longest is 270 seconds with `promptCacheTtl` unset or `5m`, and 10 minutes with `1h` (see
+[`promptCacheTtl`](../customize/configuration.md#promptcachettl)): a wait that outlasts the cache
+lifetime makes the next request write the whole conversation to the cache again, so call again to
+keep watching.
 A wait that was silently cut short would come back with silence, and silence carries no length: a
-caller that asked for ten minutes and got one would report the same nothing as ten minutes of nothing.
+caller that asked for five minutes and got one would report the same nothing as five minutes of nothing.
 [A deadline](run-tool.md#a-line-has-a-deadline) is clamped instead, because a run that ends says how long it took.
 
 The answer says how many seconds were spent watching and that nothing is watching now, so a wait that
@@ -1259,7 +1264,7 @@ answer yes or no. The grant and the record of it hold the resolved path, and the
 back, a success as much as a refusal, names the path as the planner typed it, so the name of what a link
 points at does not reach the planner. The path is judged when you answer and again each time a line starts: the grant keeps the directory you approved, so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link, by another directory or by a link to a refused place is given no row when a stage starts, and the grant is still listed. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
-`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
+`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone, and names none where nobody can be asked in the run, such as a one-shot command or a pipeline. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
 the answer is yes without a question, and the directory is also opened for those five tools and
 trusted, as `/add-dir` would, and the result tells the planner whether they now reach it: `/add-dir close` and `/clear` close it, and `--resume` carries it. With permissions bypassed the file tools do not need the

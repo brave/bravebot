@@ -2538,6 +2538,7 @@ status-cache-lifetime = durée demandée au service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 heure
 status-cache-lifetime-service-default = aucune, celle du service
+status-cache-given-up = désactivé pour ce modèle, qui l'a refusé
 hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
@@ -3315,9 +3316,11 @@ failure-with-next = { $what }. { $next }
 failure-unauthorized-next = Lancez `bravebot auth status` pour voir la connexion ou la clé utilisée, et `bravebot doctor` pour voir le point d'accès
 failure-premium-key-next = Lancez `bravebot auth login brave` pour remplacer la clé premium, ou `bravebot auth logout brave` pour envoyer les requêtes au point d'accès gratuit à la place. `bravebot auth status` montre la clé utilisée
 # Dit en dernier après une limite de débit. La première phrase est pour une requête vers une entrée
-# `provider`, qui peut indiquer `maxRetries` dans ses options, et la seconde pour tout service sans
-# entrée où l'indiquer.
+# `provider`, qui peut indiquer `maxRetries` dans ses options, la deuxième pour un compte AWS atteint
+# par les variables de niveau, qui indique le nombre dans `BRAVEBOT_BEDROCK_MAX_RETRIES`, et la
+# troisième pour tout service sans endroit où l'indiquer.
 failure-rate-limited-entry-next = Augmentez `maxRetries` dans les options de cette entrée de fournisseur pour attendre plus longtemps, ou définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle
+failure-rate-limited-variable-next = Augmentez `BRAVEBOT_BEDROCK_MAX_RETRIES` pour attendre plus longtemps, ou définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle
 failure-rate-limited-next = Définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle, ou réessayez plus tard
 failure-account-not-signed-in = pas connecté à un compte ChatGPT. Lancez `bravebot auth login chatgpt` pour vous connecter
 failure-account-ended = la connexion ChatGPT a pris fin. Lancez `bravebot auth login chatgpt` pour vous reconnecter
@@ -3741,6 +3744,8 @@ paste-files-refused =
     le nom d'un fichier copié n'est pas du texte ou contient un saut de ligne : aucun fichier n'a été collé
 return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
+shell-mode-idle-only =
+    le mode shell n'est disponible que sur une invite au repos, donc cette ligne n'a pas été envoyée : elle reste dans la zone de saisie
 leave-not-pressed =
     cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour quitter
 suspend-not-pressed =
@@ -4192,6 +4197,7 @@ panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
+panel-cache-given-up = cache désactivé, refusé par le modèle
 # Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
 # de lignes de chaque sorte il a laissées de côté.
 panel-hidden-to-do = +{ $count } à faire

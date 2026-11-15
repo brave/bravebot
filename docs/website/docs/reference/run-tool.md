@@ -572,7 +572,8 @@ too: a later step that succeeds does not hide an earlier failure. A step that `S
 a later step of the same pipeline closed its input and exited zero, as `producer | head` does, is
 not a failure: the result says the run exited 0 and that the step stopped because the next step
 closed its input. Any other signal, and `SIGPIPE` with no later step that exited zero, is still
-reported as a failure. It is said for quarantined output too,
+reported as a failure. A step a signal ended is named by the signal's number and, where the system
+names it, the name: `step 1 was ended by signal 9 (SIGKILL)`. It is said for quarantined output too,
 where the planner holds a reference it may not read. The verdict is read off the processes and the
 clock, never out of a byte the program printed, so it is structure exactly as a line count is and
 puts nothing in the planner's context that a program chose.
@@ -595,6 +596,14 @@ head and the tail are kept and the middle dropped, with a line in between saying
 the byte it starts at. The cap is on what enters the conversation rather than on what the command
 printed, and the whole of it stays available as a reference, which
 [`read_output`](tools.md#read_output) reads back a page at a time without asking you.
+
+The text the planner reads has its colour codes taken out: each complete `ESC [`, digits, `;` or `:`,
+`m` sequence is removed, and the result ends with a sentence saying how many were, such as `14 colour
+codes were taken out of this output.` Output with none gets no sentence, and every other escape is
+left as it is. This is done after the cap has cut, so the byte a cut marker or a page names is a byte
+of the reference, and the reference keeps the codes. It covers a `run` result, `read: true`,
+`job_output`, the account of a job's end and a `read_output` page or search. Output the planner may
+not read is neither changed nor counted.
 
 ## Reading the output in the same result
 
@@ -704,7 +713,10 @@ is not a whole number of seconds is refused before anything runs. It has no effe
 what a line with no deadline of its own gets and the most one may ask for; see
 [configuration](../customize/configuration.md#rundefaultseconds-and-runmaxseconds). Raise the first
 where your build takes longer than five minutes, so a line the agent did not think to put a deadline
-on is not stopped partway through. The agent is told whichever figures are in force, so a ceiling you
+on is not stopped partway through. A line that runs longer than your prompt cache lifetime (five
+minutes unless `promptCacheTtl` says `1h`) makes the next request write the whole conversation to the
+cache again, and the agent is told so, so it starts such a command in the background and watches it in
+shorter waits. The agent is told whichever figures are in force, so a ceiling you
 raise is one it knows it may ask for.
 
 When the deadline runs out the steps are stopped, and **what they printed before that comes back exactly

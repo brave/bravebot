@@ -341,7 +341,7 @@ report.
 A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
 There is no report to sit beside, so the sentence says the limit was spent and that the same task
 will not get further; the person's note gains the bound the same way. What the failure was stays the
-fixed category, said to the planner only for a limit or an outage as below
+fixed category, said to the planner only for a limit, an outage, a silence or a stopped reply as below
 ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this driver holds, not a reason
 read off a service's answer.
 
@@ -351,15 +351,24 @@ it asks for a tool instead, there is no answer to carry and the run ends as a fa
 is then told only that the delegate did not finish, which reads as bad luck, so it spawns the same
 delegate on the same task and the budget goes on repeats of a run that cannot end differently.
 
-**A limit or an outage is named, because a repeat meets it again.** A delegate that ended
-rate-limited or unavailable is told of with its category and with the sentence that starting the
-same delegate again meets the same limit, beside the bound sentence where the bound was also spent.
-A planner told only that the delegate did not finish takes it for bad luck and starts the same
-delegate again, which makes the same requests into the same limit. The sentence is written by this
-driver for each of the two categories from the closed name the trail records
-([TRACE-8](trace.md#TRACE-8)), so nothing the service answered is carried
-([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and a lost thread are still
-told as only that the delegate did not finish.
+**A limit, an outage, a silence or a stopped reply is named, because a repeat meets it again.** A
+delegate that ended rate-limited or unavailable is told of with its category and with the sentence
+that starting the same delegate again meets the same limit, beside the bound sentence where the
+bound was also spent. A delegate that ended transport or incomplete is told of with its category,
+with the statement that the service sent no refusal, with the sentence that starting the same
+delegate again on the same task may meet the same silence or stop the same way, and with the
+instruction to split the task so that each delegate makes smaller replies or writes. The statement
+that no refusal came is made because a planner left without a cause has written that a declined or
+refused call might be it, and a transport or incomplete ending carries no refusal. The sentence does
+not say that starting again will succeed or that the task need not change. A planner told only that
+the delegate did not finish takes it for bad luck and starts the same delegate again, which makes
+the same requests into the same ending. The sentence is written by this driver for each of the four
+categories from the closed name the trail records ([TRACE-8](trace.md#TRACE-8)), so nothing the
+service answered is carried ([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and
+a lost thread are still told as only that the delegate did not finish. What the delegate had read or
+written before it failed is not handed back: the planner is told the counts of commands and writes
+and nothing of their content, because only the report crosses back and a delegate that failed
+has none ([DELEGATE-9](#DELEGATE-9)).
 
 **Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
 limiting round to say what stopped it, and that is model text: a delegate may spend its last round
@@ -375,8 +384,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
-`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
-`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way`
 
 <a id="DELEGATE-29"></a>
 ### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
