@@ -24069,8 +24069,9 @@ mod tests {
         );
     }
 
-    /// LOAD-4: a link that lands where a deny rule covers the directory, or where the trust map
-    /// distrusts it, is named no landing, and the skill is still offered. The regression it
+    /// LOAD-4: a link that lands where the trust map distrusts the directory is named no landing,
+    /// and the skill is still offered. A link that lands where a deny rule covers the directory is
+    /// not offered at all, since the rule covers the `SKILL.md` in it (PERM-3). The regression it
     /// rejects: a landing path named to the planner without the rules and the trust map having
     /// been asked about it. The first skill is the control: it lands where both allow.
     #[cfg(unix)]
@@ -24111,7 +24112,11 @@ mod tests {
 
         let landed = |name: &str| catalogue.get(name).map(|skill| skill.landed.clone());
         assert_eq!(landed("open"), Some(Some("shared/open".to_string())));
-        assert_eq!(landed("denied"), Some(None), "a denied landing was named");
+        assert_eq!(
+            landed("denied"),
+            None,
+            "a skill in a directory a deny rule covers was offered"
+        );
         assert_eq!(
             landed("distrusted"),
             Some(None),
@@ -24157,24 +24162,20 @@ mod tests {
             store.trust(".");
             let catalogue =
                 crate::skills::resolved(&workspace, None, store, rules, &mut RecordingSink::new());
-            let landed = |name: &str| {
-                catalogue
-                    .get(name)
-                    .map(|skill| skill.landed.clone())
-                    .expect("offered")
-            };
+            let landed = |name: &str| catalogue.get(name).map(|skill| skill.landed.clone());
             (landed("invalid"), landed("lookalike"))
         };
 
         let (invalid_landed, lookalike_landed) =
             landings(bravebot_core::permissions::Permissions::default());
         assert_eq!(
-            invalid_landed, None,
+            invalid_landed,
+            Some(None),
             "a landing that is not text was named as its lookalike"
         );
         assert_eq!(
-            lookalike_landed.as_deref(),
-            Some("shared/lint-\u{FFFD}"),
+            lookalike_landed,
+            Some(Some("shared/lint-\u{FFFD}".to_string())),
             "the control: a landing that is text and allowed is named"
         );
 
@@ -24190,7 +24191,12 @@ mod tests {
             lookalike_landed, None,
             "a rule about the lookalike did not deny it"
         );
-        assert_eq!(invalid_landed, None, "a landing that is not text was named");
+        assert_eq!(
+            invalid_landed,
+            Some(None),
+            "a rule about the lookalike dropped the skill whose landing is not text, or let the \
+             landing be named"
+        );
     }
 
     /// TURN-10: reads of one round that run beside each other.

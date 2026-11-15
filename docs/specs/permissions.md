@@ -292,6 +292,24 @@ slash in its project and local files at the project as well, so a rule copied fr
 same file here. The file tools hold a file in the project by its relative name, so a rule about one
 spelled as a full path would refuse nothing asked for by that name.
 
+A `deny` or `ask` path rule covers what is under the place it names as well as the place, as a
+trailing `/**` does and as [PERM-7](#PERM-7)'s walk, which does not descend into a directory a rule
+covers, assumes. `Read(./secrets)`, `Read(./secrets/)` and `Read(secrets/)` cover `secrets` and
+`secrets/key`, and `Edit(./secrets/)` stops a write to `secrets/key`. An `allow` rule keeps its
+reading and covers the place it names alone, since widening a grant would grant files nobody named.
+
+A `..` in a path specifier is resolved when the rule is read, against the place its anchor names, so
+a rule is in the form [TRUST-10](trust-map.md#TRUST-10) gives a call's path. `Read(../sib/.env)` in a
+session working in `/home/someone/proj` is the full path `/home/someone/sib/.env`, which is how a call
+to that file reaches the gate, and `Read(//home/someone/proj/../sib/.env)` is the same rule. A `..`
+that would climb above the top of the file system, take out a drive letter, or follow a segment
+holding a `*`, whose parent is not one place, is reported ([PERM-11](#PERM-11)) and the rule decides
+nothing. A relative rule resolves against the workspace; a caller that names none keeps it as written.
+
+**Why a directory covers what is under it.** A rule that fences a tree and leaves the files in it
+readable by name is a statement that is not true, and a listing that hides the tree while a read of
+one of its files succeeds shows the person a protection that is not there.
+
 `verified-by: bravebot_core::permissions::a_path_rule_covers_the_file_it_names_wherever_a_backslash_separates`
 `verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_a_folding_volume_would_open`
 `verified-by: bravebot_core::permissions::a_tree_rule_covers_the_folded_spelling_of_its_path`
@@ -333,6 +351,13 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_double_star_segment_inside_quotes_is_a_directory_called_that`
 `verified-by: bravebot_core::permissions::a_backslash_inside_quotes_follows_the_hosts_separator`
 `verified-by: bravebot_core::permissions::a_trailing_double_star_covers_the_directory_it_names`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_a_directory_covers_the_files_under_it`
+`verified-by: bravebot_core::permissions::an_allow_rule_naming_a_directory_grants_that_entry_and_not_what_is_under_it`
+`verified-by: bravebot_core::permissions::a_rule_holding_dot_dot_covers_the_place_a_call_to_it_arrives_as`
+`verified-by: bravebot_core::permissions::a_rule_holding_dot_dot_is_resolved_in_every_list`
+`verified-by: bravebot_agent::permissions::a_directory_rule_and_a_rule_holding_dot_dot_cover_the_files_they_name`
+`verified-by: bravebot_agent::turn::a_denied_directory_written_without_a_double_star_is_not_read_by_a_file_under_it`
+`verified-by: bravebot_agent::turn::a_denied_directory_written_without_a_double_star_is_not_written_into`
 `verified-by: bravebot_core::permissions::a_relative_rule_says_nothing_about_an_absolute_path`
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
 `verified-by: bravebot_core::permissions::a_pattern_whose_anchor_is_unknown_is_reported_rather_than_matching_nothing`
@@ -845,7 +870,8 @@ directory a person typed from being reachable on different terms.
 <a id="PERM-11"></a>
 ### PERM-11: an unreadable rule is dropped, named, and takes nothing with it
 
-A line that is not a rule, names no family this agent has, has no anchor to resolve, holds a path
+A line that is not a rule, names no family this agent has, has no anchor to resolve, holds a `..`
+that cannot be resolved ([PERM-3](#PERM-3)), holds a path
 with whitespace at an end ([PERM-3](#PERM-3)), or holds a quoted path specifier with nothing between
 the quotes (`Read("")`, which has its own wording and does not advise dropping the brackets alone)
 is dropped, and the rest of the file still applies. A `deny` or `ask` `Bash` rule with a quote that
@@ -865,6 +891,7 @@ here worth interrupting somebody over. Refusing the whole file instead would mea
 allow rule quietly removed a deny rule's protection.
 
 `verified-by: bravebot_core::permissions::a_rule_that_cannot_be_read_is_dropped_and_reported`
+`verified-by: bravebot_core::permissions::a_rule_whose_dot_dot_cannot_be_resolved_is_reported`
 `verified-by: bravebot_core::permissions::brackets_holding_only_whitespace_are_empty_in_every_family`
 `verified-by: bravebot_core::permissions::a_path_specifier_with_whitespace_at_an_end_is_reported_and_decides_nothing`
 `verified-by: bravebot_agent::permissions::a_settings_rule_whose_path_has_whitespace_at_an_end_is_reported_and_decides_nothing`

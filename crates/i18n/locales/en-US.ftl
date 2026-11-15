@@ -1062,6 +1062,7 @@ permission-rule-whitespace-at-an-end = has whitespace at the start or end of its
 permission-rule-unclosed-quote = has a quote that is never closed, so it is matched only as its characters are written, not as a typed line; close the quote, or write a quote that is part of a word as \' or \"
 permission-rule-trailing-backslash = ends in a backslash with nothing after it, so it is matched only as its characters are written, not as a typed line; remove it, or write \\ for a backslash
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
+permission-rule-climbs = holds .. in a place it cannot be resolved: it climbs above the top of the file system, or follows a segment holding a *; write the path without it
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
 permission-rule-not-a-host = has a port, scheme, path or other text that is not a host after 'domain:'; write a host name or an address alone, as WebFetch(domain:example.com) or WebFetch(domain:[::1])

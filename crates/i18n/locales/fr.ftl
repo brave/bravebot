@@ -892,6 +892,7 @@ permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la 
 permission-rule-unclosed-quote = a un guillemet qui n'est jamais fermé, donc elle n'est comparée qu'avec ses caractères tels qu'ils sont écrits, et non comme une ligne tapée ; fermez-le, ou écrivez \' ou \" pour un guillemet qui fait partie d'un mot
 permission-rule-trailing-backslash = se termine par une barre oblique inverse suivie de rien, donc elle n'est comparée qu'avec ses caractères tels qu'ils sont écrits, et non comme une ligne tapée ; enlevez-la, ou écrivez \\ pour une barre oblique inverse
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
+permission-rule-climbs = contient .. là où il ne peut pas être résolu : il sort du haut du système de fichiers, ou suit un segment contenant un * ; écrivez le chemin sans lui
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
 permission-rule-not-a-host = a un port, un schéma, un chemin ou un autre texte qui n'est pas un hôte après 'domain:' ; écrivez un nom d'hôte ou une adresse seul, comme WebFetch(domain:example.com) ou WebFetch(domain:[::1])

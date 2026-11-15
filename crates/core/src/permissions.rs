@@ -141,6 +141,10 @@ pub struct Anchors {
     pub home: Option<String>,
     /// The directory the settings file sits in, for a single-slash pattern.
     pub settings_dir: Option<String>,
+    /// The workspace, as a full path, for a relative pattern holding a `..` that climbs out of it
+    /// (PERM-3). Absent, such a pattern is kept as written, which is what a caller with no
+    /// workspace to resolve against gets.
+    pub workspace: Option<String>,
     /// Whether the host separates one segment of a path from the next with a backslash as well as
     /// with a slash. Supplied by the caller for the same reason the two directories are: this
     /// crate asks the host nothing, and the answer cannot be read off a pattern or a path, since a
@@ -373,7 +377,7 @@ impl Rule {
             }
             Some(specifier) if subject.takes_a_path() => {
                 path_pattern(quoted.unwrap_or(specifier), anchors, quoted.is_some())
-                    .ok_or_else(|| Rejected::new(text, Unreadable::Unanchored))?
+                    .map_err(|reason| Rejected::new(text, reason))?
             }
             Some(specifier) if subject == Subject::WebFetch => {
                 // Claude Code's spelling, and the only one: a URL prefix would read as covering a
@@ -441,8 +445,8 @@ impl Rule {
     /// a path: relative for a pattern about the workspace and in full for any other. A leading `**`
     /// also matches no segment, so the segments after it name a place at the anchor too: a bare
     /// name, read as `**/name`, is followed at the top of the workspace. A pattern that starts with
-    /// any other star names no place. A prefix holding `..` is left as written, as a path holding one
-    /// is (TRUST-10).
+    /// any other star names no place. A prefix still holding `..` is left as written: a rule is
+    /// resolved when it is read (PERM-3), and one kept as written had no workspace to resolve against.
     ///
     /// The spelling added is rooted where it landed and never floats: the name a link reaches is one
     /// place. Only the place the prefix names is followed, not the nested copies PERM-4 floats a
@@ -703,6 +707,9 @@ pub enum Unreadable {
     /// A `Bash` rule in `deny` or `ask` that ends in a backslash with nothing after it, kept the
     /// same way.
     TrailingBackslash,
+    /// A path rule holding a `..` that cannot be resolved: one that climbs above the top of the
+    /// file system, or that follows a segment holding a `*`, whose parent is not one place.
+    Climbs,
     /// A `WebFetch` rule whose specifier does not begin `domain:`.
     NotADomainRule,
     /// `WebFetch(domain:)`, which names no host.
@@ -1197,26 +1204,51 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 /// A name rooted at a drive letter is keyed the way [`Permissions::for_path`] keys the path, both
 /// as the directory a `~/` or `/` pattern is anchored at and as a specifier written without `//`,
 /// since the host spells a full path that way and the path it names reads as one.
-fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Option<Pattern> {
+///
+/// A `..` in the pattern is resolved here, against the place its anchor names, so a rule is held in
+/// the form a call's path is (TRUST-10): `Read(../sib/.env)` in a session at `/home/someone/proj` is
+/// the full path `/home/someone/sib/.env`. One that climbs above the top of the file system, or that
+/// follows a segment holding a wildcard, whose parent is not one place, is reported
+/// ([`Unreadable::Climbs`]). A relative pattern that climbs out of the workspace is kept as written
+/// where the caller named no workspace, which only a caller whose rules decide nothing does.
+fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Result<Pattern, Unreadable> {
     use crate::spelling::{to_key, to_slash};
     let backslash_separates = anchors.backslash_separates;
     let rooted = |key: &str| {
-        let key = drive_in_upper_case(key, backslash_separates);
-        Some(Pattern::Absolute(PathPattern::rooted(
-            &fold(&key, anchors.folds_case),
-            literal,
-        )))
+        let key = fold(
+            &drive_in_upper_case(key, backslash_separates),
+            anchors.folds_case,
+        );
+        let pattern = PathPattern::rooted(&key, literal)?;
+        // `D:/..` is `D:/` itself, so a `..` that takes out the drive names no place of this rule.
+        let drive = split(&key).into_iter().next().filter(|first| {
+            backslash_separates
+                && matches!(first.as_bytes(), [letter, b':'] if letter.is_ascii_alphabetic())
+        });
+        match drive {
+            Some(drive) if pattern.segments.first() != Some(&drive) => Err(Unreadable::Climbs),
+            _ => Ok(Pattern::Absolute(pattern)),
+        }
     };
     let specifier = &*to_slash(specifier, backslash_separates);
     if specifier.starts_with("//") {
         return rooted(&specifier[1..]);
     }
     if let Some(rest) = specifier.strip_prefix("~/") {
-        let home = to_key(anchors.home.as_deref()?, backslash_separates);
+        let home = to_key(
+            anchors.home.as_deref().ok_or(Unreadable::Unanchored)?,
+            backslash_separates,
+        );
         return rooted(&join(&home, rest));
     }
     if let Some(rest) = specifier.strip_prefix('/') {
-        let base = to_key(anchors.settings_dir.as_deref()?, backslash_separates);
+        let base = to_key(
+            anchors
+                .settings_dir
+                .as_deref()
+                .ok_or(Unreadable::Unanchored)?,
+            backslash_separates,
+        );
         return rooted(&join(&base, rest));
     }
     let keyed = to_key(specifier, backslash_separates);
@@ -1224,14 +1256,47 @@ fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Option<Pat
         return rooted(&keyed);
     }
     // Decided on the specifier as written: `./x` says where it starts, and only a specifier with
-    // no slash in it is a name that matches at any depth.
+    // no slash in it is a name that matches at any depth. A pattern holding `..` is not a name
+    // either: it says where it starts as `./x` does.
     let dotted = specifier.strip_prefix("./");
     let rest = dotted.unwrap_or(specifier);
-    Some(Pattern::Relative(PathPattern::relative(
-        &fold(rest, anchors.folds_case),
-        dotted.is_some(),
+    let holds_dots = rest.split('/').any(|segment| segment == "..");
+    let (climbs, below) = resolve_dots(split(&fold(rest, anchors.folds_case)), literal)?;
+    let mut segments = vec!["..".to_string(); climbs];
+    if climbs > 0
+        && let Some(workspace) = anchors.workspace.as_deref()
+    {
+        return rooted(&join(&to_key(workspace, backslash_separates), rest));
+    }
+    segments.extend(below);
+    Ok(Pattern::Relative(PathPattern::relative(
+        &segments.join("/"),
+        dotted.is_some() || holds_dots,
         literal,
     )))
+}
+
+/// `segments` with each `..` taken out together with the segment before it, and the number of `..`
+/// that had nothing before them to take out, which climb out of wherever the pattern starts.
+///
+/// A `..` after a segment holding a wildcard is not resolvable, since the parent of `*` is not one
+/// place, so the pattern is reported. In a quoted pattern a `*` is an ordinary character and the
+/// segment is a name.
+fn resolve_dots(segments: Vec<String>, literal: bool) -> Result<(usize, Vec<String>), Unreadable> {
+    let mut kept: Vec<String> = Vec::new();
+    let mut climbs = 0;
+    for segment in segments {
+        if segment != ".." {
+            kept.push(segment);
+            continue;
+        }
+        match kept.pop() {
+            Some(parent) if !literal && parent.contains('*') => return Err(Unreadable::Climbs),
+            Some(_) => {}
+            None => climbs += 1,
+        }
+    }
+    Ok((climbs, kept))
 }
 
 /// The name between the double quotes of a path specifier written as one, or `None` for a
@@ -1284,14 +1349,19 @@ fn join(base: &str, rest: &str) -> String {
 }
 
 impl PathPattern {
-    /// A pattern that starts where it says it starts, so it never floats.
-    fn rooted(pattern: &str, literal: bool) -> Self {
-        Self {
-            segments: split(pattern),
+    /// A pattern that starts where it says it starts, so it never floats. One that climbs above
+    /// the top of the file system names no place and is reported.
+    fn rooted(pattern: &str, literal: bool) -> Result<Self, Unreadable> {
+        let (climbs, segments) = resolve_dots(split(pattern), literal)?;
+        if climbs > 0 {
+            return Err(Unreadable::Climbs);
+        }
+        Ok(Self {
+            segments,
             floats_when_restricting: false,
             literal,
             anywhere: false,
-        }
+        })
     }
 
     /// A workspace-relative pattern.
@@ -1346,7 +1416,17 @@ impl PathPattern {
     }
 
     /// Whether this pattern covers `path`, already split into segments.
+    ///
+    /// A pattern that restricts covers what is under the place it names as well as the place, as a
+    /// trailing `/**` does and as a walk that does not descend into a covered directory assumes
+    /// (PERM-3). A pattern that grants covers the place it names and no more.
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
+        self.names(path, restricting)
+            || (restricting && (1..path.len()).any(|end| self.names(&path[..end], restricting)))
+    }
+
+    /// Whether this pattern names `path` itself.
+    fn names(&self, path: &[&str], restricting: bool) -> bool {
         if self.literal {
             let ends_with = path.len() >= self.segments.len()
                 && path[path.len() - self.segments.len()..]
@@ -2068,6 +2148,7 @@ mod tests {
         Anchors {
             home: Some("/home/someone".to_string()),
             settings_dir: Some("/home/someone/.bravebot".to_string()),
+            workspace: Some("/home/someone/proj".to_string()),
             backslash_separates: false,
             folds_case: false,
         }
@@ -3666,8 +3747,9 @@ mod tests {
 
     /// PERM-7: a `deny` or `ask` path rule is followed from the segments before its first `*`, keyed
     /// as a gate holds a path, and a name or a leading `**` from the segments after it. A pattern
-    /// that starts with any other star, a prefix holding `..`, a rule that is not about a path and an
-    /// `allow` rule have nothing to follow.
+    /// that starts with any other star, a rule that is not about a path and an `allow` rule have
+    /// nothing to follow. A `..` is resolved when the rule is read (PERM-3), so `../up/**` is
+    /// followed as the full path it names.
     #[test]
     fn a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star() {
         let mut permissions = rules(
@@ -3695,6 +3777,7 @@ mod tests {
                 "linked",
                 ".env",
                 "x",
+                "/home/someone/up",
                 "/abs/dir",
                 "/home/someone/notes.md",
                 "a/b.md"
@@ -3927,6 +4010,162 @@ mod tests {
             permissions.for_path(Subject::Read, "/tmp/scratchpad"),
             Decision::Unmatched
         );
+    }
+
+    /// PERM-3, PERM-7: a `deny` or `ask` rule naming a directory without `/**` covers what is under
+    /// it, in every spelling of the directory and for both path families, as the rule with `/**`
+    /// does. The siblings whose names merely start the same way, and the same name below another
+    /// directory for a rule written from `./`, stay uncovered, so the rule is no wider than the
+    /// directory it names.
+    #[test]
+    fn a_deny_or_ask_rule_naming_a_directory_covers_the_files_under_it() {
+        for (subject, family) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+            for spelling in ["./secrets", "./secrets/", "secrets/", "//work/secrets/"] {
+                let rule = format!("{family}({spelling})");
+                let (root, below) = match spelling.starts_with("//") {
+                    true => ("/work/secrets", "/work/secrets/a/b"),
+                    false => ("secrets", "secrets/a/b"),
+                };
+                for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                    let permissions = match ruling {
+                        "deny" => rules(&[&rule], &[], &[]),
+                        _ => rules(&[], &[&rule], &[]),
+                    };
+                    for path in [root, &format!("{root}/key"), below] {
+                        assert_eq!(
+                            permissions.for_path(subject, path),
+                            Decision::Ruled(list),
+                            "{rule} in {ruling} did not cover {path}"
+                        );
+                    }
+                    let sibling = root.replace("secrets", "secrets-old");
+                    assert_eq!(
+                        permissions.for_path(subject, &format!("{sibling}/key")),
+                        Decision::Unmatched,
+                        "{rule} in {ruling} covered the sibling {sibling}"
+                    );
+                }
+            }
+        }
+        // A rule from `./` stays at the top, so the same name below another directory is not it.
+        let permissions = rules(&["Read(./secrets/)"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "other/secrets/key"),
+            Decision::Unmatched
+        );
+        // And the rule is about the one family it names.
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "secrets/key"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3: an `allow` rule keeps its reading. Widening a grant to what is under the directory
+    /// would grant files nobody named.
+    #[test]
+    fn an_allow_rule_naming_a_directory_grants_that_entry_and_not_what_is_under_it() {
+        for spelling in ["./notes", "./notes/", "notes/"] {
+            let permissions = rules(&[], &[], &[&format!("Edit({spelling})")]);
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "notes"),
+                Decision::Ruled(Ruling::Allow),
+                "{spelling} did not grant the entry it names"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "notes/a.md"),
+                Decision::Unmatched,
+                "{spelling} as an allow rule granted a file under the directory"
+            );
+        }
+    }
+
+    /// PERM-3, TRUST-10: a rule holding `..` is put in the form a call's path has, resolved against
+    /// the place its anchor names. Each rule is alone in `deny`, in the session at
+    /// `/home/someone/proj`.
+    #[test]
+    fn a_rule_holding_dot_dot_covers_the_place_a_call_to_it_arrives_as() {
+        for (rule, path, covered) in [
+            ("Read(../sib/.env)", "/home/someone/sib/.env", true),
+            ("Read(../sib/.env)", "/home/someone/sib/other", false),
+            ("Read(../sib/.env)", "/home/someone/proj/sib/.env", false),
+            ("Read(./../sib/**)", "/home/someone/sib/a/b", true),
+            ("Read(a/../b)", "b", true),
+            ("Read(a/../b)", "a/b", false),
+            (
+                "Read(//home/someone/proj/../sib/.env)",
+                "/home/someone/sib/.env",
+                true,
+            ),
+            (
+                "Read(//home/someone/proj/../sib/.env)",
+                "/home/someone/proj/sib/.env",
+                false,
+            ),
+            ("Read(~/proj/../sib/.env)", "/home/someone/sib/.env", true),
+            ("Read(/../sib/.env)", "/home/someone/sib/.env", true),
+        ] {
+            let permissions = rules(&[rule], &[], &[]);
+            let decided = permissions.for_path(Subject::Read, path);
+            let wanted = match covered {
+                true => Decision::Ruled(Ruling::Deny),
+                false => Decision::Unmatched,
+            };
+            assert_eq!(decided, wanted, "{rule} against {path}");
+        }
+    }
+
+    /// PERM-3: a rule holding `..` is resolved the same in `ask` and `allow`, so a grant for
+    /// `../sib/x` covers the file it names and no other.
+    #[test]
+    fn a_rule_holding_dot_dot_is_resolved_in_every_list() {
+        let ask = rules(&[], &["Edit(../sib/x)"], &[]);
+        let allow = rules(&[], &[], &["Edit(../sib/x)"]);
+        assert_eq!(
+            ask.for_path(Subject::Edit, "/home/someone/sib/x"),
+            Decision::Ruled(Ruling::Ask)
+        );
+        assert_eq!(
+            allow.for_path(Subject::Edit, "/home/someone/sib/x"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            allow.for_path(Subject::Edit, "/home/someone/sib/y"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3, PERM-11: a rule whose `..` cannot be resolved is reported and decides nothing, in the
+    /// words the sandbox lists use for the same entry, rather than being kept as a rule that no
+    /// call reaches. One climbing above the top of the file system, one following a wildcard, and one
+    /// taking out a drive letter are such rules.
+    #[test]
+    fn a_rule_whose_dot_dot_cannot_be_resolved_is_reported() {
+        for text in [
+            "Read(//../x)",
+            "Read(//home/../../x)",
+            "Read(~/../../../../x)",
+            "Read(src/*/../x)",
+            "Read(**/../x)",
+        ] {
+            let rejected = Rule::parse(text, &anchors()).expect_err(text);
+            assert_eq!(rejected.reason, Unreadable::Climbs, "{text}");
+        }
+        let drive = Anchors {
+            backslash_separates: true,
+            ..anchors()
+        };
+        let rejected = Rule::parse("Read(//D:/../x)", &drive).expect_err("a drive climbed out of");
+        assert_eq!(rejected.reason, Unreadable::Climbs);
+        // A `..` that stays below the drive is a rule like any other.
+        assert!(Rule::parse("Read(//D:/a/../x)", &drive).is_ok());
+        // In a quoted name a `*` is a character of the name, so the parent of `*` is that name.
+        assert!(Rule::parse("Read(\"./src/*/../x\")", &anchors()).is_ok());
+        // A rule climbing out of a workspace is one a caller with no workspace keeps as written.
+        let none = Anchors {
+            workspace: None,
+            ..anchors()
+        };
+        assert!(Rule::parse("Read(../sib/.env)", &none).is_ok());
     }
 
     /// A family names one family. Reads and edits are separate questions, and a rule about one
@@ -5090,6 +5329,7 @@ mod tests {
         let anchors = Anchors {
             home: Some("C:\\Users\\someone".to_string()),
             settings_dir: Some("C:\\Users\\someone/.bravebot".to_string()),
+            workspace: None,
             backslash_separates: true,
             folds_case: false,
         };

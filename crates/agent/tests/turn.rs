@@ -5388,6 +5388,94 @@ fn a_denied_file_is_not_written_even_where_writes_are_approved() {
     );
 }
 
+/// PERM-3, PERM-7: a `deny` rule naming a directory without `/**` keeps the files under it out of
+/// the turn, as the rule with `/**` does. The control is the same call against a sibling whose
+/// name only starts the same way, which the rule does not cover.
+#[test]
+fn a_denied_directory_written_without_a_double_star_is_not_read_by_a_file_under_it() {
+    let scratch = Scratch::new("permissions-read-denied-directory");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("secrets-old")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key"), "TOKEN=hunter2").unwrap();
+    std::fs::write(scratch.path.join("secrets-old/key"), "TOKEN=swordfish").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"secrets/key"}"#),
+        tool_request_2("read_file", r#"{"path":"secrets-old/key"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is in secrets/key").with_permissions(rules(
+        &["Read(./secrets/)"],
+        &[],
+        &[],
+    ));
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        !second.contains("hunter2"),
+        "a file under a denied directory reached the planner: {second}"
+    );
+    assert!(second.contains("deny rule"), "got: {second}");
+    assert!(
+        third.contains("swordfish"),
+        "the rule covered a sibling directory it does not name: {third}"
+    );
+}
+
+/// PERM-3, PERM-7: an `Edit` deny rule naming a directory without `/**` stops a write into it.
+#[test]
+fn a_denied_directory_written_without_a_double_star_is_not_written_into() {
+    let scratch = Scratch::new("permissions-write-denied-directory");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"secrets/key","contents":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task =
+        Task::new("replace secrets/key").with_permissions(rules(&["Edit(./secrets/)"], &[], &[]));
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("secrets/key")).unwrap(),
+        "original",
+        "a deny rule naming a directory did not stop a write to a file under it"
+    );
+}
+
 /// Run one planner call against a workspace whose `.env` a deny rule covers and whose `alias.txt`
 /// is a link to it, and return what the planner was sent. Rules are parsed without knowing whether
 /// the volume folds case, so only where the call lands can connect the two names.
