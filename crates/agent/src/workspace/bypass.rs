@@ -88,6 +88,24 @@ impl Workspace {
         });
     }
 
+    /// Run `read`, which opens a file a reference stands for, with the reach the call in progress
+    /// holds judged as a read, and put the call's own back after.
+    ///
+    /// A call that writes holds a reach that judges a path as a write, and the file a reference
+    /// stands for is read whatever the call does with it. Nothing is added where the call holds no
+    /// reach, so a call outside bypass reaches nothing more than it did (PATHREQ-7).
+    pub fn reading_under_the_reach<T>(&self, read: impl FnOnce() -> T) -> T {
+        let held = locked(&self.call_reach.0).clone();
+        if let Some(held) = &held {
+            let mut judged_as_a_read = held.clone();
+            judged_as_a_read.reach.write = false;
+            *locked(&self.call_reach.0) = Some(judged_as_a_read);
+        }
+        let read = read();
+        *locked(&self.call_reach.0) = held;
+        read
+    }
+
     /// Hold `reach` for one look at a watch, which records no directory as reached.
     pub(super) fn hold_bypass_reach_for_a_look(&self, reach: Option<BypassReach>) {
         *locked(&self.call_reach.0) = reach.map(|reach| HeldReach {

@@ -91313,6 +91313,620 @@ fn under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request() {
     }
 }
 
+/// Every request a turn sent when it listed `beside`, which makes a reference to each file there
+/// that nothing has opened, and then called `tool` with `arguments`, which name `ref:1`. `answers`
+/// are the replies after the call of `tool`: a processor's answer where the tool starts one, then
+/// the planner's last word.
+fn bodies_of_a_listing_then<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    places: &PathPlaces,
+    permission: bravebot_agent::PermissionMode,
+    tool: &str,
+    arguments: &serde_json::Value,
+    answers: Vec<String>,
+    confirmer: &mut C,
+) -> Vec<String> {
+    bodies_of_a_listing_then_under(
+        name,
+        places,
+        permission,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        tool,
+        arguments,
+        answers,
+        confirmer,
+    )
+    .0
+}
+
+/// [`bodies_of_a_listing_then`] under `permission`, which may be a [`bravebot_agent::LiveMode`] a
+/// reporter moves while the turn runs, and `sandbox`, with the events the turn recorded.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the settings a test varies plus the call, forwarded from bodies_of_a_listing_then"
+)]
+fn bodies_of_a_listing_then_under<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    places: &PathPlaces,
+    permission: impl Into<bravebot_agent::LiveMode>,
+    sandbox: bravebot_sandbox::SandboxMode,
+    reporter: &mut (impl bravebot_agent::report::Reporter + Send),
+    tool: &str,
+    arguments: &serde_json::Value,
+    answers: Vec<String>,
+    confirmer: &mut C,
+) -> (Vec<String>, Vec<Event>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = vec![
+        tool_request_with_usage(
+            "list_files",
+            &serde_json::json!({ "directory": places.beside.display().to_string() }).to_string(),
+            1,
+            1,
+        ),
+        tool_request_with_usage(tool, &arguments.to_string(), 1, 1),
+    ];
+    replies.extend(answers);
+    let (endpoint, received) = serve_sequence(replies);
+    let task = Task::new("read what is beside")
+        .with_profile(Some(places.home.clone()))
+        .with_permission_mode(permission)
+        .with_confined_runs(true)
+        .with_sandbox_mode(sandbox);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .as_ref()
+    .expect("the turn runs");
+    (every_request(&received), sink.events().to_vec())
+}
+
+/// MODE-4, PATHREQ-7: under bypass a reference made by a listing of a directory beside the session
+/// is opened by the tools that take a reference, with no request, as `read_file` of the same path
+/// is. The reach is read at the deferred read, which is not a call of a tool that names a path. The
+/// regression it rejects is a deferred read that holds no reach, which refuses the file as outside
+/// the workspace and names `/add-dir` to a turn nobody can answer.
+#[test]
+fn under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (tool, arguments) in [
+        (
+            "vet_content",
+            serde_json::json!({ "ref": "ref:1", "expects": "some notes" }),
+        ),
+        (
+            "spawn_processor",
+            serde_json::json!({ "reads": ["ref:1"], "instruction": "say what it is" }),
+        ),
+        (
+            "run",
+            serde_json::json!({ "command": "cat", "stdin_ref": "ref:1" }),
+        ),
+        (
+            "write_file",
+            serde_json::json!({ "path": "copy.txt", "contents_ref": "ref:1" }),
+        ),
+    ] {
+        let name = format!("bypass-deferred-{tool}");
+        let places = PathPlaces::new(&name);
+        std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+            .expect("a file beside the session");
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let mut answers = Vec::new();
+        if tool == "spawn_processor" {
+            answers.push(processor_reply("a processed note"));
+        }
+        answers.push(reply_with("done"));
+        let (bodies, events) = bodies_of_a_listing_then_under(
+            &name,
+            &places,
+            bravebot_agent::PermissionMode::Bypass,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            tool,
+            &arguments,
+            answers,
+            &mut bypassing(&mut asked),
+        );
+        // The listing reached the directory, which is the one record. The deferred read is in a
+        // directory already reached and adds none, and no record names the file.
+        let reached = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "path_reach",
+                    detail,
+                } if detail.contains("file tools reach") => Some(detail.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reached.len(), 1, "{tool}: {reached:?}");
+        assert!(
+            reached[0].contains("of list_files") && !reached[0].contains("notes.txt"),
+            "{tool}: {}",
+            reached[0]
+        );
+        let said = newest_tool_result(bodies.last().expect("a last request").clone());
+        assert!(
+            !said.contains("resolves outside the workspace")
+                && !said.contains("refusing to touch")
+                && !said.contains("/add-dir")
+                && !said.contains("no reference is named"),
+            "{tool}: {said}"
+        );
+        assert!(
+            bodies
+                .iter()
+                .skip(2)
+                .any(|body| body.contains("NOTES-CONTENT"))
+                || tool == "run"
+                || tool == "write_file",
+            "{tool}: the file beside the session was not opened: {bodies:?}"
+        );
+        assert!(paths.lock().unwrap().is_empty(), "{tool}: a path was asked");
+    }
+}
+
+/// OUTPUT-2, PATHREQ-7: `read_output` named a reference a listing made for a file is given no
+/// reach under bypass and opens no file. It is refused as a slot that holds a file, pointing at
+/// `vet_content`, as it is in every mode, and the refusal is not the outside-the-workspace one.
+/// The regression it rejects: `read_output` opening the file a listing found, which would release
+/// its bytes by a route that has no screening of its own, or a refusal that offers `/add-dir`.
+#[test]
+fn under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "bypass-read-output-file-slot";
+    let places = PathPlaces::new(name);
+    std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+        .expect("a file beside the session");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let paths = asked.paths.clone();
+    let (bodies, events) = bodies_of_a_listing_then_under(
+        name,
+        &places,
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        "read_output",
+        &serde_json::json!({ "ref": "ref:1" }),
+        vec![reply_with("done")],
+        &mut bypassing(&mut asked),
+    );
+    let said = newest_tool_result(bodies.last().expect("a last request").clone());
+    assert!(
+        said.contains("ref:1 is not something a program printed")
+            && said.contains("vet_content is how to ask for it"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("resolves outside the workspace") && !said.contains("/add-dir"),
+        "{said}"
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains("NOTES-CONTENT")),
+        "read_output opened the file: {bodies:?}"
+    );
+    let reached = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::GatePassed {
+                    gate: "path_reach",
+                    detail,
+                } if detail.contains("file tools reach")
+            )
+        })
+        .count();
+    assert_eq!(reached, 1, "only the listing reaches the directory");
+    assert!(paths.lock().unwrap().is_empty(), "a path was asked");
+}
+
+/// MODE-4, PATHREQ-7: the reads of one round that run beside each other (TURN-10) are given the
+/// reach the live mode gives them, so a listing and a search of a directory beside the session in
+/// one round are answered under bypass as they would be one after another, the directory is
+/// recorded once, and under the mode that asks both are refused. The regression it rejects: the
+/// facts the turn hands to the reads it runs ahead of the dispatcher giving no reach, which
+/// refuses a path the same round's dispatched call would reach.
+#[test]
+fn the_reads_of_one_round_beside_the_session_hold_the_reach_the_mode_gives_them() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (permission, reached) in [
+        (bravebot_agent::PermissionMode::Bypass, true),
+        (bravebot_agent::PermissionMode::Ask, false),
+    ] {
+        let name = format!("round-reach-{permission:?}");
+        let places = PathPlaces::new(&name);
+        std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+            .expect("a file beside the session");
+        let scratch = Scratch::new(&name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let beside = places.beside.display().to_string();
+        let (endpoint, received) = serve_sequence(vec![
+            two_tool_requests(
+                (
+                    "list_files",
+                    &serde_json::json!({ "directory": beside }).to_string(),
+                ),
+                (
+                    "search",
+                    &serde_json::json!({ "pattern": "NOTES", "directory": beside }).to_string(),
+                ),
+            ),
+            reply_with("done"),
+        ]);
+        let task = Task::new("read what is beside")
+            .with_profile(Some(places.home.clone()))
+            .with_permission_mode(permission)
+            .with_confined_runs(true);
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let mut sink = RecordingSink::new();
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::Conversation::new(),
+            &mut bypassing(&mut asked),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .as_ref()
+        .expect("the turn runs");
+        let told = tool_results(every_request(&received).last().expect("a request"));
+        assert_eq!(
+            !told.contains("resolves outside the workspace"),
+            reached,
+            "{permission:?}: {told}"
+        );
+        assert_eq!(
+            told.contains("Its 1 entries are quarantined") && told.contains("[ref:2]"),
+            reached,
+            "{permission:?}: {told}"
+        );
+        let records = sink
+            .events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::GatePassed {
+                        gate: "path_reach",
+                        detail,
+                    } if detail.contains("file tools reach")
+                )
+            })
+            .count();
+        assert_eq!(records, usize::from(reached), "{permission:?}");
+    }
+}
+
+/// MODE-4, PATHREQ-7: outside bypass the same listing and the same reference are refused as they
+/// were, naming `/add-dir`, so the mode and nothing else gives a deferred read its reach. The
+/// regression it rejects is a deferred read given a reach whatever the mode.
+#[test]
+fn outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused() {
+    if cannot_confine_here() {
+        return;
+    }
+    for permission in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        bravebot_agent::PermissionMode::Plan,
+    ] {
+        let name = format!("no-bypass-deferred-{permission:?}");
+        let places = PathPlaces::new(&name);
+        std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+            .expect("a file beside the session");
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let bodies = bodies_of_a_listing_then(
+            &name,
+            &places,
+            permission,
+            "vet_content",
+            &serde_json::json!({ "ref": "ref:1", "expects": "some notes" }),
+            vec![reply_with("done")],
+            &mut asked,
+        );
+        // Outside bypass the listing of the directory is refused, so no reference to its files
+        // exists for the second call to name.
+        let said = newest_tool_result(bodies[1].clone());
+        assert!(
+            said.contains("resolves outside the workspace") && said.contains("/add-dir"),
+            "{permission:?}: {said}"
+        );
+        assert!(
+            bodies.iter().all(|body| !body.contains("NOTES-CONTENT")),
+            "{permission:?}: the file beside the session was opened"
+        );
+    }
+}
+
+/// MODE-8, MODE-4, PATHREQ-7, TRUST-10: a reference made under bypass is opened under the mode in
+/// force when it is opened. The person leaves bypass after the listing, the reference is named
+/// after that, and the file beside the session is refused as it is outside bypass. Where the run
+/// has nobody to ask the refusal names no `/add-dir`, and where there is a person it does. The
+/// regressions it rejects: a reach held from the listing that outlives the mode, and a deferred
+/// read that offers `/add-dir` to a run nobody can answer.
+#[test]
+fn a_reference_made_under_bypass_is_refused_once_the_mode_leaves_bypass() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (label, live) in [
+        (
+            "attended",
+            bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass),
+        ),
+        (
+            "unattended",
+            bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Bypass),
+        ),
+    ] {
+        let name = format!("bypass-left-{label}");
+        let places = PathPlaces::new(&name);
+        std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+            .expect("a file beside the session");
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let mut reporter = ChangesTheModeAfterACall {
+            live: live.clone(),
+            to: bravebot_agent::PermissionMode::Ask,
+            at: 1,
+            finished: 0,
+        };
+        let (bodies, _) = bodies_of_a_listing_then_under(
+            &name,
+            &places,
+            live.clone(),
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            &mut reporter,
+            "vet_content",
+            &serde_json::json!({ "ref": "ref:1", "expects": "some notes" }),
+            vec![reply_with("done")],
+            &mut bravebot_agent::Confining::new(&mut asked, live.clone(), false),
+        );
+        assert_eq!(live.get(), bravebot_agent::PermissionMode::Ask, "{label}");
+        let said = newest_tool_result(bodies.last().expect("a last request").clone());
+        assert!(
+            said.contains("resolves outside the workspace") && said.contains("'ref:1'"),
+            "{label}: the deferred read after leaving bypass was not refused: {said}"
+        );
+        assert!(
+            bodies
+                .iter()
+                .skip(2)
+                .all(|body| !body.contains("NOTES-CONTENT")),
+            "{label}: the file was opened after the mode left bypass"
+        );
+        assert!(
+            !said.contains("notes.txt") && !said.contains(&places.beside.display().to_string()),
+            "{label}: the refusal named the path: {said}"
+        );
+        if label == "attended" {
+            assert!(said.contains("/add-dir"), "{label}: {said}");
+        } else {
+            assert!(
+                said.contains("Nobody can be asked") && !said.contains("/add-dir"),
+                "{label}: {said}"
+            );
+        }
+    }
+}
+
+/// MODE-4, SANDBOX-22, PATHREQ-7: under bypass with the sandbox mode `read-only` the reference to
+/// a listed file beside the session is opened, because opening it is a read and `read-only` keeps
+/// writes only. The regression it rejects: the deferred read judged as a write, which a reach
+/// held by `write_file` or by a read-only write refusal would turn away.
+#[test]
+fn under_bypass_with_read_only_a_reference_to_a_listed_file_is_opened() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "bypass-deferred-read-only";
+    let places = PathPlaces::new(name);
+    std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+        .expect("a file beside the session");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let (bodies, _) = bodies_of_a_listing_then_under(
+        name,
+        &places,
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_sandbox::SandboxMode::ReadOnly,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        "spawn_processor",
+        &serde_json::json!({ "reads": ["ref:1"], "instruction": "say what it is" }),
+        vec![processor_reply("a processed note"), reply_with("done")],
+        &mut bypassing(&mut asked),
+    );
+    let said = newest_tool_result(bodies.last().expect("a last request").clone());
+    assert!(
+        !said.contains("resolves outside the workspace") && !said.contains("/add-dir"),
+        "{said}"
+    );
+    assert!(
+        bodies
+            .iter()
+            .skip(2)
+            .any(|body| body.contains("NOTES-CONTENT")),
+        "the file beside the session was not opened under read-only: {bodies:?}"
+    );
+}
+
+/// MODE-4, CHECK-12, VET-3, PATHREQ-7: opening a reference to a listed file beside the session
+/// under bypass releases nothing to the planner that `vet_content` did not. The slot keeps the
+/// listing's label, so with auto-vetting on a check that objected keeps the file's text out of every
+/// request the planner is sent, and a check that found nothing is what releases it, which the trail
+/// records. The regression it rejects: the
+/// deferred read given the reach also marks the slot as read by the person, or skips the check,
+/// which puts a file nobody vouched for in front of the planner unscreened.
+#[test]
+fn under_bypass_opening_a_listed_file_releases_nothing_the_check_did_not() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (label, verdict, released) in [
+        ("objected", A_CHECK_OBJECTING, false),
+        ("found nothing", A_SAFE_VERDICT, true),
+    ] {
+        let name = format!("bypass-deferred-screened-{}", label.replace(' ', "-"));
+        let places = PathPlaces::new(&name);
+        std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT")
+            .expect("a file beside the session");
+        let scratch = Scratch::new(&name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(verdict)],
+            vec![
+                tool_request_with_usage(
+                    "list_files",
+                    &serde_json::json!({ "directory": places.beside.display().to_string() })
+                        .to_string(),
+                    1,
+                    1,
+                ),
+                tool_request_with_usage(
+                    "vet_content",
+                    &serde_json::json!({ "ref": "ref:1", "expects": "some notes" }).to_string(),
+                    1,
+                    1,
+                ),
+                reply_with("done"),
+            ],
+        );
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let mut confirmer = bravebot_agent::Confining::new(
+            &mut asked,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+        );
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut sink = RecordingSink::new();
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("read what is beside")
+                .with_profile(Some(places.home.clone()))
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_auto_vetting(true)
+                .with_confined_runs(true),
+            &mut conversation,
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .as_ref()
+        .expect("the turn runs");
+
+        let sent = every_request(&received);
+        let checks: Vec<&String> = sent
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING))
+            .collect();
+        assert!(
+            checks.iter().any(|body| body.contains("NOTES-CONTENT")),
+            "{label}: the file was not opened and checked, so the rest says nothing: {sent:?}"
+        );
+        let planner: Vec<&String> = sent
+            .iter()
+            .filter(|body| !body.contains(A_CHECK_ASKING))
+            .collect();
+        assert_eq!(
+            planner.iter().any(|body| body.contains("NOTES-CONTENT")),
+            released,
+            "{label}: the file's text reached the planner only where a check released it"
+        );
+        assert_eq!(
+            releases_by_vet_content(&sink).len(),
+            usize::from(released),
+            "{label}: {:#?}",
+            sink.events()
+        );
+    }
+}
+
+/// MODE-4, PATHREQ-7: a reference to a file the reach does not cover is refused as it was, under
+/// bypass. The listing made the reference inside a directory the reach covers, and the file the
+/// reference stands for is a link into the home directory's credential directory, which the
+/// reach refuses where it leads. The regression it rejects: a deferred read that is given the
+/// reach without its refusals, or one that judges the spelling of the path and not where it leads.
+#[cfg(unix)]
+#[test]
+fn under_bypass_a_reference_to_a_link_into_the_credentials_is_refused() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "bypass-deferred-credential-link";
+    let places = PathPlaces::new(name);
+    std::fs::write(places.home.join(".ssh/id_ed25519"), "SECRET-KEY-TEXT").expect("a key");
+    std::os::unix::fs::symlink(
+        places.home.join(".ssh/id_ed25519"),
+        places.beside.join("key.txt"),
+    )
+    .expect("a link");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let (bodies, _) = bodies_of_a_listing_then_under(
+        name,
+        &places,
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        "vet_content",
+        &serde_json::json!({ "ref": "ref:1", "expects": "a key" }),
+        vec![reply_with("done")],
+        &mut bypassing(&mut asked),
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains("SECRET-KEY-TEXT")),
+        "the credential was read through a reference"
+    );
+    let said = newest_tool_result(bodies.last().expect("a last request").clone());
+    assert!(
+        said.contains("resolves outside the workspace") || said.contains("refused"),
+        "{said}"
+    );
+}
+
 /// MODE-4, PATHREQ-7: outside bypass the same calls are refused as before, with the sentence naming
 /// `/add-dir` and no mention of `request_path`, which a refusal no longer sends the planner to. The
 /// regression it rejects is a reach given by something other than the mode: a refusal missing in
@@ -101176,14 +101790,17 @@ fn an_unattended_turn_refused_outside_by_read_file_and_by_run_is_given_one_answe
     std::fs::write(elsewhere.path.join("todo.txt"), "buy milk").unwrap();
     let scratch = Scratch::new("outside-both");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let outside = elsewhere.path.join("todo.txt").to_string_lossy().to_string();
+    let outside = elsewhere
+        .path
+        .join("todo.txt")
+        .to_string_lossy()
+        .to_string();
     let escaped = elsewhere
         .path
         .join("escaped.txt")
         .to_string_lossy()
         .to_string();
-    let mode =
-        bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Ask);
+    let mode = bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Ask);
     let (endpoint, received) = serve_sequence(vec![
         tool_request("read_file", &json!({ "path": outside }).to_string()),
         tool_request_2(

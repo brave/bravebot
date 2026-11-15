@@ -4813,6 +4813,21 @@ pub(crate) fn materialise<S: Sink>(
     // Exclusive: `Policy::materialise` emits the slot's `SlotWritten` and trail lines inside
     // this closure, and a shared capture must emit nothing while it is held.
     let nobody_to_ask = policy.nobody_to_ask();
+    // The reach the call holds, judged as a read: a reference is opened to be read whatever the
+    // call goes on to do with it, and a call that holds no reach (outside bypass) is given none.
+    workspace.reading_under_the_reach(|| {
+        materialise_held(policy, workspace, slots, tool, wanted, nobody_to_ask)
+    })
+}
+
+fn materialise_held<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    slots: &mut SlotStore,
+    tool: &str,
+    wanted: &[SlotId],
+    nobody_to_ask: bool,
+) -> Result<Vec<String>, String> {
     policy.capture_files(|policy, _capture| {
         let mut opened = Vec::new();
         for slot in wanted {
@@ -10130,6 +10145,17 @@ pub(crate) const TOOLS_NAMING_A_PATH: &[(&str, &str, bool)] = &[
     ("watch_file", "path", false),
 ];
 
+/// The tools that open a reference to a file the driver has not read yet, with the argument that
+/// names it (MODE-4, PATHREQ-7). The reference stands for a path a listing or a search found, and
+/// opening it resolves that path through the workspace, so the call is given the reach a call of
+/// `read_file` is given, judged as a read. A tool that is also in [`TOOLS_NAMING_A_PATH`] is read
+/// from there, and [`materialise`] judges the opening of a reference as a read in either case.
+pub(crate) const TOOLS_READING_A_REFERENCE: &[(&str, &str)] = &[
+    ("vet_content", "ref"),
+    ("spawn_processor", "reads"),
+    ("read_output", "ref"),
+];
+
 /// The tools that take a path, or a directory, and are given no reach by the mode, each with why.
 #[cfg(test)]
 pub(crate) const TOOLS_NAMING_A_PATH_WITHOUT_REACH: &[(&str, &str)] = &[
@@ -10188,9 +10214,16 @@ impl ReachFacts<'_> {
             return None;
         }
         let tool = strip_namespace(tool);
-        let &(_, field, write) = TOOLS_NAMING_A_PATH
+        let (field, write) = TOOLS_NAMING_A_PATH
             .iter()
-            .find(|(named, _, _)| *named == tool)?;
+            .find(|(named, _, _)| *named == tool)
+            .map(|&(_, field, write)| (field, write))
+            .or_else(|| {
+                TOOLS_READING_A_REFERENCE
+                    .iter()
+                    .find(|(named, _)| *named == tool)
+                    .map(|&(_, field)| (field, false))
+            })?;
         let person = bravebot_sandbox::rules::resolve(
             &bravebot_config::sandbox_filesystem(),
             self.profile,
@@ -17714,6 +17747,122 @@ mod tests {
             .collect();
         assert!(required.contains(&"path") && required.contains(&WHY));
         assert!(!required.contains(&"write"));
+    }
+
+    /// MODE-4, PATHREQ-7: the tools that open a reference to a file not read yet are given a reach
+    /// under bypass, judged as a read, and none in any other mode or in a workspace that is not
+    /// trusted. The regression it rejects is a tool of the list that reaches nothing under bypass
+    /// (the deferred read of a listed file beside the workspace is refused), one judged as a write,
+    /// or one given a reach where the mode is not bypass.
+    #[test]
+    fn the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass() {
+        let root =
+            std::env::temp_dir().join(format!("bravebot-reference-reach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let workspace = Workspace::new(root.canonicalize().expect("canonical")).expect("workspace");
+        let facts = |mode| ReachFacts {
+            permission_mode: crate::LiveMode::new(mode),
+            profile: None,
+        };
+        for &(tool, field) in TOOLS_READING_A_REFERENCE {
+            let reach = facts(crate::PermissionMode::Bypass)
+                .reach_for(tool, &workspace, || true)
+                .unwrap_or_else(|| panic!("{tool} reaches nothing under bypass"));
+            assert_eq!((reach.tool.as_str(), reach.field), (tool, field));
+            assert!(!reach.write, "{tool} is judged as a write");
+            assert!(
+                facts(crate::PermissionMode::Bypass)
+                    .reach_for(tool, &workspace, || false)
+                    .is_none(),
+                "{tool} reaches in a workspace that is not trusted"
+            );
+            for mode in [
+                crate::PermissionMode::Ask,
+                crate::PermissionMode::AcceptEdits,
+                crate::PermissionMode::Plan,
+            ] {
+                assert!(
+                    facts(mode).reach_for(tool, &workspace, || true).is_none(),
+                    "{tool} reaches outside bypass"
+                );
+            }
+        }
+    }
+
+    /// MODE-4, PATHREQ-7: the reach is set before each call and cleared after it, as the dispatcher
+    /// does with [`ReachFacts::for_call`] and `hold_bypass_reach`. A path beside the workspace
+    /// resolves while a tool that opens a reference holds the reach, and does not after the call is
+    /// over or in the next call of any tool that is in neither list. The regression it rejects is a
+    /// reach left held by the call that had it, which a later call of a tool the mode gives no
+    /// reach finds, and a tool outside both lists that is given one.
+    #[test]
+    fn a_tool_outside_the_tables_called_after_one_holding_the_reach_gets_none() {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-homes")
+            .join(format!("reach-cleared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        let session = top.join("session");
+        let beside = top.join("beside");
+        let home = top.join("home");
+        std::fs::create_dir_all(&session).expect("session");
+        std::fs::create_dir_all(&beside).expect("beside");
+        std::fs::create_dir_all(home.join(".ssh")).expect("home");
+        std::fs::write(beside.join("notes.txt"), "NOTES").expect("a file beside");
+        let home = home.canonicalize().expect("canonical home");
+        let beside_file = beside
+            .canonicalize()
+            .expect("canonical")
+            .join("notes.txt")
+            .display()
+            .to_string();
+        let workspace =
+            Workspace::new(session.canonicalize().expect("canonical")).expect("session");
+        let facts = ReachFacts {
+            permission_mode: crate::LiveMode::new(crate::PermissionMode::Bypass),
+            profile: Some(home.as_path()),
+        };
+        let reaches = |workspace: &Workspace| workspace.resolve(&beside_file).is_ok();
+        assert!(!reaches(&workspace), "the control: nothing is held yet");
+
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let mut checked = 0;
+        for holder in TOOLS_READING_A_REFERENCE.iter().map(|(tool, _)| *tool) {
+            for tool in &offered {
+                let name = tool.function.name.as_str();
+                let listed = TOOLS_NAMING_A_PATH
+                    .iter()
+                    .any(|(named, _, _)| *named == name)
+                    || TOOLS_READING_A_REFERENCE
+                        .iter()
+                        .any(|(named, _)| *named == name);
+                if listed {
+                    continue;
+                }
+                workspace.hold_bypass_reach(facts.reach_for(holder, &workspace, || true));
+                assert!(reaches(&workspace), "{holder} held no reach for its call");
+                // The call is over: the dispatcher holds none before the next call is made.
+                workspace.hold_bypass_reach(None);
+                assert!(
+                    !reaches(&workspace),
+                    "{holder}: the reach outlived its call"
+                );
+                // The next call is of a tool outside both lists.
+                workspace.hold_bypass_reach(facts.reach_for(name, &workspace, || true));
+                assert!(
+                    !reaches(&workspace),
+                    "{name} found a reach after {holder} held one"
+                );
+                workspace.hold_bypass_reach(None);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no tool outside the lists was offered");
     }
 
     /// MODE-4, PATHREQ-7: the tools that name a path are one list. A tool offered with an argument

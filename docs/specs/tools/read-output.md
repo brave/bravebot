@@ -104,9 +104,15 @@ This rule is about a file's worth and not about a slot's bytes. Promoting one sl
 has read it is a different thing, single-use, writing no rule and leaving the trust map saying
 what it said, and it is [vetting.md](../vetting.md).
 
+A reference that stands for a file a listing or a search found is not opened by this tool, so it is
+given no reach under bypass either. Opening one is `vet_content`'s or `spawn_processor`'s, which
+are given the reach a call of `read_file` for the path has
+([PATHREQ-7](request-path.md#PATHREQ-7)).
+
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
 `verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
 `verified-by: bravebot_agent::tools::tests::arguments::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
+`verified-by: bravebot_agent::turn::under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer

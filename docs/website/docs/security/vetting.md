@@ -67,7 +67,7 @@ path, a URL or a command, because a reference name means something to the planne
 
 It refuses a reference to nothing and a call from a delegate. A reference to a file
 nothing has read yet is opened rather than refused, since naming one is the ordinary way for the planner
-to ask about a file it may not read.
+to ask about a file it may not read. Under bypass the file is opened with the reach `read_file` has for its path, so a file in a directory beside the workspace is opened without a request, and in any other mode it is refused as outside the workspace.
 
 ### Asking for the result in the same call
 
