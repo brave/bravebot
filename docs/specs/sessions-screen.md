@@ -145,7 +145,8 @@ stopped, and `saved` is a record nothing runs. A roster entry whose process is g
 ([BG-6](background-sessions.md#BG-6)). The session this terminal is in is `working` or `ready` as the
 terminal says, whatever the roster or the lock says.
 
-Where the screen is 90 columns wide beside the list, the details of the session under the cursor stand
+Where the terminal is 94 columns wide, which leaves the 90 that the list and the details share inside
+the margin of two columns on each side, the details of the session under the cursor stand
 at the right: its name, status, when it began and was last written as ages, model, the reasoning
 effort, mode, turns, tokens as read and written, the share of the input the service served from its
 prompt cache, the number of edits and of commands it made and whether the last command failed,
@@ -155,8 +156,17 @@ prompt. A line is drawn only where its fact is known: a record that predates the
 effort, the work counts or the cache figures has no line for it, and the cache share is not drawn
 where no input was read. Where the screen is too narrow for them, a line under the list says the branch, the size and
 the start of the id of the session under the cursor, and where the list is 100 columns wide the branch
-and the size are columns of every row. A manifest run, which can be read and not continued, says so on
-its row. A session that needs a person says that it does and which kind of prompt it holds, by a
+and the size are columns of every row. Details whose lines, wrapped to the width of the pane, are taller than the pane scroll. The last
+row of the pane is then the marker's and holds no line: it says that there are more lines above,
+below or both, and says nothing at either end of the lines it has none beyond. Shift-Up and
+Shift-Down scroll a line, and the wheel scrolls the rows `tui.wheelRows` names while the pointer is
+over the pane ([SCREEN-12](#SCREEN-12)), and neither goes past the first line or the last. The
+scroll belongs to the session under the cursor: it goes back to the first line when the cursor is on
+another session, stays through a read of the list that leaves the cursor on the session, and is cut
+back to the last line where fewer lines or more room leave less to scroll. The two keys are the
+screen's own and no settings file moves them ([SCREEN-14](#SCREEN-14)), and they scroll nothing
+while a name is being typed or a question or the help is up. A manifest run, which can be read and
+not continued, says so on its row. A session that needs a person says that it does and which kind of prompt it holds, by a
 word from the fixed set of [BG-5](background-sessions.md#BG-5), and says nothing of what the prompt
 is about. An interrupted session says its process ended in the middle of a turn. The list and the
 details draw no reply, tool result or question text.
@@ -180,6 +190,15 @@ is idle or working would be a guess.
 `verified-by: bravebot_tui::render::sessions_screen::a_cache_share_is_a_whole_percent_and_never_past_a_hundred`
 `verified-by: bravebot_tui::render::sessions_screen::a_wide_list_has_the_branch_and_the_size_of_each_session_in_columns`
 `verified-by: bravebot_tui::render::sessions_screen::a_narrow_list_says_the_branch_size_and_id_of_the_cursor_row_under_it`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_stand_from_ninety_four_columns`
+`verified-by: bravebot_tui::render::sessions_screen::details_taller_than_the_pane_scroll_a_line_at_a_time_to_their_last_line_and_no_further`
+`verified-by: bravebot_tui::render::sessions_screen::every_line_of_the_details_is_read_on_some_row_while_scrolling`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_say_when_there_are_more_lines_above_and_below`
+`verified-by: bravebot_tui::render::sessions_screen::the_keys_that_scroll_the_details_move_no_cursor_and_type_no_text`
+`verified-by: bravebot_tui::render::sessions_screen::the_scroll_goes_back_to_the_top_for_another_session_and_stays_through_a_refresh`
+`verified-by: bravebot_tui::render::sessions_screen::a_taller_terminal_or_fewer_lines_cut_the_scroll_back_to_the_last_line`
+`verified-by: bravebot_tui::render::sessions_screen::a_pane_of_a_row_or_two_draws_the_details_without_a_panic`
+`verified-by: bravebot_tui::sessions_screen::details::the_offset_stops_at_the_first_line_and_at_the_last`
 
 <a id="SCREEN-4"></a>
 ### SCREEN-4: five tabs count the sets of sessions, the header says what is waiting, and a search narrows the rows and not the counts
@@ -317,7 +336,9 @@ Up, `k` and Ctrl-P move the cursor up, and Down, `j` and Ctrl-N down, from the f
 and from the box to the last row (Up) or the first (Down), and from the last row to the box. While
 the box has the focus no row is the cursor, the letters typed are the search, and Enter opens the
 first match. A screen opened by `--resume`, `--from-pr` or `/resume` has the box focused, and one
-opened by Left or `/sessions` has the cursor on a row. Home and End go to the first row and the last. Page Up, Page Down, Ctrl-B and Ctrl-F move a screen and
+opened by Left or `/sessions` has the cursor on a row. Home and End go to the first row and the last. Shift-Up and Shift-Down scroll the details of the
+session under the cursor a line and move nothing else ([SCREEN-3](#SCREEN-3)); they do so from the
+search box and are not text there. Page Up, Page Down, Ctrl-B and Ctrl-F move a screen and
 stop at either end without going round. "Show more" is the entry after the last session where older
 sessions were left out, and the cursor goes to it like any row. Enter and Right open the session under the
 cursor ([SCREEN-8](#SCREEN-8)).
@@ -352,6 +373,7 @@ comes into view with its first row.
 `verified-by: bravebot_tui::render::sessions_screen::an_empty_list_says_whether_nothing_exists_or_nothing_matches`
 `verified-by: bravebot_tui::render::sessions_screen::the_line_being_typed_has_its_label_and_the_caret_after_it`
 `verified-by: bravebot_tui::render::sessions_screen::the_help_lists_the_keys_in_three_groups`
+`verified-by: bravebot_tui::render::sessions_screen::the_footer_and_the_help_name_the_keys_that_scroll_the_details`
 `verified-by: bravebot_tui::render::sessions_screen::the_footer_names_the_keys_that_answer_where_the_person_is`
 `verified-by: bravebot_tui::sessions_screen::backspace_edits_a_line_and_deletes_a_task_only_outside_one`
 `verified-by: bravebot_tui::render::sessions_screen::a_tiny_terminal_draws_without_a_panic`
@@ -465,7 +487,10 @@ row within the time of a double click opens it as Enter does, as a row of a pick
 ([MOUSE-15](mouse.md#MOUSE-15)). The same holds for "Show more". A press on a heading, on the blank
 line between groups, on the header or below the last row does nothing. A turn of the wheel moves the
 cursor `tui.wheelRows` rows over the headings and stops at the first row and the last
-([MOUSE-46](mouse.md#MOUSE-46)). Each row and tab is recorded as a target where it is drawn, and
+([MOUSE-46](mouse.md#MOUSE-46)), except where the pointer is over the details beside the list: there
+it scrolls them the same number of lines and moves no cursor ([SCREEN-3](#SCREEN-3)), and a press
+on them does nothing. Each row and tab is recorded as a target where it is drawn, and the details as
+the cells of the pane, and
 nothing the plain frame drew stands while the Sessions screen is open, so a press never reaches what the Sessions screen
 covers ([MOUSE-50](mouse.md#MOUSE-50)).
 
@@ -473,6 +498,10 @@ covers ([MOUSE-50](mouse.md#MOUSE-50)).
 `verified-by: bravebot_tui::sessions_screen_tests::a_second_click_on_a_row_opens_it_as_enter_does`
 `verified-by: bravebot_tui::sessions_screen_tests::a_press_that_is_on_no_row_does_nothing`
 `verified-by: bravebot_tui::sessions_screen_tests::the_wheel_walks_the_cursor_and_stops_at_the_ends`
+`verified-by: bravebot_tui::sessions_screen_tests::the_wheel_scrolls_the_details_over_them_and_walks_the_cursor_elsewhere`
+`verified-by: bravebot_tui::sessions_screen_tests::the_wheel_over_the_details_scrolls_nothing_while_a_name_is_typed_or_a_question_is_up`
+`verified-by: bravebot_tui::sessions_screen_tests::a_press_on_the_details_does_nothing`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_are_recorded_as_the_cells_they_are_drawn_in`
 `verified-by: bravebot_tui::sessions_screen_tests::a_press_on_the_sessions_screen_reaches_nothing_beneath_it`
 `verified-by: bravebot_tui::sessions_screen_tests::a_click_or_the_wheel_while_a_question_is_up_leaves_the_list_alone`
 `verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
@@ -513,9 +542,9 @@ otherwise:
 
 A key is spelled as one character, alone or after `ctrl-` or `alt-`, or as a function key from `f1`
 to `f12`: `z`, `ctrl-e`, `alt-h`, `f5`, `ctrl+/`. Nothing else can be moved. Enter, Right and the other
-arrows, Page Up, Page Down, Home, End, Tab, Shift-Tab, Escape, the digits 1 to 5, Ctrl-P, Ctrl-N,
-Ctrl-B, Ctrl-F, Ctrl-C, F3 and the keys that answer a question or a line being typed are the screen's
-own. Delete moved to a key takes Backspace and the Delete key with it, and the key an action was
+arrows, Shift-Up and Shift-Down ([SCREEN-3](#SCREEN-3)), Page Up, Page Down, Home, End, Tab,
+Shift-Tab, Escape, the digits 1 to 5, Ctrl-P, Ctrl-N, Ctrl-B, Ctrl-F, Ctrl-C, F3 and the keys that
+answer a question or a line being typed are the screen's own. Delete moved to a key takes Backspace and the Delete key with it, and the key an action was
 moved off does nothing.
 
 The keys apply while the cursor is on the list. In a search, in a name being typed and under the
@@ -533,7 +562,7 @@ the rule that settles the input box's chords. Each refusal is said when the Sess
 first with the name, the spelling and the key the action stays on, and a count of the others, until
 the next key. What is said is pictured and cut, since the file may hold anything.
 
-The footer, the hint beside the title and the list `?` open name the keys in force.
+The footer, the hint beside the title and the list `?` open name the keys in force, and the footer and the list name Shift-Up and Shift-Down where the details have lines to scroll to.
 
 **Why.** The keys are bare letters, so a settings file that could move only a chord carrying Ctrl or
 Alt could move none of them, and a person whose terminal or habits want `x` elsewhere could not move

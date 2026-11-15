@@ -178,6 +178,9 @@ fr:sessions-screen-details-last-command-failed
 fr:sessions-screen-details-manifest
 fr:sessions-screen-details-mode
 fr:sessions-screen-details-model
+fr:sessions-screen-details-more-above
+fr:sessions-screen-details-more-below
+fr:sessions-screen-details-more-both
 fr:sessions-screen-details-open-to-answer
 fr:sessions-screen-details-project
 fr:sessions-screen-details-prompt
@@ -220,6 +223,7 @@ fr:sessions-screen-help-pin
 fr:sessions-screen-help-quit
 fr:sessions-screen-help-rename
 fr:sessions-screen-help-resize
+fr:sessions-screen-help-scroll-details
 fr:sessions-screen-help-search
 fr:sessions-screen-help-stop
 fr:sessions-screen-help-tabs
@@ -238,6 +242,7 @@ fr:sessions-screen-hint-new
 fr:sessions-screen-hint-open
 fr:sessions-screen-hint-open-first
 fr:sessions-screen-hint-rename
+fr:sessions-screen-hint-scroll-details
 fr:sessions-screen-interrupt-body
 fr:sessions-screen-interrupt-copy-title
 fr:sessions-screen-interrupt-new-title

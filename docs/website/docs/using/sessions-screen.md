@@ -54,7 +54,7 @@ too narrow for the details, a line under the list gives the branch, the size and
 of the session under the cursor. A manifest run, which can be read and not continued, is marked on its
 row.
 
-On a screen wide enough, the details of the session under the cursor stand at the right: when it
+On a terminal 94 columns wide or more, the details of the session under the cursor stand at the right: when it
 began and when it was last active, its model, the reasoning effort it was asked for at its last turn,
 the mode a background session runs in, the turns and tokens it has spent, how much of its input the
 service read from its prompt cache, how many edits and commands it made and whether the last command
@@ -63,6 +63,12 @@ its agent, the issue and pull request you linked, the session it was handed off 
 whole id and the last prompt you typed to it. A session that needs you says which kind of question it holds.
 It does not show what the model said, so a name or a status on this screen is always something you
 typed or a fact about a process.
+
+When the details are taller than the space beside the list, the last row of the pane says **↓ more
+below**, **↑ more above** or **↑↓ more above and below**. **Shift-Up** and **Shift-Down** scroll them a
+line, and the wheel scrolls them while the pointer is over them. The cursor does not move, and the
+keys are not text in the search box. The details start from their first line again when the cursor
+moves to another session, and keep their place while the list is read again.
 
 The list is the 40 most recently written sessions. **Show more** at its end reads 40 older ones.
 
@@ -73,6 +79,7 @@ The list is the 40 most recently written sessions. **Show more** at its end read
 | Up, Down, `k`, `j` | move the cursor through the sessions and the search box, and go round at the ends |
 | Page Up, Page Down | move a screen, and stop at the ends |
 | Home, End | go to the first or the last row |
+| Shift-Up, Shift-Down | scroll the details of the session under the cursor |
 | Enter, Right | open the session under the cursor |
 | `1` to `5`, Tab, Shift-Tab | choose a tab |
 | `n` | begin a session in the directory of the session under the cursor |
@@ -99,8 +106,8 @@ Thirteen of these keys can be moved with a `sessionsKeys` block in
 
 A key is one character, alone or after `ctrl-` or `alt-`, or a function key from `f1` to `f12`. The
 key an action was moved off does nothing, and the footer, the hint beside the title and the list
-`?` shows name the keys in force. Enter, the arrows, Tab, Escape, the digits 1 to 5, Ctrl-P, Ctrl-N,
-Ctrl-B, Ctrl-F, Ctrl-C and F3 are the screen's own and cannot be moved. A key that cannot be had, or
+`?` shows name the keys in force. Enter, the arrows, Shift-Up, Shift-Down, Tab, Escape, the digits 1 to 5,
+Ctrl-P, Ctrl-N, Ctrl-B, Ctrl-F, Ctrl-C and F3 are the screen's own and cannot be moved. A key that cannot be had, or
 that another action also asked for, leaves the action where it was, and the screen says so when it
 opens. In a search or a name being typed every character is text, whatever it is bound to.
 
@@ -156,7 +163,7 @@ A session open in this terminal, or in another one, is never archived or deleted
 ## The mouse
 
 Click a tab to choose it. Click a row to put the cursor on it, and click it again to open it. The
-wheel moves the cursor.
+wheel moves the cursor, except over the details, where it scrolls them.
 
 ## `bravebot sessions`
 

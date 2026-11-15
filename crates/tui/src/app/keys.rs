@@ -2110,14 +2110,29 @@ fn carry_out_choice(session: &mut Session, choice: crate::state::Choice) -> Acti
 ///
 /// While the scroller is open it is one of the scroller's keys, so it stops at the first row and the
 /// last the way every other movement in that mode does. It takes no count, so it drops one, as any
-/// other key would. Over the rows of a list of what could be typed it walks the list and not the
-/// transcript beneath it. Over the panel in the files state it scrolls the pane under the pointer
-/// (MOUSE-19). Elsewhere it scrolls the transcript. How far it goes is what `tui.wheelRows` named,
-/// which is the same distance in each.
+/// other key would. In the Sessions screen it scrolls the details beside the list while the pointer
+/// is over them and walks the cursor elsewhere (SCREEN-12). Over the rows of a list of what could be
+/// typed it walks the list and not the transcript beneath it. Over the panel in the files state it
+/// scrolls the pane under the pointer (MOUSE-19). Elsewhere it scrolls the transcript. How far it goes
+/// is what `tui.wheelRows` named, which is the same distance in each.
 fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
     let rows = session.wheel_rows();
+    // Over the details of the Sessions screen the wheel scrolls them, and elsewhere on it the wheel
+    // walks the cursor (SCREEN-12).
+    let over_the_details = session.sessions_screen().is_some()
+        && session
+            .laid
+            .find_of_kind(session, mouse.row, mouse.column, |hit| {
+                hit == Hit::SessionsScreen(crate::sessions_screen::Click::Details)
+            })
+            .is_some();
     if let Some(sessions_screen) = session.sessions_screen_mut() {
-        sessions_screen.wheel(usize::from(rows), down);
+        match over_the_details {
+            true => {
+                sessions_screen.scroll_details(usize::from(rows), down);
+            }
+            false => sessions_screen.wheel(usize::from(rows), down),
+        }
     } else if session.scrolling() {
         session.take_the_scroller_count();
         match down {
@@ -2192,6 +2207,11 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
             1 | 2 => click_an_item(session, index, presses == 2),
             _ => Action::Copy,
         };
+    }
+    // The details of the Sessions screen are drawn for the wheel and take no click, which is the
+    // selection it made, as on any cell that is no row (SCREEN-12).
+    if target.hit == Hit::SessionsScreen(crate::sessions_screen::Click::Details) {
+        return Action::Copy;
     }
     // The same for a row of the Sessions screen: the first click puts the cursor on it and the
     // second opens it, as Enter does (SCREEN-12).
