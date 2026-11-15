@@ -3748,6 +3748,13 @@ suspend-failed = impossible de suspendre la session : { $reason }
 # que le nom de n'importe quel mode de permission tienne encore à côté sur une ligne de quatre-vingts
 # colonnes.
 leave-word-sent = Envoyé comme invite ; ctrl-c l'arrête, /exit pour partir
+# Dit sous la zone de saisie pendant le tour commencé par une commande tapée avec des mots après elle
+# alors qu'elle n'en prend aucun, comme /model suivi d'un nom de modèle. Ces mots font de la ligne
+# une invite : elle est partie vers le modèle et la commande ne s'est pas exécutée ; la commande
+# seule est ce qui l'exécute. Dessiné à droite de la ligne d'indications comme leave-word-sent, et
+# aussi court pour que le mode vi et le nom de n'importe quel mode de permission tiennent à côté sur
+# une ligne de quatre-vingts colonnes.
+command-sent-as-prompt = Invite envoyée ; ctrl-c l'arrête ; le mot seul l'exécute
 prompt-file-unreadable =
     /{ $name } est un fichier d'invite illisible comme texte, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-too-large =

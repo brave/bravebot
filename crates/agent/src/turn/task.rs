@@ -10,6 +10,35 @@ use super::MAX_TOOL_ROUNDS;
 use crate::conversation::Composed;
 use crate::tools;
 
+/// The interface a person is using to talk to the planner, as the front end that builds the task
+/// says it (INSTR-9).
+///
+/// Defined here and supplied by the caller, because this crate cannot see which front end is
+/// calling it and does not depend on the crate that records one. It selects one of three fixed
+/// sentences and nothing else: no file, tool result or record decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontEnd {
+    /// The full-screen terminal interface.
+    Terminal,
+    /// The desktop application.
+    Desktop,
+    /// An editor that hosts the session over the Agent Client Protocol.
+    Editor,
+}
+
+impl FrontEnd {
+    /// The sentence the planner's system prompt carries for this front end.
+    pub const fn sentence(self) -> &'static str {
+        match self {
+            Self::Terminal => "The person is using the terminal client.",
+            Self::Desktop => "The person is using the desktop app.",
+            Self::Editor => {
+                "The person is using an editor that hosts this session over the Agent Client Protocol."
+            }
+        }
+    }
+}
+
 /// A file the user attached, to be carried rather than read as text.
 ///
 /// Separate from [`Task::files`] because the two differ in what reaches the planner: a context
@@ -235,6 +264,13 @@ pub struct Task {
     /// once the turn returns. A one-shot run, `--plain`, a goal run and a manifest run drop them, so
     /// the planner is not offered a tool whose "recorded" would be untrue.
     pub keeps_links: bool,
+    /// The front end the person is using, where the caller says so (INSTR-9).
+    ///
+    /// `None` unless a caller says so, and then the prompt says nothing about one: a default would
+    /// guess for every caller that has no person at an interface, such as a one-shot run, a goal
+    /// run or a delegate. Supplied per turn from the front end running now and never read back from
+    /// a session record, so a session resumed in another front end names the one in use.
+    pub front_end: Option<FrontEnd>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -592,6 +628,7 @@ impl Task {
             retriever: None,
             courier: None,
             keeps_links: false,
+            front_end: None,
             model: None,
             effort: None,
             variant: None,
@@ -844,6 +881,12 @@ impl Task {
     /// Say that the front end running this turn keeps the links `set_link` records (SETLINK-2).
     pub fn keeping_links(mut self, keeps: bool) -> Self {
         self.keeps_links = keeps;
+        self
+    }
+
+    /// Say which front end the person is using, so the planner is told (INSTR-9).
+    pub fn in_front_end(mut self, front_end: FrontEnd) -> Self {
+        self.front_end = Some(front_end);
         self
     }
 

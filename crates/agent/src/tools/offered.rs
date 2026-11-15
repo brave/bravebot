@@ -443,7 +443,9 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          waits for the job to end or for wait_seconds to run out and returns what it printed \
          since your last look in one answer. It is still a wait inside this turn, so it cannot \
          tell you about anything that happens after the turn ends, and the account of the job's \
-         start says whether it is killed then or kept."
+         start says whether it is killed then or kept. Repeated waits on a job that is still \
+         running are not held. The same job_output call without wait_seconds, or on a job that \
+         has ended, is held at the third in a row."
     )
 }
 
@@ -1916,7 +1918,8 @@ fn table(
                                         adjusted, so the wait you get is the wait you asked for. \
                                         Omit it to look and answer straight away. With \
                                         until_exit it returns only when the job ends, the user \
-                                        types a line or the bound is reached."
+                                        types a line or the bound is reached. The same wait \
+                                        repeated while the job is running is not held."
                     },
                     "until_exit": {
                         "type": "boolean",

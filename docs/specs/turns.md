@@ -523,6 +523,26 @@ permission mode, no rule and no answer lets a held call run, bypassing included,
 one-shot run, a manifest run and a closed channel are refused in the same way as a session with a
 person at it. A note under the turn names the tool and the count.
 
+**A bounded wait on a running job is not refused.** A `job_output` call that names a background job
+of this turn, carries a `wait_seconds` the tool accepts, and does not ask to kill the job is a
+wait on the job, which returns when it ends, when it prints something not yet shown or when the
+seconds run out, and the same wait repeated while the job is running is not a repeat of
+the kind this clause guards against. Such a call is treated as a different call from the ones
+around it, so the count starts again, and it is never refused or recorded in the trail.
+The wait may carry `until_exit` or not. The decision reads the planner's own tool name and
+arguments, read through the same gate as any other argument of the planner's, and the driver's own
+observation that the job's process has not exited. It never reads what the job printed. Where the
+gate refuses to read the job name, because the context holds something untrusted, the call is not
+exempt and is counted. A `job_output` call with no `wait_seconds`, with a `wait_seconds` the tool
+refuses, with a `read` that is not true or false, that kills the job, or that names a job that has
+ended or is not one of this turn's is counted and refused as any other call.
+
+**The refusal says what to do instead.** The error the planner is given names the tool and the
+count. For `job_output` it also says that the end of a background job is reported in a message of
+its own, that `wait_seconds` waits for a running job, and that a shell loop that sleeps is not a
+way to wait. For any other tool it says to try a different call or carry on with the rest of the
+task. The route is chosen from the tool name the planner wrote.
+
 **The turn goes on.** The refusal does not end the turn. A planner that keeps repeating the call
 is bound only by the limits that bound any turn ([TURN-1](#TURN-1), [TURN-8](#TURN-8)).
 
@@ -539,6 +559,16 @@ result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
 `verified-by: bravebot_agent::turn::the_trail_records_the_count_and_nothing_the_call_carried`
 `verified-by: bravebot_agent::turn::a_delegates_repeated_call_is_refused_and_the_person_is_not_asked`
 `verified-by: bravebot_agent::repeated_call::the_same_arguments_in_another_key_order_are_the_same_call`
+`verified-by: bravebot_agent::repeated_call::a_call_passed_without_counting_starts_the_count_again`
+`verified-by: bravebot_agent::repeated_call::the_refusal_names_the_tool_and_the_count_and_gives_a_route`
+`verified-by: bravebot_agent::tools::tests::arguments::a_bounded_wait_on_a_running_job_is_waited_on`
+`verified-by: bravebot_agent::tools::tests::arguments::a_look_a_kill_or_a_refused_wait_is_not_waited_on`
+`verified-by: bravebot_agent::tools::tests::arguments::a_wait_on_a_job_that_has_ended_is_not_waited_on`
+`verified-by: bravebot_agent::tools::tests::arguments::a_wait_is_not_waited_on_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::turn::four_identical_waits_on_a_running_job_ask_nothing_and_all_run`
+`verified-by: bravebot_agent::turn::identical_looks_with_no_wait_are_still_held_at_the_third`
+`verified-by: bravebot_agent::turn::identical_waits_that_kill_the_job_are_still_held_at_the_third`
+`verified-by: bravebot_agent::turn::identical_waits_on_a_job_that_has_ended_are_held_at_the_third`
 
 <a id="TURN-10"></a>
 ### TURN-10: the independent reads of a round run at the same time

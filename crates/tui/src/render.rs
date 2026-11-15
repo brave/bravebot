@@ -6195,6 +6195,115 @@ mod tests {
         }
     }
 
+    /// A command the table gives no argument, typed with words after it, is a prompt, and the person
+    /// who typed it may have meant the command. The row under the box says the line went to the
+    /// model, and that it was not the command, for as long as the turn it began runs (CMD-2).
+    #[test]
+    fn the_row_under_the_box_says_a_command_given_words_went_to_the_model_as_a_prompt() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let said = "Prompt sent; ctrl-c stops it; bare word runs it";
+        for line in ["/model gpt-5", "/undo the last change", "/lsp servers"] {
+            let mut session = typed(line);
+            let before = hint_row_at(&session, 90, 24);
+            assert!(
+                !before.contains(said),
+                "{line:?}: said before Enter: {before}"
+            );
+
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert!(session.a_turn_is_running(), "{line:?} began no turn");
+            let sent = hint_row_at(&session, 90, 24);
+            assert!(sent.contains(said), "{line:?}: {sent}");
+            assert!(
+                !sent.contains("/exit leaves"),
+                "{line:?} drew the leave word's note: {sent}"
+            );
+
+            session.complete("done", Vec::new(), 0);
+            let after = hint_row_at(&session, 90, 24);
+            assert!(
+                !after.contains(said),
+                "{line:?}: left up after the turn: {after}"
+            );
+        }
+    }
+
+    /// The note is about a command typed with words after it and no other line: the bare command is
+    /// the command and begins no turn, a command that takes an argument takes the words, and a prompt
+    /// that merely contains a command is a question like any other, so a note saying it was
+    /// mistaken for a command would be wrong.
+    #[test]
+    fn the_row_under_the_box_says_nothing_of_a_line_that_is_not_a_command_given_words() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for line in [
+            "/rename foo",
+            "/models gpt-5",
+            "why is /model slow",
+            "how do I exit",
+        ] {
+            let mut session = typed(line);
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+
+            let hint = hint_row_at(&session, 90, 24);
+            assert!(!hint.contains("Prompt sent"), "{line:?}: {hint}");
+        }
+    }
+
+    /// The note takes its room ahead of the parts of the line, as the leave word's does, and one
+    /// permission mode name is the part given up last. A note too wide for eighty columns clears the
+    /// whole left side, so the person reading it would be told it was a prompt and not told that
+    /// every write is going through.
+    #[test]
+    fn the_note_on_a_command_given_words_leaves_the_permission_mode_on_an_eighty_column_row() {
+        use bravebot_agent::PermissionMode;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (mode, vi) in [
+            (PermissionMode::Bypass, false),
+            (PermissionMode::AcceptEdits, true),
+            (PermissionMode::Plan, true),
+        ] {
+            let mut session = Session::new("kernel-enforced").starting_in_bypass();
+            while session.permission_mode() != mode {
+                session.cycle_permission_mode();
+            }
+            if vi {
+                session.choose_editing(crate::vim::Editing::Vi);
+            }
+            for c in "/model gpt-5".chars() {
+                session.type_char(c);
+            }
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert!(session.a_turn_is_running(), "the line did not start a turn");
+
+            let hint = hint_row_at(&session, 80, 24);
+            assert!(
+                hint.contains("Prompt sent; ctrl-c stops it; bare word runs it"),
+                "{mode:?}: {hint}"
+            );
+            let named =
+                crate::status::named_mode(mode, true).expect("every mode but asking is named");
+            assert!(
+                hint.contains(named),
+                "{mode:?} (vi: {vi}) was cleared by the note: {hint}"
+            );
+            if vi {
+                assert!(hint.contains("INSERT"), "{mode:?} lost the vi mode: {hint}");
+            }
+        }
+    }
+
     /// Rubbing the marker out is the only way a person has to change their mind about a file, and
     /// the row under the box is the only place they can see whether it worked. Left drawn, it says
     /// a file is going that is not.

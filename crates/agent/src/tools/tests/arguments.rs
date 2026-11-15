@@ -2581,6 +2581,136 @@ fn a_url_is_refused_once_the_context_has_met_something_untrusted() {
     );
 }
 
+#[cfg(unix)]
+fn a_wait_call(tool: &str, arguments: Value) -> ToolCall {
+    serde_json::from_value(json!({
+        "id": "c1",
+        "type": "function",
+        "function": {"name": tool, "arguments": arguments.to_string()},
+    }))
+    .expect("a tool call")
+}
+
+/// A job that is still running when the closure is called, and is let go afterwards.
+#[cfg(unix)]
+fn with_a_running_job(name: &str, body: impl FnOnce(&mut Jobs)) {
+    let root = std::env::temp_dir().join(format!("bravebot-waited-{name}-{}", std::process::id()));
+    let mut jobs = Jobs::new();
+    let gate = job_running_commands(&mut jobs, &root, "printf a", "printf b");
+    body(&mut jobs);
+    std::fs::write(&gate, "").unwrap();
+    wait_for_the_job_to_end(&mut jobs);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// TURN-9: a bounded wait on a running job is not counted, in both forms.
+/// Rejects: exempting by tool name only (the no-wait and kill rows below), and counting
+/// every job_output (this test).
+#[cfg(unix)]
+#[test]
+fn a_bounded_wait_on_a_running_job_is_waited_on() {
+    with_a_running_job("running", |jobs| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink);
+        for arguments in [
+            json!({"job": "job:1", "wait_seconds": 1}),
+            json!({"job": "job:1", "wait_seconds": 600, "until_exit": true}),
+            json!({"job": "job:1", "wait_seconds": 5, "until_exit": false, "read": true}),
+        ] {
+            assert!(
+                jobs.is_waited_on_while_running(
+                    &mut policy,
+                    &a_wait_call("job_output", arguments.clone())
+                ),
+                "{arguments}"
+            );
+        }
+        assert!(jobs.is_waited_on_while_running(
+            &mut policy,
+            &a_wait_call(
+                "functions.job_output",
+                json!({"job": "job:1", "wait_seconds": 1})
+            )
+        ));
+    });
+}
+
+/// TURN-9: a call that is not a bounded wait stays counted.
+/// Rejects: exempting every job_output, and exempting a kill.
+#[cfg(unix)]
+#[test]
+fn a_look_a_kill_or_a_refused_wait_is_not_waited_on() {
+    with_a_running_job("notwaits", |jobs| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink);
+        for arguments in [
+            json!({"job": "job:1"}),
+            json!({"job": "job:1", "read": true}),
+            json!({"job": "job:1", "wait_seconds": 5, "read": "yes"}),
+            json!({"job": "job:1", "wait_seconds": 5, "kill": true}),
+            json!({"job": "job:1", "wait_seconds": 0}),
+            json!({"job": "job:1", "wait_seconds": 601}),
+            json!({"job": "job:1", "wait_seconds": "5"}),
+            json!({"job": "job:1", "until_exit": true}),
+            json!({"job": "job:1", "wait_seconds": 5, "until_exit": true, "kill": true}),
+            json!({"job": "job:2", "wait_seconds": 5}),
+            json!({"wait_seconds": 5}),
+        ] {
+            assert!(
+                !jobs.is_waited_on_while_running(
+                    &mut policy,
+                    &a_wait_call("job_output", arguments.clone())
+                ),
+                "{arguments}"
+            );
+        }
+        for tool in ["read_file", "run", "read_output"] {
+            assert!(!jobs.is_waited_on_while_running(
+                &mut policy,
+                &a_wait_call(tool, json!({"job": "job:1", "wait_seconds": 5}))
+            ));
+        }
+        let mut not_json = a_wait_call("job_output", json!({}));
+        not_json.function.arguments = Some("job:1 wait_seconds 5".to_string());
+        assert!(!jobs.is_waited_on_while_running(&mut policy, &not_json));
+    });
+}
+
+/// TURN-9: a wait on a job that has ended returns at once, so it is counted again.
+/// Rejects: ignoring the state of the job.
+#[cfg(unix)]
+#[test]
+fn a_wait_on_a_job_that_has_ended_is_not_waited_on() {
+    let root = std::env::temp_dir().join(format!("bravebot-waited-ended-{}", std::process::id()));
+    let mut jobs = Jobs::new();
+    let gate = job_running_commands(&mut jobs, &root, "printf a", "printf b");
+    std::fs::write(&gate, "").unwrap();
+    wait_for_the_job_to_end(&mut jobs);
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink);
+    assert!(!jobs.is_waited_on_while_running(
+        &mut policy,
+        &a_wait_call("job_output", json!({"job": "job:1", "wait_seconds": 5}))
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// TURN-9: the job name is read through the argument gate, which refuses it once the
+/// context has met something untrusted, so the call stays counted.
+/// Rejects: deciding from the job name without the gate.
+#[cfg(unix)]
+#[test]
+fn a_wait_is_not_waited_on_once_the_context_has_met_something_untrusted() {
+    with_a_running_job("untrusted", |jobs| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink).resuming(Integrity::Untrusted);
+        assert!(!jobs.is_waited_on_while_running(
+            &mut policy,
+            &a_wait_call("job_output", json!({"job": "job:1", "wait_seconds": 5}))
+        ));
+    });
+}
+
 /// The baseline for `job_output`. The name is read, which the trail says, and the lookups
 /// against the turn's jobs and the delegates it started then find nothing, which is the
 /// whole of what this tool decides from it.

@@ -507,8 +507,13 @@ remembered command cannot pick one up unseen. Both redirections are among the pr
 ## Something that wants a terminal is refused before it starts
 
 `git rebase -i`, `git add -i`, an editor, a pager without `--no-pager`: refused when the line is
-compiled, with the thing to do instead. `git commit` is refused when it gives no message, because git
-would open an editor. `-m`, `-F`, `-C`, `--message`, `--file`, `--reuse-message` or `--no-edit` lets
+compiled, with the thing to do instead. `git rebase -i` is let through when the line names the editor
+outright, as in `GIT_SEQUENCE_EDITOR=<command> git rebase -i <base>`, `GIT_EDITOR=<command>` or
+`git -c sequence.editor=<command> rebase -i <base>`, with a literal command that needs no terminal.
+`git rebase --autosquash <base>` without `-i` and `git commit --fixup=reword:<sha> -m <message>` need
+no editor at all. `git commit` is refused when it gives no message, because git would open an editor
+(unless the line names `GIT_EDITOR` or `-c core.editor`). `-m`, `-F`, `-C`, `--message`, `--file`,
+`--reuse-message` or `--no-edit` lets
 it through, and so does a plain `--fixup=<commit>` (or `--fixup <commit>`), since git writes the
 `fixup!` message itself. `--fixup=amend:<commit>` and `--fixup=reword:<commit>` open an editor and
 are refused unless a message option is also given. `--squash=<commit>` is refused. The list is a
@@ -563,7 +568,11 @@ printed nothing.
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
 [its deadline](#a-line-has-a-deadline) and was stopped. This holds for lines joined with `;` or `||`
-too: a later step that succeeds does not hide an earlier failure. It is said for quarantined output too,
+too: a later step that succeeds does not hide an earlier failure. A step that `SIGPIPE` ended because
+a later step of the same pipeline closed its input and exited zero, as `producer | head` does, is
+not a failure: the result says the run exited 0 and that the step stopped because the next step
+closed its input. Any other signal, and `SIGPIPE` with no later step that exited zero, is still
+reported as a failure. It is said for quarantined output too,
 where the planner holds a reference it may not read. The verdict is read off the processes and the
 clock, never out of a byte the program printed, so it is structure exactly as a line count is and
 puts nothing in the planner's context that a program chose.

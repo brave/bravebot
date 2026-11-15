@@ -681,6 +681,13 @@ fn note_at_the_right(session: &Session) -> Option<Note> {
         return Note::said(format!("{}  ", t!(leave_word_sent)));
     }
 
+    // A command typed with words after it where it takes none is a prompt, and the person may have
+    // meant the command: `/model gpt-5` opens no picker and starts a turn. Nothing else on the
+    // screen says the line went to the model or what stops it, and the turn is when they look (CMD-2).
+    if session.command_sent_as_prompt && session.a_turn_is_running() {
+        return Note::said(format!("{}  ", t!(command_sent_as_prompt)));
+    }
+
     // The line the person was writing has just gone, so the press that took it is the one thing
     // worth explaining: without this, a key they pressed to stop something emptied the box and
     // said nothing, and the next press of it ends the session.

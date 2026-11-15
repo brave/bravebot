@@ -2228,6 +2228,8 @@ impl RunSettings {
             .with_output_cap(self.output_cap)
             .with_download_cap(self.download_cap)
             .with_deadlines(self.deadlines)
+            // The planner is told it is talking to a person at this interface (INSTR-9).
+            .in_front_end(bravebot_agent::FrontEnd::Terminal)
             .with_confined_runs(true)
             .asking_about_unconfined(true)
             .with_sandbox_mode(session.live_sandbox_mode())
@@ -16514,6 +16516,106 @@ mod tests {
         assert!(!session.leave_word_sent, "a command line was marked");
     }
 
+    /// A command the table gives no argument, typed with words after it, is a prompt (CMD-2). The
+    /// first Enter sends it, as it would any prompt, and the session marks the turn it begins so the
+    /// row under the box can say the line went to the model and was not the command.
+    #[test]
+    fn a_no_argument_command_given_words_is_sent_as_a_prompt_with_the_mark() {
+        for line in [
+            "/model gpt-5",
+            "/model   gpt-5  ",
+            "/undo the last change",
+            "/exit now",
+            "/lsp servers please",
+            "/request again",
+            "/init the project",
+            "/recap in one line",
+            "/context all of it",
+            "/changelog since monday",
+            "/todos done",
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.trim().to_string()),
+                "{line:?} was not sent at the first Enter"
+            );
+            assert!(session.a_turn_is_running(), "{line:?} began no turn");
+            assert!(!session.is_quitting(), "{line:?} left");
+            assert!(
+                session.command_sent_as_prompt,
+                "{line:?} was sent with no mark"
+            );
+            assert!(
+                !session.leave_word_sent,
+                "{line:?} was marked as a leave word"
+            );
+        }
+    }
+
+    /// Only a line whose first word is a command with no argument and that has words after it is
+    /// marked (CMD-2). The bare command is the command, a command with an argument takes the words,
+    /// a longer word is another word, and a prompt that merely mentions a command is a prompt of
+    /// the person's own words, so none of them is told it was sent in place of a command.
+    #[test]
+    fn a_line_that_is_not_a_no_argument_command_given_words_is_sent_without_that_mark() {
+        for line in [
+            "/model",
+            "/rename foo",
+            "/theme nord",
+            "/effort high",
+            "/models",
+            "/undone",
+            "/models gpt-5",
+            "why is /model slow",
+            "please /undo that",
+            "how do I exit",
+            "exit",
+            "list the files",
+            "!/model x",
+            "!/undo the last change",
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+            handle_key(&mut session, key(KeyCode::Enter));
+
+            assert!(
+                !session.command_sent_as_prompt,
+                "{line:?} was marked as a command sent as a prompt"
+            );
+        }
+    }
+
+    /// The bare command is still the command: the picker opens and nothing is sent, so there is no
+    /// turn for the note to describe.
+    #[test]
+    fn the_bare_model_command_opens_the_picker_and_marks_nothing() {
+        let mut session = Session::new("none");
+        type_line(&mut session, MODEL_COMMAND);
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::ChooseModel
+        );
+        assert!(!session.command_sent_as_prompt, "the command was marked");
+    }
+
+    /// A command typed with words in shell mode is a command line (CMD-3) and runs at the first
+    /// Enter, so nothing was sent to the model and no note is owed.
+    #[test]
+    fn a_no_argument_command_given_words_in_shell_mode_is_run_as_the_command_line_it_is() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!/model gpt-5");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Run("/model gpt-5".to_string())
+        );
+        assert!(!session.command_sent_as_prompt, "a command line was marked");
+    }
+
     /// A command, not a prompt: asking for the picker must not also ask the planner about models.
     #[test]
     fn typing_the_model_command_opens_the_picker() {
@@ -18499,6 +18601,16 @@ mod tests {
 
         session.clear();
         assert_eq!(session.spend_limit().credits(), 0);
+    }
+
+    /// INSTR-9: every task the terminal client builds names the terminal as the front end, so the
+    /// planner is told where the person is. Rejects a task built without it, and one that names
+    /// another front end.
+    #[test]
+    fn every_task_the_terminal_builds_names_the_terminal_front_end() {
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let task = run_settings.task("one", &Session::new("none"), &Permissions::new());
+        assert_eq!(task.front_end, Some(bravebot_agent::FrontEnd::Terminal));
     }
 
     /// CHATGPT-10: every turn of a session is built in the session, so the requests of all of them

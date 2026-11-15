@@ -4630,6 +4630,13 @@ suspend-failed = could not suspend the session: { $reason }
 # are fitted to the room it leaves: kept short enough that any one permission mode name still fits
 # beside it on a row eighty columns wide.
 leave-word-sent = Sent as a prompt; ctrl-c stops it, /exit leaves
+# Said under the box while the turn runs that began on a command typed with words after it where the
+# command takes no argument, such as /model followed by a model name. Those words make the line a
+# prompt, so it went to the model and the command did not run; the bare command is what runs it.
+# Drawn at the right of the hint row like leave-word-sent, and kept about as wide as it so the vi
+# mode and any one permission mode name still fit beside it on a row eighty columns wide. The bare
+# word is the command typed alone, which is what runs it.
+command-sent-as-prompt = Prompt sent; ctrl-c stops it; bare word runs it
 prompt-file-unreadable =
     /{ $name } is a prompt file that could not be read as text, so the line was not sent: { $path }
 prompt-file-too-large =

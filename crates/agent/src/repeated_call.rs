@@ -42,6 +42,14 @@ impl Repeats {
         self.count >= IN_A_ROW
     }
 
+    /// Record a call that is never held, such as a bounded wait on a job that is still running
+    /// (TURN-9). It is a different call from the ones around it, so the count starts again, and it
+    /// is not counted toward the next hold.
+    pub(crate) fn passed_without_counting(&mut self) {
+        self.last = None;
+        self.count = 0;
+    }
+
     pub(crate) fn count(&self) -> usize {
         self.count
     }
@@ -49,11 +57,21 @@ impl Repeats {
 
 /// What the planner is told in place of a result when its call is not run.
 ///
-/// The driver's own words: the tool's name is the planner's own and no result is quoted.
+/// The driver's own words: the tool's name is the planner's own and no result is quoted. The
+/// route is chosen from that name alone.
 pub(crate) fn refusal(tool: &str, count: usize) -> String {
+    let route = match crate::tools::strip_namespace(tool) {
+        "job_output" => {
+            " A background job's end is reported to you in a message of its own while the turn \
+             goes on, so do not look at it again to learn that. To wait for a job that is \
+             still running, call job_output with wait_seconds. Do not poll with a shell loop \
+             that sleeps."
+        }
+        _ => " Try a different call, or carry on with the rest of the task.",
+    };
     format!(
         "error: tool call repetition limit reached. You have made the same {tool} call {count} \
-         times in a row and it was not run. Try a different approach."
+         times in a row and it was not run.{route}"
     )
 }
 
@@ -125,5 +143,36 @@ mod tests {
         assert!(!repeats.is_held(&call("read_file", r#"{"path":"a"}"#)));
         assert!(!repeats.is_held(&call("list_dir", r#"{"path":"a"}"#)));
         assert!(!repeats.is_held(&call("read_file", r#"{"path":"a"}"#)));
+    }
+
+    /// TURN-9: a call passed without counting is a different call, so the count starts again and
+    /// the call is never held. Rejects: leaving the count alone, which holds the call after it.
+    #[test]
+    fn a_call_passed_without_counting_starts_the_count_again() {
+        let mut repeats = Repeats::default();
+        let read = call("read_file", r#"{"path":"a.txt"}"#);
+        assert!(!repeats.is_held(&read));
+        assert!(!repeats.is_held(&read));
+        repeats.passed_without_counting();
+        assert_eq!(repeats.count(), 0);
+        assert!(!repeats.is_held(&read));
+        assert!(!repeats.is_held(&read));
+        assert!(repeats.is_held(&read));
+    }
+
+    /// TURN-9: the refusal names the tool and the count and gives a route chosen from the tool's
+    /// name. Rejects: one text for every tool, and a text that drops the count.
+    #[test]
+    fn the_refusal_names_the_tool_and_the_count_and_gives_a_route() {
+        let job = refusal("job_output", 3);
+        assert!(job.contains("repetition limit reached"));
+        assert!(job.contains("same job_output call 3 times"));
+        assert!(job.contains("message of its own"));
+        assert!(job.contains("shell loop"));
+        let read = refusal("read_file", 4);
+        assert!(read.contains("same read_file call 4 times"));
+        assert!(!read.contains("job"));
+        assert!(read.contains("Try a different call"));
+        assert!(refusal("functions.job_output", 3).contains("shell loop"));
     }
 }

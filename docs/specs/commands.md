@@ -130,6 +130,32 @@ prompt and the row says so. Holding the first Enter would add a step in front of
 at once, which no other prompt has. The line is the text of the person's own box, and what it
 decides is only whether the note is drawn.
 
+**A command the table gives no argument, typed with words after it, is a prompt, and it gets a note
+under the box as well.** `/model gpt-5` opens no picker and sends the line, because the words after a
+command that takes none are the person's own (CMD-17 for `/model`). The same holds for every row of
+the command table whose argument column is empty, such as `/undo the last change`, `/exit now` and
+`/lsp servers`, and a command added to the table with no argument is covered without a second list.
+While the turn the line begins runs, the row under the box says that the line was sent as a prompt,
+that Ctrl-C stops it and that the bare word runs the command. The note is drawn on the same terms as
+the leave words' note: for a line the person typed in the box, sent at once or queued behind a
+running turn and sent when that turn ends, and never for a turn a loop's tick, a watch, a goal or a
+command begins, for a line sent together with another by Ctrl-Enter, or in shell mode, where the line
+is a command line (CMD-3). It is drawn only where the first word is the whole command word: the bare
+command runs the command, a command that takes an argument takes the words, `/undone` and `/models`
+are longer words and so a prompt of the person's own words with no note, and `why is /model slow` has
+a first word that is not a command. In English the note is as wide as the leave words' note, so any
+one permission mode name is still drawn beside it, and the vi mode with it, on a terminal eighty
+columns wide. The French note is wider, and where the parts of the line do not fit beside a note the
+left side is cleared while it is up.
+
+**Why.** A person who types a command and a name expects the command to act on the name, and a turn
+that starts with nothing on the screen saying the line went to the model reads as an interface that
+did not understand, and the person may cancel it before it answers. Two other routes were rejected.
+Opening the picker for `/model gpt-5` and sending nothing would give a no-argument command an
+argument that CMD-17 and the table say it does not take, for one command only. Making `/model <name>`
+a command would apply the name without the look at the roster that the picker gives. The line is the
+text of the person's own box, and what it decides is only which fixed note is drawn.
+
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_the_command_is_a_prompt`
 `verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
@@ -175,6 +201,17 @@ decides is only whether the note is drawn.
 `verified-by: bravebot_tui::render::the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt`
 `verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word`
 `verified-by: bravebot_tui::render::the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
+`verified-by: bravebot_tui::app::a_no_argument_command_given_words_is_sent_as_a_prompt_with_the_mark`
+`verified-by: bravebot_tui::app::a_line_that_is_not_a_no_argument_command_given_words_is_sent_without_that_mark`
+`verified-by: bravebot_tui::app::a_no_argument_command_given_words_in_shell_mode_is_run_as_the_command_line_it_is`
+`verified-by: bravebot_tui::state::a_turn_begun_on_a_command_given_words_is_marked_and_one_on_any_other_line_is_not`
+`verified-by: bravebot_tui::state::the_prompt_after_a_command_marked_turn_does_not_inherit_the_mark`
+`verified-by: bravebot_tui::state::a_turn_that_begins_without_a_line_from_the_box_takes_down_the_command_mark`
+`verified-by: bravebot_tui::state::a_command_given_words_that_waited_in_the_queue_is_marked_when_its_turn_begins`
+`verified-by: bravebot_tui::state::command_lines_hurried_together_are_not_marked_and_one_hurried_alone_is`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_a_command_given_words_went_to_the_model_as_a_prompt`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_line_that_is_not_a_command_given_words`
+`verified-by: bravebot_tui::render::the_note_on_a_command_given_words_leaves_the_permission_mode_on_an_eighty_column_row`
 
 
 <a id="CMD-3"></a>
@@ -1186,10 +1223,11 @@ keys, are refused as a file that cannot be used is, since the box holds one form
 that has a `model` key is held to the same rule as one that has none: it may not begin with a
 command word.
 
-`/model <name>` is not a command. It stays a prompt (CMD-2), because the picker is where a name is
-checked against the roster and where the person sees the row, and a command that took the name
-would apply it without that look. The box also keeps the file's text to send after the choice, which
-a `/model <name>` line has no room for.
+`/model <name>` is not a command. It stays a prompt (CMD-2), and the row under the box says so while
+the turn it begins runs, as it does for any command typed with words after it where it takes none.
+The picker is where a name is checked against the roster and where the person sees the row, and a
+command that took the name would apply it without that look. The box also keeps the file's text to
+send after the choice, which a `/model <name>` line has no room for.
 
 **Why.** A prompt used often should be a word, and the file is the person's own, so it is as trusted
 as their typing. Putting the text in the box before it is sent keeps what reaches the planner a line

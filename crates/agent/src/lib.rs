@@ -136,5 +136,5 @@ pub use report::{Activity, IgnoreReports, Reporter};
 pub use scratch::{ScratchDirectory, SessionScratch};
 pub use spend_limit::SpendLimit;
 pub use subscription::PremiumKey;
-pub use turn::{Outcome, Task, TurnError};
+pub use turn::{FrontEnd, Outcome, Task, TurnError};
 pub use workspace::{Workspace, WorkspaceError};

@@ -439,7 +439,8 @@ Smaller, uncontroversial, mostly parity with other agent harnesses:
 - **Working directory persists** between calls. Environment variables don't, because there's no
   shell process between calls to hold them.
 - **Interactive commands refused up front**, `git rebase -i` and friends, with a message naming
-  the alternative, rather than hanging until the deadline.
+  the alternative, rather than hanging until the deadline. A line that names its editor outright,
+  such as `GIT_SEQUENCE_EDITOR=<command> git rebase -i`, is not refused.
 - **The tool description gets rewritten** to tell the planner to filter at the source. This sounds
   trivial. It isn't: the current wording measurably steered a real session into the expensive path
   every single round. A tool's description is the only instruction the planner reliably reads.

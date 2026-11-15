@@ -172,6 +172,9 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// The front end the planner is told it runs in (INSTR-9): the desktop application unless a
+    /// host that projects this bridge says otherwise, as the editor server does.
+    front_end: bravebot_agent::FrontEnd,
     /// The ChatGPT or xAI sign-in the window started, while it runs.
     sign_ins: crate::accounts::SignIns,
 }
@@ -179,6 +182,7 @@ pub struct Bridge {
 impl Bridge {
     pub fn new(emit: Listener) -> Self {
         Self {
+            front_end: bravebot_agent::FrontEnd::Desktop,
             open: HashMap::new(),
             next_handle: 0,
             settings: None,
@@ -203,6 +207,13 @@ impl Bridge {
     /// than silently fall back to another destination after a process restart.
     pub fn with_settings(mut self, path: Option<PathBuf>) -> Self {
         self.settings = path;
+        self
+    }
+
+    /// Say which front end this bridge is the projection of, so the planner is told the one the
+    /// person is using (INSTR-9). Prompt-only: the front word a record carries is not changed.
+    pub fn with_front_end(mut self, front_end: bravebot_agent::FrontEnd) -> Self {
+        self.front_end = front_end;
         self
     }
 
@@ -1549,6 +1560,7 @@ impl Bridge {
         let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
+        let front_end = self.front_end;
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
             open.sandbox,
             &settings,
@@ -1631,6 +1643,7 @@ impl Bridge {
                 download_cap,
                 deadlines,
                 auto_vetting,
+                front_end,
                 sandbox,
                 permission_mode,
                 mcp_requested,
@@ -3086,6 +3099,8 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// The front end the person is using, so the planner is told (INSTR-9).
+    front_end: bravebot_agent::FrontEnd,
     /// How far the programs this turn runs may reach, from the settings and the managed file.
     sandbox: bravebot_sandbox::SandboxMode,
     /// The session's own handle, so a change made while the turn runs reaches it.
@@ -3206,6 +3221,7 @@ fn work(work: Work) {
         download_cap,
         deadlines,
         auto_vetting,
+        front_end,
         sandbox,
         permission_mode,
         mcp_requested,
@@ -3310,6 +3326,7 @@ fn work(work: Work) {
         .with_rounds(None)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
+        .in_front_end(front_end)
         .with_model(model)
         .with_effort(effort)
         .in_account_session(state.account.clone())

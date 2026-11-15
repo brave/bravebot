@@ -4071,3 +4071,100 @@ fn a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only() {
         assert!(!text.contains(secret), "{text}");
     }
 }
+
+/// RUN-13: a stage ended by SIGPIPE because the next stage closed its input and exited 0, as
+/// `yes | head` does, is recorded as closed by the next and the run succeeded, as a shell would
+/// report it. The fault it rejects is the signal dropped, which leaves the stage a failure beside
+/// a complete result.
+#[test]
+#[cfg(unix)]
+fn a_stage_ended_by_sigpipe_behind_head_counts_as_closed_and_the_run_succeeded() {
+    let scratch = Scratch::new("sigpipe-closed");
+    let ran = run(
+        Pipeline::new(vec![
+            Stage::new("yes", Vec::new()),
+            Stage::new("head", vec!["-n".into(), "3".into()]),
+        ]),
+        &scratch.path,
+    )
+    .expect("the pipeline runs");
+    assert_eq!(ran.stdout.lines().count(), 3);
+    assert_eq!(ran.codes, [None, Some(0)]);
+    assert_eq!(ran.signals, [Some(13), None]);
+    assert_eq!(ran.closed, [true, false]);
+    assert!(ran.succeeded(), "a complete result was reported as failed");
+}
+
+/// RUN-13: a stage ended by SIGPIPE with no later stage that exited 0 is still a failure, and so
+/// is a stage ended by SIGKILL beside a `head` that exited 0. The faults they reject are every
+/// killed stage forgiven, and the signal number ignored.
+#[test]
+#[cfg(unix)]
+fn only_sigpipe_with_a_later_stage_that_exited_zero_is_forgiven() {
+    let scratch = Scratch::new("sigpipe-not-closed");
+    let killed = script(&scratch.path, "killed", "#!/bin/sh\nkill -9 $$\n");
+    let piped = script(&scratch.path, "piped", "#!/bin/sh\nkill -13 $$\n");
+    let failing = script(
+        &scratch.path,
+        "failing",
+        "#!/bin/sh\ncat >/dev/null\nexit 3\n",
+    );
+    let head = bravebot_agent::programs::resolve("head", &scratch.path).expect("head");
+
+    // SIGKILL beside a head that exited 0.
+    let pipeline = Pipeline::new(vec![
+        Stage::new("killed", Vec::new()),
+        Stage::new("head", vec!["-n".into(), "1".into()]),
+    ]);
+    let ran = run_resolved(&pipeline, &[killed, head], &scratch.path).expect("the pipeline runs");
+    assert_eq!(ran.signals, [Some(9), None]);
+    assert_eq!(ran.closed, [false, false]);
+    assert!(!ran.succeeded(), "a SIGKILL was forgiven");
+
+    // SIGPIPE with the only later stage failing.
+    let pipeline = Pipeline::new(vec![
+        Stage::new("piped", Vec::new()),
+        Stage::new("failing", Vec::new()),
+    ]);
+    let ran = run_resolved(&pipeline, &[piped.clone(), failing], &scratch.path)
+        .expect("the pipeline runs");
+    assert_eq!(ran.signals[0], Some(13));
+    assert_eq!(ran.closed, [false, false]);
+    assert!(
+        !ran.succeeded(),
+        "a SIGPIPE with no later success was forgiven"
+    );
+
+    // SIGPIPE as the last stage, with nothing after it.
+    let pipeline = Pipeline::new(vec![Stage::new("piped", Vec::new())]);
+    let ran = run_resolved(&pipeline, &[piped], &scratch.path).expect("the pipeline runs");
+    assert_eq!(ran.closed, [false]);
+    assert!(!ran.succeeded());
+}
+
+/// RUN-13: a background job whose first stage SIGPIPE ended behind a `head` reports the signal and
+/// the closed flag, so the account of its ending says it succeeded. The fault it rejects is the
+/// background path keeping only the exit codes.
+#[test]
+#[cfg(unix)]
+fn a_background_stage_ended_by_sigpipe_behind_head_is_closed() {
+    let scratch = Scratch::new("sigpipe-background");
+    let pipeline = Pipeline::new(vec![
+        Stage::new("yes", Vec::new()),
+        Stage::new("head", vec!["-n".into(), "3".into()]),
+    ]);
+    let resolved = resolve_all(&pipeline, &scratch.path).expect("resolves");
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("it starts");
+    let mut ended = false;
+    for _ in 0..100 {
+        if job.ended() {
+            ended = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(ended, "the job never ended");
+    assert_eq!(job.codes(), [None, Some(0)]);
+    assert_eq!(job.signals(), [Some(13), None]);
+    assert_eq!(job.closed(), [true, false]);
+}

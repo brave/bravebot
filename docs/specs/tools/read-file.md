@@ -369,8 +369,9 @@ does a read whose result carried no call id to attach the record to.
 **It goes with the round that showed it.** An entry stands for lines in a message the planner still
 has, and names that message by its position in the conversation, not by the id of the call it answered,
 since providers number ids per response and two rounds can carry one. Compaction removes messages from
-the request ([COMPACT-6](../compaction.md#COMPACT-6)), and removes the entry with each one, so a read
-after a compaction sends the lines again. A resumed conversation starts with no record, which errs toward
+the request ([COMPACT-6](../compaction.md#COMPACT-6)), and removes the entry with each one. A result
+replaced by a stub ([COMPACT-18](../compaction.md#COMPACT-18)) loses its entry the same way. A read
+after either sends the lines again. A resumed conversation starts with no record, which errs toward
 sending them.
 
 **The comparison is of metadata.** The token is taken from the file's size and modification time

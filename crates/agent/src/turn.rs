@@ -2231,6 +2231,8 @@ fn reads_that_run_together(
     let mut counting = repeats.clone();
     let mut together = 0;
     for call in calls {
+        // A `job_output` wait that the hold lets through (TURN-9) is never a read-ahead call, so
+        // the loop has already stopped at it before `is_held` is asked, and the two agree.
         if !tools::can_read_ahead(call, confined_to, offered)
             || hooks
                 .firing(
@@ -2644,7 +2646,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Lent rather than held, because the turn is not the only run that will want them. There is
     // one trail to record into, one screen to report to and one person to ask, however many
     // delegates this turn goes on to start, so each takes the lock for one call at a time.
-    let confirming = crate::shared::Lent::new(confirmer);
+    let confirming = crate::shared::Lent::confirming(confirmer);
     let reporting = crate::shared::Lent::new(reporter);
     let recording = crate::shared::Lent::new(sink);
     let confirmer = confirming.turn();
@@ -4166,7 +4168,13 @@ where
             let mut asking = crate::confirm::Timed::new(confirmer);
             let ran_at = Instant::now();
             let wait_mark = policy.file_authority().wait_mark();
-            let refused = if state.repeats.is_held(call) {
+            // A bounded wait on a job that is still running is a different call from the ones
+            // around it and is never held (TURN-9). It is decided from the planner's own name and
+            // arguments and from whether the job's process is running, never from what it printed.
+            let refused = if state.jobs.is_waited_on_while_running(policy, call) {
+                state.repeats.passed_without_counting();
+                None
+            } else if state.repeats.is_held(call) {
                 crate::repeated_call::hold(
                     call,
                     state.repeats.count(),

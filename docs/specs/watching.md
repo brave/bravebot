@@ -530,6 +530,9 @@ every stage exited zero, one for a run a stage failed, and the mark of work stil
 stopped at the wall-clock limit. The view says it in the driver's words, beside the command, which
 for a failure names the step and its code.
 
+A step ended by `SIGPIPE` behind a step that exited 0 is not a failed stage ([RUN-13](tools/run.md#RUN-13)),
+so a run whose only such step is that one carries the mark of a run that succeeded.
+
 It is said from the exit codes and the clock, and never from a byte the program printed.
 
 **Why.** A row that gives only the line count leaves a person unable to tell the build that

@@ -249,6 +249,7 @@ run a command to learn them:
 | Shell | `$SHELL`, or `/bin/sh` when that is unset or empty |
 | Today's date | The current UTC date, as `YYYY-MM-DD` |
 | Scratch directory | The directory this session has to itself, on the sessions that have one |
+| Front end | One sentence naming the terminal client, the desktop app, or an editor that hosts the session, set by the program you started it from. Not stated for a one-shot or goal run |
 
 :::caution[These lines are sent to the model with every request]
 The working directory is an absolute path, so on most machines it contains your username, and the
@@ -277,7 +278,7 @@ is followed and the next turn states where the session went.
 
 ### The scratch directory
 
-The last line names a directory this session has to itself, created as the session opens in the
+The scratch directory line names a directory this session has to itself, created as the session opens in the
 system temporary directory rather than anywhere in your project. It is where a file the work needs on
 disk but nobody is asking to keep belongs: output to grep through, an archive to look inside. Written
 into the project instead, that file is one a build, a test run, a `git add -A` and a reviewer each

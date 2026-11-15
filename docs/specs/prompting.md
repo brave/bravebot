@@ -50,6 +50,7 @@ kept_in:
   - Confirmer::arrival: nothing
   - Confirmer::alert_when_asking: nothing
   - Confirmer::asks_a_person: nothing
+  - Confirmer::answering_unasked: nothing
   - Asker::anybody_there: nothing
   - Asker::ask_to_start: MCP servers approved; MCP projects answered for
   - Asker::ask_to_move: MCP server moves

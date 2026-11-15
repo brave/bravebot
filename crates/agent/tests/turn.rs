@@ -33704,6 +33704,67 @@ fn a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed
     );
 }
 
+/// The result a planner is sent after a turn that confines runs under `mode`, opened on `root`,
+/// runs the line `command`.
+#[cfg(unix)]
+fn result_of_running_line(
+    root: &std::path::Path,
+    command: &str,
+    mode: bravebot_sandbox::SandboxMode,
+) -> String {
+    let (_, second) = requests_for_one_run_at(root, command, mode);
+    message_from(&second, "Result of run").to_string()
+}
+
+/// RUN-13: the issue's own shape. The producer is ended by SIGPIPE when `head` has read what it
+/// wanted, and the planner is told the run exited 0 with the step that stopped, and is given no
+/// confinement paragraph for a result that is complete. The fault it rejects is the step named as
+/// killed, which says `It failed` beside the three lines `head` asked for.
+#[test]
+#[cfg(unix)]
+fn a_step_closed_by_head_is_told_as_an_ending_that_exited_zero() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-status-sigpipe");
+    let result = result_of_running_line(
+        &scratch.path,
+        "yes | head -n 3",
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+    );
+    assert!(
+        result.contains("It exited 0. Step 1 stopped because the next step closed its input."),
+        "{result}"
+    );
+    assert!(!result.contains("It failed"), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+}
+
+/// RUN-13: a step killed by SIGKILL beside a `head` that exited 0, and a step ended by SIGPIPE
+/// with no later step that exited 0, are still told as failures. The fault it rejects is every
+/// killed step forgiven once a later step exits 0.
+#[test]
+#[cfg(unix)]
+fn a_step_killed_beside_head_is_still_told_as_a_failure() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-status-sigkill-beside-head");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let killed = a_stub_named(&scratch.path, "killed", "stub-killed", "kill -9 $$");
+    let result = result_of_running_line(
+        &scratch.path,
+        &format!("{} | head -n 1", killed.display()),
+        mode,
+    );
+    assert!(result.contains("It failed: step 1 was killed"), "{result}");
+    assert!(!result.contains("It exited 0."), "{result}");
+
+    let piped = a_stub_named(&scratch.path, "piped", "stub-piped", "kill -13 $$");
+    let result = result_of_running_line(&scratch.path, &piped.display().to_string(), mode);
+    assert!(result.contains("It failed: step 1 was killed"), "{result}");
+}
+
 /// The exit status is structure rather than content, so it is told even where none of the bytes
 /// can be: a planner holding a reference to output it may not read still has to know whether the
 /// program worked.
@@ -47581,6 +47642,75 @@ fn old_tool_results_are_dropped_before_a_summary_is_asked_for() {
         bodies[0].contains("call-1") && bodies[0].contains("dropped from the request"),
         "the call lost its answer: {}",
         bodies[0]
+    );
+}
+
+/// COMPACT-18, READ-8: the stub tells the planner that calling the tool again returns the result,
+/// so a read repeated after its result was dropped has to send the lines and not a notice that the
+/// file has not changed since it was shown.
+#[test]
+fn a_read_repeated_after_its_result_was_dropped_sends_the_lines_again() {
+    let scratch = Scratch::new("compact-read-after-drop");
+    let lines: String = (0..500)
+        .map(|n| format!("LINE-MARK-{n:04} {}\n", "x".repeat(84)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), lines).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("read it"),
+    ]);
+    take_a_turn(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt"),
+    )
+    .expect("first turn runs");
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("carry on", "carrying on"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    // About what the read amounts to, plus a little: dropping it is the way under 1,000.
+    conversation.measured(12_500);
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    take_a_turn(
+        &config_with_budget(&endpoint, 1_000),
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt again"),
+    )
+    .expect("second turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        bodies[0].contains("is no longer in the request") && !bodies[0].contains("LINE-MARK"),
+        "the first read was not dropped: {}",
+        bodies[0]
+    );
+    assert!(
+        !bodies[1].contains("has not changed since it was shown"),
+        "the repeat was answered with a notice for lines the planner no longer holds: {}",
+        bodies[1]
+    );
+    assert_eq!(
+        bodies[1].matches("LINE-MARK-0499").count(),
+        1,
+        "the repeat did not send the lines: {}",
+        bodies[1]
     );
 }
 
@@ -79496,6 +79626,272 @@ fn a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
     assert!(questions.lock().unwrap().is_empty());
 }
 
+/// A person who has not answered `ask_user` yet. The question is announced on `entered`, and the
+/// answer is given when `release` is sent to. Every other question is refused and counted, so a
+/// count of zero says the mode answered all of them.
+struct SlowToAnswer {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    reached: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SlowToAnswer {
+    fn reached(&self) {
+        self.reached
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl bravebot_agent::confirm::Confirmer for SlowToAnswer {
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        self.reached();
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        self.reached();
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_write(
+        &mut self,
+        _request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::confirm::WriteDecision {
+        self.reached();
+        bravebot_agent::confirm::WriteDecision::reject()
+    }
+
+    fn confirm_server(
+        &mut self,
+        _request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        self.reached();
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_run(
+        &mut self,
+        _request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        self.reached();
+        bravebot_agent::confirm::RunDecision::reject()
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        _request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_manifest(
+        &mut self,
+        _request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.reached();
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn ask_user(
+        &mut self,
+        _asking: &bravebot_core::ask::Asking,
+    ) -> Vec<bravebot_core::ask::Answer> {
+        let _ = self.entered.send(());
+        let _ = self
+            .release
+            .recv_timeout(std::time::Duration::from_secs(30));
+        Vec::new()
+    }
+
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// DELEGATE-16, MODE-9. A delegate's read that bypass answers is answered and recorded while the
+/// turn's own `ask_user` is still unanswered, which is the session the issue recorded: readers
+/// idled for as long as the person took. The planner puts a question to the person and a reader
+/// reads a flagged file in the same turn. The reader's second request to the model arrives only
+/// if its read returned, and it is watched for before the question is released. The regression it
+/// rejects is the delegate waiting for the one confirmer before the mode answers, which holds the
+/// reader until the release and fails the bounded wait.
+#[test]
+fn a_delegates_read_bypass_answers_is_not_held_behind_the_turns_open_question() {
+    let scratch = Scratch::new("delegate-read-open-question");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received, _) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-READ",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-THE-ENV"}"#),
+                    tool_request(
+                        "ask_user",
+                        r#"{"questions":[{"header":"Branch","question":"Which branch?","options":[{"label":"main"}]}]}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "READ-THE-ENV",
+                vec![
+                    tool_request("read_file", r#"{"path":".env"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "READ-THE-ENV",
+            after: "DELEGATE-THE-READ",
+            asked: 2,
+        },
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let reached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut person = SlowToAnswer {
+        entered: entered_tx,
+        release: release_rx,
+        reached: reached.clone(),
+    };
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut person, bravebot_agent::PermissionMode::Bypass, false);
+    let mut sink = RecordingSink::new();
+
+    let (progressed, _received) = thread::scope(|scope| {
+        let watching = scope.spawn(move || {
+            let mut progressed = false;
+            if entered_rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .is_ok()
+            {
+                // A body without the planner's task is the reader's. Its second one carries the
+                // result of the read, so it exists only once the read returned.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut readers = 0;
+                while readers < 2 {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    match received.recv_timeout(left) {
+                        Ok(body) if !body.contains("DELEGATE-THE-READ") => readers += 1,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                progressed = readers >= 2;
+            }
+            let _ = release_tx.send(());
+            (progressed, received)
+        });
+        turns::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("DELEGATE-THE-READ")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        watching.join().expect("watcher")
+    });
+
+    assert!(
+        progressed,
+        "the reader's read waited for the question the person had not answered"
+    );
+    assert_eq!(
+        exposure_approvals(&sink),
+        [
+            ".env: answered by bypass mode, nobody was asked, the planner may be given it despite the scan"
+        ]
+    );
+    assert_eq!(
+        reached.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a question the mode answered reached the person"
+    );
+}
+
 /// The `gate` entries of the trail whose text holds `needle`, in order.
 fn trail_entries(sink: &RecordingSink, wanted: &str, needle: &str) -> Vec<String> {
     sink.events()
@@ -88037,6 +88433,8 @@ mod spend_limit {
     pub(super) struct Replies {
         replies: std::collections::VecDeque<Vec<Answer>>,
         pub(super) asked: Vec<Asking>,
+        /// Whether a run is approved. Off, a run is refused as `ApproveWrites` refuses it.
+        approving_runs: bool,
     }
 
     impl Replies {
@@ -88044,7 +88442,14 @@ mod spend_limit {
             Self {
                 replies: replies.into(),
                 asked: Vec::new(),
+                approving_runs: false,
             }
+        }
+
+        /// Approves every run, which a test that needs a background job to start has to do.
+        pub(super) fn approving_runs(mut self) -> Self {
+            self.approving_runs = true;
+            self
         }
     }
 
@@ -88053,6 +88458,9 @@ mod spend_limit {
             ApproveWrites.confirm_write(request)
         }
         fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            if self.approving_runs {
+                return ApproveRuns.confirm_run(request);
+            }
             ApproveWrites.confirm_run(request)
         }
         fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
@@ -91590,7 +91998,7 @@ mod repeated_call {
         let workspace = Workspace::new(&scratch.path).expect("workspace");
         let (endpoint, received) = serve_sequence(script);
         let config = config_for(&endpoint);
-        let mut confirmer = Replies::new(replies);
+        let mut confirmer = Replies::new(replies).approving_runs();
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
         let mut sink = RecordingSink::new();
         let task = Task::new("look at a.txt");
@@ -91731,6 +92139,128 @@ mod repeated_call {
         let told = tool_results(ran.requests.last().unwrap());
         assert!(told.contains("5 times"), "{told}");
         assert_eq!(ran.trail.len(), 3, "{:?}", ran.trail);
+    }
+
+    fn start_a_job() -> String {
+        tool_request("run", r#"{"command":"sleep 30","background":true}"#)
+    }
+
+    fn wait_for_the_job() -> String {
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":1,"until_exit":true}"#,
+        )
+    }
+
+    /// TURN-9: identical bounded waits on a job that keeps running are never refused. Four of
+    /// them ask nothing and every one runs.
+    /// Rejects: counting every job_output (the third is refused and the planner is told so).
+    #[test]
+    fn four_identical_waits_on_a_running_job_ask_nothing_and_all_run() {
+        let ran = run(
+            "repeat-waits",
+            vec![
+                start_a_job(),
+                wait_for_the_job(),
+                wait_for_the_job(),
+                wait_for_the_job(),
+                wait_for_the_job(),
+                reply_with("done"),
+            ],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(
+            ran.asked.is_empty(),
+            "asked {} times, results: {told}",
+            ran.asked.len()
+        );
+        assert!(!told.contains("repetition limit reached"), "{told}");
+        assert!(ran.trail.is_empty(), "{:?}", ran.trail);
+        assert_eq!(ran.requests.len(), 6, "a round did not run");
+    }
+
+    /// TURN-9: the same identical look with no wait_seconds is still refused at the third, and the
+    /// refusal gives the route for a job.
+    /// Rejects: exempting job_output by tool name only.
+    #[test]
+    fn identical_looks_with_no_wait_are_still_held_at_the_third() {
+        let look = || tool_request("job_output", r#"{"job":"job:1"}"#);
+        let ran = run(
+            "repeat-looks",
+            vec![start_a_job(), look(), look(), look(), reply_with("done")],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(told.contains("repetition limit reached"), "{told}");
+        assert!(told.contains("same job_output call 3 times"), "{told}");
+        assert!(told.contains("message of its own"), "{told}");
+        assert!(told.contains("shell loop"), "{told}");
+    }
+
+    /// TURN-9: a kill is not a bounded wait, so identical kill calls are still refused at the
+    /// third.
+    /// Rejects: exempting a call because it carries wait_seconds without reading kill.
+    #[test]
+    fn identical_waits_that_kill_the_job_are_still_held_at_the_third() {
+        let kill = || {
+            tool_request(
+                "job_output",
+                r#"{"job":"job:1","wait_seconds":1,"kill":true}"#,
+            )
+        };
+        let ran = run(
+            "repeat-kills",
+            vec![start_a_job(), kill(), kill(), kill(), reply_with("done")],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(told.contains("repetition limit reached"), "{told}");
+    }
+
+    /// TURN-9: a wait on a job that has ended returns at once, so identical waits on it are
+    /// refused at the third. The first wait runs until the job ends, and the next three are waits
+    /// on a job that is gone.
+    /// Rejects: ignoring whether the job is still running.
+    #[test]
+    fn identical_waits_on_a_job_that_has_ended_are_held_at_the_third() {
+        let wait = || {
+            tool_request(
+                "job_output",
+                r#"{"job":"job:1","wait_seconds":1,"until_exit":true}"#,
+            )
+        };
+        let ran = run(
+            "repeat-ended",
+            vec![
+                tool_request("run", r#"{"command":"true","background":true}"#),
+                tool_request(
+                    "job_output",
+                    r#"{"job":"job:1","wait_seconds":5,"until_exit":true}"#,
+                ),
+                wait(),
+                wait(),
+                wait(),
+                reply_with("done"),
+            ],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert!(told.contains("repetition limit reached"), "{told}");
     }
 
     /// No permission mode lets a held call through or puts a question about it: bypass asks about
@@ -98835,6 +99365,55 @@ fn first_system_prompt(tag: &str, definition: Option<&str>, task: Task) -> Strin
         &task,
     );
     system_prompt_of(&received.recv().expect("a request"))
+}
+
+/// INSTR-9: the planner's system prompt says which front end the person is using, once, in the
+/// words of the front end the caller named, and says nothing about one where the caller named none.
+///
+/// Rejects: a prompt that carries no line, one that names the terminal for every caller, one that
+/// says the line for an unset front end, and one that repeats it.
+#[test]
+fn the_system_prompt_names_the_front_end_the_caller_named_and_none_otherwise() {
+    use bravebot_agent::FrontEnd;
+    for (tag, front_end, sentence) in [
+        (
+            "terminal",
+            Some(FrontEnd::Terminal),
+            "The person is using the terminal client.",
+        ),
+        (
+            "desktop",
+            Some(FrontEnd::Desktop),
+            "The person is using the desktop app.",
+        ),
+        (
+            "editor",
+            Some(FrontEnd::Editor),
+            "The person is using an editor that hosts this session over the Agent Client Protocol.",
+        ),
+        ("unset", None, ""),
+    ] {
+        let mut task = Task::new("LOOK-AT-THE-NOTES");
+        if let Some(front_end) = front_end {
+            task = task.in_front_end(front_end);
+        }
+        let system = first_system_prompt(tag, None, task);
+        match front_end {
+            Some(_) => assert_eq!(
+                system.matches(sentence).count(),
+                1,
+                "{tag}: the prompt does not carry the front end's sentence exactly once: {system}"
+            ),
+            None => assert!(
+                !system.contains("The person is using"),
+                "{tag}: the prompt names a front end nobody named: {system}"
+            ),
+        }
+        for other in ["terminal client", "desktop app", "Agent Client Protocol"] {
+            let named = front_end.is_some_and(|_| sentence.contains(other));
+            assert_eq!(system.contains(other), named, "{tag}: {other}: {system}");
+        }
+    }
 }
 
 /// TURN-16: what the planner is told about reading a quarantined reference follows the tools the

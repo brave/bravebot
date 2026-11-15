@@ -873,6 +873,15 @@ the clock: that it exited 0, which stages did not and with what code, or that it
 limit and was stopped. It stands in front of what the program printed, and it is there in the same
 words where the output is quarantined and the caller holds a reference to it instead.
 
+A step that `SIGPIPE` ended is not one of those stages when a later step of the same pipeline
+exited 0: the next step closed its input, as `producer | head` does, and a shell would report the
+last step. The sentence says the run exited 0 and that the step stopped because the next step closed
+its input, the run counts as having succeeded wherever the exit codes decide that, and no
+confinement sentence follows. A step ended by `SIGPIPE` with no later step that exited 0, and a step
+ended by any other signal, is still a failed stage. Each pipeline of a line joined with `;`, `&&` or
+`||` is judged on its own steps. The decision is read from the exit codes and signals and the
+steps' places, never from what a step printed.
+
 On a turn that confines the programs `run` starts, a result with a step that did not exit zero
 adds the sentence [SANDBOX-19](../sandboxing.md#SANDBOX-19) describes, after this one.
 
@@ -891,6 +900,12 @@ where it also cannot tell success from failure.
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_read_ended`
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_not_read_ended`
 `verified-by: bravebot_agent::turn::a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed`
+`verified-by: bravebot_agent::turn::a_step_closed_by_head_is_told_as_an_ending_that_exited_zero`
+`verified-by: bravebot_agent::turn::a_step_killed_beside_head_is_still_told_as_a_failure`
+`verified-by: bravebot_agent::exec::a_stage_ended_by_sigpipe_behind_head_counts_as_closed_and_the_run_succeeded`
+`verified-by: bravebot_agent::exec::only_sigpipe_with_a_later_stage_that_exited_zero_is_forgiven`
+`verified-by: bravebot_agent::exec::a_background_stage_ended_by_sigpipe_behind_head_is_closed`
+`verified-by: bravebot_agent::tools::a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
 
 <a id="RUN-14"></a>
