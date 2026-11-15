@@ -54697,9 +54697,9 @@ fn delegate_ends(sink: &RecordingSink) -> Vec<(bool, String)> {
 
 /// TRACE-8 for a delegate whose model call failed: the trail says how long it ran, how many of its
 /// rounds it made and the fixed name of the failure, the person's note names the same failure,
-/// and neither holds a word of what the service answered. A failure other than rate-limited or
-/// unavailable is not named to the planner, which is told only that the delegate did not finish
-/// (BACKEND-37).
+/// and neither holds a word of what the service answered. A failure other than a limit, an
+/// outage, a silence or a stopped reply is not named to the planner, which is told only that the
+/// delegate did not finish (BACKEND-37).
 #[test]
 fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply() {
     let scratch = Scratch::new("delegate-end-failed");
@@ -54787,7 +54787,8 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
 
 /// Answers a request carrying `failing` with `status` and an empty body, and every other request
 /// from `script`, in order. The requests the client sends are retried on a 429 or a 503, so a
-/// delegate asked for a failing task sees the status on every attempt.
+/// delegate asked for a failing task sees the status on every attempt. A `status` of 0 hangs up
+/// without answering and one of 200 sends a stream that stops before it says it is finished.
 ///
 /// A 429 here names a wait of one second. One that names none is sent again up to six times with
 /// pauses of 8, 16, 32, 64 and 120 seconds, which takes over four minutes in a test.
@@ -54839,6 +54840,20 @@ fn serve_failing_delegate(
                     }
                     None => out_of_script(),
                 },
+                false if status == 0 => {
+                    // Hung up on without a word: no status, no headers, no body.
+                    drop(stream);
+                    continue;
+                }
+                false if status == 200 => {
+                    // A reply that begins and stops with no finish reason and no end marker.
+                    let frames = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n\
+                                  data: {\"choices\":[{\"delta\":{\"content\":\"half an ans\"}}]}\n\n";
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                        frames.len()
+                    )
+                }
                 false => {
                     let wait = if status == 429 {
                         "Retry-After: 1\r\n"
@@ -54863,13 +54878,15 @@ fn serve_failing_delegate(
     (format!("http://127.0.0.1:{port}"), requests)
 }
 
-/// BACKEND-37, DELEGATE-26. A delegate whose requests meet a 429 or a 503 on every attempt ends
-/// rate-limited or unavailable, and the planner is told that category in the driver's own
-/// sentence and that starting the same delegate again meets the same limit. Without it the
-/// planner starts the same delegate again into the same limit. Nothing the service answered, and
-/// no other category, reaches the planner, and the person's note and the trail keep the category.
+/// BACKEND-37, DELEGATE-26. A delegate whose requests meet a 429, a 503, a hang-up or a stream that
+/// stops on every attempt ends rate-limited, unavailable, transport or incomplete, and the planner
+/// is told that category in the driver's own sentence and that starting the same delegate again
+/// meets the same ending. Without it the planner starts the same delegate again into the same
+/// ending. Nothing the service answered, and no other category, reaches the planner, and the
+/// person's note and the trail keep the category.
 #[test]
-fn a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit() {
+fn a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner()
+{
     for (status, category, said) in [
         (
             429,
@@ -54882,6 +54899,22 @@ fn a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a
             "unavailable",
             "It ended because the service could not answer (unavailable), so starting the same \
              delegate again meets the same limit.",
+        ),
+        (
+            0,
+            "transport",
+            "It ended because a request to the service did not get through or went quiet \
+             (transport), and the service sent no refusal. Starting the same delegate again on \
+             the same task may meet the same silence. Split the task so that each delegate \
+             makes smaller replies or writes.",
+        ),
+        (
+            200,
+            "incomplete",
+            "It ended because the service's reply stopped before it was finished \
+             (incomplete), and the service sent no refusal. Starting the same delegate again \
+             on the same task may stop the same way. Split the task so that each delegate \
+             makes smaller replies or writes.",
         ),
     ] {
         let scratch = Scratch::new("delegate-end-limited");
@@ -54947,7 +54980,7 @@ fn a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a
             .expect("the planner was never told the delegate did not finish");
         assert!(
             told.contains(said),
-            "the planner was not told the delegate met a limit: {told}"
+            "the planner was not told how the delegate ended: {told}"
         );
         assert!(
             !told.contains("ran out of scripted replies") && !told.contains("Refused"),
@@ -55885,7 +55918,7 @@ fn a_delegate_whose_childs_spend_takes_it_near_its_token_budget_is_warned() {
 /// twelve that reached its bound ended without a report, and the planner, told only that the
 /// delegate did not finish, spawned the same delegate on the same task again.
 ///
-/// A failure other than rate-limited or unavailable stays the fixed category
+/// A failure other than rate-limited, unavailable, transport or incomplete stays the fixed category
 /// ([`a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`] pins that
 /// the planner is told no more than that for `refused`). What is added is the bound, which is a
 /// count this driver fixed before the run started.

@@ -35662,7 +35662,7 @@ mod tests {
             context_tokens: None,
             conceded: Default::default(),
             backend: None,
-            retry_setting: false,
+            retry_setting: bravebot_agent::RetrySetting::None,
             attempts: 2,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 ChatError::Account(AccountFailure::NotSignedIn),
@@ -40950,7 +40950,7 @@ mod tests {
             context_tokens: None,
             conceded: Default::default(),
             backend: None,
-            retry_setting: false,
+            retry_setting: bravebot_agent::RetrySetting::None,
             attempts: 3,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
@@ -41017,7 +41017,7 @@ mod tests {
             context_tokens: None,
             conceded: Default::default(),
             backend: None,
-            retry_setting: false,
+            retry_setting: bravebot_agent::RetrySetting::None,
             attempts: 1,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
@@ -41089,7 +41089,7 @@ mod tests {
                 context_tokens: None,
                 conceded: Default::default(),
                 backend: None,
-                retry_setting: false,
+                retry_setting: bravebot_agent::RetrySetting::None,
                 attempts: 2,
                 cause: Box::new(bravebot_agent::backend::BackendError::from(
                     ChatError::Account(failure),

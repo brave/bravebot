@@ -10,7 +10,7 @@
 //! environment and the user's own settings file before any turn starts, and nothing a model says can
 //! reach it.
 
-use crate::outcome::{BackendKind, Category, Diagnosis};
+use crate::outcome::{BackendKind, Category, Diagnosis, RetrySetting};
 use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
 use bravebot_aichat::call::Conceded;
@@ -75,10 +75,10 @@ pub enum BackendError {
         conceded: Conceded,
         /// The backend that sent the requests, where the caller said so.
         backend: Option<BackendKind>,
-        /// Whether the backend that sent the requests has a `provider` entry to state `maxRetries`
-        /// in, set from the variant that sent them and never from a reply
+        /// Where the backend that sent the requests lets a person state `maxRetries`, set from the
+        /// variant that sent them and never from a reply
         /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
-        retry_setting: bool,
+        retry_setting: RetrySetting,
         cause: Box<BackendError>,
     },
 }
@@ -171,7 +171,7 @@ impl BackendError {
             context_tokens,
             conceded: Conceded::default(),
             backend: None,
-            retry_setting: false,
+            retry_setting: RetrySetting::None,
             cause: Box::new(self),
         }
     }
@@ -226,11 +226,10 @@ impl BackendError {
         }
     }
 
-    /// This failure marked with whether the backend that sent the requests has a `provider` entry to
-    /// state `maxRetries` in, which is a fact about the variant and its configuration and never
-    /// anything a reply or an address said. A failure that counted no requests is returned as it
-    /// was.
-    pub(crate) fn with_retry_setting(self, entry: bool) -> Self {
+    /// This failure marked with where the backend that sent the requests lets a person state
+    /// `maxRetries`, which is a fact about the variant and its configuration and never anything a
+    /// reply or an address said. A failure that counted no requests is returned as it was.
+    pub(crate) fn with_retry_setting(self, setting: RetrySetting) -> Self {
         match self {
             Self::Attempted {
                 attempts,
@@ -246,7 +245,7 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 backend,
-                retry_setting: entry,
+                retry_setting: setting,
                 cause,
             },
             other => other,
@@ -280,12 +279,11 @@ impl BackendError {
                 cause,
                 ..
             } => {
-                let diagnosis = cause.diagnosis().after(*attempts).with_conceded(*conceded);
-                let diagnosis = if *retry_setting {
-                    diagnosis.with_retry_setting()
-                } else {
-                    diagnosis
-                };
+                let diagnosis = cause
+                    .diagnosis()
+                    .after(*attempts)
+                    .with_conceded(*conceded)
+                    .with_retry_setting(*retry_setting);
                 return match backend {
                     Some(kind) => diagnosis.on_backend(*kind),
                     None => diagnosis,
@@ -1442,17 +1440,21 @@ impl<'a> Backend<'a> {
         }
     }
 
-    /// Whether this backend is reached through a `provider` entry, which is where `maxRetries` is
-    /// stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    /// Where this backend lets a person state `maxRetries`, which is a `provider` entry or, for an
+    /// AWS account reached through the tier variables, `BRAVEBOT_BEDROCK_MAX_RETRIES`
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
     ///
-    /// Read from the configuration the backend was selected with. The Brave endpoint, a tier-variable
-    /// Bedrock account, the Vertex service the environment names and the two sign-in accounts have no
-    /// entry to put it in.
-    fn has_retry_setting(&self) -> bool {
+    /// Read from the configuration the backend was selected with. The Brave endpoint, the Vertex
+    /// service the environment names and the two sign-in accounts have no place to put it.
+    fn retry_setting(&self) -> RetrySetting {
         match self {
-            Self::Bedrock { config, .. } => config.named_by_block(),
-            Self::Gateway { provider, .. } => provider.written_in_entry(),
-            Self::Aichat { .. } | Self::Account { .. } | Self::XaiAccount { .. } => false,
+            Self::Bedrock { config, .. } if config.named_by_block() => RetrySetting::Entry,
+            Self::Bedrock { .. } => RetrySetting::Variable,
+            Self::Gateway { provider, .. } if provider.written_in_entry() => RetrySetting::Entry,
+            Self::Gateway { .. }
+            | Self::Aichat { .. }
+            | Self::Account { .. }
+            | Self::XaiAccount { .. } => RetrySetting::None,
         }
     }
 
@@ -1463,7 +1465,7 @@ impl<'a> Backend<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
-        let entry = self.has_retry_setting();
+        let entry = self.retry_setting();
         self.send(policy, request)
             .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
     }
@@ -1546,7 +1548,7 @@ impl<'a> Backend<'a> {
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
-        let entry = self.has_retry_setting();
+        let entry = self.retry_setting();
         self.send_streaming(policy, request, progress)
             .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
     }
@@ -2582,14 +2584,14 @@ mod tests {
         ));
     }
 
-    /// BACKEND-37: only a backend reached through a `provider` entry has a `maxRetries` to raise,
-    /// so only it is told to raise one. A gateway entry and an AWS entry have one; Brave's endpoint
-    /// and an AWS account reached through the tier variables have none.
+    /// BACKEND-37: only a backend with a place to state `maxRetries` is told to raise one. A gateway
+    /// entry and an AWS entry have `options.maxRetries`; an AWS account reached through the tier
+    /// variables has `BRAVEBOT_BEDROCK_MAX_RETRIES`; Brave's endpoint has none.
     ///
-    /// The faults this rejects: the flag true for every backend, false for every backend, and
-    /// decided by the variant alone, which would treat the two kinds of AWS account alike.
+    /// The faults this rejects: the setting the same for every backend, `None` for every backend,
+    /// and decided by the variant alone, which would treat the two kinds of AWS account alike.
     #[test]
-    fn only_a_backend_reached_through_a_provider_entry_has_a_retry_setting() {
+    fn each_backend_names_the_place_it_states_max_retries_in() {
         let mut config = with_a_gateway();
         let serde_json::Value::Object(root) = serde_json::from_str(
             r#"{"provider": {"amazon-bedrock": {
@@ -2604,12 +2606,20 @@ mod tests {
             .providers
             .extend(bravebot_config::provider::Provider::all(&root));
         let egress = Egress::new();
-        let has = |model: &str| Backend::select(&config, &egress, model).has_retry_setting();
+        let has = |model: &str| Backend::select(&config, &egress, model).retry_setting();
 
-        assert!(has("z-ai/glm-4.6"), "a gateway entry");
-        assert!(has("openai.gpt-5.6-sol"), "an AWS entry");
-        assert!(!has("opus-arn"), "an AWS account the tier variables name");
-        assert!(!has(DEFAULT_MODEL), "Brave's endpoint");
+        assert_eq!(has("z-ai/glm-4.6"), RetrySetting::Entry, "a gateway entry");
+        assert_eq!(
+            has("openai.gpt-5.6-sol"),
+            RetrySetting::Entry,
+            "an AWS entry"
+        );
+        assert_eq!(
+            has("opus-arn"),
+            RetrySetting::Variable,
+            "an AWS account the tier variables name"
+        );
+        assert_eq!(has(DEFAULT_MODEL), RetrySetting::None, "Brave's endpoint");
     }
 
     /// A `provider` block naming AWS reaches Bedrock, which signs, rather than the gateway client,
@@ -5717,6 +5727,50 @@ mod tests {
             assert_eq!(failure.diagnosis().category, Category::Incomplete);
             assert!(!failure.is_unreachable());
         }
+    }
+
+    /// BACKEND-37: which endings of a request are told as a request that did not get through and
+    /// which as a reply that stopped. A transport failure, a redirect that did not end or named no
+    /// location, and a withdrawn request are transport; a reply cut at the time its request stated
+    /// for it is incomplete. The category is chosen from the kind of error the transport raised,
+    /// never from its text.
+    ///
+    /// The faults this rejects: a deadline told as transport, which sends a person to check a
+    /// network that answered, and a dropped connection told as incomplete before any of the reply
+    /// arrived.
+    #[test]
+    fn each_ending_of_a_request_is_told_as_transport_or_as_incomplete() {
+        use bravebot_net::EgressError;
+        let url = || "https://bedrock.example/invoke".to_string();
+        let category = |error: EgressError| of_egress(&error).category;
+
+        assert_eq!(
+            category(EgressError::Transport {
+                url: url(),
+                detail: "reset".to_string(),
+                transient: true,
+            }),
+            Category::Transport,
+            "a connection that dropped or went silent"
+        );
+        assert_eq!(
+            category(EgressError::TooManyRedirects { url: url() }),
+            Category::Transport
+        );
+        assert_eq!(
+            category(EgressError::MissingLocation { url: url() }),
+            Category::Transport
+        );
+        assert_eq!(
+            category(EgressError::Stopped { url: url() }),
+            Category::Transport,
+            "a withdrawn request, which is reported as a stop before it gets here"
+        );
+        assert_eq!(
+            category(EgressError::OutOfTime { url: url() }),
+            Category::Incomplete,
+            "a reply cut at the time its request stated for it"
+        );
     }
 
     /// A turn asks again after an empty reply, so a reply that was cut or garbled must not pass

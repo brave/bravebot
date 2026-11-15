@@ -1510,6 +1510,18 @@ mod tests {
             "a later request of the process lost its breakpoints: {}",
             sent[0]
         );
+
+        // The answered request cleared the doubt, so a refusal after it is a first one again.
+        let (result, _) = complete_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+        );
+        result.expect("the request without the breakpoints answers");
+        assert!(
+            !refusals(model).caching,
+            "a refusal after an answered request completed the pair held before it"
+        );
     }
 
     /// A model that refuses the breakpoints on a second request is the one that does not do

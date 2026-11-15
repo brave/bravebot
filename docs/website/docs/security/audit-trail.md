@@ -229,8 +229,9 @@ answered, it reached its round limit and answered with what it had, it was stopp
 (with the kind of failure), or its thread died and returned nothing. A delegate that ran for
 twenty minutes and produced nothing can be told apart this way from one that ran out of rounds. The
 same cause is in the note you are shown. The planner is told only that the delegate did not finish,
-except when the cause was a rate limit or an outage: it is then also told which, and that starting the
-same delegate again meets the same limit.
+except when the cause was a rate limit, an outage, a connection that went silent or a reply that
+stopped: it is then also told which, and that starting the same delegate again meets the same
+ending, and for the last two that the task should be split into smaller replies or writes.
 
 Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
 removed, is recorded as well.

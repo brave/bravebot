@@ -244,7 +244,12 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | `BRAVEBOT_HOME` | the directory bravebot keeps its state in, in place of `~/.bravebot` ([below](#moving-the-state-directory)) |
 | `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](../security/sandbox.md#runscrubenv)) |
 
-Six more name an AWS account rather than this build. See
+Six more name an AWS account rather than this build, and two more state how patient a request to it is:
+`BRAVEBOT_BEDROCK_MAX_RETRIES`, how many times a request is sent again (at most 7, and `0` sends each
+request once), and `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`, how many milliseconds a reply may go quiet before
+it is given up on (at most 600000). They are the `maxRetries` and `idleTimeoutMs` of a
+[`provider` entry](providers/bedrock.md) for an account that has none. A value that is not a whole number, and a gap of `0`,
+states nothing. See
 [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock).
 
 To point a release build at a backend running locally:
@@ -260,18 +265,20 @@ one. It is read from your own file and the file `--settings` names, and from no 
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
 
-**Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
-spelling: seven of the ten above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
+**Fifteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
+spelling: seven of the ten above, plus the six AWS ones and the two for retries and idle gap. The three exceptions are `BRAVEBOT_LOCALE`,
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB` and `BRAVEBOT_HOME`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Eighteen names are read from your own file and the file `--settings` names, and from no
+Twenty names are read from your own file and the file `--settings` names, and from no
 project or local file: `BRAVEBOT_DEFAULT_MODEL`, because it chooses which of your configured
 services receives a conversation, the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
 `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
-because they choose the AWS account a conversation is sent through, and `BRAVE_AI_CHAT_ENDPOINT` and
+because they choose the AWS account a conversation is sent through, `BRAVEBOT_BEDROCK_MAX_RETRIES` and
+`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`, because a count or a gap a checkout raised would multiply the requests
+billed to your account or hold your turn on a dead connection, and `BRAVE_AI_CHAT_ENDPOINT` and
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, because they choose the host a conversation and a premium key are
 sent to. A build that carries an endpoint outranks your file, and a source build carries none.
 `bravebot doctor` reports one a project or local file names and the name decides nothing; see

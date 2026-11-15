@@ -10481,6 +10481,87 @@ mod tests {
         assert_eq!(inside.network_ignored().count(), 0);
     }
 
+    /// BACKEND-33, BACKEND-55: a checkout that raised the retry count or stretched the idle gap of
+    /// the account the tier variables name would multiply the requests billed to the person's
+    /// account and hold their turn on a dead connection, so its project and local files decide
+    /// neither name, `doctor` reports them, and the person's own file keeps both.
+    ///
+    /// The faults this rejects: either name left out of the person-only list, and a project file's
+    /// value replacing the person's.
+    #[test]
+    fn a_project_layer_cannot_change_the_tier_accounts_retry_count_or_idle_gap() {
+        let patience = |settings: &Settings| {
+            crate::Config::from_sources(
+                settings,
+                &crate::managed::Managed::default(),
+                &crate::keys::Keys::default(),
+                None,
+                |_| None,
+                |key| match key {
+                    crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
+                    crate::env_var::KEY_ID => Some("test-key-id".into()),
+                    crate::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                    _ => None,
+                },
+            )
+            .expect("configured")
+            .bedrock
+            .expect("the person's file configures the account")
+            .patience()
+        };
+        let account = r#""BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn""#;
+        let own = format!(
+            r#"{{"env": {{{account}, "BRAVEBOT_BEDROCK_MAX_RETRIES": "1",
+                "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS": "30000"}}}}"#
+        );
+        let checkout = r#"{"env": {"BRAVEBOT_BEDROCK_MAX_RETRIES": "7",
+            "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS": "600000"}}"#;
+
+        let settings = Layers::new("tier-patience")
+            .global(&own)
+            .project(checkout)
+            .local(checkout)
+            .read();
+        let held = patience(&settings);
+        assert_eq!(held.max_retries, Some(1));
+        assert_eq!(held.idle_timeout, Some(std::time::Duration::from_secs(30)));
+        let reported: Vec<&str> = settings.network_ignored().map(|(_, name)| name).collect();
+        assert_eq!(
+            reported,
+            [
+                "BRAVEBOT_BEDROCK_MAX_RETRIES",
+                "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS",
+                "BRAVEBOT_BEDROCK_MAX_RETRIES",
+                "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS",
+            ]
+        );
+
+        // Each name alone, in each checkout file, decides nothing and is reported. The names are
+        // spelled here and not taken from the list under test.
+        for name in [
+            "BRAVEBOT_BEDROCK_MAX_RETRIES",
+            "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS",
+        ] {
+            let text = format!(r#"{{"env": {{"{name}": "5"}}}}"#);
+            for (file, layers) in [
+                (
+                    "project",
+                    Layers::new(&format!("tier-patience-project-{name}")).project(&text),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("tier-patience-local-{name}")).local(&text),
+                ),
+            ] {
+                let settings = layers.read();
+                assert_eq!(settings.get(name), None, "a {file} file decided {name}");
+                let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+                assert_eq!(reported, [name], "a {file} file's {name} was not reported");
+            }
+        }
+    }
+
     /// Every name a managed layer may pin is read from the person's layers alone, so a name added
     /// to `PINNABLE` has to be placed in the person-only lists of `env_var`, which is what keeps a
     /// checkout from choosing the host that receives a conversation or a credential (BACKEND-33).
