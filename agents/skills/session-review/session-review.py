@@ -191,29 +191,13 @@ def candidates(store, workspace=None):
     return found
 
 
-def select(found, named, limit, now, idle):
-    """The sessions to review: the ones named, else the unreviewed or grown, newest first.
+def due(found, now, idle):
+    """The sessions a default run would review, newest first, before the limit is applied.
 
-    A named session is reviewed whatever its marker says and from its first turn and first note,
-    since naming one is how a session is reviewed again. Otherwise a session that is imported, has
-    no turns, or was written within `idle` seconds (so may still be running) is passed over, and
-    one reviewed before is offered only when it has more turns or more notes than the review
-    considered, for the turns and notes after those.
+    A session that is imported, has no turns, or was written within `idle` seconds (so may still be
+    running) is passed over, and one reviewed before is due only when it has more turns or more notes
+    than the review considered, for the turns and notes after those.
     """
-    if named:
-        chosen = []
-        for name in dict.fromkeys(named):
-            exact = [s for s in found if s["id"] == name]
-            matches = exact or [s for s in found if s["id"].startswith(name)]
-            if not matches:
-                raise Problem(f"no session {name}")
-            if len(matches) > 1:
-                raise Problem(f"{name} matches {len(matches)} sessions; give more of the id")
-            if matches[0]["turns"] < 1:
-                raise Problem(f"session {matches[0]['id']} has had no turns")
-            chosen.append(dict(matches[0], from_turn=0, from_note=0))
-        return chosen
-
     left = []
     for session in found:
         marker = session["marker"]
@@ -229,7 +213,44 @@ def select(found, named, limit, now, idle):
             )
         )
     left.sort(key=lambda s: s["updated"], reverse=True)
-    return left[:limit]
+    return left
+
+
+def select(found, named, limit, now, idle):
+    """The sessions to review: the ones named, else the unreviewed or grown, newest first.
+
+    A named session is reviewed whatever its marker says and from its first turn and first note,
+    since naming one is how a session is reviewed again. Otherwise the newest `limit` of `due`.
+    """
+    if named:
+        chosen = []
+        for name in dict.fromkeys(named):
+            exact = [s for s in found if s["id"] == name]
+            matches = exact or [s for s in found if s["id"].startswith(name)]
+            if not matches:
+                raise Problem(f"no session {name}")
+            if len(matches) > 1:
+                raise Problem(f"{name} matches {len(matches)} sessions; give more of the id")
+            if matches[0]["turns"] < 1:
+                raise Problem(f"session {matches[0]['id']} has had no turns")
+            chosen.append(dict(matches[0], from_turn=0, from_note=0))
+        return chosen
+    return due(found, now, idle)[:limit]
+
+
+def plan(found, chosen, args, now, idle):
+    """One line saying how many sessions this run reviews, from what was asked, and how many stay for later runs."""
+    left = {s["id"] for s in due(found, now, idle)} - {s["id"] for s in chosen}
+    where = " in that workspace" if args.workspace else ""
+    if args.ids:
+        asked = "the ones you named"
+    elif args.max != MAX:
+        asked = f"up to {args.max} as you asked"
+    else:
+        asked = f"up to {MAX}, the default"
+    reviewing = f"reviewing {len(chosen)} session{'s' if len(chosen) != 1 else ''} ({asked})"
+    remain = f"{len(left)} more due{where} will remain for future runs" if left else f"none more due{where} will remain"
+    return f"{reviewing}; {remain}"
 
 
 def pending(args, now=None):
@@ -240,7 +261,9 @@ def pending(args, now=None):
         raise Problem(f"no sessions under {store}")
     workspace = Path(args.workspace).resolve() if args.workspace else None
     found = candidates(store, workspace)
-    chosen = select(found, args.ids, args.max, time.time() if now is None else now, args.idle * 60)
+    now = time.time() if now is None else now
+    chosen = select(found, args.ids, args.max, now, args.idle * 60)
+    print(plan(found, chosen, args, now, args.idle * 60), file=sys.stderr)
 
     work = Path(tempfile.mkdtemp(prefix="session-review-"))
     for name in ("sessions", "analyze", "verify"):

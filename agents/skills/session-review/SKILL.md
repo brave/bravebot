@@ -106,8 +106,10 @@ outside this project, and the agents that read them are told what the text is.
 python3 agents/skills/session-review/session-review.py pending [--max N] [--workspace DIR] [SESSION-ID ...]
 ```
 
-Print its stderr: how many sessions exist, how many were reviewed before, and the commit they are
-reviewed against. It refuses a tree that differs from `upstream/main`, since a verdict about a
+Print its stderr. Its first line says how many sessions this run is reviewing, from what the user
+asked (the default eight, `max N`, or the ids named), and how many more are due and will remain for
+future runs. Repeat that line to the user before going on. The rest says how many sessions exist, how
+many were reviewed before, and the commit they are reviewed against. It refuses a tree that differs from `upstream/main`, since a verdict about a
 branch is no verdict about main; the refusal names the worktree to run from instead. It copies each
 chosen record and trail into the work directory, so the agents read nothing under `~/.bravebot`. It
 also writes `<id>.digest.json` beside each copy ([digest.py](digest.py)): the figures that code can
