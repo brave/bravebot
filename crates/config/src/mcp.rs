@@ -170,8 +170,8 @@ pub fn alias_matches(pattern: &str, alias: &str) -> bool {
         return rest.is_empty();
     };
     for part in between {
-        match rest.find(part) {
-            Some(at) => rest = &rest[at + part.len()..],
+        match rest.split_once(part) {
+            Some((_, after)) => rest = after,
             None => return false,
         }
     }
