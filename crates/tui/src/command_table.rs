@@ -143,6 +143,13 @@ pub(crate) const NOTE_COMMAND: &str = "/note";
 pub(crate) const ISSUE_COMMAND: &str = "/issue";
 pub(crate) const PR_COMMAND: &str = "/pr";
 
+/// The lines that list the issues and the pull requests the session has named, taking no argument.
+///
+/// Carried out by the driver from the list the session holds and start no turn (CMD-31). Longer
+/// words than `/issue` and `/pr`, which are not the same commands with an argument.
+pub(crate) const ISSUES_COMMAND: &str = "/issues";
+pub(crate) const PRS_COMMAND: &str = "/prs";
+
 /// The line that asks a question beside the work, taking the question as its argument.
 pub(crate) const BTW_COMMAND: &str = "/btw";
 
@@ -679,6 +686,18 @@ pub fn commands() -> Vec<Command> {
             argument: "[<url> | clear]",
             description: t!(command_issue),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: PRS_COMMAND,
+            argument: "",
+            description: t!(command_prs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: ISSUES_COMMAND,
+            argument: "",
+            description: t!(command_issues),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: CHECKOUTS_COMMAND,

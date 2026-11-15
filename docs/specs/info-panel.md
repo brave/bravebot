@@ -6,6 +6,8 @@ governs:
   - crates/tui/src/title.rs
   - crates/tui/src/panel.rs
   - crates/tui/src/pointer.rs
+  - crates/tui/src/state/references.rs
+  - crates/agent/src/links.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -13,13 +15,17 @@ documented-by: docs/website/docs/using/sessions.md
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
-issue and pull request it is for, the model and effort it runs on, its context and cache, its token
-total, the language servers and MCP servers it has started, and its plan. A session gets its links
-from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
-[`set_link`](tools/set-link.md) for an address the person typed. A session does not get its links from
-what `gh pr create` prints. That needs a reader that branches on untrusted run output
+issues and pull requests it is for and has met, the model and effort it runs on, its context and
+cache, its token total, the language servers and MCP servers it has started, and its plan. A session
+gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
+[`set_link`](tools/set-link.md) for an address the person typed. It lists the other issues and pull
+requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed, from the
+planner's own tool-call arguments and from content whose label is trusted. A session does not get its
+links from what `gh pr create` prints. That needs a reader that branches on untrusted run output
 ([RUN-4](tools/run.md#RUN-4)), which is an exception no maintainer has accepted, so it is
-not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). How a session
+not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). The sections of
+met items are collected without it, and an issue the agent creates with `gh issue create` is listed
+only once a later argument or typed line names its number. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
 is closed is proposed in [background-sessions.md](background-sessions.md) and not built.
@@ -225,24 +231,35 @@ narrow for it.
    none. Both come from the session's settings, so the section is left out while the person has
    chosen no model and no effort level is in force.
 3. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
-4. **Links.** PANEL-12.
-5. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
+4. **Pull requests.** A row for the session's own pull request link and one for each pull request
+   the session met ([PANEL-12](#PANEL-12), [PANEL-16](#PANEL-16)). A row is `{owner}/{repo}#{n}`,
+   cut from the left with an ellipsis where it is longer than the row, and its cells are a terminal
+   link (OSC 8) to the item's address.
+5. **Issues.** The same for the session's own issue link and the issues it met. The two sections
+   are cut to the room the sections below them and the Plan's reserve leave, the pull requests
+   having their room before the issues do. A section that does not fit whole keeps the rows that
+   do and ends with a row `+{n} more` that counts the rest. A section with no room for a row is
+   left out with its heading, so a heading is never drawn over nothing and a count is never drawn
+   over no row.
+6. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
    has the session's token total, as `/cost` opens with it, in tokens and not money, counting what
    the turn in flight has spent so far, the requests its delegates have completed included as
    they complete, and left out until a token has been spent.
-6. **Language servers.** PANEL-13.
-7. **MCP servers.** PANEL-14.
-8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
+7. **Language servers.** PANEL-13.
+8. **MCP servers.** PANEL-14.
+9. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
    A click on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as `/diff` does
    ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The Plan takes
    the rows it leaves, as PANEL-13 says of the server sections.
-9. **Plan.** PANEL-10.
+10. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
 whatever whoever made it chose.
 
 `verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
+`verified-by: bravebot_tui::panel::the_sections_of_references_are_cut_to_the_room_with_a_count_of_the_rest`
+`verified-by: bravebot_tui::panel::the_references_do_not_move_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::a_long_name_takes_three_rows_and_ends_in_an_ellipsis`
 `verified-by: bravebot_tui::panel::a_github_address_in_the_name_is_drawn_as_its_shorthand`
 `verified-by: bravebot_tui::panel::an_address_of_any_other_shape_is_drawn_as_written`
@@ -356,14 +373,19 @@ says the work is finished reads as work still going.
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
-typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the driver's own counters (the context
+typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the rows of the
+Pull requests and Issues sections, which are the items [PANEL-16](#PANEL-16) collects from the lines
+the person typed, from the planner's own tool-call arguments once the gate that reads them has said the
+context is trusted, and from content whose label is trusted, the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
 servers (PANEL-14), the model the person chose and the effort level in force, or the paths of the files
 the session wrote with the counts the kernel made ([FILES-2](files-mode.md#FILES-2)). No row comes from a
-reply, a tool result, a file's contents, a language server's reply, an issue or
-pull request body, or anything a job printed.
+reply, an untrusted tool result, a file's contents, a language server's reply, an issue or
+pull request body, or anything a job printed. A row of the two sections of references is built from
+an owner, a repository and a number that [PANEL-16](#PANEL-16) validated, so a reply or a result that
+names an item adds no row, and a row cannot hold a character the validation does not allow.
 
 The files state, and no other state of the panel, also draws the changes of a write, under
 [FILES-6](files-mode.md#FILES-6) and [FILES-7](files-mode.md#FILES-7). Those rows are in a region of
@@ -377,6 +399,7 @@ own sentence, and it would be in front of the person on every frame.
 No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
 
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
+`verified-by: bravebot_tui::panel::control_characters_in_a_link_row_are_drawn_as_pictures`
 `verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
 
 <a id="PANEL-12"></a>
@@ -405,15 +428,19 @@ replaces the link of that kind and is written to the record as `/issue` is.
 
 `verified-by: bravebot_agent::turn::an_address_the_person_typed_reaches_set_link_and_leaves_the_turn`
 
-The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
-set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
-since the number at its end is what tells two apart. A link that is a GitHub pull request or issue
-address of the shape [PANEL-9](#PANEL-9) gives is drawn as `{owner}/{repo}#{n}` instead, cut from
-the left in the same way. The cells drawn are a terminal link (OSC 8) to the address, and a
-selection over them copies the shorthand. An address of any other shape is drawn as written and is
-not a link. A new link reaches an open panel on the next frame. A click on either row opens the
-address that was set in the person's browser, as `/open` followed by that address does
-([MOUSE-41](mouse.md#MOUSE-41), [CMD-30](commands.md#CMD-30)).
+The Pull requests section starts with the session's own pull request link and the Issues section
+with its own issue link, each only while that link is set, and the items the session met follow
+([PANEL-16](#PANEL-16)). A row has no label: the heading says what the rows are. A link that is a
+GitHub pull request or issue address of the shape [PANEL-9](#PANEL-9) gives, whose path names the
+kind of its section, is drawn as `{owner}/{repo}#{n}`, cut from the left with an ellipsis where it is
+longer than the row, since the number at its end is what tells two apart. The item it names is not
+drawn a second time among the items met. The cells drawn are a terminal link (OSC 8) to the address,
+and a selection over them copies the shorthand. An address of any other shape, including one with a
+path after the number, one of another kind than its section, and one on another host, is drawn as
+written, cut in the same way, and is not a link. A new link reaches an open panel on the next frame.
+A click on a row opens the address that was set in the person's browser, as `/open` followed by that
+address does ([MOUSE-41](mouse.md#MOUSE-41), [CMD-30](commands.md#CMD-30)), and on a row for an item
+the session met opens the address built from the item's validated parts.
 
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
@@ -425,7 +452,10 @@ address that was set in the person's browser, as `/open` followed by that addres
 `verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
 `verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`
 `verified-by: bravebot_session::sessions::only_one_web_address_on_one_line_is_a_link`
-`verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
+`verified-by: bravebot_tui::panel::a_link_the_person_gave_is_the_first_row_of_the_section_of_its_kind`
+`verified-by: bravebot_tui::panel::what_the_session_met_follows_its_own_link_in_the_section_of_its_kind`
+`verified-by: bravebot_tui::panel::an_own_link_with_a_path_after_its_number_is_drawn_as_written_and_not_repeated`
+`verified-by: bravebot_tui::panel::a_row_for_what_the_session_met_links_to_the_address_its_reference_builds`
 `verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`
 `verified-by: bravebot_tui::panel::a_github_address_in_a_link_row_is_drawn_as_its_shorthand`
 `verified-by: bravebot_tui::panel::a_link_row_of_any_other_shape_is_drawn_as_written_and_not_linked`
@@ -494,6 +524,117 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::app::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
 `verified-by: bravebot_tui::app::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`
 
+<a id="PANEL-16"></a>
+### PANEL-16: the issues and pull requests a session names are collected from what the person and the planner wrote
+
+The Pull requests and Issues sections ([PANEL-9](#PANEL-9)) and the lists `/issues` and `/prs` print
+([CMD-31](commands.md#CMD-31)) hold the items the session has met. An item is an owner, a repository
+and a number, with the kind issue or pull request, and it is built in one place and only from an owner
+of up to 39 letters, digits and hyphens, a repository of up to 100 letters, digits, hyphens,
+underscores and dots (not `.` or `..`) and a number of one to nine digits with no leading zero. The
+shorthand `{owner}/{repo}#{n}` and the address a click opens are written from those parts alone, so
+nothing else a string held reaches a row. Two sightings are one item where the owner (without regard to
+case), the repository and the number agree, and the list keeps the order they were first met and the
+first spelling.
+
+One reader takes items out of a string. It calls no model, no network and no `gh`, and touches no
+file. It finds a full `https://github.com/{owner}/{repo}/issues/{n}` or `/pull/{n}` address, which
+names its kind, and a word `{owner}/{repo}#{n}`, which names none and is listed as an issue until a
+later sighting names it. In a command it also finds the number a `gh pr` or `gh issue` subcommand works
+on (`view`, `comment`, `checkout`, `diff`, `checks`, `merge`, `review`, `close`, `reopen`, `edit`,
+`ready`, `develop`, `lock`, `unlock`, `pin`, `unpin`, `transfer`). That number is the first word after
+the subcommand, or the first one after only `-R {repo}`, `--repo {repo}`, `--repo={repo}` or `-R{repo}`,
+so the `30` in `gh pr checks --interval 30` is not an item, as no number is read once any other word
+comes first. The reader also finds the number after `Closes`,
+`Fixes` or `Resolves` and their other forms, as `#n` or `{owner}/{repo}#n`. A number alone takes its
+repository from `--repo`, `--repo=`, `-R` or `GH_REPO=` in the same segment of the command, a segment
+ending at a newline, `;`, `|` or `&`, and otherwise from the repository of the session's own pull
+request link, or failing that its issue link, when that is a GitHub address. A repository that is on
+another host or is not well formed names nothing, and a number with no repository names nothing. A bare
+`#n` in prose, a number in `gh pr list` or `gh api`, and a title such as `Add x (#12)` name nothing.
+A string is read up to its first 64 KiB, cut at the end of a word, so a word the cut falls inside is
+dropped and never shortened to a different number, and it gives at most 64 items.
+
+There are three sources, and only these.
+
+1. **Lines the person typed.** Every line the box sends is read, whether a prompt, a queued line, a
+   command or a shell line, and so are the addresses `--issue` and `--pr` gave when the session opened.
+   What the person wrote is theirs, as [SETLINK-1](tools/set-link.md#SETLINK-1) holds.
+2. **The planner's tool-call arguments.** The `command` of `run` and the address of `fetch_url` and
+   `download_url` are read where the call is made, after the same gate that lets the driver read an
+   argument at all ([LABEL-5](labels.md#LABEL-5)), and only then. A context that has met something
+   untrusted is refused that read, so it collects nothing from the planner's arguments, and the call
+   fails as it did before. No gate was added and nothing is declassified. The call is read before the
+   credential, directory, rules and approval checks, so a command one of them then refuses still names
+   what it was about. Only a turn whose front end keeps links (the terminal and the desktop, as
+   [SETLINK-2](tools/set-link.md#SETLINK-2) says) collects. A delegate, a one-shot run and a plain run
+   collect nothing.
+3. **Content whose label is trusted.** A tool result is read only after its label is asked, and only
+   where that says trusted ([LABEL-5](labels.md#LABEL-5)), as a read of a file the person vouched for
+   is. One such read is one `allow` event in the trail. A result that is untrusted, such as what a
+   program printed, is not read and adds no event, so an address in `gh pr view` output never
+   reaches the panel.
+
+No other text is read: not an assistant reply, an untrusted tool result, a file that was not vouched
+for, an issue body or a language server's reply. What the reader returns is appended to a list and
+nothing else. It decides no permission, route, prompt, refusal or sentence to the planner, and no code
+in the driver branches on an item beyond the kind the validating constructor set, which picks the
+section. The items travel to the terminal as the turn finds them, one message for each call that named
+something new, so `/issues` and the panel are current while a turn runs and a failed or stopped turn
+has handed back what it found. A turn keeps at most 200 and the session at most 500, the first met,
+and the items of the session are written with each turn's save, kept by a resume and a fork and dropped
+by `/clear` ([SESSION-3](sessions.md#SESSION-3)).
+
+**Why.** The panel and the lists are the interface speaking in its own voice, so a row is made only
+from what a person or the planner's own context wrote, never from what a page, a reply or a program
+supplied ([PANEL-11](#PANEL-11)). The reader returns a value that only the screen uses, so what it
+reads cannot decide anything.
+
+`verified-by: bravebot_agent::links::a_reference_is_built_only_from_what_github_allows_in_a_name_and_a_number`
+`verified-by: bravebot_agent::links::a_reference_writes_its_shorthand_and_the_address_of_its_kind`
+`verified-by: bravebot_agent::links::two_references_are_the_same_item_by_owner_repository_and_number`
+`verified-by: bravebot_agent::links::a_full_address_gives_the_kind_its_path_names_and_what_follows_the_number_is_ignored`
+`verified-by: bravebot_agent::links::an_owner_repository_number_word_is_read_as_an_issue_whose_kind_was_not_named`
+`verified-by: bravebot_agent::links::a_word_that_is_not_a_reference_gives_nothing`
+`verified-by: bravebot_agent::links::what_a_sentence_puts_around_a_reference_is_taken_off`
+`verified-by: bravebot_agent::links::only_the_first_part_of_a_long_string_is_read_and_the_cut_falls_on_a_character`
+`verified-by: bravebot_agent::links::a_word_the_cut_falls_inside_is_dropped_and_not_shortened`
+`verified-by: bravebot_agent::links::one_string_adds_at_most_sixty_four_references_and_the_first_are_kept`
+`verified-by: bravebot_agent::links::a_list_holds_each_item_once_and_a_named_kind_settles_an_assumed_one_only`
+`verified-by: bravebot_agent::links::a_full_list_keeps_what_it_holds_and_drops_the_rest`
+`verified-by: bravebot_agent::links::the_item_a_gh_command_works_on_is_read_with_the_kind_of_its_noun`
+`verified-by: bravebot_agent::links::a_number_is_read_only_first_or_after_a_repository_flag`
+`verified-by: bravebot_agent::links::a_bare_number_takes_the_commands_repository_then_the_default_and_otherwise_nothing`
+`verified-by: bravebot_agent::links::a_repository_that_is_not_one_on_github_is_not_replaced_by_the_default`
+`verified-by: bravebot_agent::links::a_closing_keyword_names_an_issue_and_a_number_with_no_keyword_names_nothing`
+`verified-by: bravebot_agent::links::an_address_in_any_argument_of_a_command_is_read`
+`verified-by: bravebot_agent::links::a_command_that_names_an_item_in_two_forms_lists_it_once_with_the_named_kind`
+`verified-by: bravebot_agent::links::a_line_that_is_not_valid_shell_is_still_read_as_words`
+`verified-by: bravebot_agent::tools::tests::references::a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_then_fails`
+`verified-by: bravebot_agent::tools::tests::references::a_bare_number_in_a_command_belongs_to_the_sessions_repository_and_not_to_a_guess`
+`verified-by: bravebot_agent::tools::tests::references::an_address_the_planner_fetches_or_downloads_names_its_item`
+`verified-by: bravebot_agent::tools::tests::references::a_context_that_has_met_something_untrusted_collects_nothing_from_the_planners_arguments`
+`verified-by: bravebot_agent::tools::tests::references::a_turn_that_keeps_no_links_collects_nothing`
+`verified-by: bravebot_agent::tools::tests::references::what_a_call_names_leaves_dispatch_in_its_output`
+`verified-by: bravebot_agent::references::a_turn_that_fails_after_a_call_has_still_reported_what_the_call_named`
+`verified-by: bravebot_agent::references::an_item_is_reported_once_and_again_only_when_a_later_call_settles_its_kind`
+`verified-by: bravebot_agent::references::a_bare_number_in_a_planners_command_takes_the_repository_the_task_names`
+`verified-by: bravebot_agent::references::a_turn_whose_front_end_keeps_no_links_reports_nothing`
+`verified-by: bravebot_agent::references::what_a_vouched_file_names_is_listed`
+`verified-by: bravebot_agent::references::what_a_program_printed_is_not_listed_and_adds_nothing_to_the_trail`
+`verified-by: bravebot_tui::state::references::every_line_the_box_sends_is_read_for_what_it_names`
+`verified-by: bravebot_tui::state::references::an_item_met_again_keeps_its_place_and_a_named_kind_settles_a_guess`
+`verified-by: bravebot_tui::state::references::the_session_keeps_the_first_five_hundred_it_met_in_order`
+`verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
+`verified-by: bravebot_tui::app::the_addresses_the_command_line_gave_are_in_the_list_when_the_session_opens`
+`verified-by: bravebot_tui::from_worker::the_references_a_turn_reports_are_taken_by_both_loops_and_never_handed_back`
+`verified-by: bravebot_tui::remote_confirm::references_a_turn_found_travel_when_found_without_an_answer`
+`verified-by: bravebot_tui::sessions::a_turn_that_fails_after_naming_an_item_has_already_given_the_session_the_item`
+`verified-by: bravebot_tui::panel::what_the_session_met_follows_its_own_link_in_the_section_of_its_kind`
+`verified-by: bravebot_tui::panel::a_row_for_what_the_session_met_links_to_the_address_its_reference_builds`
+`verified-by: bravebot_tui::panel::the_sections_of_references_are_cut_to_the_room_with_a_count_of_the_rest`
+`verified-by: bravebot_tui::panel::the_references_do_not_move_where_the_context_section_fits`
+
 ## Known costs
 
 - **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
@@ -508,3 +649,40 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 - **A prompt or a picker opened under the pointer leaves the resize pointer in place.** The prompts
   and pickers read their own events and none of them reads the pointer, so a pointer on the border
   when one opens keeps its shape until the prompt closes and the pointer next moves.
+
+- **An issue the agent creates appears only when a later argument or typed line names its number
+  ([PANEL-16](#PANEL-16)).** The address `gh issue create` prints is a program's output and is never
+  read, so the list does not hold it until something the person or the planner wrote names it.
+
+- **A word shaped like `owner/repo#n` is read as a reference ([PANEL-16](#PANEL-16)).** A path with a
+  number after a hash, such as `src/main.rs#12`, has a valid owner and repository by GitHub's rules, so
+  it is listed as an issue. The list is for the person to look at and nothing acts on it.
+
+- **A command a rule then refuses still counts ([PANEL-16](#PANEL-16)).** The command is read where
+  the planner's argument is read, before the checks that refuse it, so the items it names are listed
+  though it did not run.
+
+- **The reader is bounded by count, and what it drops is not shown ([PANEL-16](#PANEL-16)).** It
+  reads 64 KiB of a string and keeps 64 items of it, a turn keeps 200 and a session 500, the first
+  met. A log that names more leaves the rest out with no note, and a record keeps what the list held
+  at the last save, so a session that ends without one loses what it named since.
+
+- **The desktop collects the list and draws none of it ([PANEL-16](#PANEL-16)).** The desktop bridge
+  keeps links so that a turn collects, and the window draws no such list, so each turn there reads the
+  planner's `run` and fetch arguments and the trusted results for a list nobody sees. The trail of a
+  desktop turn gains one `allow` event for each trusted result read, as the terminal's does.
+
+- **A pull request met as `owner/repo#n` is listed under Issues until something names it
+  ([PANEL-16](#PANEL-16)).** An address with `/pull/` or a `gh pr` command settles its kind.
+
+- **An own link that is not on GitHub is drawn as written and is not a reference
+  ([PANEL-12](#PANEL-12)).** It is not in `/issues` or `/prs` either.
+
+- **Assistant reply text is never read ([PANEL-16](#PANEL-16)).** An item the model names only in a
+  sentence is not listed. Reading it would need a gate of its own and a reversal of
+  [PANEL-11](#PANEL-11).
+
+- **A context that has met something untrusted collects nothing from the planner's arguments
+  ([PANEL-16](#PANEL-16)).** The read goes through the same gate as every argument
+  ([LABEL-5](labels.md#LABEL-5)), so the sections stop growing from the planner's commands once a page
+  or an untrusted file has been read, though what the person types still counts.

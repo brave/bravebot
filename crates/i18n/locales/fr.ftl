@@ -2835,6 +2835,8 @@ command-note = Noter quelque chose au dossier de la session, sans le mettre dans
 command-branch = Copier cette session et continuer dans la copie, en gardant l'originale pour y revenir
 command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
 command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
+command-issues = Lister les tickets que cette session a nommés
+command-prs = Lister les pull requests que cette session a nommées
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-recap = Résumer où en est cette session, sans le mettre dans la conversation
@@ -4179,10 +4181,10 @@ panel-context = Contexte
 panel-language-servers = Serveurs de langage
 panel-mcp-servers = Serveurs MCP
 panel-plan = Plan
-panel-links = Liens
-# Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.
-panel-pull-request = Pull request
-panel-issue = Ticket
+panel-pull-requests = Pull requests
+panel-issues = Tickets
+# La dernière ligne d'une section du panneau d'informations coupée à la place disponible : le nombre de lignes laissées de côté.
+panel-more-references = +{ $count } de plus
 panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
@@ -4207,6 +4209,17 @@ todos-heading = plan : { $done } sur { $total } terminées
 # La même, quand certaines de ses tâches ont été annulées, ce qu'elle compte à part de celles qui sont terminées.
 todos-heading-cancelled = plan : { $done } sur { $total } terminées, annulées : { $cancelled }
 todos-none = cette session n'a pas encore de plan
+# Ce que /issues et /prs mettent dans la transcription au-dessus de la liste, et l'unique ligne qu'ils disent quand la session n'a rien nommé.
+references-heading-issues = { $count ->
+    [one] { $count } ticket nommé dans cette session :
+   *[other] { $count } tickets nommés dans cette session :
+    }
+references-heading-prs = { $count ->
+    [one] { $count } pull request nommée dans cette session :
+   *[other] { $count } pull requests nommées dans cette session :
+    }
+references-none-issues = Aucun ticket n'a encore été nommé dans cette session.
+references-none-prs = Aucune pull request n'a encore été nommée dans cette session.
 # L'état que porte chaque tâche d'un plan affiché, à côté de sa marque.
 todos-status-pending = à faire
 todos-status-active = en cours

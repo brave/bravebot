@@ -2040,6 +2040,11 @@ pub(super) fn tools_for_a_call<'a>(
             }),
         delegated: task.delegate.is_some(),
         keeping_links: task.keeps_links && task.delegate.is_none(),
+        default_repository: task
+            .default_repository
+            .as_ref()
+            .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
+        found: Vec::new(),
         confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
         offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
@@ -2056,6 +2061,41 @@ pub(super) fn tools_for_a_call<'a>(
         // call is decided under, in every one of its decisions (SANDBOX-22).
         sandbox: task.sandbox.get(),
         asks_about_unconfined: task.asks_about_unconfined,
+    }
+}
+
+/// Add `found` to what the turn has named and report what was new. Appends to a list for the
+/// person to read and decides nothing.
+fn keep_references<P: Reporter + ?Sized>(
+    state: &mut State<'_>,
+    reporter: &mut P,
+    found: &[crate::links::Reference],
+) {
+    let new = crate::links::merge(&mut state.references, found, crate::links::PER_TURN);
+    if !new.is_empty() {
+        reporter.references(&new);
+    }
+}
+
+/// Take the issues and pull requests a result names, where its label says it is trusted and the
+/// turn keeps them (PANEL-16).
+///
+/// The label is asked first, and only a trusted result is handed to `read_trusted_content`, so an
+/// untrusted result adds no reference and no event to the trail. A result is never searched here
+/// after being released to the planner: the read is the gate's, on the value that is still labelled
+/// (LABEL-6). A delegate collects nothing.
+pub(super) fn collect_from_a_result<S: Sink, P: Reporter + ?Sized>(
+    policy: &mut Policy<'_, S>,
+    task: &Task,
+    state: &mut State<'_>,
+    reporter: &mut P,
+    output: &tools::Output,
+) {
+    if !task.keeps_links || task.delegate.is_some() || !output.text.label().is_trusted() {
+        return;
+    }
+    if let Ok(text) = policy.read_trusted_content("references", &output.text) {
+        keep_references(state, reporter, &crate::links::references_in_text(&text));
     }
 }
 
@@ -2215,6 +2255,9 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     if let Some(set) = output.link.clone() {
         state.links.push(set);
     }
+    // What the call's arguments named, reported as they are found so the list is current while the
+    // turn runs and a turn that then fails has handed it over (PANEL-16).
+    keep_references(state, reporter, &output.references);
     // A tool the planner loaded is offered from the next request on (SERVERS-16).
     if let Some(wire) = output.tool_loaded.take()
         && let Some((offer, _)) = &mut state.mcp

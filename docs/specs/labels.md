@@ -459,6 +459,12 @@ the planner wrote them in. So an argument may be read while that context has met
 and is refused once it has. Locating a passage to replace is the case that shows why: `old_text` is
 compared against the file, and a comparison decides whether the write happens at all.
 
+The reader that takes the issues and pull requests a session names out of a `run` command and a
+`fetch_url` or `download_url` address ([PANEL-16](info-panel.md#PANEL-16)) is one such reader. It
+runs after the gate that reads the argument and only where that gate has handed the bytes over, so a
+context that has met something untrusted collects nothing from the planner's arguments, and it adds
+no gate of its own.
+
 An argument naming something the driver minted is held the same way, since the planner is the one
 who picks which of those names a call is about. [routing.md](routing.md) is where that case is
 settled.
@@ -477,6 +483,8 @@ settled.
 `verified-by: bravebot_agent::tools::tests::arguments::a_job_name_is_read_from_a_trusted_context`
 `verified-by: bravebot_agent::tools::tests::arguments::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::references::a_context_that_has_met_something_untrusted_collects_nothing_from_the_planners_arguments`
+`verified-by: bravebot_agent::tools::tests::references::a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_then_fails`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect

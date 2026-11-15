@@ -58,6 +58,8 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
+| `/prs` | | List the pull requests this session has met |
+| `/issues` | | List the issues this session has met |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/plan` | `[task]` | Enter plan mode, and start on a task if you give one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
@@ -1248,6 +1250,28 @@ another scheme sets nothing and is not repeated back. Alone, each says what is s
 rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. In the desktop app a chat whose pull request link points at a `/pull/<number>` path shows `PR #<number>` beside its branch on its sidebar row and in a bot's conversation list. Clicking it opens the address in your browser, and typing `PR #<number>` in the row search finds the chat. Typed
 while a turn runs with nothing waiting, each is carried out at once, as `/rename` is. [`--issue` and `--pr`](cli.md#--issue-url-and---pr-url) set the same links when a session opens.
 
+## `/issues` and `/prs`
+
+`/prs` lists the pull requests the session has met, and `/issues` the issues. A line says how many there
+are, and each item follows as `owner/repo#12` and its address. The list is the one the Pull requests
+and Issues sections of the [info panel](../using/sessions.md#telling-sessions-apart) draw, so it
+starts with the link you gave with `/pr` or `/issue` where that is a GitHub address, and then holds
+what the session met in the order it was first met. A session that has met none says so.
+
+A session meets an item when you type a GitHub address or `owner/repo#12` in a line you send, when you
+open it with `--issue` or `--pr`, when the model's own `run`, `fetch_url` or `download_url` call names
+it (`gh pr view 12 --repo owner/repo`, an address, `Closes owner/repo#12` in a commit message), and
+when a file you vouched for names it. Nothing a program printed, a web page said or the model wrote in
+a reply is read, so an address in the output of `gh pr view` is not listed, and an issue the model
+creates with `gh issue create` is listed once a later line or call names its number. A bare `#12` names
+no repository and is read only after `gh pr`, `gh issue` or a word such as `Closes`, in the repository of
+`--repo` or `-R`, else of your own link. Once a page or an untrusted file has been read in a turn, the
+model's later commands add nothing to the list, and what you type still does. The session keeps the
+first 500 and its record keeps them for a resume and a fork. `/clear` starts a session that has met none.
+
+Typed while a turn runs, each answers at once with what the turn has found so far. Neither takes an
+argument: `/issues` or `/prs` followed by words is a prompt, and `/issues` is not `/issue`.
+
 ## `/compact [focus]`
 
 Summarises the conversation so far and keeps the recent part, on demand, at any size, without
@@ -1651,7 +1675,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so

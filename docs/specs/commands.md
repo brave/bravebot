@@ -52,7 +52,8 @@ the name of the skill that carries the documentation, which is CMD-24, and `/cha
 this program carries and starts no turn, which is CMD-25. `/todos` prints the plan the session holds
 and starts no turn, which is CMD-28. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19. `/open` is
-the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30.
+the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30. `/issues` and `/prs` list the issues and pull requests the session has met,
+which is CMD-31.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -394,7 +395,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -1879,3 +1880,37 @@ is over.
 `verified-by: bravebot_tui::app::moving_to_another_directory_ends_the_list_a_number_was_read_beside`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+
+<a id="CMD-31"></a>
+### CMD-31: `/issues` and `/prs` list the issues and the pull requests the session has met, and start no turn
+
+`/issues` puts the issues the session has met in the transcript, and `/prs` the pull requests. A line
+says how many there are, and a line after it for each gives the item as `{owner}/{repo}#{n}`, two
+spaces, and its address. The list is the one the info panel draws in its Issues or Pull requests
+section ([PANEL-9](info-panel.md#PANEL-9)): the session's own link of that kind first, where it is a
+GitHub address whose path names that kind, then each item the session met in the order it was first
+met ([PANEL-16](info-panel.md#PANEL-16)), without the item the own link names. A link of any other
+shape is not an item, so it is not listed. The one function builds both, so the command and the panel
+cannot disagree. A session with none says so in one sentence and prints no heading. Nothing is read,
+fetched or sent, no turn starts, and the printed lines are not kept with the session as part of any
+turn.
+
+The commands take no argument, so `/issues` or `/prs` followed by words is a prompt (CMD-2), and
+`/issues` is not `/issue` with an argument. `/issue` and `/pr` are still the commands that set the
+session's own link ([PANEL-12](info-panel.md#PANEL-12)), and `/prs` is not `/pr`. They touch nothing a
+running turn holds, so typed during one they are carried out as they are typed, and list what the turn
+has found so far (CMD-8). A prompt file or skill named `issues` or `prs` is shadowed by the command
+(CMD-17), and a slash offers both words with the commands that begin like them (CMD-9).
+
+**Why.** The panel is cut to the room the screen has and may be closed, and a person who cannot see
+it has no other way to read which issues and pull requests a session has named. The session already
+holds the list, so no model is needed to read it out. Every item is built from an owner, a repository
+and a number that [PANEL-16](info-panel.md#PANEL-16) validated, and nothing a reply or a tool result
+said is printed, so nothing branches on untrusted content.
+
+`verified-by: bravebot_tui::app::issues_and_prs_are_commands_of_their_own_beside_issue_and_pr`
+`verified-by: bravebot_tui::app::issues_and_prs_typed_mid_turn_answer_at_once_from_what_has_been_met`
+`verified-by: bravebot_tui::state::references::the_commands_print_each_item_with_its_address_or_say_there_are_none`
+`verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`

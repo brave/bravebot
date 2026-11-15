@@ -1301,21 +1301,31 @@ they read or the exact address, and nothing in the address.
 `verified-by: bravebot_tui::link_clicks::a_typed_address_opens_while_a_turn_runs_and_a_typed_name_is_refused`
 
 <a id="MOUSE-41"></a>
-### MOUSE-41: a click on the info panel's pull request or issue row opens the link the person gave
+### MOUSE-41: a click on a row of the info panel's Pull requests or Issues section opens its address
 
-In the info panel, a left click that sweeps nothing on the `Pull request` row or the `Issue` row opens
-the address `/pr` or `/issue` set ([PANEL-12](info-panel.md#PANEL-12)) in the person's browser. It
-needs no modifier, since the panel draws only what the person and the driver said and nothing a tool
-returned reaches it ([PANEL-11](info-panel.md#PANEL-11)), and a click on a row of the person's own is
-not one that could take them somewhere nobody chose. The address is the one that was set, text the
-person typed, so it is routing on its own integrity ([ROUTE-2](routing.md#ROUTE-2)), held to one `http`
-or `https` address with a host in printable ASCII ([PANEL-12](info-panel.md#PANEL-12)). It is not the text
-the row draws for it: the shorthand `{owner}/{repo}#{n}`, or the address cut from the left to fit. It is
-never built from a repository the person did not name. An address naming a user, as in
-`https://github.com@example.test/`, is refused by the opener ([MOUSE-40](#MOUSE-40)), so its row is
-drawn and is not a target. The word beside the link and the link are one target, and the heading, the
-rows around them and the border column, which is the panel's resize handle
-([PANEL-6](info-panel.md#PANEL-6)), are not.
+In the info panel, a left click that sweeps nothing on a row of the `Pull requests` section or the
+`Issues` section opens that row's address in the person's browser. It needs no modifier, since the
+panel draws only what the person and the driver said and nothing an untrusted tool result returned
+reaches it ([PANEL-11](info-panel.md#PANEL-11)), and a click on a row of the person's own is not one
+that could take them somewhere nobody chose. There are two kinds of row.
+
+- The row of the session's own link, which `/pr` or `/issue` set ([PANEL-12](info-panel.md#PANEL-12)).
+  The address is the one that was set, text the person typed, so it is routing on its own integrity
+  ([ROUTE-2](routing.md#ROUTE-2)), held to one `http` or `https` address with a host in printable
+  ASCII. It is not the text the row draws for it: the shorthand `{owner}/{repo}#{n}`, or the address
+  cut from the left to fit.
+- The row of an item the session met ([PANEL-16](info-panel.md#PANEL-16)). The address is built from
+  the owner, the repository and the number the item holds, which were validated to the characters
+  GitHub allows, as `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}` by the kind of
+  its section. No other text is in it, and nothing a reply or a tool result said is.
+
+An address is never built from a repository the person did not name or the driver did not validate.
+An address naming a user, as in `https://github.com@example.test/`, is refused by the opener
+([MOUSE-40](#MOUSE-40)), so its row is drawn and is not a target. The whole of a row's cells after
+the border is one target, and the headings, the `+{n} more` row that counts what a section left out,
+the rows around them and the border column, which is the panel's resize handle
+([PANEL-6](info-panel.md#PANEL-6)), are not. A row that is cut for want of room is not drawn and is
+not a target ([PANEL-9](info-panel.md#PANEL-9)).
 
 As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single
 click, so a drag is a selection, and a click over the scroller, a
@@ -1323,8 +1333,9 @@ history search or a picker opens nothing. The browser is started as for MOUSE-40
 the link while a turn or a command runs. A pointer over the row is told from the same record, so
 what it says it would open and what a click opens are the same ([MOUSE-51](#MOUSE-51)).
 
-**The keyboard.** `/pr` and `/issue` with no argument say the address that is set, and `/open` followed by
-that address opens it in the browser as the click does ([CMD-30](commands.md#CMD-30)).
+**The keyboard.** `/pr` and `/issue` with no argument say the address that is set, `/prs` and `/issues`
+print each item of a section with its address ([CMD-31](commands.md#CMD-31)), and `/open` followed by
+an address opens it in the browser as the click does ([CMD-30](commands.md#CMD-30)).
 
 `verified-by: bravebot_tui::link_clicks::a_click_on_the_panels_pull_request_or_issue_row_opens_what_the_person_gave`
 `verified-by: bravebot_tui::link_clicks::a_link_row_opens_the_address_as_it_was_set_and_not_the_text_drawn_for_it`
@@ -1901,7 +1912,7 @@ show in every theme and under `NO_COLOR`. The track of the scrollbar has no text
 The row where the frame draws its hints, which is the row under the box, the scroller's footer and the
 footer of a delegate's view, says in one line what a click on the target does, from a message of the
 catalog for each kind of target, in the room to the right of the last cell the row has drawn. For an
-address, a path and the pull request or issue row of the info panel the line carries the address, or
+address, a path and a row of the info panel's Pull requests or Issues section the line carries the address, or
 the path with the line it names, after the sentence, as the cells show it and for the panel as it
 opens, cut to what is left by the columns the characters are drawn in: an address from the right,
 which keeps the host, and a path from the left, which keeps the name, whatever the name is written

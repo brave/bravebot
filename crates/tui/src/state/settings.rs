@@ -745,16 +745,19 @@ impl Session {
         }
     }
 
-    /// The address the row `target` of the info panel opens, if it is the pull request or issue row.
+    /// The address the row `target` of the info panel opens, if it is a row of the Pull requests or
+    /// Issues section.
     ///
     /// The one the person gave with `/pr` or `/issue` (PANEL-12), as it was set and not the text the
-    /// row draws for it, which may be the shorthand or cut. A row is a target only for an address the
-    /// opener takes, which the panel decides where it lays the rows out.
-    pub fn panel_link(&self, target: crate::panel::Target) -> Option<&str> {
-        use crate::panel::Target;
+    /// row draws for it, which may be the shorthand or cut, and for any other row the address its
+    /// reference builds (PANEL-16). A row is a target only for an address the opener takes, which the
+    /// panel decides where it lays the rows out.
+    pub fn panel_link(&self, target: crate::panel::Target) -> Option<String> {
+        use crate::panel::{Target, reference_address};
+        use bravebot_agent::links::LinkKind;
         match target {
-            Target::PullRequest => self.identity.pull_request.as_deref(),
-            Target::Issue => self.identity.issue.as_deref(),
+            Target::PullRequest(row) => reference_address(self, LinkKind::PullRequest, row),
+            Target::Issue(row) => reference_address(self, LinkKind::Issue, row),
             Target::Name
             | Target::Model
             | Target::Effort
