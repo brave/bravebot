@@ -754,6 +754,55 @@ never draws a line twice, and nothing has to be reconciled between a look and th
 `verified-by: bravebot_tui::state::a_delegates_live_lines_go_to_its_job_and_not_the_turns_of_the_same_name`
 `verified-by: bravebot_tui::render::a_jobs_live_lines_are_marked_as_unread_even_after_a_look_that_was_read`
 
+<a id="WATCH-25"></a>
+### WATCH-25: a session whose turn has ended says in the row above the box that something is still active
+
+While no turn is running and at least one of these holds, the row above the box, under the line that
+says the last turn ended and under the reason where that turn failed, says that the session is
+still active:
+
+- a loop is live ([LOOP-13](loop.md#LOOP-13)), or a line `/after` holds is waiting to be sent
+- a file watch is live ([FSWATCH-10](file-watches.md#FSWATCH-10))
+- a background job is running ([RUN-15](tools/run.md#RUN-15))
+
+```
+  ✓ turn 3 done (12.1k tokens, 41s)
+  ● still active  ·  looping, next in 4m 12s  ·  1 in the background  ·  /status for the list
+```
+
+The row reads the driver's own tables and no content: the loop's number and next moment, how many
+watches are live, and how many jobs are running. It names no line, path, command or output. The
+words for a loop and for a job are the ones the hint line uses ([LOOP-13](loop.md#LOOP-13),
+[RUN-26](tools/run.md#RUN-26)), read from one place, so the two cannot disagree.
+
+The light before the label is full for one second and hollow for the next, and the screen is drawn
+again once a second while anything is live, so the light changes on a screen where nothing else
+does. With `NO_MOTION` set the light stays full. It is not the spinner: the spinner turns while a
+turn runs and this row is drawn only when none does.
+
+The row is cut whole at the width. The pointer to `/status` is given up first, then the parts from
+the end, and a part is never cut part-way. A terminal with room for the label alone still says the
+session is active. The row is not drawn while a turn or a command is running, since the row it would
+share is the indicator, and the hint line names the same things then. A goal is not named: a goal
+sends no work until a turn ends, so it is not something that goes on with nobody typing.
+
+**Why.** The line that says `done` is the last thing a turn draws, so it reads as the end of
+everything. Without the row, a loop, a watch or a job that goes on after it is named only by a dim
+part at the far end of the bottom row, which a narrow terminal drops, or by `/status`, and a person
+has to spend a turn asking whether the session is still working.
+
+**Why a light and not the spinner.** A turning shape beside `done` says the turn has not finished.
+
+`verified-by: bravebot_tui::render::a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line`
+`verified-by: bravebot_tui::render::a_session_with_nothing_going_on_has_no_still_active_row`
+`verified-by: bravebot_tui::render::each_kind_of_thing_still_active_is_named_in_the_row`
+`verified-by: bravebot_tui::render::the_still_active_row_is_not_drawn_while_a_turn_is_running`
+`verified-by: bravebot_tui::render::a_failed_turn_keeps_its_reason_and_gains_the_still_active_row`
+`verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_pointer_then_the_parts_whole`
+`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
+`verified-by: bravebot_tui::indicator::the_standing_light_changes_every_second`
+`verified-by: bravebot_tui::indicator::the_standing_light_stays_on_where_no_motion_is_asked_for`
+
 ## Known costs
 
 - **A running job's row gains lines only while a turn runs.** The release is at a turn's steps,
@@ -787,3 +836,8 @@ never draws a line twice, and nothing has to be reconciled between a look and th
 - **The view says what a delegate is doing and not how it is going.** One row changes several
   times a second while a delegate works, and nothing on the screen says whether those calls are
   getting anywhere. The report says, and it says it at the end.
+
+- **The loop and the job are named twice while a session is at rest.** The row above the box says
+  them for the end of a turn ([WATCH-25](#WATCH-25)) and the hint line goes on saying them, because
+  the hint line is the only place that names them while a turn runs and it is specified for every
+  state ([LOOP-13](loop.md#LOOP-13)).

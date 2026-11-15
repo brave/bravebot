@@ -114,9 +114,12 @@ const POLL: Duration = Duration::from_millis(100);
 /// stale in.
 const COUNTDOWN: Duration = Duration::from_secs(1);
 
-/// Whether a pass with no event in it owes the row under the box a frame anyway.
-fn a_countdown_is_owed_a_frame(counting_down: bool, since_drawn: Duration) -> bool {
-    counting_down && since_drawn >= COUNTDOWN
+/// Whether a pass with no event in it owes the rows around the box a frame anyway: the countdown
+/// under it while a loop is live, and the light above it while anything is still active
+/// ([WATCH-25](../../../docs/specs/watching.md#WATCH-25)). A session with a watch or a job and no
+/// loop is owed one too, since the light changes only if a frame is drawn.
+fn a_session_is_owed_a_frame(session: &Session, since_drawn: Duration) -> bool {
+    session.is_standing() && since_drawn >= COUNTDOWN
 }
 
 /// How often to look at the face on the opening screen. A blink keeps the lids shut for about a
@@ -3314,7 +3317,7 @@ fn next_idle_action(
             return Ok(Some(action));
         }
     }
-    if a_countdown_is_owed_a_frame(session.looping().is_some(), drawn_at.elapsed()) {
+    if a_session_is_owed_a_frame(session, drawn_at.elapsed()) {
         *needs_draw = true;
     }
     // The face on the opening screen blinks and glances without a key, and is
@@ -20455,19 +20458,44 @@ mod tests {
         }
     }
 
-    /// The frame a countdown is owed, and the ones it is not. A session with no loop in it is left
-    /// alone, because nothing in its row goes stale on its own; a session drawn inside the last
-    /// second is left alone too, since the row is spelled no finer than a second and a frame per
-    /// pass is a spin.
+    /// The frame a session at rest is owed, and the ones it is not. A session with nothing active
+    /// is left alone, because nothing on its screen goes stale by standing still. One with only a
+    /// watch, only a job or only a loop is owed a frame a second, since the countdown and the
+    /// light change only if one is drawn. A session drawn inside the last second is left alone
+    /// too: the rows are spelled no finer than a second and a frame per pass is a spin.
     #[test]
-    fn a_countdown_is_owed_a_frame_once_a_second_and_only_while_a_loop_runs() {
-        assert!(!a_countdown_is_owed_a_frame(false, Duration::from_secs(9)));
-        assert!(!a_countdown_is_owed_a_frame(
-            true,
-            COUNTDOWN - Duration::from_millis(1)
-        ));
-        assert!(a_countdown_is_owed_a_frame(true, COUNTDOWN));
-        assert!(a_countdown_is_owed_a_frame(true, Duration::from_secs(9)));
+    fn a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active() {
+        let idle = Session::new("none");
+        let mut watching = Session::new("none");
+        watching.arm_watch(
+            "notes.md",
+            "/work",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        let mut running = Session::new("none");
+        running.job(bravebot_agent::report::JobEvent::Started {
+            name: "job:1".to_string(),
+            line: "sleep 600".to_string(),
+            moved_after: None,
+            stop: bravebot_core::cancel::JobStop::new(),
+        });
+        let mut looping = Session::new("none");
+        looping.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert!(!a_session_is_owed_a_frame(&idle, Duration::from_secs(9)));
+        for session in [&watching, &running, &looping] {
+            assert!(session.is_standing());
+            assert!(!a_session_is_owed_a_frame(
+                session,
+                COUNTDOWN - Duration::from_millis(1)
+            ));
+            assert!(a_session_is_owed_a_frame(session, COUNTDOWN));
+            assert!(a_session_is_owed_a_frame(session, Duration::from_secs(9)));
+        }
     }
 
     /// The frame a face is owed, and the ones it is not. A face held as it was is left alone, and a

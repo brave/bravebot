@@ -593,6 +593,20 @@ returns. So once the command has run for 10 seconds, the message moves it to the
 key would, and the turn reads your message next. A command, such as `/clear`, or a shell line waiting
 does not move it, since those wait for the turn to end anyway.
 
+**The row above the box says when something is still active.** Once a turn has ended, a live
+[`/loop`](../reference/commands.md#loop-interval-prompt) or `/after` line, a live file watch, or a
+background job still running adds a row under the line that says the turn is done:
+
+```
+  ✓ turn 3 done (12.1k tokens, 41s)
+  ● still active  ·  looping, next in 4m 12s  ·  1 in the background  ·  /status for the list
+```
+
+The light before `still active` goes full and hollow once a second, so the row changes on a screen
+where nothing else does, and it stays full where `NO_MOTION` is set. The row is cut at the width, the
+pointer to `/status` first and then the parts from the end. It names no command, path or output. It is
+not drawn while a turn runs, since the hint line names the same things then.
+
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
