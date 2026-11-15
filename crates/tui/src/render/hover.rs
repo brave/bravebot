@@ -158,13 +158,11 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Panel(Target::Name) => said(t!(hover_panel_name)),
         Hit::Panel(Target::Task(_)) => said(t!(hover_panel_task)),
         Hit::Panel(Target::Detail(_)) => said(t!(hover_panel_detail)),
-        // The address that opens, which is the one that was set and not the shorthand the row draws
-        // for it.
-        Hit::Panel(link @ (Target::PullRequest | Target::Issue)) => Some(Says {
+        // The address that opens, which is the one that was set, or the one the reference builds,
+        // and not the shorthand the row draws for it.
+        Hit::Panel(link @ (Target::PullRequest(_) | Target::Issue(_))) => Some(Says {
             what: t!(hover_panel_link).to_string(),
-            detail: session
-                .panel_link(link)
-                .map(|address| (address.to_string(), false)),
+            detail: session.panel_link(link).map(|address| (address, false)),
         }),
         Hit::Footer(Footer::Mode) => said(t!(hover_footer_mode)),
         Hit::Footer(Footer::Trail) => said(t!(hover_footer_trail)),

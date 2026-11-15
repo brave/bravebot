@@ -334,6 +334,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 
     reports! {
         fn todos(&mut self, rows: Vec<Row>);
+        fn references(&mut self, found: &[crate::links::Reference]);
         fn output_tokens(&mut self, written: u64);
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);

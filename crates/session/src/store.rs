@@ -141,6 +141,10 @@ const PANEL_FILE: &str = "panel";
 /// directory.
 const PANEL_WIDTH_FILE: &str = "panel-width";
 
+/// The sections of the info panel the person turned off, one word on each line, inside the global
+/// state directory. Named for the command that chooses them, as the panel's file is.
+const SIDEBAR_FILE: &str = "sidebar";
+
 /// Whether the person has read what `/caffeinate` does and turned it on, one word, inside the
 /// global state directory.
 const CAFFEINATE_FILE: &str = "caffeinate";
@@ -166,6 +170,12 @@ const MAX_THEME_BYTES: usize = 128;
 /// The tag is only matched against the catalogs that shipped, so what is bounded here is a file
 /// anybody with the account can edit being handed on at any length.
 const MAX_LANGUAGE_BYTES: usize = 128;
+
+/// The longest sidebar file worth reading back.
+///
+/// The file holds at most the ten section ids, about 150 bytes, so one past this is not a file the
+/// program wrote and is read as absent rather than split into lines.
+const MAX_SIDEBAR_BYTES: usize = 1024;
 
 /// The longest style of editing worth reading back.
 ///
@@ -700,6 +710,57 @@ pub fn save_vetting(auto: bool) {
     keep(VETTING_FILE, format!("{word}\n").as_bytes());
 }
 
+/// The lines of the file naming the info panel sections turned off, or `None` where there is no
+/// file, it is not a regular file, it is longer than [`MAX_SIDEBAR_BYTES`] or it cannot be read
+/// (PANEL-17).
+///
+/// Global as the open/closed choice is: it is about their screen and not about a checkout. The
+/// lines are text the store only splits; the interface reads each against its own fixed list of
+/// section names and never draws one.
+pub fn load_sidebar() -> Option<Vec<String>> {
+    use std::io::Read;
+    let path = directory()?.join(SIDEBAR_FILE);
+    // Asked before the open, which a pipe would block.
+    if !std::fs::metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_SIDEBAR_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_SIDEBAR_BYTES {
+        return None;
+    }
+    Some(parse_sidebar(&String::from_utf8(bytes).ok()?))
+}
+
+/// The lines of the file's contents, each trimmed, with the blank ones skipped.
+///
+/// A file with no line is an empty list, which the interface reads as every section drawn.
+pub fn parse_sidebar(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Record the sections of the info panel that are turned off, one on each line.
+///
+/// With none, the file is written empty rather than removed, so a choice made earlier is replaced.
+/// Best-effort, as [`save_panel`] is.
+pub fn save_sidebar(hidden: &[&str]) {
+    let mut contents = String::new();
+    for id in hidden {
+        contents.push_str(id);
+        contents.push('\n');
+    }
+    keep(SIDEBAR_FILE, contents.as_bytes());
+}
+
 /// Whether the person last left the info panel open, or `None` where they never pressed its key.
 ///
 /// Global rather than per-directory, as the theme is: whether somebody wants the panel beside the
@@ -1196,6 +1257,74 @@ and this?
         for contents in ["", "\n", "   \n", "on\n", "true\n", "opened\n"] {
             assert_eq!(parse_panel(contents), None, "{contents:?} became a choice");
         }
+    }
+
+    /// The file is one section name on each line. Surrounding space and blank lines are dropped,
+    /// and nothing is looked up here: a line that names no section is the interface's to refuse.
+    #[test]
+    fn the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else() {
+        assert_eq!(
+            parse_sidebar("plan\n  files \n\n\t\nmcp-servers"),
+            ["plan", "files", "mcp-servers"]
+        );
+        assert_eq!(parse_sidebar("a b\r\n"), ["a b"]);
+        for contents in ["", "\n", "  \n\n"] {
+            assert!(parse_sidebar(contents).is_empty(), "{contents:?}");
+        }
+    }
+
+    /// A sidebar file grown past what the program writes is no choice, which leaves every section
+    /// on, and one at the bound or an ordinary one still answers with its lines.
+    ///
+    /// The fault it rejects: a read that takes a file of any size into lines.
+    #[test]
+    fn an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        save_sidebar(&["plan", "files"]);
+        assert_eq!(load_sidebar(), Some(vec!["plan".into(), "files".into()]));
+        let path = directory().expect("a state directory").join(SIDEBAR_FILE);
+
+        let exact = "x\n".repeat(MAX_SIDEBAR_BYTES / 2);
+        assert_eq!(exact.len(), MAX_SIDEBAR_BYTES);
+        std::fs::write(&path, &exact).expect("a file at the bound");
+        assert_eq!(load_sidebar().map(|lines| lines.len()), Some(512));
+        std::fs::write(&path, format!("{exact}x")).expect("a file past the bound");
+        assert_eq!(load_sidebar(), None);
+        std::fs::write(&path, "plan\n".repeat(1 << 20)).expect("a large file");
+        assert_eq!(load_sidebar(), None);
+    }
+
+    /// The sidebar is read at every start, so a pipe where the file should be must not block the
+    /// open: it is no choice, which leaves every section on.
+    ///
+    /// The fault it rejects: a read that opens before asking what the path is, which holds up
+    /// every start of the program.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        save_sidebar(&["plan"]);
+        let path = directory().expect("a state directory").join(SIDEBAR_FILE);
+        std::fs::remove_file(&path).expect("the saved file");
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is not installed, so a pipe is not tried");
+            return;
+        }
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(load_sidebar());
+        });
+        assert_eq!(
+            received
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the read waited on the pipe"),
+            None
+        );
     }
 
     /// A file that does not hold a plain positive number is no width, so the panel keeps its 36

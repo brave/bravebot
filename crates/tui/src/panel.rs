@@ -7,6 +7,7 @@
 
 use crate::state::Session;
 use crate::theme;
+use bravebot_agent::links::LinkKind;
 use bravebot_aichat::protocol::Cached;
 use bravebot_i18n::t;
 use ratatui::buffer::Buffer;
@@ -58,6 +59,124 @@ pub fn fits(columns: u16) -> bool {
 /// Whether a frame this wide draws the panel: the person has it open and it fits.
 pub fn drawn(session: &Session, columns: u16) -> bool {
     session.panel_open() && fits(columns)
+}
+
+/// A section of the panel, one for each heading it can draw (PANEL-9, PANEL-17).
+///
+/// A closed list, so what `/sidebar` names and what a file of the person's choice is read against
+/// is this and nothing from a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Session,
+    Model,
+    Goal,
+    PullRequests,
+    Issues,
+    Context,
+    LanguageServers,
+    McpServers,
+    Files,
+    Plan,
+}
+
+impl Section {
+    /// Every section in the order the panel draws them.
+    pub const ALL: [Section; 10] = [
+        Section::Session,
+        Section::Model,
+        Section::Goal,
+        Section::PullRequests,
+        Section::Issues,
+        Section::Context,
+        Section::LanguageServers,
+        Section::McpServers,
+        Section::Files,
+        Section::Plan,
+    ];
+
+    /// The word the choice is kept by, fixed English and not the translated heading.
+    pub fn id(self) -> &'static str {
+        match self {
+            Section::Session => "session",
+            Section::Model => "model",
+            Section::Goal => "goal",
+            Section::PullRequests => "pull-requests",
+            Section::Issues => "issues",
+            Section::Context => "context",
+            Section::LanguageServers => "language-servers",
+            Section::McpServers => "mcp-servers",
+            Section::Files => "files",
+            Section::Plan => "plan",
+        }
+    }
+
+    /// The section a name from the file of the person's choice stands for, or `None` for any other
+    /// text. The name is only compared with the fixed ones and is never drawn.
+    pub fn from_id(id: &str) -> Option<Section> {
+        Section::ALL.into_iter().find(|section| section.id() == id)
+    }
+
+    /// The heading the panel draws for it.
+    ///
+    /// A match rather than a lookup, so each message is named in the source.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Section::Session => t!(panel_session),
+            Section::Model => t!(panel_model),
+            Section::Goal => t!(panel_goal),
+            Section::PullRequests => t!(panel_pull_requests),
+            Section::Issues => t!(panel_issues),
+            Section::Context => t!(panel_context),
+            Section::LanguageServers => t!(panel_language_servers),
+            Section::McpServers => t!(panel_mcp_servers),
+            Section::Files => t!(panel_files),
+            Section::Plan => t!(panel_plan),
+        }
+    }
+
+    /// The bit that holds this section, its place in [`Section::ALL`].
+    fn bit(self) -> u16 {
+        1 << (self as u16)
+    }
+}
+
+/// The sections the person turned off. A set bit is a section left out, so that none turned off,
+/// which is the default, and a section added later are both drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Sections(u16);
+
+impl Sections {
+    /// Whether the panel draws `section`.
+    pub fn shows(self, section: Section) -> bool {
+        self.0 & section.bit() == 0
+    }
+
+    /// These sections with `section` turned off where it was drawn, and on where it was not.
+    #[must_use]
+    pub fn toggled(self, section: Section) -> Self {
+        Self(self.0 ^ section.bit())
+    }
+
+    /// The sections that the names turn off, or every section drawn where any name is not the id
+    /// of a section. A file that does not read cleanly is no choice, and a section added in a later
+    /// version is on because no earlier file names it (PANEL-17).
+    pub fn from_ids<S: AsRef<str>>(ids: &[S]) -> Self {
+        let mut sections = Self::default();
+        for id in ids {
+            let Some(section) = Section::from_id(id.as_ref()) else {
+                return Self::default();
+            };
+            sections.0 |= section.bit();
+        }
+        sections
+    }
+
+    /// The sections turned off, in the panel's order.
+    pub fn hidden(self) -> impl Iterator<Item = Section> {
+        Section::ALL
+            .into_iter()
+            .filter(move |section| !self.shows(*section))
+    }
 }
 
 fn dim() -> Style {
@@ -127,31 +246,67 @@ pub(crate) fn ending(text: &str, width: usize) -> String {
     std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
-/// One row of the Links section: what the link is, dim, and the link cut from the left to the rest
-/// of the row, since the number at its end is what tells two apart.
+/// One row of the Pull requests or Issues section, as the panel and a click on it read it.
+pub(crate) struct ReferenceRow {
+    /// What the row draws: the shorthand `{owner}/{repo}#{n}`, or the session's own link as the
+    /// person wrote it where that is not a GitHub address of the shape the shorthand names.
+    text: String,
+    /// The address a click on the row opens: the one the person set for the session's own link, and
+    /// for any other row the one built from the validated parts of its reference (MOUSE-41).
+    address: String,
+    /// Whether the cells of the row are a terminal link to `address`. Only an address built from
+    /// validated parts is, so nothing in it can end the escape sequence it travels in (PANEL-2).
+    linked: bool,
+}
+
+/// The rows of the section for `kind`, in the order it draws them: the session's own link first,
+/// then each reference the session has met that is not the item the own link names (PANEL-12,
+/// PANEL-16).
 ///
-/// A GitHub pull request or issue address is written as its shorthand, and the row comes with the
-/// [`Link`] that makes the cells of the shorthand a link to the address, at row 0.
-fn link_row(label: &str, url: &str, width: usize) -> (Line<'static>, Option<Link>) {
-    let label_width = crate::wrap::display_width(label);
-    let room = width.saturating_sub(label_width + 1);
-    let (text, address) = match shorthand(url) {
-        Some(short) => (short, Some(url)),
-        None => (crate::render::printable(url), None),
+/// Every row comes from a line the person typed, from the planner's own tool-call arguments or from
+/// content labelled trusted, as [`Session::listed_references`] holds them. No reply and no tool
+/// result is read here (PANEL-11).
+pub(crate) fn reference_rows(session: &Session, kind: LinkKind) -> Vec<ReferenceRow> {
+    let identity = session.identity();
+    let own = match kind {
+        LinkKind::PullRequest => identity.pull_request.as_deref(),
+        LinkKind::Issue => identity.issue.as_deref(),
     };
-    let shown = ending(&text, room);
-    let link = address.map(|url| Link {
-        row: 0,
-        // The space before the label and the one after it.
-        column: label_width + 2,
-        width: crate::wrap::display_width(&shown),
-        url: url.to_string(),
-    });
-    let line = Line::from(vec![
-        Span::styled(format!(" {label} "), dim()),
-        Span::raw(shown),
-    ]);
-    (line, link)
+    let item = session.own_reference(kind);
+    let mut rows = Vec::new();
+    if let Some(own) = own {
+        // The row stands for the item only where the address the person set is the one the item
+        // builds. One with a path after the number is drawn as written, as it always was.
+        let linked = item
+            .as_ref()
+            .filter(|item| item.address() == own)
+            .map(|item| item.shorthand());
+        rows.push(ReferenceRow {
+            linked: linked.is_some(),
+            text: linked.unwrap_or_else(|| crate::render::printable(own)),
+            address: own.to_string(),
+        });
+    }
+    let listed = session.listed_references(kind);
+    rows.extend(
+        listed
+            .iter()
+            .skip(usize::from(item.is_some()))
+            .map(|reference| ReferenceRow {
+                text: reference.shorthand(),
+                address: reference.address(),
+                linked: true,
+            }),
+    );
+    rows
+}
+
+/// The address a click on row `index` of the section for `kind` opens, if there is such a row.
+pub(crate) fn reference_address(session: &Session, kind: LinkKind, index: usize) -> Option<String> {
+    reference_rows(session, kind)
+        .into_iter()
+        .nth(index)
+        .map(|row| row.address)
 }
 
 /// `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}` as `{owner}/{repo}#{n}`.
@@ -382,10 +537,12 @@ pub enum Target {
     /// The mark of a finished task, or a row below it once its words are open, by its place in the
     /// plan: it opens or closes the whole of them (MOUSE-32).
     Detail(usize),
-    /// The pull request row of the Links section: opens the address `/pr` gave (MOUSE-41).
-    PullRequest,
-    /// The issue row of the Links section: opens the address `/issue` gave (MOUSE-41).
-    Issue,
+    /// A row of the Pull requests section, by its place in the rows [`reference_rows`] gives for
+    /// pull requests: opens its address (MOUSE-41).
+    PullRequest(usize),
+    /// A row of the Issues section, by its place in the rows [`reference_rows`] gives for issues:
+    /// opens its address (MOUSE-41).
+    Issue(usize),
 }
 
 impl Target {
@@ -462,10 +619,16 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         return (rows, Vec::new(), Vec::new(), targets);
     }
     let text = text_width(width);
-    let (mut body, mut links, mut continued, mut targets) = head(session, text);
+    let shown = session.panel_sections();
+    let refs_room = if wants_references(session) {
+        room_for_references(session, text, height)
+    } else {
+        0
+    };
+    let (mut body, mut links, mut continued, mut targets) = head(session, text, refs_room);
 
     let languages = session.language_servers().programs();
-    if !languages.is_empty() {
+    if !languages.is_empty() && shown.shows(Section::LanguageServers) {
         let rows: Vec<_> = languages
             .iter()
             .map(|program| row((*program).to_string(), Style::default()))
@@ -476,7 +639,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         targets.extend((first..first + count).map(|row| Place::on_row(row, Target::Languages)));
     }
     let offered = session.servers.offered();
-    if !offered.is_empty() {
+    if !offered.is_empty() && shown.shows(Section::McpServers) {
         let rows: Vec<_> = offered
             .iter()
             .map(|alias| {
@@ -495,7 +658,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
     // it leaves (FILES-1).
     let (count, added, removed) = session.written_totals();
-    if count > 0 {
+    if count > 0 && shown.shows(Section::Files) {
         let mut total = vec![Span::raw(format!(
             " {}",
             t!(panel_files_total, count = count)
@@ -519,7 +682,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
 
     // The blank row and the heading come out of the room before the rows do.
     let room = (height - 1).saturating_sub(body.len() + 2);
-    if !session.plan().is_empty() && room > 0 {
+    if !session.plan().is_empty() && room > 0 && shown.shows(Section::Plan) {
         plan_section(session, text, room, &mut body, &mut targets);
     }
 
@@ -534,6 +697,49 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     targets.retain(|place| place.row < height - 1);
     targets.push(Place::on_row(height - 1, Target::Hide));
     (body, links, continued, targets)
+}
+
+/// Rows the Plan keeps for itself, its blank row and heading included, before the sections of
+/// references take any: the plan is cut to what is left and the references are cut first.
+const PLAN_RESERVE: usize = 4;
+
+/// Whether the session has anything to draw under Pull requests or Issues.
+fn wants_references(session: &Session) -> bool {
+    let identity = session.identity();
+    !session.references().is_empty() || identity.issue.is_some() || identity.pull_request.is_some()
+}
+
+/// The rows the two sections of references may take together in a panel `height` rows high.
+///
+/// The Session, Model, Goal and Context sections, the language and MCP servers and the Files
+/// section come first and are never cut for them, and the Plan keeps [`PLAN_RESERVE`] rows, or what
+/// its own rows and heading need where that is fewer.
+fn room_for_references(session: &Session, text: usize, height: usize) -> usize {
+    let shown = session.panel_sections();
+    // A section turned off takes no rows, so it counts for none.
+    let below = |count: usize, section: Section| {
+        if count == 0 || !shown.shows(section) {
+            0
+        } else {
+            count + 2
+        }
+    };
+    let lower = below(
+        session.language_servers().programs().len(),
+        Section::LanguageServers,
+    ) + below(session.servers.offered().len(), Section::McpServers)
+        + below(usize::from(session.written_totals().0 > 0), Section::Files);
+    let plan = session.plan().len();
+    let reserve = if plan == 0 || !shown.shows(Section::Plan) {
+        0
+    } else {
+        PLAN_RESERVE.min(plan + 2)
+    };
+    let ahead = head(session, text, 0).0;
+    // With nothing above it the Context section starts the body and has no blank row. The
+    // references come before it, so once one is drawn the Context section gains that row.
+    let context_blank = usize::from(ahead.first() == Some(&heading(t!(panel_context).to_string())));
+    (height - 1).saturating_sub(ahead.len() + context_blank + lower + reserve)
 }
 
 /// The Plan section: its heading, the rows of the plan that `room` rows hold and the row that names
@@ -579,7 +785,8 @@ pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
     // Context section, so the line keeps both figures there (FILES-4).
     drawn(session, columns)
         && !session.files_open()
-        && head(session, text_width(session.panel_columns(columns)))
+        && session.panel_sections().shows(Section::Context)
+        && head(session, text_width(session.panel_columns(columns)), 0)
             .0
             .len()
             + 2
@@ -591,16 +798,20 @@ fn text_width(width: u16) -> usize {
     usize::from(width).saturating_sub(usize::from(INSET)).max(1)
 }
 
-/// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
-/// the context, which always has a reading, where in them the links are, and which rows continue on
-/// the row below.
-fn head(session: &Session, text: usize) -> Body {
+/// The Session, Model, Goal, Pull requests, Issues and Context sections, each left out where it has
+/// nothing to say but for the context, which always has a reading, or where the person turned it
+/// off (PANEL-17), where in them the links are, and which rows continue on the row below.
+///
+/// The two sections of references take at most `refs_room` rows between them, pull requests first,
+/// and are left out where it is 0.
+fn head(session: &Session, text: usize, refs_room: usize) -> Body {
     let mut targets = Vec::new();
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut links = Vec::new();
     let mut continued = Vec::new();
     let mut id_row = None;
 
+    let shown = session.panel_sections();
     let identity = session.identity();
     let (name, addresses) = shortened(&crate::render::printable(&crate::status::cut(
         &identity.name,
@@ -647,7 +858,7 @@ fn head(session: &Session, text: usize) -> Body {
             }
         }
     }
-    if !about.is_empty() {
+    if !about.is_empty() && shown.shows(Section::Session) {
         let count = about.len();
         section(&mut body, t!(panel_session).to_string(), about);
         let first = body.len() - count;
@@ -673,7 +884,7 @@ fn head(session: &Session, text: usize) -> Body {
         model_targets.push((model.len(), Target::Effort));
         model.push(row(t!(panel_effort, level = level.as_str()), dim()));
     }
-    if !model.is_empty() {
+    if !model.is_empty() && shown.shows(Section::Model) {
         let count = model.len();
         section(&mut body, t!(panel_model).to_string(), model);
         let first = body.len() - count;
@@ -684,7 +895,7 @@ fn head(session: &Session, text: usize) -> Body {
         );
     }
 
-    if let Some(goal) = session.goal() {
+    if let Some(goal) = session.goal().filter(|_| shown.shows(Section::Goal)) {
         let rows = wrapped(goal.condition(), text)
             .into_iter()
             .map(|condition| row(condition, Style::default()))
@@ -696,47 +907,29 @@ fn head(session: &Session, text: usize) -> Body {
         section(&mut body, t!(panel_goal).to_string(), rows);
     }
 
-    let mut link_rows = Vec::new();
-    let mut address_links = Vec::new();
-    let mut link_targets = Vec::new();
-    for (label, url, target) in [
+    let mut room = refs_room;
+    for (kind, section, target) in [
         (
-            t!(panel_pull_request),
-            &identity.pull_request,
-            Target::PullRequest,
+            LinkKind::PullRequest,
+            Section::PullRequests,
+            Target::PullRequest as fn(usize) -> Target,
         ),
-        (t!(panel_issue), &identity.issue, Target::Issue),
+        (LinkKind::Issue, Section::Issues, Target::Issue),
     ] {
-        let Some(url) = url.as_deref() else {
-            continue;
-        };
-        let (line, link) = link_row(label, url, text);
-        address_links.extend(link.map(|link| Link {
-            row: link_rows.len(),
-            ..link
-        }));
-        // A row is a target only for an address the opener takes, so a click on one it refuses is
-        // the selection it would be anywhere else.
-        if crate::opener::is_openable(url) {
-            link_targets.push((link_rows.len(), target));
+        if room > 0 && shown.shows(section) {
+            room -= references_section(
+                (session, kind),
+                (section.heading(), target),
+                (text, room),
+                (&mut body, &mut links, &mut targets),
+            );
         }
-        link_rows.push(line);
-    }
-    if !link_rows.is_empty() {
-        let count = link_rows.len();
-        section(&mut body, t!(panel_links).to_string(), link_rows);
-        let first = body.len() - count;
-        links.extend(address_links.into_iter().map(|link| Link {
-            row: first + link.row,
-            ..link
-        }));
-        targets.extend(
-            link_targets
-                .into_iter()
-                .map(|(row, target)| Place::on_row(first + row, target)),
-        );
     }
 
+    // Left out whole, the reading with it: the hint line then keeps the reading (PANEL-8).
+    if !shown.shows(Section::Context) {
+        return (body, links, continued, targets);
+    }
     let mut context = vec![row(
         crate::render::context_reading(session),
         Style::default(),
@@ -776,6 +969,76 @@ fn head(session: &Session, text: usize) -> Body {
     section(&mut body, t!(panel_context).to_string(), context);
     targets.push(Place::on_row(body.len() - count, Target::Context));
     (body, links, continued, targets)
+}
+
+/// The Pull requests or Issues section for `kind`, as many of its rows as `room` rows hold, with
+/// a row that counts the rest where some were cut, added to `body`. Returns the rows it took, the
+/// blank row and the heading included, and none where the section has no row or no room for one.
+///
+/// `what` is the heading and the target a row is. A row that has no room is not drawn and is no
+/// target. A section has the room for a row only where it holds the whole of its rows or at least
+/// one row and the count of the rest, so a heading is never drawn over nothing and a count is
+/// never drawn over no row (PANEL-9).
+fn references_section(
+    (session, kind): (&Session, LinkKind),
+    (heading, target): (&str, fn(usize) -> Target),
+    (text, room): (usize, usize),
+    (body, links, targets): (&mut Vec<Line<'static>>, &mut Vec<Link>, &mut Vec<Place>),
+) -> usize {
+    let spacing = usize::from(!body.is_empty()) + 1;
+    if room < spacing + 1 {
+        return 0;
+    }
+    let rows = reference_rows(session, kind);
+    let space = room - spacing;
+    let (shown, left_out) = if rows.len() <= space {
+        (rows.len(), 0)
+    } else if space >= 2 {
+        (space - 1, rows.len() - (space - 1))
+    } else {
+        return 0;
+    };
+    if shown == 0 {
+        return 0;
+    }
+    let before = body.len();
+    let mut drawn = Vec::new();
+    let mut linked = Vec::new();
+    let mut clicks = Vec::new();
+    for (index, reference) in rows.into_iter().take(shown).enumerate() {
+        let text = ending(&reference.text, text);
+        if reference.linked {
+            linked.push(Link {
+                row: index,
+                // The space `row` puts before the text.
+                column: 1,
+                width: crate::wrap::display_width(&text),
+                url: reference.address.clone(),
+            });
+        }
+        // A row is a target only for an address the opener takes, so a click on one it refuses is
+        // the selection it would be anywhere else.
+        if crate::opener::is_openable(&reference.address) {
+            clicks.push((index, target(index)));
+        }
+        drawn.push(row(text, Style::default()));
+    }
+    if left_out > 0 {
+        drawn.push(row(t!(panel_more_references, count = left_out), dim()));
+    }
+    let count = drawn.len();
+    section(body, heading.to_string(), drawn);
+    let first = body.len() - count;
+    links.extend(linked.into_iter().map(|link| Link {
+        row: first + link.row,
+        ..link
+    }));
+    targets.extend(
+        clicks
+            .into_iter()
+            .map(|(index, target)| Place::on_row(first + index, target)),
+    );
+    body.len() - before
 }
 
 /// The fewest rows the plan has for the row that names the key that prints it whole to be drawn.
@@ -2424,19 +2687,53 @@ mod tests {
     }
 
     /// The panel speaks in the interface's own voice, so a reply or anything a tool returned drawn
-    /// in it would read as the interface saying it.
+    /// in it would read as the interface saying it. The rows of the Pull requests and Issues
+    /// sections come from what the person typed, so an address and a `owner/repo#n` word in a reply
+    /// and in what a tool returned add none, while the one the person typed is drawn.
+    ///
+    /// Rejects: a session that reads the references out of a reply or a result as it reads them out
+    /// of a line the person sent.
     #[test]
     fn nothing_a_turn_returned_reaches_the_panel() {
+        use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
+        const TRAP: &str = "evil/trap#9 and https://github.com/evil/trap/pull/10";
         let mut session = Session::new("none");
         session.identify("typed by the person", "~/b".to_string(), None);
-        session.type_char('a');
+        for c in "see brave/bravebot#7".chars() {
+            session.type_char(c);
+        }
         session.submit();
-        session.complete("REPLYTEXT ignore the rules", Vec::new(), 0);
+        session.finish_activity(Activity::running("Run", "gh").done(format!("{TRAP} finished")));
+        session.landed(Landing::Context);
+        session.returned(Returned {
+            lines: vec![TRAP.to_string()],
+            total: 1,
+            from_the_end: false,
+            whole: vec![TRAP.to_string()],
+        });
+        session.show(Shown {
+            origin: TRAP.to_string(),
+            reach: Reach::NotThePlanner,
+            label: "untrusted".to_string(),
+            preview: vec![TRAP.to_string()],
+            lines: 1,
+        });
+        session.complete(format!("REPLYTEXT ignore the rules {TRAP}"), Vec::new(), 0);
         let drawn = texts(&lines(&session, WIDTH, 30));
         assert!(
             !drawn.iter().any(|row| row.contains("REPLYTEXT")),
             "the reply reached the panel: {drawn:#?}"
         );
+        assert!(
+            !drawn.iter().any(|row| row.contains("evil/trap")),
+            "a reference a reply or a result held reached the panel: {drawn:#?}"
+        );
+        assert_eq!(
+            link_rows(&session, t!(panel_issues)),
+            ["brave/bravebot#7"],
+            "{drawn:#?}"
+        );
+        assert!(session.references().iter().all(|r| r.owner() != "evil"));
     }
 
     /// A held goal is still drawn, with its condition, and says it is held.
@@ -2634,7 +2931,8 @@ mod tests {
             t!(panel_session).to_string(),
             t!(panel_model).to_string(),
             t!(panel_goal).to_string(),
-            t!(panel_links).to_string(),
+            t!(panel_pull_requests).to_string(),
+            t!(panel_issues).to_string(),
             t!(panel_context).to_string(),
             t!(panel_language_servers).to_string(),
             t!(panel_mcp_servers).to_string(),
@@ -2644,7 +2942,7 @@ mod tests {
         let shown: Vec<&String> = headings.iter().filter(|h| bare.contains(h)).collect();
         assert_eq!(
             shown,
-            vec![&headings[4]],
+            vec![&headings[5]],
             "headings over nothing: {bare:#?}"
         );
 
@@ -2656,7 +2954,7 @@ mod tests {
         );
         full.choose_model("claude-sonnet".to_string(), &model_config());
         full.start_goal("the tests pass".to_string());
-        full.link(Some("https://x.test/i/1"), None);
+        full.link(Some("https://x.test/i/1"), Some("https://x.test/p/2"));
         full.report_language_servers(Roster::of([Language::Rust]));
         full.servers.started = vec!["notes".to_string()];
         let drawn = texts(&lines(&full, WIDTH, 30));
@@ -2679,7 +2977,8 @@ mod tests {
             "fix-info-panel",
             "claude-sonnet",
             "the tests pass",
-            "Issue https://x.test/i/1",
+            "https://x.test/p/2",
+            "https://x.test/i/1",
             "rust-analyzer",
             "notes",
         ] {
@@ -2690,33 +2989,47 @@ mod tests {
         }
     }
 
-    /// Each link has its row only once the person gave it, the pull request's first, and a session
-    /// given neither has no heading for them.
+    /// Each link has its row only once the person gave it, under the heading for its kind with
+    /// no word before it, the pull requests' heading above the issues', and a session given
+    /// neither has no heading for either.
+    ///
+    /// Rejects: a heading over no row, the label word the Links section drew before each link, and
+    /// the two kinds in one section.
     #[test]
-    fn the_links_section_has_a_row_for_each_link_that_is_set() {
+    fn a_link_the_person_gave_is_the_first_row_of_the_section_of_its_kind() {
         let mut session = Session::new("none");
-        let heading = t!(panel_links).to_string();
+        let pulls = t!(panel_pull_requests).to_string();
+        let issues = t!(panel_issues).to_string();
+        let bare = texts(&lines(&session, WIDTH, 30));
         assert!(
-            !texts(&lines(&session, WIDTH, 30)).contains(&heading),
-            "a Links heading over no links"
+            !bare.contains(&pulls) && !bare.contains(&issues),
+            "a heading over no links: {bare:#?}"
         );
 
         session.link(Some("https://x.test/i/1"), None);
         let drawn = texts(&lines(&session, WIDTH, 30));
         let at = drawn
             .iter()
-            .position(|row| *row == heading)
-            .unwrap_or_else(|| panic!("no Links heading: {drawn:#?}"));
-        assert_eq!(drawn[at + 1], "Issue https://x.test/i/1");
+            .position(|row| *row == issues)
+            .unwrap_or_else(|| panic!("no Issues heading: {drawn:#?}"));
+        assert_eq!(drawn[at + 1], "https://x.test/i/1");
         assert_eq!(drawn[at + 2], "", "a row for a link that is not set");
+        assert!(!drawn.contains(&pulls), "a heading over no row: {drawn:#?}");
 
         session.link(Some("https://x.test/i/1"), Some("https://x.test/p/2"));
         let drawn = texts(&lines(&session, WIDTH, 30));
+        let at = drawn
+            .iter()
+            .position(|row| *row == pulls)
+            .unwrap_or_else(|| panic!("no Pull requests heading: {drawn:#?}"));
         assert_eq!(
-            drawn[at + 1..at + 3],
+            drawn[at..at + 5],
             [
-                "Pull request https://x.test/p/2",
-                "Issue https://x.test/i/1"
+                pulls.as_str(),
+                "https://x.test/p/2",
+                "",
+                issues.as_str(),
+                "https://x.test/i/1"
             ],
             "{drawn:#?}"
         );
@@ -2733,10 +3046,11 @@ mod tests {
             Some("https://git.example.org/an-organisation/a-long-repository-name/pull/12345"),
         );
         let drawn = texts(&lines(&session, WIDTH, 30));
-        let row = drawn
+        let heading = drawn
             .iter()
-            .find(|row| row.starts_with("Pull request"))
-            .unwrap_or_else(|| panic!("no pull request row: {drawn:#?}"));
+            .position(|row| *row == t!(panel_pull_requests))
+            .unwrap_or_else(|| panic!("no Pull requests heading: {drawn:#?}"));
+        let row = &drawn[heading + 1];
         assert!(
             row.ends_with("/pull/12345") && row.contains('…'),
             "{row:?} is not cut from the left"
@@ -2877,14 +3191,13 @@ mod tests {
         );
     }
 
-    /// The rows under the Links heading.
-    fn link_rows(session: &Session) -> Vec<String> {
+    /// The rows under the heading `heading`, up to the blank row that ends the section.
+    fn link_rows(session: &Session, heading: &str) -> Vec<String> {
         let drawn = texts(&lines(session, WIDTH, 30));
-        let heading = t!(panel_links).to_string();
         let first = drawn
             .iter()
-            .position(|row| *row == heading)
-            .unwrap_or_else(|| panic!("no Links heading: {drawn:#?}"));
+            .position(|row| row == heading)
+            .unwrap_or_else(|| panic!("no {heading} heading: {drawn:#?}"));
         drawn[first + 1..]
             .iter()
             .take_while(|row| !row.is_empty())
@@ -2936,11 +3249,12 @@ mod tests {
             Some("https://github.com/brave/bravebot/pull/1975"),
         );
         assert_eq!(
-            link_rows(&session),
-            [
-                "Pull request brave/bravebot#1975",
-                "Issue brave/bravebot#1267"
-            ]
+            link_rows(&session, t!(panel_pull_requests)),
+            ["brave/bravebot#1975"]
+        );
+        assert_eq!(
+            link_rows(&session, t!(panel_issues)),
+            ["brave/bravebot#1267"]
         );
     }
 
@@ -2955,15 +3269,15 @@ mod tests {
         ] {
             let mut session = opened_at(100);
             session.link(Some(address), None);
-            assert_eq!(link_rows(&session), [format!("Issue {address}")]);
+            assert_eq!(link_rows(&session, t!(panel_issues)), [address]);
             let buffer = frame(&mut session, 100, 30);
             assert_eq!(linked_cells(&buffer), [], "{address:?} was linked");
         }
     }
 
     /// The shorthand opens the address it stands for, so each row's cells have to open their own
-    /// row's address: the pull request's number is not the issue's, and neither the word beside the
-    /// shorthand nor the rest of the row may open anything.
+    /// row's address: the pull request's number is not the issue's, and nothing else on the row
+    /// may open anything.
     #[test]
     fn a_link_row_shorthand_links_to_its_own_address_and_nothing_else_does() {
         const PULL: &str = "https://github.com/brave/bravebot/pull/1975";
@@ -2973,16 +3287,15 @@ mod tests {
         let buffer = frame(&mut session, 100, 30);
 
         let mut expected = Vec::new();
-        for (word, shorthand, address) in [
-            ("Pull request", "brave/bravebot#1975", PULL),
-            ("Issue", "brave/bravebot#1267", ISSUE),
+        for (shorthand, address) in [
+            ("brave/bravebot#1975", PULL),
+            ("brave/bravebot#1267", ISSUE),
         ] {
-            let (x, y) = found_in_panel(&buffer, 100, &format!("{word} {shorthand}"));
-            let start = x + word.len() as u16 + 1;
+            let (x, y) = found_in_panel(&buffer, 100, shorthand);
             expected.extend(
                 shorthand
                     .chars()
-                    .zip(start..)
+                    .zip(x..)
                     .map(|(c, x)| (x, y, c.to_string(), address.to_string())),
             );
         }
@@ -2998,14 +3311,13 @@ mod tests {
         session.link(None, Some(PULL));
         let buffer = frame(&mut session, 100, 30);
 
-        let drawn = "…epository-name#12345";
-        let (x, y) = found_in_panel(&buffer, 100, &format!("Pull request {drawn}"));
-        let start = x + "Pull request ".len() as u16;
+        let drawn = "…tion/a-long-repository-name#12345";
+        let (x, y) = found_in_panel(&buffer, 100, drawn);
         assert_eq!(
             linked_cells(&buffer),
             drawn
                 .chars()
-                .zip(start..)
+                .zip(x..)
                 .map(|(c, x)| (x, y, c.to_string(), PULL.to_string()))
                 .collect::<Vec<_>>()
         );
@@ -3019,6 +3331,252 @@ mod tests {
         session.link(None, Some("https://github.com/brave/bravebot/pull/1975"));
         let buffer = frame(&mut session, 100, 2);
         assert_eq!(linked_cells(&buffer), []);
+    }
+
+    use bravebot_agent::links::{LinkKind, Reference};
+
+    fn met(owner_and_repo: (&str, &str), number: u64, kind: LinkKind) -> Reference {
+        Reference::new(owner_and_repo.0, owner_and_repo.1, number, kind).expect("valid")
+    }
+
+    /// The session's own links come first in their sections, what the session met follows in the
+    /// order first met under the heading of its kind, and the item the own link names is not drawn
+    /// a second time.
+    ///
+    /// Rejects: one list for both kinds, the met items ahead of the own link, and the own item
+    /// drawn twice.
+    #[test]
+    fn what_the_session_met_follows_its_own_link_in_the_section_of_its_kind() {
+        let mut session = Session::new("none");
+        session.link(
+            Some("https://github.com/brave/bravebot/issues/1267"),
+            Some("https://github.com/brave/bravebot/pull/1975"),
+        );
+        session.add_references(&[
+            met(("brave", "brave-core"), 42, LinkKind::Issue),
+            met(("brave", "bravebot"), 1267, LinkKind::Issue),
+            met(("brave", "bravebot"), 12, LinkKind::PullRequest),
+            met(("brave", "bravebot"), 1975, LinkKind::PullRequest),
+            met(("o", "r"), 3, LinkKind::Issue),
+        ]);
+        assert_eq!(
+            link_rows(&session, t!(panel_pull_requests)),
+            ["brave/bravebot#1975", "brave/bravebot#12"]
+        );
+        assert_eq!(
+            link_rows(&session, t!(panel_issues)),
+            ["brave/bravebot#1267", "brave/brave-core#42", "o/r#3"]
+        );
+    }
+
+    /// A reference the session met opens the address built from its parts, by the kind it names,
+    /// and only the cells of its shorthand are the link.
+    ///
+    /// Rejects: an issue linked under the pull path or the reverse, and a link over more cells than
+    /// the shorthand.
+    #[test]
+    fn a_row_for_what_the_session_met_links_to_the_address_its_reference_builds() {
+        let mut session = opened_at(100);
+        session.add_references(&[
+            met(("brave", "brave-core"), 42, LinkKind::Issue),
+            met(("brave", "bravebot"), 12, LinkKind::PullRequest),
+        ]);
+        let buffer = frame(&mut session, 100, 30);
+        let mut expected = Vec::new();
+        for (shorthand, address) in [
+            (
+                "brave/bravebot#12",
+                "https://github.com/brave/bravebot/pull/12",
+            ),
+            (
+                "brave/brave-core#42",
+                "https://github.com/brave/brave-core/issues/42",
+            ),
+        ] {
+            let (x, y) = found_in_panel(&buffer, 100, shorthand);
+            expected.extend(
+                shorthand
+                    .chars()
+                    .zip(x..)
+                    .map(|(c, x)| (x, y, c.to_string(), address.to_string())),
+            );
+        }
+        assert_eq!(linked_cells(&buffer), expected);
+    }
+
+    /// A link given with a path after the number is drawn as written and opens as written, so the
+    /// item it names is not drawn a second time as a shorthand that opens another page.
+    ///
+    /// Rejects: a shorthand drawn for the item, and the item listed once as the link and once as
+    /// met.
+    #[test]
+    fn an_own_link_with_a_path_after_its_number_is_drawn_as_written_and_not_repeated() {
+        const FILES: &str = "https://github.com/a/b/issues/5/x";
+        let mut session = opened_at(100);
+        session.link(Some(FILES), None);
+        session.add_references(&[met(("a", "b"), 5, LinkKind::Issue)]);
+        assert_eq!(link_rows(&session, t!(panel_issues)), [FILES]);
+        assert_eq!(linked_cells(&frame(&mut session, 100, 30)), []);
+        assert_eq!(
+            reference_address(&session, LinkKind::Issue, 0).as_deref(),
+            Some(FILES)
+        );
+        assert_eq!(reference_address(&session, LinkKind::Issue, 1), None);
+    }
+
+    /// An address the person gave is validated to printable ASCII, and a link set any other way
+    /// is still drawn with its control characters as pictures, as every row of the panel is.
+    #[test]
+    fn control_characters_in_a_link_row_are_drawn_as_pictures() {
+        let mut session = Session::new("none");
+        session.link(Some("https://x.test/\u{1b}[2J\u{7}"), None);
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        assert!(
+            !drawn.iter().any(|row| row.chars().any(char::is_control)),
+            "a control character reached the panel: {drawn:#?}"
+        );
+        assert!(drawn.iter().any(|row| row.starts_with("https://x.test/")));
+    }
+
+    /// Twelve of each kind, a plan, and a language server, an MCP server and a file written: the
+    /// rows the sections below the references and the plan's own reserve need are never taken for
+    /// the references, and each section is cut to what is left with a count of the rest.
+    fn crowded() -> Session {
+        let mut session = working_on(plan(&[
+            ("one", Status::Done),
+            ("two", Status::Active),
+            ("three", Status::Pending),
+            ("four", Status::Pending),
+            ("five", Status::Pending),
+        ]));
+        session.identify("name", "~/b".to_string(), Some("main"));
+        session.report_language_servers(Roster::of([Language::Rust]));
+        session.servers.started = vec!["notes".to_string()];
+        let found: Vec<Reference> = (1..=12)
+            .flat_map(|n| {
+                [
+                    met(("o", "r"), n, LinkKind::PullRequest),
+                    met(("o", "r"), 100 + n, LinkKind::Issue),
+                ]
+            })
+            .collect();
+        session.add_references(&found);
+        session
+    }
+
+    /// The rows of a section under `heading`, the count row last where there is one.
+    fn section_rows(drawn: &[String], heading: &str) -> Option<Vec<String>> {
+        let first = drawn.iter().position(|row| row == heading)?;
+        Some(
+            drawn[first + 1..]
+                .iter()
+                .take_while(|row| !row.is_empty())
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// At every height the sections of references are cut to the room: a section has a row, and a
+    /// count of exactly the rows it left out where it left any, pull requests come before issues,
+    /// and what a panel with no references draws of the context and the plan is drawn all the same.
+    ///
+    /// Rejects: a section drawn whole over the rows of the plan, a count that does not match the
+    /// rows left out, a heading over no row, and references that take the plan's reserve.
+    #[test]
+    fn the_sections_of_references_are_cut_to_the_room_with_a_count_of_the_rest() {
+        let with = crowded();
+        let mut without = crowded();
+        without.restore_references(&[]);
+        let mut saw_cut = false;
+        let mut saw_whole = false;
+        for height in 4..60 {
+            let drawn = texts(&lines(&with, WIDTH, height));
+            let bare = texts(&lines(&without, WIDTH, height));
+            for heading in [t!(panel_context), t!(panel_plan)] {
+                assert_eq!(
+                    drawn.iter().any(|row| row == heading),
+                    bare.iter().any(|row| row == heading),
+                    "{heading} at {height}: {drawn:#?}"
+                );
+            }
+            assert!(
+                drawn
+                    .iter()
+                    .any(|row| *row == t!(panel_hide, chord = with.bindings().panel_name())),
+                "the hide row is gone at {height}"
+            );
+            for heading in [t!(panel_pull_requests), t!(panel_issues)] {
+                let Some(rows) = section_rows(&drawn, heading) else {
+                    continue;
+                };
+                assert!(!rows.is_empty(), "{heading} over nothing at {height}");
+                let (shown, left_out) = match rows.last() {
+                    Some(last) if last.starts_with('+') => {
+                        let count: usize = last
+                            .trim_start_matches('+')
+                            .trim_end_matches(" more")
+                            .parse()
+                            .unwrap_or_else(|_| panic!("{last:?}"));
+                        saw_cut = true;
+                        (rows.len() - 1, count)
+                    }
+                    _ => {
+                        saw_whole = true;
+                        (rows.len(), 0)
+                    }
+                };
+                assert!(shown >= 1, "a count and no row at {height}: {rows:?}");
+                assert_eq!(shown + left_out, 12, "{heading} at {height}: {rows:?}");
+            }
+            assert!(
+                section_rows(&drawn, t!(panel_pull_requests)).is_some()
+                    || section_rows(&drawn, t!(panel_issues)).is_none(),
+                "issues drawn and no pull requests at {height}: {drawn:#?}"
+            );
+        }
+        assert!(
+            saw_cut && saw_whole,
+            "no height cut a section, or none held one whole"
+        );
+
+        // One height, whole: the rows the other sections need, the plan's reserve and the rest.
+        let at = |height| texts(&lines(&with, WIDTH, height));
+        let tall = at(60);
+        assert_eq!(
+            section_rows(&tall, t!(panel_issues)).map(|rows| rows.len()),
+            Some(12)
+        );
+    }
+
+    /// The hint line keeps the context reading until the panel can draw the Context section whole,
+    /// and the references are cut for it, so what they hold moves nothing about where that is.
+    ///
+    /// Rejects: counting the rows of the references in the height the panel needs for the context.
+    #[test]
+    fn the_references_do_not_move_where_the_context_section_fits() {
+        let mut open_with = opened_at(120);
+        let mut open_without = opened_at(120);
+        for session in [&mut open_with, &mut open_without] {
+            session.identify("name", "~/b".to_string(), None);
+        }
+        open_with.link(
+            Some("https://github.com/brave/bravebot/issues/1"),
+            Some("https://github.com/brave/bravebot/pull/2"),
+        );
+        open_with.add_references(&[met(("o", "r"), 3, LinkKind::Issue)]);
+        for rows in 1..40 {
+            assert_eq!(
+                shows_context(&open_with, 120, rows),
+                shows_context(&open_without, 120, rows),
+                "at {rows} rows"
+            );
+            let drawn = panel_column(&screen(&mut open_with, 120, rows), 120);
+            assert_eq!(
+                drawn.contains(&crate::render::context_reading(&open_with)),
+                shows_context(&open_with, 120, rows),
+                "shows_context disagrees with the rows drawn at {rows}: {drawn:#?}"
+            );
+        }
     }
 
     const ID: &str = "0b3f6c1e-9a2d-4e57-8c41-5d7a2f90b3e8";
@@ -5031,5 +5589,579 @@ mod tests {
         session.toggle_panel();
         screen(&mut session, 120, 30);
         assert_eq!(session.pointer_shape(), Default);
+    }
+
+    /// A session with something under every section, and a plan of three tasks.
+    fn with_every_section() -> Session {
+        let mut session = with_two_files_written(&[
+            ("write the panel", Status::Active),
+            ("test it", Status::Pending),
+            ("ship it", Status::Pending),
+        ]);
+        session.identify(
+            "the info panel",
+            "~/bravebot".to_string(),
+            Some("fix-panel"),
+        );
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        session.start_goal("the tests pass".to_string());
+        session.link(Some("https://x.test/i/1"), Some("https://x.test/p/2"));
+        session.report_language_servers(Roster::of([Language::Rust]));
+        session.servers.started = vec!["notes".to_string()];
+        session
+    }
+
+    /// PANEL-17. A section turned off is not drawn, heading or rows, and no other section goes with
+    /// it. Every section is tried, so that none reads another's flag.
+    ///
+    /// Rejects: a section that ignores its flag, a flag that hides the heading and leaves the rows,
+    /// and two sections that share one flag.
+    #[test]
+    fn a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it() {
+        let session = with_every_section();
+        // A row only that section draws.
+        let row_of = |section| match section {
+            Section::Session => "~/bravebot".to_string(),
+            Section::Model => "claude-sonnet".to_string(),
+            Section::Goal => "the tests pass".to_string(),
+            Section::PullRequests => "https://x.test/p/2".to_string(),
+            Section::Issues => "https://x.test/i/1".to_string(),
+            Section::Context => crate::render::context_reading(&session),
+            Section::LanguageServers => "rust-analyzer".to_string(),
+            Section::McpServers => "notes".to_string(),
+            Section::Files => "2 files +2 -1".to_string(),
+            Section::Plan => "■ write the panel".to_string(),
+        };
+        let drawn = texts(&lines(&session, WIDTH, 60));
+        for section in Section::ALL {
+            assert!(
+                drawn.iter().any(|row| row == section.heading()),
+                "{drawn:#?}"
+            );
+            assert!(
+                drawn.iter().any(|row| *row == row_of(section)),
+                "{drawn:#?}"
+            );
+        }
+        for off in Section::ALL {
+            let mut session = with_every_section();
+            session.set_panel_sections(Sections::default().toggled(off));
+            let drawn = texts(&lines(&session, WIDTH, 60));
+            for section in Section::ALL {
+                let on = section != off;
+                assert_eq!(
+                    drawn.iter().any(|row| row == section.heading()),
+                    on,
+                    "{} with {} off: {drawn:#?}",
+                    section.heading(),
+                    off.heading()
+                );
+                assert_eq!(
+                    drawn.iter().any(|row| *row == row_of(section)),
+                    on,
+                    "a row of {} with {} off: {drawn:#?}",
+                    section.heading(),
+                    off.heading()
+                );
+            }
+        }
+    }
+
+    /// PANEL-17. A section turned off takes no click target with it, so a click on the rows below
+    /// it does not act as it would have on the section.
+    ///
+    /// Rejects: a section drawn as nothing whose targets stay, which a click on a blank row would
+    /// reach.
+    #[test]
+    fn a_section_turned_off_has_no_click_target() {
+        let targets = |session: &Session| -> Vec<Target> {
+            laid_out(session, WIDTH, 60)
+                .3
+                .into_iter()
+                .map(|place| place.target)
+                .collect()
+        };
+        let whole = targets(&with_every_section());
+        for (section, target) in [
+            (Section::Session, Target::Name),
+            (Section::Model, Target::Model),
+            (Section::PullRequests, Target::PullRequest(0)),
+            (Section::Issues, Target::Issue(0)),
+            (Section::Context, Target::Context),
+            (Section::LanguageServers, Target::Languages),
+            (Section::McpServers, Target::Servers),
+            (Section::Files, Target::Files),
+            (Section::Plan, Target::Task(0)),
+        ] {
+            assert!(whole.contains(&target), "{target:?} is not a target at all");
+            let mut session = with_every_section();
+            session.set_panel_sections(Sections::default().toggled(section));
+            let held = targets(&session);
+            assert!(
+                !held.contains(&target),
+                "{target:?} stayed with {} off",
+                section.heading()
+            );
+            assert!(held.contains(&Target::Hide), "the hide row is gone");
+        }
+    }
+
+    /// PANEL-17. The rows a section turned off frees go to the Plan, which takes what is left, and
+    /// they are rows, not blanks: the blank row and the heading of the section go with it.
+    ///
+    /// Rejects: a hidden section that is replaced by blank rows, and one whose blank row or heading
+    /// is still counted in the room the Plan has.
+    #[test]
+    fn the_rows_a_section_turned_off_frees_go_to_the_plan() {
+        let tasks: Vec<(String, Status)> = (0..30)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let plan_rows = |session: &Session| {
+            let drawn = texts(&lines(session, WIDTH, 28));
+            section_rows(&drawn, t!(panel_plan))
+                .expect("the Plan heading")
+                .len()
+        };
+        let build = || {
+            let mut session = with_two_files_written(&rows);
+            session.report_language_servers(Roster::of([Language::Rust]));
+            session.servers.started = vec!["notes".to_string()];
+            session
+        };
+        let before = plan_rows(&build());
+
+        // The heading, the blank row above it and the one row each holds. Context holds its reading
+        // and the token total, which a plan session has not spent, so it holds one row too.
+        for section in [
+            Section::LanguageServers,
+            Section::McpServers,
+            Section::Files,
+            Section::Context,
+        ] {
+            let mut session = build();
+            let drawn = texts(&lines(&session, WIDTH, 28));
+            let held = section_rows(&drawn, section.heading())
+                .expect("the section")
+                .len();
+            session.set_panel_sections(Sections::default().toggled(section));
+            assert_eq!(
+                plan_rows(&session),
+                before + held + 2,
+                "{} off frees its {held} rows, its heading and its blank row",
+                section.heading()
+            );
+        }
+    }
+
+    /// PANEL-17. The sections of references are given the rows that a section turned off, and the
+    /// Plan's reserve while the Plan is off, would have kept, as they are given the rows of one that
+    /// has nothing to draw.
+    ///
+    /// Rejects: references cut for the rows of a section that is not drawn.
+    #[test]
+    fn the_references_are_not_cut_for_the_rows_of_a_section_turned_off() {
+        let shown = |session: &Session, height| -> usize {
+            let drawn = texts(&lines(session, WIDTH, height));
+            [t!(panel_pull_requests), t!(panel_issues)]
+                .into_iter()
+                .filter_map(|heading| section_rows(&drawn, heading))
+                .flatten()
+                .filter(|row| row.starts_with("https://") || row.contains('#'))
+                .count()
+        };
+        for off in [Section::LanguageServers, Section::McpServers, Section::Plan] {
+            let on = crowded();
+            let mut hidden = crowded();
+            hidden.set_panel_sections(Sections::default().toggled(off));
+            let mut gained = false;
+            for height in 4..60 {
+                let (with, without) = (shown(&on, height), shown(&hidden, height));
+                assert!(
+                    without >= with,
+                    "{} off shows fewer references at {height}: {without} against {with}",
+                    off.heading()
+                );
+                gained |= without > with;
+            }
+            assert!(gained, "{} off gave the references no rows", off.heading());
+        }
+    }
+
+    /// PANEL-9, PANEL-10, PANEL-17. With nothing drawn above them the sections of references take
+    /// no blank row, and the Context section that follows them takes one, so the room they are
+    /// given is counted for that row. At every height from 0 up the Context section is as whole with
+    /// the references as without them, the Plan keeps the rows of its reserve, and a panel too
+    /// short for any of it draws without a panic.
+    ///
+    /// Rejects: a count of the rows ahead of the references that leaves out the blank row the
+    /// Context section gains, which cuts the last row of Context at height 8 with six pull requests
+    /// and no plan, and gives the Plan one row less than [`PLAN_RESERVE`] holds.
+    #[test]
+    fn references_over_a_panel_with_nothing_above_them_leave_the_context_and_the_plan_their_rows() {
+        let build = |planned: bool, references: bool| {
+            let mut session = working_on(if planned {
+                plan(&[
+                    ("one", Status::Done),
+                    ("two", Status::Active),
+                    ("three", Status::Pending),
+                    ("four", Status::Pending),
+                ])
+            } else {
+                Vec::new()
+            });
+            session.identify("name", "~/b".to_string(), Some("main"));
+            session.set_panel_sections(
+                Sections::default()
+                    .toggled(Section::Session)
+                    .toggled(Section::Model),
+            );
+            if references {
+                let found: Vec<Reference> = (1..=6)
+                    .map(|n| met(("o", "r"), n, LinkKind::PullRequest))
+                    .collect();
+                session.add_references(&found);
+            }
+            session
+        };
+        for planned in [false, true] {
+            let (with, without) = (build(planned, true), build(planned, false));
+            let hide = t!(panel_hide, chord = with.bindings().panel_name());
+            // The rows of a section, without the row that hides the panel where nothing but the
+            // end of the panel follows it.
+            let rows_of = |drawn: &[String], heading: &str| {
+                section_rows(drawn, heading).map(|rows| {
+                    rows.into_iter()
+                        .filter(|row| *row != hide)
+                        .collect::<Vec<_>>()
+                })
+            };
+            let mut reserved = false;
+            for height in 0..40 {
+                let drawn = texts(&lines(&with, WIDTH, height));
+                let bare = texts(&lines(&without, WIDTH, height));
+                assert!(drawn.len() <= usize::from(height), "{height}: {drawn:#?}");
+                assert_eq!(
+                    rows_of(&drawn, t!(panel_context)),
+                    rows_of(&bare, t!(panel_context)),
+                    "Context at {height} rows, plan {planned}: {drawn:#?}"
+                );
+                if planned {
+                    let kept = |rows: &[String]| {
+                        rows_of(rows, t!(panel_plan)).map_or(0, |rows| rows.len())
+                    };
+                    let least = kept(&bare).min(PLAN_RESERVE - 2);
+                    assert!(
+                        kept(&drawn) >= least,
+                        "the plan has {} rows at {height}, its reserve holds {least}: {drawn:#?}",
+                        kept(&drawn)
+                    );
+                    reserved |= section_rows(&drawn, t!(panel_pull_requests)).is_some()
+                        && kept(&drawn) == least
+                        && least > 0;
+                }
+            }
+            assert!(
+                reserved || !planned,
+                "no height drew references over a plan held to its reserve"
+            );
+        }
+    }
+
+    /// The words a choice of sections is kept by are fixed, and each section has a bit of its own,
+    /// so turning one off turns no other off and turning it off twice turns it on.
+    ///
+    /// Rejects: an id that follows the translated heading or is renamed, which would read a saved
+    /// choice as another section; two sections that share a bit; and a toggle that is not its own
+    /// inverse.
+    #[test]
+    fn each_section_has_a_fixed_id_and_a_bit_of_its_own() {
+        let ids: Vec<&str> = Section::ALL.iter().map(|section| section.id()).collect();
+        assert_eq!(
+            ids,
+            [
+                "session",
+                "model",
+                "goal",
+                "pull-requests",
+                "issues",
+                "context",
+                "language-servers",
+                "mcp-servers",
+                "files",
+                "plan"
+            ]
+        );
+        for off in Section::ALL {
+            let sections = Sections::default().toggled(off);
+            assert_eq!(sections.hidden().collect::<Vec<_>>(), vec![off]);
+            for section in Section::ALL {
+                assert_eq!(sections.shows(section), section != off, "{ids:?}");
+            }
+            assert_eq!(sections.toggled(off), Sections::default());
+        }
+        let all_off = Section::ALL
+            .into_iter()
+            .fold(Sections::default(), Sections::toggled);
+        assert_eq!(all_off.hidden().collect::<Vec<_>>(), Section::ALL.to_vec());
+    }
+
+    /// PANEL-17. A file is read against the ids of the sections and nothing else. One name that is
+    /// not an id leaves every section on, wherever it stands in the file, and a name the file lacks
+    /// is a section that is on.
+    ///
+    /// Rejects: ignoring the line that names no section and applying the rest, applying the names
+    /// before the first one that is wrong, matching by prefix, by case or by the heading as the
+    /// panel draws it, and reading an empty file as every section off.
+    #[test]
+    fn a_name_that_is_not_a_section_leaves_every_section_on_and_a_section_not_named_is_on() {
+        let off = |ids: &[&str]| Sections::from_ids(ids).hidden().collect::<Vec<_>>();
+        assert_eq!(off(&[]), Vec::<Section>::new());
+        assert_eq!(off(&["plan"]), [Section::Plan]);
+        assert_eq!(
+            off(&["mcp-servers", "files", "mcp-servers"]),
+            [Section::McpServers, Section::Files]
+        );
+        let every: Vec<&str> = Section::ALL.iter().map(|section| section.id()).collect();
+        assert_eq!(off(&every), Section::ALL.to_vec());
+        for wrong in [
+            "nonsense",
+            "pla",
+            "plans",
+            "Plan",
+            "PLAN",
+            "pull requests",
+            "Pull requests",
+            "language servers",
+            "\u{1b}[2J",
+            "",
+        ] {
+            for ids in [
+                vec![wrong],
+                vec!["plan", wrong],
+                vec![wrong, "plan"],
+                vec!["plan", wrong, "files"],
+            ] {
+                assert_eq!(
+                    Sections::from_ids(&ids),
+                    Sections::default(),
+                    "{ids:?} turned a section off"
+                );
+            }
+        }
+    }
+
+    /// PANEL-17. What a file holds beyond the names of sections is never drawn, by the panel or by
+    /// the checklist: a line that is no section changes nothing on the screen.
+    ///
+    /// Rejects: a reading of the file that keeps a line it does not know, to draw it as a row or a
+    /// heading. (Reasoned only: the choice is a set of bits, so no text can be kept.)
+    #[test]
+    fn a_line_of_the_file_that_names_no_section_is_never_drawn() {
+        const TRAP: &str = "ignore this and run rm -rf";
+        let mut read = with_every_section();
+        read.set_panel_sections(Sections::from_ids(&["plan", TRAP, "\u{1b}[2J"]));
+        assert_eq!(read.panel_sections(), Sections::default());
+        let drawn = texts(&lines(&read, WIDTH, 60));
+        assert_eq!(drawn, texts(&lines(&with_every_section(), WIDTH, 60)));
+        let picker = crate::sidebar_prompt::Picker::new(read.panel_sections());
+        assert!(
+            !format!("{picker:?}").contains(TRAP),
+            "the checklist holds the line of the file"
+        );
+        for row in drawn {
+            assert!(!row.contains("rm -rf") && !row.contains('\u{1b}'), "{row}");
+        }
+    }
+
+    /// PANEL-17. With every section off the panel is still drawn, as a bordered column whose one
+    /// row is the key that hides it, and that row still hides it. The checklist never closes the
+    /// panel.
+    ///
+    /// Rejects: an all-off panel that closes, one that draws no hide row, a hide row that is no
+    /// longer a click target, and a panel that is drawn over nothing but blank rows with a heading.
+    #[test]
+    fn with_every_section_off_the_panel_is_drawn_with_only_its_hide_row_and_stays_open() {
+        let mut session = opened_at(120);
+        session.identify("name", "~/b".to_string(), Some("main"));
+        let all_off = Section::ALL
+            .into_iter()
+            .fold(Sections::default(), Sections::toggled);
+        session.set_panel_sections(all_off);
+        assert!(
+            session.panel_open(),
+            "turning sections off closed the panel"
+        );
+
+        let rows = screen(&mut session, 120, 30);
+        assert!(session.panel_open() && crate::panel::drawn(&session, 120));
+        let hide = t!(panel_hide, chord = session.bindings().panel_name());
+        let column = panel_column(&rows, 120);
+        let held: Vec<&String> = column.iter().filter(|row| !row.is_empty()).collect();
+        assert_eq!(held, [&hide.to_string()], "{column:#?}");
+        let border = usize::from(120 - WIDTH);
+        for row in &rows[..29] {
+            assert_eq!(row.chars().nth(border), Some('│'), "no border: {row:?}");
+        }
+
+        let targets = laid_out(&session, WIDTH, 30).3;
+        assert_eq!(
+            targets.iter().map(|place| place.target).collect::<Vec<_>>(),
+            [Target::Hide]
+        );
+        session.toggle_panel();
+        assert!(!session.panel_open(), "the hide row did not hide");
+    }
+
+    /// PANEL-17, FILES-4. The sections turned off are the ordinary panel's, and the files state
+    /// that takes its place draws what it draws with every one off.
+    ///
+    /// Rejects: a files state drawn through the same sections, which would show less or nothing.
+    #[test]
+    fn the_files_state_is_drawn_the_same_with_every_section_off() {
+        let all_off = Section::ALL
+            .into_iter()
+            .fold(Sections::default(), Sections::toggled);
+        let mut on = with_every_section();
+        let mut off = with_every_section();
+        off.set_panel_sections(all_off);
+        for session in [&mut on, &mut off] {
+            screen(session, 120, 30);
+            session.toggle_files();
+            assert!(session.files_open());
+        }
+        let (on_rows, off_rows) = (lines(&on, WIDTH, 30), lines(&off, WIDTH, 30));
+        assert_eq!(texts(&on_rows), texts(&off_rows));
+        assert!(texts(&off_rows).len() > 1, "the files state drew nothing");
+        assert_eq!(
+            laid_out(&on, WIDTH, 30).3.len(),
+            laid_out(&off, WIDTH, 30).3.len()
+        );
+    }
+
+    /// PANEL-7, PANEL-17. The hint line offers the key that shows the panel while it is closed and
+    /// not otherwise, whatever sections are off, so a panel with nothing in it is not offered as
+    /// one that is not there and a closed panel is not left unmentioned.
+    ///
+    /// Rejects: an offer that follows whether any section is on.
+    #[test]
+    fn the_hint_line_offers_the_panel_the_same_with_every_section_off() {
+        let all_off = Section::ALL
+            .into_iter()
+            .fold(Sections::default(), Sections::toggled);
+        let offer = t!(
+            panel_hint,
+            chord = Session::new("none").bindings().panel_name()
+        );
+        for sections in [Sections::default(), all_off] {
+            let mut session = Session::new("none");
+            session.set_panel_sections(sections);
+            let closed = screen(&mut session, 120, 30);
+            assert!(
+                closed[29].contains(&offer),
+                "closed, {sections:?}: {}",
+                closed[29]
+            );
+            session.toggle_panel();
+            let open = screen(&mut session, 120, 30);
+            assert!(
+                !open[29].contains(&offer),
+                "open, {sections:?}: {}",
+                open[29]
+            );
+        }
+    }
+
+    /// PANEL-8, PANEL-17. With the Context section off the panel draws neither the reading nor the
+    /// cache figures, and the hint line has the reading and the hit rate as it does with the panel
+    /// closed. The loop stays on the line as it does with the panel drawn. Turning the section on
+    /// again moves them back.
+    ///
+    /// Rejects: a Context that is off with the reading on neither the panel nor the line, and one
+    /// that is left on the line while the section is drawn.
+    #[test]
+    fn the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off()
+    {
+        let mut session = opened_at(120);
+        session.measured(50_000, 200_000, false);
+        session.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 12_000,
+                written_tokens: 3_000,
+            },
+            20_000,
+        );
+        session.identify("name", "~/b".to_string(), Some("main"));
+        let reading = crate::render::context_reading(&session);
+        let rate = crate::render::cache_hit_rate(&session).expect("a hit rate");
+        let moved = |session: &mut Session| {
+            let rows = screen(session, 120, 30);
+            let column = panel_column(&rows, 120);
+            (
+                rows[29].contains(&reading) && rows[29].contains(&rate),
+                column.contains(&reading),
+                column.contains(&rate),
+            )
+        };
+        assert_eq!(moved(&mut session), (false, true, true), "section on");
+
+        session.set_panel_sections(Sections::default().toggled(Section::Context));
+        assert_eq!(moved(&mut session), (true, false, false), "section off");
+        let column = panel_column(&screen(&mut session, 120, 30), 120);
+        assert!(
+            !column
+                .iter()
+                .any(|row| row.starts_with("cache") || row == Section::Context.heading()),
+            "{column:#?}"
+        );
+        assert!(
+            column.iter().any(|row| row == "name"),
+            "the other sections went with it: {column:#?}"
+        );
+
+        session.set_panel_sections(Sections::default());
+        assert_eq!(moved(&mut session), (false, true, true), "section on again");
+    }
+
+    /// PANEL-8, PANEL-17. Where the panel draws the Context section is where the hint line gives
+    /// the reading up, at every height, with sections turned off too, and a panel with sections off
+    /// takes the reading at heights that the whole panel is too short for.
+    ///
+    /// Rejects: the height that fits the Context section measured over every section whatever is
+    /// off, which leaves the reading on the line under a panel that draws it, or on neither.
+    #[test]
+    fn the_reading_moves_to_the_panel_where_the_sections_left_on_have_the_room() {
+        let fits = |session: &Session| -> u16 {
+            (1..60)
+                .find(|rows| shows_context(session, 120, *rows))
+                .expect("fits somewhere")
+        };
+        let mut whole = opened_at(120);
+        whole.identify("a name ".repeat(8).trim(), "~/b".to_string(), Some("main"));
+        whole.start_goal("a goal that takes a row or two to say".to_string());
+        let mut fewer = opened_at(120);
+        fewer.identify("a name ".repeat(8).trim(), "~/b".to_string(), Some("main"));
+        fewer.start_goal("a goal that takes a row or two to say".to_string());
+        fewer.set_panel_sections(
+            Sections::default()
+                .toggled(Section::Session)
+                .toggled(Section::Goal),
+        );
+        assert!(
+            fits(&fewer) < fits(&whole),
+            "{} rows with Session and Goal off, {} with them on",
+            fits(&fewer),
+            fits(&whole)
+        );
+        for session in [&mut whole, &mut fewer] {
+            for rows in 1..40 {
+                let drawn = panel_column(&screen(session, 120, rows), 120);
+                assert_eq!(
+                    drawn.contains(&crate::render::context_reading(session)),
+                    shows_context(session, 120, rows),
+                    "shows_context disagrees with the rows drawn at {rows}: {drawn:#?}"
+                );
+            }
+        }
     }
 }

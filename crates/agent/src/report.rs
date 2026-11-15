@@ -1071,6 +1071,14 @@ pub trait Reporter {
     /// The task list changed. Rows are already shaped for display and released.
     fn todos(&mut self, rows: Vec<Row>);
 
+    /// Issues and pull requests the turn has just named that it had not named before, as the
+    /// planner's own arguments and trusted results gave them (PANEL-16).
+    ///
+    /// Sent as they are found, so a front end lists them while the turn runs and a turn that then
+    /// fails or is stopped has still handed back what it found. Each reference has had its parts
+    /// checked by [`crate::links::Reference::new`]. Not sent for a delegate.
+    fn references(&mut self, _found: &[crate::links::Reference]) {}
+
     /// The model has written more of its reply.
     ///
     /// A count and nothing else. The reply is untrusted model output, so passing the text here
@@ -1320,6 +1328,8 @@ impl Reporter for IgnoreReports {
 pub struct RecordingReporter {
     /// Every update in order, so a test can assert on the sequence rather than the end state.
     pub updates: Vec<Vec<Row>>,
+    /// Every issue and pull request reported by `references`, in order.
+    pub references: Vec<crate::links::Reference>,
     /// Every output-token count reported, in order.
     pub written: Vec<u64>,
     pub spent: Vec<crate::outcome::Spent>,
@@ -1411,6 +1421,10 @@ impl Reporter for RecordingReporter {
 
     fn todos(&mut self, rows: Vec<Row>) {
         self.updates.push(rows);
+    }
+
+    fn references(&mut self, found: &[crate::links::Reference]) {
+        self.references.extend(found.iter().cloned());
     }
 
     fn output_tokens(&mut self, written: u64) {

@@ -153,6 +153,8 @@ pub(super) fn with_tools_and_skills<R>(
         typed,
         messaging: None,
         keeping_links: true,
+        default_repository: None,
+        found: Vec::new(),
     })
 }
 

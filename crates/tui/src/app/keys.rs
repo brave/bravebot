@@ -2426,13 +2426,14 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
             session.go_to_task(task, render::plan_item_row);
             Action::Redraw
         }
-        // The address `/pr` or `/issue` set, as it was set (MOUSE-41).
-        Hit::Panel(link @ (crate::panel::Target::PullRequest | crate::panel::Target::Issue)) => {
-            match session.panel_link(link) {
-                Some(address) => Action::OpenUrl(address.to_string()),
-                None => Action::Redraw,
-            }
-        }
+        // The address of a row of the Pull requests or Issues section: the one `/pr` or `/issue` set,
+        // as it was set, or the one the reference builds (MOUSE-41).
+        Hit::Panel(
+            link @ (crate::panel::Target::PullRequest(_) | crate::panel::Target::Issue(_)),
+        ) => match session.panel_link(link) {
+            Some(address) => Action::OpenUrl(address),
+            None => Action::Redraw,
+        },
         // Not rows of the panel or hints, which are all this is asked about. Named, so that a kind of
         // target added to the record has to be given its place here and is not taken for nothing.
         Hit::Back

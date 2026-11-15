@@ -143,6 +143,13 @@ pub(crate) const NOTE_COMMAND: &str = "/note";
 pub(crate) const ISSUE_COMMAND: &str = "/issue";
 pub(crate) const PR_COMMAND: &str = "/pr";
 
+/// The lines that list the issues and the pull requests the session has named, taking no argument.
+///
+/// Carried out by the driver from the list the session holds and start no turn (CMD-31). Longer
+/// words than `/issue` and `/pr`, which are not the same commands with an argument.
+pub(crate) const ISSUES_COMMAND: &str = "/issues";
+pub(crate) const PRS_COMMAND: &str = "/prs";
+
 /// The line that asks a question beside the work, taking the question as its argument.
 pub(crate) const BTW_COMMAND: &str = "/btw";
 
@@ -184,6 +191,9 @@ pub(crate) const SESSIONS_COMMAND: &str = "/sessions";
 
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
+
+/// The line that opens the checklist of the info panel's sections (PANEL-17).
+pub(crate) const SIDEBAR_COMMAND: &str = "/sidebar";
 
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const DIFF_COMMAND: &str = "/diff";
@@ -645,6 +655,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: SIDEBAR_COMMAND,
+            argument: "",
+            description: t!(command_sidebar),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: DIFF_COMMAND,
             argument: "",
             description: t!(command_diff),
@@ -679,6 +695,18 @@ pub fn commands() -> Vec<Command> {
             argument: "[<url> | clear]",
             description: t!(command_issue),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: PRS_COMMAND,
+            argument: "",
+            description: t!(command_prs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: ISSUES_COMMAND,
+            argument: "",
+            description: t!(command_issues),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: CHECKOUTS_COMMAND,

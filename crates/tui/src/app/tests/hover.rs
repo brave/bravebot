@@ -690,7 +690,7 @@ fn the_line_gives_way_to_a_note_a_banner_the_files_line_and_a_search_being_typed
 #[test]
 fn the_line_for_a_link_of_the_panel_shows_the_address_that_opens_and_not_the_shorthand() {
     let (mut session, buffer) = super::popups::with_a_pull_request_and_an_issue();
-    let cell = super::popups::shown_at(&buffer, "Pull request");
+    let cell = super::popups::shown_at(&buffer, "brave/bravebot#3200");
     handle_mouse(&mut session, moved(cell.0, cell.1));
     let hovered = drawn_again(&mut session);
     let (row, _) = the_hint_row(&session, &hovered);

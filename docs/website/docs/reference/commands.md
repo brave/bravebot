@@ -51,6 +51,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/sessions` | | Open the Sessions screen: every session on this machine and what each is doing. Left over an empty box does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
+| `/sidebar` | | Open a checklist that turns each section of the info panel on or off |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/unfinished` | | List what this session left open, and whose move each is |
@@ -58,6 +59,8 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
+| `/prs` | | List the pull requests this session has met |
+| `/issues` | | List the issues this session has met |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/plan` | `[task]` | Enter plan mode, and start on a task if you give one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
@@ -850,7 +853,24 @@ Shows or hides the info panel on the right of the screen, as Ctrl-X does. The pa
 session's name, directory and branch, the goal, how full the context is with the cache figures, and
 the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
-has the rest.
+has the rest. [`/sidebar`](#sidebar) chooses which sections it draws.
+
+## `/sidebar`
+
+Opens a checklist titled `info panel` with a row for each section of the info panel: Session, Model,
+Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
+`[x]` while the panel draws the section and `[ ]` while it is turned off. Up and Down, or `j` and
+`k`, move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the
+same in one press. The panel follows each change as it is made. Escape closes the checklist and keeps
+what you changed. It works at the prompt and while a turn runs, and the turn is not touched.
+
+The choice is kept in `~/.bravebot/sidebar` and applies to every session. A section the file does not
+name is on, so a section added later is on. A file with a line that is not a section's name leaves
+every section on. With every section off, the panel is still drawn with its last row, the one that
+names the key that hides it. While Context is off, the context reading and the cache hit rate stay on
+the hint line under the box, as they do where the panel is not drawn. `/sidebar` does not open the
+panel, so with the panel closed a change shows the next time it is opened. Nothing typed after the
+word is used: `/sidebar` followed by words is sent as a prompt.
 
 ## `/diff`
 
@@ -1247,6 +1267,28 @@ link with a host: a value with a space, a line break, an escape, a character out
 another scheme sets nothing and is not repeated back. Alone, each says what is set, and `clear` removes that one. The session record is
 rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. In the desktop app a chat whose pull request link points at a `/pull/<number>` path shows `PR #<number>` beside its branch on its sidebar row and in a bot's conversation list. Clicking it opens the address in your browser, and typing `PR #<number>` in the row search finds the chat. Typed
 while a turn runs with nothing waiting, each is carried out at once, as `/rename` is. [`--issue` and `--pr`](cli.md#--issue-url-and---pr-url) set the same links when a session opens.
+
+## `/issues` and `/prs`
+
+`/prs` lists the pull requests the session has met, and `/issues` the issues. A line says how many there
+are, and each item follows as `owner/repo#12` and its address. The list is the one the Pull requests
+and Issues sections of the [info panel](../using/sessions.md#telling-sessions-apart) draw, so it
+starts with the link you gave with `/pr` or `/issue` where that is a GitHub address, and then holds
+what the session met in the order it was first met. A session that has met none says so.
+
+A session meets an item when you type a GitHub address or `owner/repo#12` in a line you send, when you
+open it with `--issue` or `--pr`, when the model's own `run`, `fetch_url` or `download_url` call names
+it (`gh pr view 12 --repo owner/repo`, an address, `Closes owner/repo#12` in a commit message), and
+when a file you vouched for names it. Nothing a program printed, a web page said or the model wrote in
+a reply is read, so an address in the output of `gh pr view` is not listed, and an issue the model
+creates with `gh issue create` is listed once a later line or call names its number. A bare `#12` names
+no repository and is read only after `gh pr`, `gh issue` or a word such as `Closes`, in the repository of
+`--repo` or `-R`, else of your own link. Once a page or an untrusted file has been read in a turn, the
+model's later commands add nothing to the list, and what you type still does. The session keeps the
+first 500 and its record keeps them for a resume and a fork. `/clear` starts a session that has met none.
+
+Typed while a turn runs, each answers at once with what the turn has found so far. Neither takes an
+argument: `/issues` or `/prs` followed by words is a prompt, and `/issues` is not `/issue`.
 
 ## `/compact [focus]`
 
@@ -1651,7 +1693,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so

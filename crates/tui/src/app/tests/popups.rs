@@ -446,7 +446,7 @@ pub(super) fn targets() -> Vec<Target> {
             "the pull request row of the info panel",
             || {
                 let (session, buffer) = with_a_pull_request_and_an_issue();
-                (session, shown_at(&buffer, "Pull request"))
+                (session, shown_at(&buffer, "brave/bravebot#3200"))
             },
             |_, action| matches!(action, Action::OpenUrl(_)),
         ),
@@ -454,7 +454,7 @@ pub(super) fn targets() -> Vec<Target> {
             "the issue row of the info panel",
             || {
                 let (session, buffer) = with_a_pull_request_and_an_issue();
-                (session, shown_at(&buffer, "Issue"))
+                (session, shown_at(&buffer, "brave/bravebot#2685"))
             },
             |_, action| matches!(action, Action::OpenUrl(_)),
         ),

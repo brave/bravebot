@@ -271,6 +271,9 @@ pub struct Task {
     /// run or a delegate. Supplied per turn from the front end running now and never read back from
     /// a session record, so a session resumed in another front end names the one in use.
     pub front_end: Option<FrontEnd>,
+    /// The owner and repository a bare issue or pull request number in a command is read as
+    /// belonging to: the session's own `/pr` or `/issue` link, where it has one (PANEL-16).
+    pub default_repository: Option<(String, String)>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -629,6 +632,7 @@ impl Task {
             courier: None,
             keeps_links: false,
             front_end: None,
+            default_repository: None,
             model: None,
             effort: None,
             variant: None,
@@ -887,6 +891,13 @@ impl Task {
     /// Say which front end the person is using, so the planner is told (INSTR-9).
     pub fn in_front_end(mut self, front_end: FrontEnd) -> Self {
         self.front_end = Some(front_end);
+        self
+    }
+
+    /// Say which repository a bare `#n` or number in a command the planner writes belongs to, where
+    /// the session has a link that names one (PANEL-16).
+    pub fn with_default_repository(mut self, owner: &str, repo: &str) -> Self {
+        self.default_repository = Some((owner.to_string(), repo.to_string()));
         self
     }
 

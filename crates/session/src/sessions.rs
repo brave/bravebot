@@ -43,6 +43,7 @@
 //! the list rather than taken as a reason to fail.
 
 use bravebot_agent::conversation::Snapshot;
+use bravebot_agent::links::{LinkKind, Reference};
 use bravebot_agent::workspace::Workspace;
 use bravebot_aichat::protocol::{Cached, Effort};
 use bravebot_core::command::Spelling;
@@ -620,6 +621,77 @@ pub struct Record {
     /// Empty for a record written before this was kept, and for a session that touched nothing.
     #[serde(default)]
     pub touched: bravebot_agent::workspace::TouchedRecord,
+    /// The issues and pull requests the session met, in the order first met, so a resume, a fork
+    /// and the next turn's save carry the list `/issues` and `/prs` print (PANEL-16).
+    ///
+    /// Each is read back through [`Reference::new`] and one that fails is dropped, so an edited
+    /// record cannot put a string with an escape in the panel. An entry whose fields do not read
+    /// as a [`StoredReference`] is dropped when the record is read, and a list that is not a list
+    /// reads as empty, so neither makes the record unreadable. Empty for a record written before
+    /// this was kept, and for a session that met nothing.
+    #[serde(default, deserialize_with = "read_stored_references")]
+    pub references: Vec<StoredReference>,
+}
+
+/// The entries of the list that read as a [`StoredReference`], in the order written.
+fn read_stored_references<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<StoredReference>, D::Error> {
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(entries) => entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value(entry).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+/// An issue or pull request the session met, as it is written down.
+///
+/// Plain strings and a number, written from a [`Reference`], which holds only what GitHub allows in
+/// each part. What is read back is checked again, since the file can be edited.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredReference {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    /// `issue` or `pull_request`. A word this build does not know drops the entry.
+    pub kind: String,
+    /// Whether the text the reference came from named its kind. Absent reads as a guess, which a
+    /// later sighting that names the kind then settles.
+    #[serde(default)]
+    pub kind_named: bool,
+}
+
+impl StoredReference {
+    /// `reference` as it is written down.
+    pub fn of(reference: &Reference) -> Self {
+        Self {
+            owner: reference.owner().to_string(),
+            repo: reference.repo().to_string(),
+            number: reference.number(),
+            kind: match reference.kind() {
+                LinkKind::Issue => "issue",
+                LinkKind::PullRequest => "pull_request",
+            }
+            .to_string(),
+            kind_named: reference.kind_named(),
+        }
+    }
+
+    /// The reference this stands for, or `None` where a part is not one [`Reference::new`] allows.
+    pub fn read(&self) -> Option<Reference> {
+        let kind = match self.kind.as_str() {
+            "issue" => LinkKind::Issue,
+            "pull_request" => LinkKind::PullRequest,
+            _ => return None,
+        };
+        let reference = Reference::new(&self.owner, &self.repo, self.number, kind)?;
+        Some(match self.kind_named {
+            true => reference,
+            false => reference.assumed(),
+        })
+    }
 }
 
 /// A kept checkout as it is written down.
@@ -2207,6 +2279,11 @@ pub enum Link {
     PullRequest,
 }
 
+/// The references a record holds that [`Reference::new`] still accepts, in the order written.
+fn read_references(stored: &[StoredReference]) -> Vec<Reference> {
+    stored.iter().filter_map(StoredReference::read).collect()
+}
+
 /// A link the person wrote, once it has been read as one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Url(String);
@@ -2218,6 +2295,10 @@ impl Url {
     /// zero-width character could make the row read as another link.
     pub fn read(text: &str) -> Option<Self> {
         bravebot_core::url::web_address(text).map(|text| Self(text.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -2249,6 +2330,8 @@ pub struct Handle {
     /// What the session's file tools reached as of the last save that gave it, written again by a
     /// save that gives none (INSTR-14, INSTR-16).
     touched: bravebot_agent::workspace::TouchedRecord,
+    /// The issues and pull requests the session met, as of the last turn's save (PANEL-16).
+    references: Vec<Reference>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -2430,6 +2513,7 @@ impl Handle {
             skill_mode: None,
             effort: None,
             touched: bravebot_agent::workspace::TouchedRecord::default(),
+            references: Vec::new(),
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -2506,6 +2590,7 @@ impl Handle {
             skill_mode: record.skill_mode.clone(),
             effort: record.effort.as_deref().and_then(Effort::named),
             touched: record.touched.clone(),
+            references: read_references(&record.references),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -2773,6 +2858,16 @@ impl Handle {
         self.written = written.iter().map(|path| StoredPath::of(path)).collect();
     }
 
+    /// Take the issues and pull requests the session met, written with the record at the turn's
+    /// save (PANEL-16). Replaces the list whole.
+    pub fn set_references(&mut self, references: &[Reference]) {
+        self.references = references.to_vec();
+    }
+
+    pub fn references(&self) -> &[Reference] {
+        &self.references
+    }
+
     /// Add a note a person typed, belonging to `turn`, and write it to the record at once.
     ///
     /// Written at once because a note is typed while a turn runs, and the record is otherwise
@@ -2887,6 +2982,7 @@ impl Handle {
             injected_facts: self.injected_facts.clone(),
             work: self.work,
             written: self.written.clone(),
+            references: self.references.iter().map(StoredReference::of).collect(),
             title,
             started: self.started,
             updated: now(),
@@ -3043,6 +3139,7 @@ impl Handle {
         record.injected_facts = self.injected_facts.clone();
         record.work = self.work;
         record.written = self.written.clone();
+        record.references = self.references.iter().map(StoredReference::of).collect();
         self.write(&directory, &mut record)
     }
 
@@ -6887,6 +6984,133 @@ mod tests {
         assert_eq!(record.pull_request, None);
     }
 
+    /// A reference met in a session, as the record keeps it.
+    fn a_reference(number: u64, kind: LinkKind, named: bool) -> Reference {
+        let reference = Reference::new("brave", "bravebot", number, kind).expect("a valid one");
+        match named {
+            true => reference,
+            false => reference.assumed(),
+        }
+    }
+
+    /// Every record written before the references were kept has no such field, and it must still
+    /// resume, with none rather than with an error.
+    ///
+    /// The fault it rejects: a field with no `#[serde(default)]`, which makes every older record
+    /// unreadable.
+    #[test]
+    fn a_record_from_before_the_references_reads_as_having_none() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("references")
+            .expect("the references are written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+        assert!(record.references.is_empty());
+    }
+
+    /// The list is written with the turn's save, a resume reads it back with its order and with
+    /// whether each kind was named, and a fork carries it (SESSION-3).
+    ///
+    /// The faults it rejects: a save that leaves the list out of the record (the resume has none), a
+    /// resume that sorts the list or reads every kind as named, and a fork that starts empty.
+    #[test]
+    fn the_references_are_written_with_the_save_and_a_resume_and_a_fork_keep_them() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-references");
+        let met = [
+            a_reference(42, LinkKind::Issue, false),
+            a_reference(7, LinkKind::PullRequest, true),
+            a_reference(1, LinkKind::Issue, true),
+        ];
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_references(&met);
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.references.len(), 3);
+        drop(handle);
+        let resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(resumed.references(), met, "the resume changed the list");
+
+        let forked = fork(&root, resumed.id()).expect("the session forks");
+        assert_eq!(read_references(&forked.references), met);
+    }
+
+    /// An entry whose fields do not read as a reference, such as `"number": -1`, a number that is a
+    /// string or a missing owner, is dropped with the entries after it kept, and the record is still
+    /// read (SESSION-3).
+    ///
+    /// The fault it rejects: a list read as a whole, where one such entry makes the whole record
+    /// unreadable.
+    #[test]
+    fn an_entry_that_does_not_read_is_dropped_and_the_record_and_the_other_entries_are_kept() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        let entry = |owner: &str, number: serde_json::Value| serde_json::json!({"owner": owner, "repo": "bravebot", "number": number, "kind": "issue"});
+        written["references"] = serde_json::json!([
+            entry("brave", 1.into()),
+            entry("brave", (-1).into()),
+            entry("brave", "7".into()),
+            {"repo": "bravebot", "number": 8, "kind": "issue"},
+            "not an object",
+            entry("brave", 9.into()),
+        ]);
+        let record: Record = serde_json::from_value(written.clone()).expect("the record reads");
+        let numbers: Vec<u64> = read_references(&record.references)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(numbers, [1, 9]);
+
+        written["references"] = serde_json::json!("not a list");
+        let record: Record = serde_json::from_value(written).expect("the record reads");
+        assert!(record.references.is_empty());
+    }
+
+    /// A reference is read back through [`Reference::new`], so a record that was edited cannot put
+    /// a string with an escape, a kind this build does not know or a number with a leading zero in
+    /// the panel, and a record with no `kind_named` reads each kind as a guess.
+    ///
+    /// The faults it rejects: a read that trusts the strings, and one that reads an absent
+    /// `kind_named` as named.
+    #[test]
+    fn a_reference_the_record_holds_that_is_not_valid_is_dropped_on_reading() {
+        let written = |owner: &str, repo: &str, number: u64, kind: &str| StoredReference {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            number,
+            kind: kind.to_string(),
+            kind_named: true,
+        };
+        let held = [
+            written("brave", "bravebot", 1, "issue"),
+            written("brave\u{1b}[31m", "bravebot", 2, "issue"),
+            written("brave", "brave/bot", 3, "issue"),
+            written("brave", "bravebot", 4, "discussion"),
+            written("brave", "bravebot", 0, "issue"),
+            written("brave", "bravebot", 1_000_000_000, "issue"),
+            written("brave", "bravebot", 5, "pull_request"),
+        ];
+        let read: Vec<u64> = read_references(&held)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(read, [1, 5]);
+
+        let without_the_flag: StoredReference = serde_json::from_str(
+            r#"{"owner":"brave","repo":"bravebot","number":9,"kind":"issue"}"#,
+        )
+        .expect("reads");
+        let reference = without_the_flag.read().expect("valid");
+        assert!(!reference.kind_named());
+    }
+
     /// The picker searches the links, so the list has to carry them, and a record that holds
     /// neither (one written before they were kept) still has to be listed.
     #[test]
@@ -7611,6 +7835,7 @@ mod tests {
             rewind: Vec::new(),
             checkouts: Vec::new(),
             touched: Default::default(),
+            references: Vec::new(),
             agent: None,
             skill_mode: None,
         }

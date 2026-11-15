@@ -2231,6 +2231,9 @@ config-picker-title = editor mode
 config-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
 config-editing-hint-ordinary = arrows and the readline chords
 config-editing-hint-vi = modal editing, with hjkl and the operators
+# Choosing which sections the info panel draws. The names of the sections are the panel's headings.
+sidebar-picker-title = info panel
+sidebar-picker-keys = ↑↓ move · Space toggle · Esc close
 picker-premium = premium
 # The heading over the models Brave's own endpoint serves. Named rather than left blank, because a
 # list whose other sections name a service reads as though the unlabelled rows came from nowhere.
@@ -3332,6 +3335,17 @@ lsp-started = { $count ->
    *[other] { $count } language servers have started in this session:
     }
 lsp-server-running = { $program }: runs with your own access until this session ends
+# What /issues and /prs print above the list, and the one line they print when the session has met none.
+references-heading-issues = { $count ->
+    [one] 1 issue named in this session:
+   *[other] { $count } issues named in this session:
+    }
+references-heading-prs = { $count ->
+    [one] 1 pull request named in this session:
+   *[other] { $count } pull requests named in this session:
+    }
+references-none-issues = No issue has been named in this session yet.
+references-none-prs = No pull request has been named in this session yet.
 # What /open says: a line, then a line for each link of the latest reply that has any, numbered as a
 # number given back to /open names it. A link is as it was drawn, which is text the assistant wrote.
 open-listed = { $count ->
@@ -3382,10 +3396,10 @@ panel-context = Context
 panel-language-servers = Language servers
 panel-mcp-servers = MCP servers
 panel-plan = Plan
-panel-links = Links
-# The rows of the info panel's Links section, each followed by the link.
-panel-pull-request = Pull request
-panel-issue = Issue
+panel-pull-requests = Pull requests
+panel-issues = Issues
+# The last row of a section of the info panel that was cut to the room: how many rows it left out.
+panel-more-references = +{ $count } more
 # Left in the transcript when a click on the session's name in the info panel finds the line in
 # use, so /rename was not put in it.
 panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
@@ -3604,6 +3618,8 @@ command-resume = Pick up another session of this directory, by id or from a list
 command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
+command-issues = List the issues this session has named
+command-prs = List the pull requests this session has named
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-recap = Recap where this session stands, without putting it in the conversation
@@ -3617,6 +3633,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-sessions = Open the Sessions screen: every session and what each is doing
 command-panel = Show or hide the info panel beside the transcript
+command-sidebar = Choose which sections the info panel draws
 command-diff = List the files the session wrote and show every edit to the one highlighted
 command-todos = Print the whole plan, every task with its status
 command-unfinished = List what this session left open, and whose move each is

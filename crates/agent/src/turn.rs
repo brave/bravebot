@@ -614,6 +614,8 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             typed: &[],
             messaging: None,
             keeping_links: false,
+            default_repository: None,
+            found: Vec::new(),
             delegated: false,
             confined_to: None,
             offered: None,
@@ -2562,6 +2564,9 @@ struct State<'s> {
     wakeup: Option<Wakeup>,
     watches: Vec<crate::watch::Armed>,
     links: Vec<crate::links::LinkSet>,
+    /// The issues and pull requests this turn has named, which each is reported once from
+    /// (PANEL-16).
+    references: Vec<crate::links::Reference>,
     armed: usize,
     advice_asked: usize,
     // What the planner has put to other sessions this turn, which the bound on them and a
@@ -3591,6 +3596,7 @@ where
         // about several files.
         watches: Vec::new(),
         links: Vec::new(),
+        references: Vec::new(),
         armed: 0,
         // How many questions the planner has put to its advisor this turn, which the bound on them
         // is read against.
@@ -4263,6 +4269,7 @@ where
                 file_wait,
                 &mut output,
             );
+            round_steps::collect_from_a_result(policy, task, state, reporter, &output);
             // As with a context file: what the turn has seen belongs to the conversation the
             // moment it sees it, not once the turn happens to end well.
             conversation.observed(policy.context_label());

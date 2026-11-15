@@ -566,6 +566,16 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.report_started_language_servers();
         return Action::Redraw;
     }
+    // From the list the session holds: nothing is read, fetched or sent, and no turn starts
+    // (CMD-31).
+    if line.trim() == ISSUES_COMMAND {
+        session.report_references(bravebot_agent::links::LinkKind::Issue);
+        return Action::Redraw;
+    }
+    if line.trim() == PRS_COMMAND {
+        session.report_references(bravebot_agent::links::LinkKind::PullRequest);
+        return Action::Redraw;
+    }
     if let Some(argument) = argument_to(line, OPEN_COMMAND) {
         return match crate::open_command::parse(argument) {
             crate::open_command::Asked::List => {
@@ -846,6 +856,14 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
+        return Action::Redraw;
+    }
+    // Opens the checklist of the panel's sections. It edits the session and nothing else, so it is
+    // the same at rest and while a turn runs (PANEL-17).
+    if line.trim() == SIDEBAR_COMMAND {
+        session.open_picking(crate::picking::Picking::Sidebar(
+            crate::sidebar_prompt::Picker::new(session.panel_sections()),
+        ));
         return Action::Redraw;
     }
     if line.trim() == DIFF_COMMAND {
@@ -2294,6 +2312,7 @@ fn restore_resumed(
     let recalled = bravebot_session::sessions::recall(workspace.root(), record);
     session.replay(&conversation, &record.title, &recalled);
     session.restore_accounts(record);
+    session.restore_references(handle.references());
     if let Some(name) = record.skill_mode.as_deref() {
         session.resume_skill_mode(name);
     }
@@ -2439,6 +2458,10 @@ fn apply_the_command_line(
 ) {
     // After the record is open, so a link the command line gave replaces one a resumed record held,
     // as `/issue` and `/pr` would (PANEL-12).
+    // What `--issue` and `--pr` gave is the person's own text, read as a typed line is (PANEL-16).
+    for given in [&links.issue, &links.pull_request].into_iter().flatten() {
+        session.note_typed(given.as_str());
+    }
     links.give_to(stored);
 
     // Held rather than sent: the loop's first pass sends it, and the loop runs only once the
@@ -3860,6 +3883,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         | ToMain::RequestBuilt(_)
         | ToMain::Forked(_)
         | ToMain::Todos(_)
+        | ToMain::References(_)
         | ToMain::Written(_)
         | ToMain::Spent(_)
         | ToMain::Phase(_)
@@ -10344,6 +10368,8 @@ mod tests {
 
     /// A string nothing in the interface says, which the tools of the fixture below returned.
     const FROM_A_TOOL: &str = "TOOLSAID-7f3c1e";
+    /// What a tool's result holds that the Pull requests and Issues sections would list if they read it.
+    const A_REFERENCE_FROM_A_TOOL: &str = "evil/trap#9 https://github.com/evil/trap/pull/10";
 
     /// A session with every row of the panel a click acts on, whose tools returned
     /// [`FROM_A_TOOL`] in a result, in what a call showed and in what it was told, and whose reply
@@ -10352,7 +10378,10 @@ mod tests {
         use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
         use bravebot_core::todo::{Item, List, Status};
         let (mut session, _) = panel_of_command_rows(false);
-        type_line(&mut session, "do the work");
+        type_line(
+            &mut session,
+            "do the work on brave/bravebot#7 and https://github.com/brave/bravebot/pull/8",
+        );
         handle_key(&mut session, key(KeyCode::Enter));
         session.set_todos(bravebot_core::todo::rows(&List::new(vec![
             Item::new(
@@ -10362,23 +10391,29 @@ mod tests {
             Item::new("Fix it", Status::Active),
         ])));
         session.finish_activity(
-            Activity::running("Run", "make").done(format!("{FROM_A_TOOL} finished")),
+            Activity::running("Run", "make")
+                .done(format!("{FROM_A_TOOL} finished {A_REFERENCE_FROM_A_TOOL}")),
         );
         session.landed(Landing::Context);
+        let result = format!("{FROM_A_TOOL} {A_REFERENCE_FROM_A_TOOL}");
         session.returned(Returned {
-            lines: vec![FROM_A_TOOL.to_string()],
+            lines: vec![result.clone()],
             total: 1,
             from_the_end: false,
-            whole: vec![FROM_A_TOOL.to_string()],
+            whole: vec![result.clone()],
         });
         session.show(Shown {
             origin: FROM_A_TOOL.to_string(),
             reach: Reach::NotThePlanner,
             label: "untrusted".to_string(),
-            preview: vec![FROM_A_TOOL.to_string()],
+            preview: vec![result],
             lines: 1,
         });
-        session.complete(format!("it says {FROM_A_TOOL}"), Vec::new(), 0);
+        session.complete(
+            format!("it says {FROM_A_TOOL} {A_REFERENCE_FROM_A_TOOL}"),
+            Vec::new(),
+            0,
+        );
         if turn_running {
             type_line(&mut session, "next");
             handle_key(&mut session, key(KeyCode::Enter));
@@ -10460,6 +10495,8 @@ mod tests {
                 Target::Task(0),
                 Target::Task(1),
                 Target::Detail(0),
+                Target::PullRequest(0),
+                Target::Issue(0),
             ] {
                 assert!(
                     targets.iter().any(|(found, ..)| *found == wanted),
@@ -10489,6 +10526,10 @@ mod tests {
                     assert!(
                         !text_in(&after, *panel).contains(FROM_A_TOOL),
                         "{target:?} drew what a tool returned (turn running: {turn_running})"
+                    );
+                    assert!(
+                        !text_in(&after, *panel).contains("evil/trap"),
+                        "{target:?} listed a reference a tool returned (turn running: {turn_running})"
                     );
                 }
                 let spoken: String = session.transcript[said..]
@@ -10723,8 +10764,11 @@ mod tests {
     fn find_cell(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
         (0..buffer.area.height)
             .find_map(|row| {
+                // What a cell shows, so that the cells of a terminal link are found by their text.
                 let cells: Vec<String> = (0..buffer.area.width)
-                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .map(|column| {
+                        crate::hyperlink::shown(buffer[(column, row)].symbol()).to_string()
+                    })
                     .collect();
                 let first = needle.chars().next()?.to_string();
                 (0..cells.len())
@@ -11494,7 +11538,7 @@ mod tests {
 
         // The address the panel was given, without ctrl, and a row that stands for a command.
         let buffer = hold_a_selection(&mut session);
-        let (row, column) = find_cell(&buffer, "Pull request");
+        let (row, column) = find_cell(&buffer, "brave/bravebot#");
         assert_eq!(
             click(&mut session, row, column + 2),
             Action::OpenUrl(PULL_REQUEST.to_string())
@@ -23613,9 +23657,10 @@ mod tests {
         let crate::state::Offered::Slash { commands, skills } = session.offered() else {
             panic!("nothing was offered");
         };
+        // `/prs` is a longer command the word is the start of, listed before the skill.
         assert_eq!(
             commands.iter().map(|c| c.name).collect::<Vec<_>>(),
-            [PR_COMMAND]
+            [PR_COMMAND, PRS_COMMAND]
         );
         assert_eq!(skill_names(&skills), ["pr-fix"]);
         assert_eq!(
@@ -23629,6 +23674,7 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Char(c)));
             session.settle_skills(held);
         }
+        handle_key(&mut session, key(KeyCode::Down));
         handle_key(&mut session, key(KeyCode::Down));
         assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
         assert_eq!(session.input(), "/pr-fix ");
@@ -23653,6 +23699,8 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Char(c)));
             session.settle_skills(held);
         }
+        // Past `/pr` and the longer command `/prs`.
+        handle_key(&mut session, key(KeyCode::Down));
         handle_key(&mut session, key(KeyCode::Down));
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
@@ -26200,6 +26248,7 @@ mod tests {
                 FORGET_TRUST_COMMAND,
                 GOAL_COMMAND,
                 ISSUE_COMMAND,
+                ISSUES_COMMAND,
                 JOBS_COMMAND,
                 LANGUAGE_COMMAND,
                 LIMIT_COMMAND,
@@ -26212,11 +26261,13 @@ mod tests {
                 OUTPUTS_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
+                PRS_COMMAND,
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 SANDBOX_COMMAND,
                 SCHEDULE_COMMAND,
                 SESSIONS_COMMAND,
+                SIDEBAR_COMMAND,
                 STATUS_COMMAND,
                 STYLE_COMMAND,
                 THEME_COMMAND,
@@ -27468,6 +27519,58 @@ mod tests {
         );
     }
 
+    /// A turn carries the repository of the session's own link, the pull request's before the
+    /// issue's, and a link that is not a GitHub address carries none, so a bare number in a command
+    /// the planner writes is read against the repository the person said the work is for (PANEL-16).
+    #[test]
+    fn a_turn_carries_the_repository_of_the_sessions_own_link() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            std::path::Path::new("/work"),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let carried =
+            |session: &Session| with_own_repository(Task::new("p"), session).default_repository;
+        assert_eq!(carried(&session), None);
+
+        linked(
+            &mut session,
+            &mut stored,
+            "/issue https://github.com/brave/issue-repo/issues/1",
+        );
+        assert_eq!(
+            carried(&session),
+            Some(("brave".to_string(), "issue-repo".to_string()))
+        );
+
+        linked(
+            &mut session,
+            &mut stored,
+            "/pr https://github.com/brave/pr-repo/pull/2",
+        );
+        assert_eq!(
+            carried(&session),
+            Some(("brave".to_string(), "pr-repo".to_string())),
+            "the issue's repository was carried over the pull request's"
+        );
+
+        linked(&mut session, &mut stored, "/pr clear");
+        linked(
+            &mut session,
+            &mut stored,
+            "/issue https://example.com/tracker/issues/1",
+        );
+        assert_eq!(
+            carried(&session),
+            None,
+            "a link that is not on GitHub named a repository"
+        );
+    }
+
     /// A value that is not one web address on one line sets nothing, leaves a link already set as
     /// it was, and is not repeated back, since what made it no link may be an escape.
     #[test]
@@ -27764,6 +27867,240 @@ mod tests {
             vec![t!(session_pull_request_set, url = PULL)]
         );
         assert!(session.queued.is_empty(), "/pr waited");
+    }
+
+    /// R24 of #4223, CMD-31: `/issues` is its own command and not `/issue` with an `s`, `/prs` is not
+    /// `/pr` with one, and a line that adds a word to either is a prompt. The link commands still
+    /// take their own arguments, and completion offers each pair, the word typed in full first.
+    ///
+    /// The faults it rejects: a reader of `/issue` that takes a longer word as its argument, a list
+    /// command that takes an argument, and a table that gives one word of a pair and not the other.
+    #[test]
+    fn issues_and_prs_are_commands_of_their_own_beside_issue_and_pr() {
+        use bravebot_agent::links::{LinkKind, Reference};
+        use bravebot_session::sessions::Link;
+        assert_eq!(argument_to("/issues", ISSUE_COMMAND), None);
+        assert_eq!(argument_to("/prs", PR_COMMAND), None);
+        assert_eq!(command_typed("/issues"), Some(ISSUES_COMMAND));
+        assert_eq!(command_typed("/prs"), Some(PRS_COMMAND));
+        assert_eq!(command_typed("/issue x"), Some(ISSUE_COMMAND));
+        assert_eq!(command_typed("/issues x"), None, "/issues took an argument");
+        assert_eq!(command_typed("/prs x"), None, "/prs took an argument");
+
+        let mut session = Session::new("none");
+        session.add_references(&[
+            Reference::new("o", "r", 1, LinkKind::Issue).unwrap(),
+            Reference::new("o", "r", 2, LinkKind::PullRequest).unwrap(),
+        ]);
+        let before = session.transcript.len();
+        assert_eq!(
+            dispatch_command(&mut session, commanded(ISSUES_COMMAND)),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.transcript.len() - before,
+            2,
+            "/issues did not say its heading and its one issue"
+        );
+        assert_eq!(
+            dispatch_command(&mut session, commanded(PRS_COMMAND)),
+            Action::Redraw
+        );
+        assert_eq!(
+            dispatch_command(&mut session, commanded("/issue clear")),
+            Action::Link(Link::Issue, "clear".to_string())
+        );
+        assert_eq!(
+            dispatch_command(&mut session, commanded("/pr")),
+            Action::Link(Link::PullRequest, String::new())
+        );
+
+        let names = |typed: &str| -> Vec<&str> {
+            completions(typed)
+                .iter()
+                .map(|command| command.name)
+                .collect()
+        };
+        assert_eq!(names("/issue"), [ISSUE_COMMAND, ISSUES_COMMAND]);
+        assert_eq!(names("/issues"), [ISSUES_COMMAND]);
+        assert_eq!(names("/pr"), [PR_COMMAND, PRS_COMMAND]);
+        assert_eq!(names("/prs"), [PRS_COMMAND]);
+    }
+
+    /// R10 of #4223, CMD-8, CMD-31: both words are table rows that run as they are typed, so a turn
+    /// that is working neither waits for them nor is handed them. What the running turn reported so
+    /// far is what they list, and a line queued behind the turn is read where it was typed. They
+    /// cost no tokens: nothing is queued, sent or interjected.
+    ///
+    /// The faults it rejects: a row on `Waits`, a command that lists only what an earlier turn
+    /// found, and a command line handed to the running turn as a sentence.
+    #[test]
+    fn issues_and_prs_typed_mid_turn_answer_at_once_from_what_has_been_met() {
+        use bravebot_agent::links::{LinkKind, Reference};
+        for word in [ISSUES_COMMAND, PRS_COMMAND] {
+            assert_eq!(
+                commands()
+                    .into_iter()
+                    .find(|command| command.name == word)
+                    .map(|command| command.mid_turn),
+                Some(MidTurn::Runs),
+                "{word}"
+            );
+        }
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "second is brave/bravebot#5");
+        // What the running turn reported as it went (`ToMain::References`).
+        session.add_references(&[
+            Reference::new("brave", "bravebot", 77, LinkKind::PullRequest).unwrap(),
+            Reference::new("brave", "bravebot", 6, LinkKind::Issue).unwrap(),
+        ]);
+        let transcript = session.transcript.len();
+
+        assert_eq!(
+            type_while_working(&mut session, ISSUES_COMMAND),
+            Action::Redraw
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![
+                t!(references_heading_issues, count = 2).to_string(),
+                "brave/bravebot#5  https://github.com/brave/bravebot/issues/5".to_string(),
+                "brave/bravebot#6  https://github.com/brave/bravebot/issues/6".to_string(),
+            ]
+        );
+        assert_eq!(session.transcript.len(), transcript + 3);
+        assert_eq!(
+            type_while_working(&mut session, PRS_COMMAND),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.as_str()),
+            Some("brave/bravebot#77  https://github.com/brave/bravebot/pull/77")
+        );
+        let waiting: Vec<&str> = session
+            .queued
+            .iter()
+            .map(|queued| queued.prompt.as_str())
+            .collect();
+        assert_eq!(waiting, vec!["second is brave/bravebot#5"]);
+        assert_eq!(
+            session.interjections().take().as_deref(),
+            Some("second is brave/bravebot#5"),
+            "the running turn was handed a command"
+        );
+    }
+
+    /// R11 of #4223, SESSION-3: `/clear` begins a session that has met nothing, and the cleared
+    /// session's record holds none, so the list does not follow the person into a conversation it
+    /// came from nowhere in. The session before keeps its own, so it resumes with them.
+    ///
+    /// The fault it rejects: a `/clear` that begins a new record and leaves the list on the session.
+    #[test]
+    fn a_cleared_session_has_met_nothing() {
+        use bravebot_agent::links::{LinkKind, Reference};
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+        let met = [Reference::new("o", "r", 4, LinkKind::Issue).unwrap()];
+        session.add_references(&met);
+        stored.set_references(session.references());
+
+        let (_, cleared) = clear_session(&mut session, &mut workspace, None);
+
+        assert!(session.references().is_empty(), "/clear kept the list");
+        assert!(cleared.references().is_empty());
+        assert_eq!(stored.references(), met, "the session left lost its own");
+    }
+
+    /// R11 of #4223, SESSION-3: a resume puts the list back as it was written, in order and with the
+    /// kind each item was read as, and a fork starts with the same list. A record with none, which
+    /// is any record written before the list, resumes with none.
+    ///
+    /// The faults it rejects: a resume that leaves the session's list empty, one that reads every
+    /// kind as named, and a fork that drops the list.
+    #[test]
+    fn a_resumed_or_forked_session_has_met_what_its_record_says() {
+        use bravebot_agent::links::{LinkKind, Reference};
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-references-resumed");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let met = [
+            Reference::new("o", "r", 9, LinkKind::Issue)
+                .unwrap()
+                .assumed(),
+            Reference::new("o", "r", 3, LinkKind::PullRequest).unwrap(),
+        ];
+        let mut session = Session::new("none");
+        session.add_references(&met);
+
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        stored.set_references(session.references());
+        with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new(&root),
+            &TrustedPrograms::new(),
+            &workspace,
+            |standing| stored.save("a session", standing),
+        );
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        let forked = sessions::fork(&root, stored.id()).expect("the session forks");
+        drop(stored);
+
+        for (how, record) in [("resumed", &record), ("forked", &forked)] {
+            let mut again = Session::new("none");
+            restore_resumed(&mut again, &config, &mut workspace, record)
+                .expect("the record is free");
+            assert_eq!(again.references(), met, "{how}");
+        }
+    }
+
+    /// R3 of #4223, PANEL-12: the addresses `--issue` and `--pr` gave are the person's own words, so
+    /// they are in the list when the session opens, and a link the record already held is not read
+    /// again.
+    ///
+    /// The fault it rejects: reading the line the person typed and not the two flags.
+    #[test]
+    fn the_addresses_the_command_line_gave_are_in_the_list_when_the_session_opens() {
+        use bravebot_session::sessions::Url;
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+
+        apply_the_command_line(
+            &mut session,
+            &mut stored,
+            workspace.root(),
+            Links {
+                issue: Url::read(ISSUE),
+                pull_request: Url::read(PULL),
+            },
+            None,
+            None,
+            None,
+        );
+
+        let met: Vec<String> = session
+            .references()
+            .iter()
+            .map(|reference| reference.shorthand())
+            .collect();
+        assert_eq!(met, ["brave/bravebot#1267", "brave/bravebot#1270"]);
     }
 
     /// `/pr` comes after `/panel` in the list, so `/p` and Tab still give `/panel`, as they did
@@ -28506,6 +28843,9 @@ mod tests {
             (CONFIG_COMMAND, |picking| {
                 matches!(picking, Picking::Editing(_))
             }),
+            (SIDEBAR_COMMAND, |picking| {
+                matches!(picking, Picking::Sidebar(_))
+            }),
         ] {
             let mut session = a_turn_running_on("first");
 
@@ -28527,6 +28867,40 @@ mod tests {
             assert_eq!(session.input(), "", "{line} was left in the box");
             assert!(said_under_the_turn(&session).is_empty());
         }
+    }
+
+    /// PANEL-17, CMD-8. A section turned off in the checklist a turn is running under is kept for
+    /// the next start as it is turned off, and the turn is not touched: nothing is queued, handed
+    /// to the turn, said under it or cancelled, and the turn goes on.
+    ///
+    /// Rejects: a toggle that is saved when the checklist closes or only at rest, one that is
+    /// queued for the turn's end, and one that is handed to the turn as a line to answer.
+    #[test]
+    fn a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_persisting_turn_running_on("first");
+        let cancel = nothing_beside(|beside| {
+            let cancel =
+                typed_during_a_turn(&mut session, SIDEBAR_COMMAND, key(KeyCode::Enter), beside);
+            for code in [KeyCode::Char(' '), KeyCode::Char('j'), KeyCode::Enter] {
+                turn_key(&mut session, key(code), &cancel, beside);
+            }
+            cancel
+        });
+
+        assert!(session.picking().is_some(), "the checklist closed");
+        assert_eq!(
+            bravebot_session::store::load_sidebar(),
+            Some(vec!["session".to_string(), "model".to_string()])
+        );
+        assert!(session.queued.is_empty(), "a toggle waited");
+        assert_eq!(session.interjections().take(), None);
+        assert!(said_under_the_turn(&session).is_empty());
+        assert_eq!(session.input(), "");
+        assert!(!cancel.is_cancelled());
+        assert!(session.a_turn_is_running());
     }
 
     /// While a picker opened mid-turn is open it takes the keys, and a row taken is carried out as
@@ -30496,7 +30870,14 @@ mod tests {
                 MidTurn::Waits => continue,
                 // The bare word opens a picker or the Sessions screen, which are modes of the session and
                 // say nothing.
-                _ if [CONFIG_COMMAND, MODEL_COMMAND, SESSIONS_COMMAND].contains(&command.name) => {
+                _ if [
+                    CONFIG_COMMAND,
+                    MODEL_COMMAND,
+                    SESSIONS_COMMAND,
+                    SIDEBAR_COMMAND,
+                ]
+                .contains(&command.name) =>
+                {
                     continue;
                 }
                 _ if [THEME_COMMAND, EFFORT_COMMAND].contains(&command.name) => {

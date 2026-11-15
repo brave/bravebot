@@ -139,8 +139,8 @@ on, and the **standing permissions its user granted**:
 - the [turns a rewind can still reach](rewind.md#a-rewind-survives-a-resume), so `/undo` after a
   resume reaches the same turns it reached before;
 - the model the record names, which stays in force for the first save outside a turn as well, and the
-  pull request and issue you gave with `/pr` and `/issue`. `bravebot --fork` copies both, and
-  `/clear` begins a session with neither.
+  pull request and issue you gave with `/pr` and `/issue`, and the issues and pull requests the session
+  has met (up to 500). `bravebot --fork` copies them, and `/clear` begins a session with none.
 
 Each turn also keeps its number, the prompt as it was shown, what came of it, and its task list,
 spend and timing, a turn that failed or was cancelled included. A recorded failure carries the reason
@@ -323,8 +323,14 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   than by the inference-profile ARN a Bedrock tier is requested by; `/status` draws it the same way and
   keeps the request name on the line beneath,
 - the goal, while one stands,
-- the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
-  each cut from the left where it is long so the number at the end stays in view,
+- a Pull requests section and an Issues section, each left out while it has nothing to list. Each
+  starts with the pull request or the issue you gave with `/pr` or `/issue`, and goes on with the ones
+  the session has met: addresses and `owner/repo#12` words you typed, and the ones the model's own
+  `gh`, `run` and fetch calls name. A row is `owner/repo#12` as a link to the item, cut from the left
+  where it is long so the number at the end stays in view. A link of yours that is not a GitHub address
+  is drawn as you wrote it and is not a link. Where the screen has no room, a section ends with
+  `+3 more` for the rows it left out. [`/prs` and `/issues`](../reference/commands.md#issues-and-prs)
+  list the same items in the transcript,
 - how full the context is (read again after each round of a turn, so the first turn of a session shows
   a figure before it ends), the tokens the session has spent (the figure `/cost` opens with, which
   counts what a running [delegate](../how-it-works.md#delegates) has completed as it completes, nested
@@ -349,12 +355,23 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   room is under three rows, the plan fills the room to its last row, or the row would take the place
   of a task still to do. The `?` list always names it.
 
+Type `/sidebar` to choose which of these sections the panel draws. It opens a checklist with a row
+for each, `[x]` while the section is drawn and `[ ]` while it is not. Up and Down, or `j` and `k`,
+move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the same.
+The panel changes as you go, and Escape closes the checklist and keeps what you chose. A section
+you turn off is left out with its heading, and the rows it held go to the sections that remain. If
+you turn every section off, the panel is still drawn with its last row. The choice is kept in
+`~/.bravebot/sidebar` and is the same for every session. A section that file does not name is on. The
+checklist is 42 columns wide and sits in the middle of the screen, so at exactly 100 columns it
+covers part of the panel while it is open. With Context off, the context reading and the cache hit
+rate stay on the hint line under the box, as they do where the panel is not drawn.
+
 Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
 hint line under the box, unless the terminal is too short for the panel to show them; the mode, a
 running loop and the job count stay there. It needs a terminal at least 100 columns wide: a press
 to open it on a narrower one leaves a note, and narrowing the terminal while the panel is open hides
 it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
-`~/.bravebot/panel` for the next session, and the width you dragged it to in `~/.bravebot/panel-width`. The panel draws only what you typed, the plan, the
+`~/.bravebot/panel` for the next session, and the width you dragged it to in `~/.bravebot/panel-width`. The panel draws only what you typed, what the model's own commands and addresses named, the plan, the
 session's own counters, the servers you approved and where the session runs, and never a reply or anything a tool returned.
 
 ### The files the session wrote
@@ -411,6 +428,13 @@ The planner can also record them with [`set_link`](../reference/tools.md#set_lin
 address you typed to it in this session, so a link in a file, a web page or a command's output is
 never recorded. The link is held to the same check, replaces the one of its kind, and is written to
 the session record and drawn in the panel as one you gave with `/issue` or `/pr`.
+
+Other issues and pull requests the session meets are not its link. The planner's `gh pr view 12 --repo owner/repo`,
+an address it fetches and `Closes owner/repo#12` in a commit message it writes, and what you type, are
+added to the panel's Pull requests and Issues sections and to
+[`/prs` and `/issues`](../reference/commands.md#issues-and-prs), and set no link. What a program
+printed is never read, so an issue created with `gh issue create` is listed once a later line or call
+names its number.
 
 ## Sessions in the background
 

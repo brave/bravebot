@@ -22,6 +22,7 @@ mod hover;
 mod menu;
 mod open_loops;
 mod queue;
+mod references;
 mod scheduling;
 mod scroller;
 mod sessions_screen;
@@ -547,6 +548,8 @@ pub struct Session {
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
+    /// The sections of the info panel the person turned off with `/sidebar` (PANEL-17).
+    panel_sections: crate::panel::Sections,
     /// Whether a drag that began on the panel's border is still held (PANEL-6).
     panel_drag: bool,
     /// Where on the thumb the scrollbar was taken hold of, while a drag that began on it is held.
@@ -943,6 +946,8 @@ pub struct Session {
     /// The links the last `/open` listed, in the order it numbered them, so a number typed after it
     /// names the link it was read beside (CMD-30).
     pub(crate) links_listed: Option<Vec<crate::text_links::Target>>,
+    /// The issues and pull requests the session has met, in the order first met (PANEL-16).
+    references: Vec<bravebot_agent::links::Reference>,
     /// What starts the browser for an address a click or `/open` named, which says whether it was
     /// started. A test names one that starts nothing.
     pub(crate) opens_an_address: fn(&str) -> bool,
@@ -1425,6 +1430,7 @@ impl Session {
             panel: false,
             files: None,
             panel_width: crate::panel::WIDTH,
+            panel_sections: crate::panel::Sections::default(),
             panel_drag: false,
             bar_drag: None,
             words_held: None,
@@ -1545,6 +1551,7 @@ impl Session {
             rewind: Default::default(),
             hunks_listed: None,
             links_listed: None,
+            references: Vec::new(),
             opens_an_address: crate::opener::open_address,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -1913,6 +1920,8 @@ impl Session {
         self.hunks_listed = None;
         // The replies it listed were in the transcript that is gone.
         self.links_listed = None;
+        // A new session has met nothing (SESSION-3).
+        self.forget_references();
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
@@ -3196,6 +3205,9 @@ impl Session {
     /// What is written is the line with its markers settled, because the session that recalls it
     /// staged none of them.
     fn remember(&mut self, prompt: &str) -> crate::history::Ticket {
+        // The one place every line the box sends reaches, so a prompt, a command, a shell line and
+        // a line that waits for the turn are each read once (PANEL-16).
+        self.note_typed(prompt);
         let project = self.project();
         let stored = self.history.push(self.recallable(prompt), project).cloned();
         if let (true, Some(entry)) = (self.persist, stored) {

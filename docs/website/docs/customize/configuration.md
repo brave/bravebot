@@ -104,6 +104,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
 | `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
 | `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
+| `~/.bravebot/sidebar` | the info panel sections turned off with `/sidebar`, one name a line |
 | `~/.bravebot/sessions-grouping` | how the [Sessions screen](../using/sessions-screen.md) lays out its list: `together`, `project`, `agent` or `model` |
 | `~/.bravebot/sessions-pinned` | the sessions pinned in the Sessions screen, one id a line |
 | `~/.bravebot/sessions-archived` | the sessions archived in the Sessions screen, each with the time it was archived |

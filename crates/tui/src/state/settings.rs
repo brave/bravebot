@@ -691,10 +691,12 @@ impl Session {
         }
     }
 
-    /// Open the info panel where it was left open last time.
+    /// Open the info panel where it was left open last time, at the width and with the sections
+    /// it was left with.
     ///
     /// Read only for a session that persists, as the editing style is, so a test is not handed the
-    /// developer's own choice. Closed where nothing was recorded.
+    /// developer's own choice. Closed where nothing was recorded, and with every section drawn
+    /// where no sections were recorded or the record does not read cleanly.
     pub fn adopt_panel(&mut self) {
         self.panel = self
             .persist
@@ -706,6 +708,13 @@ impl Session {
             .then(bravebot_session::store::load_panel_width)
             .flatten()
             .unwrap_or(crate::panel::WIDTH);
+        self.panel_sections = self
+            .persist
+            .then(bravebot_session::store::load_sidebar)
+            .flatten()
+            .map_or_else(crate::panel::Sections::default, |ids| {
+                crate::panel::Sections::from_ids(&ids)
+            });
     }
 
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
@@ -715,6 +724,21 @@ impl Session {
             return crate::files_mode::columns(columns);
         }
         crate::panel::clamped(self.panel_width, columns)
+    }
+
+    /// The sections of the info panel that are turned off (PANEL-17).
+    pub fn panel_sections(&self) -> crate::panel::Sections {
+        self.panel_sections
+    }
+
+    /// Turn the sections of the info panel on and off as `sections` says. The next frame draws the
+    /// panel as it now is, and a session that persists keeps the choice for the next one.
+    pub fn set_panel_sections(&mut self, sections: crate::panel::Sections) {
+        self.panel_sections = sections;
+        if self.persist {
+            let hidden: Vec<&str> = sections.hidden().map(crate::panel::Section::id).collect();
+            bravebot_session::store::save_sidebar(&hidden);
+        }
     }
 
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
@@ -745,16 +769,19 @@ impl Session {
         }
     }
 
-    /// The address the row `target` of the info panel opens, if it is the pull request or issue row.
+    /// The address the row `target` of the info panel opens, if it is a row of the Pull requests or
+    /// Issues section.
     ///
     /// The one the person gave with `/pr` or `/issue` (PANEL-12), as it was set and not the text the
-    /// row draws for it, which may be the shorthand or cut. A row is a target only for an address the
-    /// opener takes, which the panel decides where it lays the rows out.
-    pub fn panel_link(&self, target: crate::panel::Target) -> Option<&str> {
-        use crate::panel::Target;
+    /// row draws for it, which may be the shorthand or cut, and for any other row the address its
+    /// reference builds (PANEL-16). A row is a target only for an address the opener takes, which the
+    /// panel decides where it lays the rows out.
+    pub fn panel_link(&self, target: crate::panel::Target) -> Option<String> {
+        use crate::panel::{Target, reference_address};
+        use bravebot_agent::links::LinkKind;
         match target {
-            Target::PullRequest => self.identity.pull_request.as_deref(),
-            Target::Issue => self.identity.issue.as_deref(),
+            Target::PullRequest(row) => reference_address(self, LinkKind::PullRequest, row),
+            Target::Issue(row) => reference_address(self, LinkKind::Issue, row),
             Target::Name
             | Target::Model
             | Target::Effort

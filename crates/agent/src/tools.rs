@@ -331,6 +331,10 @@ pub struct Output {
     /// Travels back for the reason a watch does: the session record is held by whatever owns the
     /// session. Already checked to be an address the person typed.
     pub link: Option<crate::links::LinkSet>,
+    /// The issues and pull requests the planner's own arguments named in this call (PANEL-16).
+    ///
+    /// Travels back for the reason a link does: the list is held by whatever owns the session.
+    pub references: Vec<crate::links::Reference>,
     /// The delegates the kernel approved, for the turn to start.
     ///
     /// Started by the turn because a delegate outlives the call that asked for one: the call
@@ -598,6 +602,12 @@ pub struct Tools<'a> {
     /// Read by dispatch as well as by the tool list, for the reason `messaging` is: a call to a tool
     /// this turn was not offered is answered as an unknown name rather than recorded and dropped.
     pub keeping_links: bool,
+    /// The repository a bare issue or pull request number in a command belongs to, from the
+    /// person's own `/pr` or `/issue` link, where the session has one (PANEL-16).
+    pub default_repository: Option<(&'a str, &'a str)>,
+    /// The issues and pull requests the planner's own words named in this call, which the call
+    /// hands back in [`Output::references`] (PANEL-16). Empty where the turn keeps no links.
+    pub found: Vec<crate::links::Reference>,
     /// Whether a program `run` starts is held to the profile its plan accounts for.
     ///
     /// `false` for a turn nobody turned it on for, which starts programs with the access the
@@ -816,6 +826,27 @@ impl<'a> Tools<'a> {
         crate::findings::Recording {
             home: self.home,
             session: self.remembering,
+        }
+    }
+
+    /// Note the issues and pull requests a command line the planner wrote names. Called with the
+    /// line [`Policy::read_planner_argument`] returned, so a context that has met untrusted content
+    /// never reaches it (PANEL-16). What it notes is for the list the person reads and is not read
+    /// by anything that decides what the call does.
+    fn note_command(&mut self, line: &str) {
+        if self.keeping_links {
+            self.found.extend(crate::links::references_in_command(
+                line,
+                self.default_repository,
+            ));
+        }
+    }
+
+    /// Note the issues and pull requests an address the planner wrote names, as
+    /// [`Tools::note_command`] does for a command line.
+    fn note_address(&mut self, url: &str) {
+        if self.keeping_links {
+            self.found.extend(crate::links::references_in_text(url));
         }
     }
 }
@@ -1852,6 +1883,8 @@ struct Produced {
     watch: Option<crate::watch::Armed>,
     /// The link the planner asked to have recorded, already checked against the person's lines.
     link: Option<crate::links::LinkSet>,
+    /// The issues and pull requests the call's arguments named, as [`Output::references`].
+    references: Vec<crate::links::Reference>,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -1944,6 +1977,7 @@ impl Produced {
             wakeup: None,
             watch: None,
             link: None,
+            references: Vec::new(),
             delegate: Vec::new(),
             wake_after: 1,
             loaded: None,
@@ -3373,6 +3407,9 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // The words the person typed beside their answer, where this call asked one. Taken whether the
     // call went on to succeed or fail, since either way they were said about this call.
     produced.told = policy.take_note();
+    // Whatever the planner's arguments named, taken whether the call went on or was refused after
+    // its arguments were read.
+    produced.references = std::mem::take(&mut tools.found);
 
     // The wait the call already measured, on the line the call already draws. The turn's totals
     // have it too, as part of what the turn spent at the model, but a total cannot answer which
@@ -3454,6 +3491,7 @@ fn output_of(
         wakeup: produced.wakeup,
         watch: produced.watch,
         link: produced.link,
+        references: produced.references,
         delegate: produced.delegate,
         wake_after: produced.wake_after,
         loaded: produced.loaded,
@@ -11699,6 +11737,9 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         Ok(line) => line,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
+    // Before the refusals below, so a line that is then refused still names what the planner wrote
+    // (PANEL-16). Only the list the person reads is added to; nothing here changes the call.
+    tools.note_command(&line);
 
     // A value that declared itself a credential, in the line itself. Refused here, before the
     // line is compiled, before anybody is shown it and before any of it runs: a line is the one
@@ -12782,6 +12823,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
         Ok(url) => url,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
+    tools.note_address(&url);
 
     // Worked out here rather than in the prompt, so what a person is asked about is the host the
     // request will reach and not whatever the string looks like it names.
@@ -12979,6 +13021,7 @@ fn download_url<S: Sink, C: Confirmer>(
         Ok(url) => url,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
+    tools.note_address(&url);
     let Some(host) = bravebot_core::url::host_of(&url) else {
         return Produced::problem(format!(
             "error: '{url}' names no host to download from; give an absolute http or https URL"
@@ -24314,4 +24357,8 @@ mod tests {
     /// SETLINK-1: `set_link` records an address only when it is a whole word of a line the person
     /// typed and is one web address, on any host.
     mod setting_a_link;
+
+    /// PANEL-16: the issues and pull requests the planner's own arguments name, read after the gate
+    /// that reads them and only in a context that has met nothing untrusted.
+    mod references;
 }

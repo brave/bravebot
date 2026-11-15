@@ -5,7 +5,10 @@ status: normative
 governs:
   - crates/tui/src/title.rs
   - crates/tui/src/panel.rs
+  - crates/tui/src/sidebar_prompt.rs
   - crates/tui/src/pointer.rs
+  - crates/tui/src/state/references.rs
+  - crates/agent/src/links.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -13,13 +16,18 @@ documented-by: docs/website/docs/using/sessions.md
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
-issue and pull request it is for, the model and effort it runs on, its context and cache, its token
-total, the language servers and MCP servers it has started, and its plan. A session gets its links
-from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
-[`set_link`](tools/set-link.md) for an address the person typed. A session does not get its links from
-what `gh pr create` prints. That needs a reader that branches on untrusted run output
+issues and pull requests it is for and has met, the model and effort it runs on, its context and
+cache, its token total, the language servers and MCP servers it has started, and its plan, and the
+checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
+gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
+[`set_link`](tools/set-link.md) for an address the person typed. It lists the other issues and pull
+requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed, from the
+planner's own tool-call arguments and from content whose label is trusted. A session does not get its
+links from what `gh pr create` prints. That needs a reader that branches on untrusted run output
 ([RUN-4](tools/run.md#RUN-4)), which is an exception no maintainer has accepted, so it is
-not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). How a session
+not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). The sections of
+met items are collected without it, and an issue the agent creates with `gh issue create` is listed
+only once a later argument or typed line names its number. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
 is closed is proposed in [background-sessions.md](background-sessions.md) and not built.
@@ -86,7 +94,9 @@ panel is open to `~/.bravebot/panel`, and the next start reads it, as the theme 
 leaves the panel closed. The choice is not in the session record, so a resume opens with the panel
 as the last press left it. The width the panel was last dragged to ([PANEL-6](#PANEL-6)) is kept
 the same way in `~/.bravebot/panel-width`, a single whole number of columns; no file, or one that
-holds anything else, leaves the panel at 36.
+holds anything else, leaves the panel at 36. The sections the person turned off with `/sidebar`
+([PANEL-17](#PANEL-17)) are kept the same way in `~/.bravebot/sidebar`, and are not in the session
+record either.
 
 **Why `ctrl-x`.** Ctrl-I is Tab to a terminal, Ctrl-H, Ctrl-M and Ctrl-[ are Backspace, Enter and
 Escape, Ctrl-Z suspends, Ctrl-Q is flow control, and the box answers the other Ctrl letters. A
@@ -103,6 +113,11 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 `verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
+`verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
+`verified-by: bravebot_session::store::an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read`
+`verified-by: bravebot_session::store::a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up`
+`verified-by: bravebot_tui::panel::references_over_a_panel_with_nothing_above_them_leave_the_context_and_the_plan_their_rows`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits
@@ -181,7 +196,9 @@ any turn or round has reported one. When the panel is not drawn, or the terminal
 short for the panel to show its Context section whole, the hint line has the reading and the hit
 rate. The loop, the job count, the mode and the keys stay on the hint line in every case, because a
 loop and a job spend while nobody is watching, and the panel can be closed or the terminal too
-narrow for it.
+narrow for it. The same holds while the Context section is turned off with `/sidebar`
+([PANEL-17](#PANEL-17)): the panel has no Context section then, so the hint line keeps the reading
+and the hit rate, and the token total and the two cache rows are not drawn.
 
 `verified-by: bravebot_tui::panel::the_context_reading_moves_into_the_panel_in_each_state`
 `verified-by: bravebot_tui::panel::the_cache_read_and_written_are_two_figures`
@@ -190,6 +207,8 @@ narrow for it.
 `verified-by: bravebot_tui::app::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`
 `verified-by: bravebot_tui::panel::the_loop_stays_on_the_hint_line_while_the_panel_is_drawn`
 `verified-by: bravebot_tui::panel::the_context_reading_stays_on_the_hint_line_where_the_panel_is_too_short_for_it`
+`verified-by: bravebot_tui::panel::the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off`
+`verified-by: bravebot_tui::panel::the_reading_moves_to_the_panel_where_the_sections_left_on_have_the_room`
 
 <a id="PANEL-9"></a>
 ### PANEL-9: the sections, in order, each left out when it has nothing
@@ -225,24 +244,37 @@ narrow for it.
    none. Both come from the session's settings, so the section is left out while the person has
    chosen no model and no effort level is in force.
 3. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
-4. **Links.** PANEL-12.
-5. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
+4. **Pull requests.** A row for the session's own pull request link and one for each pull request
+   the session met ([PANEL-12](#PANEL-12), [PANEL-16](#PANEL-16)). A row is `{owner}/{repo}#{n}`,
+   cut from the left with an ellipsis where it is longer than the row, and its cells are a terminal
+   link (OSC 8) to the item's address.
+5. **Issues.** The same for the session's own issue link and the issues it met. The two sections
+   are cut to the room the sections below them and the Plan's reserve leave, the pull requests
+   having their room before the issues do. A section that does not fit whole keeps the rows that
+   do and ends with a row `+{n} more` that counts the rest. A section with no room for a row is
+   left out with its heading, so a heading is never drawn over nothing and a count is never drawn
+   over no row.
+6. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
    has the session's token total, as `/cost` opens with it, in tokens and not money, counting what
    the turn in flight has spent so far, the requests its delegates have completed included as
    they complete, and left out until a token has been spent.
-6. **Language servers.** PANEL-13.
-7. **MCP servers.** PANEL-14.
-8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
+7. **Language servers.** PANEL-13.
+8. **MCP servers.** PANEL-14.
+9. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
    A click on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as `/diff` does
    ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The Plan takes
    the rows it leaves, as PANEL-13 says of the server sections.
-9. **Plan.** PANEL-10.
+10. **Plan.** PANEL-10.
 
-A section with nothing to show has no heading. Control characters in any row are drawn as visible
+A section with nothing to show has no heading. A section the person turned off with `/sidebar`
+([PANEL-17](#PANEL-17)) is left out the same way, with its heading, its rows and the blank row
+before it, whatever it holds, and it is not counted in the room the other sections share. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
 whatever whoever made it chose.
 
 `verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
+`verified-by: bravebot_tui::panel::the_sections_of_references_are_cut_to_the_room_with_a_count_of_the_rest`
+`verified-by: bravebot_tui::panel::the_references_do_not_move_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::a_long_name_takes_three_rows_and_ends_in_an_ellipsis`
 `verified-by: bravebot_tui::panel::a_github_address_in_the_name_is_drawn_as_its_shorthand`
 `verified-by: bravebot_tui::panel::an_address_of_any_other_shape_is_drawn_as_written`
@@ -263,6 +295,9 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 `verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 `verified-by: bravebot_tui::app::tests::herdr::sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends`
+`verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
+`verified-by: bravebot_tui::panel::a_section_turned_off_has_no_click_target`
+`verified-by: bravebot_tui::panel::the_references_are_not_cut_for_the_rows_of_a_section_turned_off`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
@@ -272,7 +307,8 @@ with a mark for its status, and a finished row struck through. It
 stays after the turn that wrote it ends, is replaced by the next report that has rows, and is
 emptied by `/clear`. A report with no rows leaves it as it was, since the session record does not
 tell a turn that emptied its list from one that kept none. It is the last section and has the rows
-the others leave, the language servers and MCP servers included.
+the others leave, the language servers and MCP servers included, and the rows of a section turned
+off with `/sidebar` ([PANEL-17](#PANEL-17)) are rows it has. Turned off itself, it is not drawn.
 
 A plan longer than that shows the rows that fit less the row after them that says what was left out,
 and less the key row where that is drawn. The rows shown are chosen from each row's status and from
@@ -349,6 +385,7 @@ says the work is finished reads as work still going.
 `verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
 `verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
 `verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`
+`verified-by: bravebot_tui::panel::the_rows_a_section_turned_off_frees_go_to_the_plan`
 
 <a id="PANEL-11"></a>
 ### PANEL-11: the panel draws only on what the person and the driver said
@@ -356,14 +393,23 @@ says the work is finished reads as work still going.
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
-typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the driver's own counters (the context
+typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the rows of the
+Pull requests and Issues sections, which are the items [PANEL-16](#PANEL-16) collects from the lines
+the person typed, from the planner's own tool-call arguments once the gate that reads them has said the
+context is trusted, and from content whose label is trusted, the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
 servers (PANEL-14), the model the person chose and the effort level in force, or the paths of the files
 the session wrote with the counts the kernel made ([FILES-2](files-mode.md#FILES-2)). No row comes from a
-reply, a tool result, a file's contents, a language server's reply, an issue or
-pull request body, or anything a job printed.
+reply, an untrusted tool result, a file's contents, a language server's reply, an issue or
+pull request body, or anything a job printed. A row of the two sections of references is built from
+an owner, a repository and a number that [PANEL-16](#PANEL-16) validated, so a reply or a result that
+names an item adds no row, and a row cannot hold a character the validation does not allow. The
+checklist `/sidebar` opens ([PANEL-17](#PANEL-17)) has one row for each section, drawn from the
+section's fixed name in the message catalog. The lines of `~/.bravebot/sidebar` are compared with the
+fixed ids of the sections and are never drawn, so no text from a file, a reply or a tool result
+reaches it.
 
 The files state, and no other state of the panel, also draws the changes of a write, under
 [FILES-6](files-mode.md#FILES-6) and [FILES-7](files-mode.md#FILES-7). Those rows are in a region of
@@ -377,7 +423,9 @@ own sentence, and it would be in front of the person on every frame.
 No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
 
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
+`verified-by: bravebot_tui::panel::control_characters_in_a_link_row_are_drawn_as_pictures`
 `verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
+`verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
 
 <a id="PANEL-12"></a>
 ### PANEL-12: the person says which issue and pull request the session is for
@@ -405,15 +453,19 @@ replaces the link of that kind and is written to the record as `/issue` is.
 
 `verified-by: bravebot_agent::turn::an_address_the_person_typed_reaches_set_link_and_leaves_the_turn`
 
-The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
-set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
-since the number at its end is what tells two apart. A link that is a GitHub pull request or issue
-address of the shape [PANEL-9](#PANEL-9) gives is drawn as `{owner}/{repo}#{n}` instead, cut from
-the left in the same way. The cells drawn are a terminal link (OSC 8) to the address, and a
-selection over them copies the shorthand. An address of any other shape is drawn as written and is
-not a link. A new link reaches an open panel on the next frame. A click on either row opens the
-address that was set in the person's browser, as `/open` followed by that address does
-([MOUSE-41](mouse.md#MOUSE-41), [CMD-30](commands.md#CMD-30)).
+The Pull requests section starts with the session's own pull request link and the Issues section
+with its own issue link, each only while that link is set, and the items the session met follow
+([PANEL-16](#PANEL-16)). A row has no label: the heading says what the rows are. A link that is a
+GitHub pull request or issue address of the shape [PANEL-9](#PANEL-9) gives, whose path names the
+kind of its section, is drawn as `{owner}/{repo}#{n}`, cut from the left with an ellipsis where it is
+longer than the row, since the number at its end is what tells two apart. The item it names is not
+drawn a second time among the items met. The cells drawn are a terminal link (OSC 8) to the address,
+and a selection over them copies the shorthand. An address of any other shape, including one with a
+path after the number, one of another kind than its section, and one on another host, is drawn as
+written, cut in the same way, and is not a link. A new link reaches an open panel on the next frame.
+A click on a row opens the address that was set in the person's browser, as `/open` followed by that
+address does ([MOUSE-41](mouse.md#MOUSE-41), [CMD-30](commands.md#CMD-30)), and on a row for an item
+the session met opens the address built from the item's validated parts.
 
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
@@ -425,7 +477,10 @@ address that was set in the person's browser, as `/open` followed by that addres
 `verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
 `verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`
 `verified-by: bravebot_session::sessions::only_one_web_address_on_one_line_is_a_link`
-`verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
+`verified-by: bravebot_tui::panel::a_link_the_person_gave_is_the_first_row_of_the_section_of_its_kind`
+`verified-by: bravebot_tui::panel::what_the_session_met_follows_its_own_link_in_the_section_of_its_kind`
+`verified-by: bravebot_tui::panel::an_own_link_with_a_path_after_its_number_is_drawn_as_written_and_not_repeated`
+`verified-by: bravebot_tui::panel::a_row_for_what_the_session_met_links_to_the_address_its_reference_builds`
 `verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`
 `verified-by: bravebot_tui::panel::a_github_address_in_a_link_row_is_drawn_as_its_shorthand`
 `verified-by: bravebot_tui::panel::a_link_row_of_any_other_shape_is_drawn_as_written_and_not_linked`
@@ -494,6 +549,195 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::app::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
 `verified-by: bravebot_tui::app::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`
 
+<a id="PANEL-16"></a>
+### PANEL-16: the issues and pull requests a session names are collected from what the person and the planner wrote
+
+The Pull requests and Issues sections ([PANEL-9](#PANEL-9)) and the lists `/issues` and `/prs` print
+([CMD-31](commands.md#CMD-31)) hold the items the session has met. An item is an owner, a repository
+and a number, with the kind issue or pull request, and it is built in one place and only from an owner
+of up to 39 letters, digits and hyphens, a repository of up to 100 letters, digits, hyphens,
+underscores and dots (not `.` or `..`) and a number of one to nine digits with no leading zero. The
+shorthand `{owner}/{repo}#{n}` and the address a click opens are written from those parts alone, so
+nothing else a string held reaches a row. Two sightings are one item where the owner (without regard to
+case), the repository and the number agree, and the list keeps the order they were first met and the
+first spelling.
+
+One reader takes items out of a string. It calls no model, no network and no `gh`, and touches no
+file. It finds a full `https://github.com/{owner}/{repo}/issues/{n}` or `/pull/{n}` address, which
+names its kind, and a word `{owner}/{repo}#{n}`, which names none and is listed as an issue until a
+later sighting names it. In a command it also finds the number a `gh pr` or `gh issue` subcommand works
+on (`view`, `comment`, `checkout`, `diff`, `checks`, `merge`, `review`, `close`, `reopen`, `edit`,
+`ready`, `develop`, `lock`, `unlock`, `pin`, `unpin`, `transfer`). That number is the first word after
+the subcommand, or the first one after only `-R {repo}`, `--repo {repo}`, `--repo={repo}` or `-R{repo}`,
+so the `30` in `gh pr checks --interval 30` is not an item, as no number is read once any other word
+comes first. The reader also finds the number after `Closes`,
+`Fixes` or `Resolves` and their other forms, as `#n` or `{owner}/{repo}#n`. A number alone takes its
+repository from `--repo`, `--repo=`, `-R` or `GH_REPO=` in the same segment of the command, a segment
+ending at a newline, `;`, `|` or `&`, and otherwise from the repository of the session's own pull
+request link, or failing that its issue link, when that is a GitHub address. A repository that is on
+another host or is not well formed names nothing, and a number with no repository names nothing. A bare
+`#n` in prose, a number in `gh pr list` or `gh api`, and a title such as `Add x (#12)` name nothing.
+A string is read up to its first 64 KiB, cut at the end of a word, so a word the cut falls inside is
+dropped and never shortened to a different number, and it gives at most 64 items.
+
+There are three sources, and only these.
+
+1. **Lines the person typed.** Every line the box sends is read, whether a prompt, a queued line, a
+   command or a shell line, and so are the addresses `--issue` and `--pr` gave when the session opened.
+   What the person wrote is theirs, as [SETLINK-1](tools/set-link.md#SETLINK-1) holds.
+2. **The planner's tool-call arguments.** The `command` of `run` and the address of `fetch_url` and
+   `download_url` are read where the call is made, after the same gate that lets the driver read an
+   argument at all ([LABEL-5](labels.md#LABEL-5)), and only then. A context that has met something
+   untrusted is refused that read, so it collects nothing from the planner's arguments, and the call
+   fails as any call whose argument the gate refuses. The reader has no gate of its own and
+   declassifies nothing. The call is read before the
+   credential, directory, rules and approval checks, so a command one of them then refuses still names
+   what it was about. Only a turn whose front end keeps links (the terminal and the desktop, as
+   [SETLINK-2](tools/set-link.md#SETLINK-2) says) collects. A delegate, a one-shot run and a plain run
+   collect nothing.
+3. **Content whose label is trusted.** A tool result is read only after its label is asked, and only
+   where that says trusted ([LABEL-5](labels.md#LABEL-5)), as a read of a file the person vouched for
+   is. One such read is one `allow` event in the trail. A result that is untrusted, such as what a
+   program printed, is not read and adds no event, so an address in `gh pr view` output never
+   reaches the panel.
+
+No other text is read: not an assistant reply, an untrusted tool result, a file that was not vouched
+for, an issue body or a language server's reply. What the reader returns is appended to a list and
+nothing else. It decides no permission, route, prompt, refusal or sentence to the planner, and no code
+in the driver branches on an item beyond the kind the validating constructor set, which picks the
+section. The items travel to the terminal as the turn finds them, one message for each call that named
+something new, so `/issues` and the panel are current while a turn runs and a failed or stopped turn
+has handed back what it found. A turn keeps at most 200 and the session at most 500, the first met,
+and the items of the session are written with each turn's save, kept by a resume and a fork and dropped
+by `/clear` ([SESSION-3](sessions.md#SESSION-3)).
+
+**Why.** The panel and the lists are the interface speaking in its own voice, so a row is made only
+from what a person or the planner's own context wrote, never from what a page, a reply or a program
+supplied ([PANEL-11](#PANEL-11)). The reader returns a value that only the screen uses, so what it
+reads cannot decide anything.
+
+`verified-by: bravebot_agent::links::a_reference_is_built_only_from_what_github_allows_in_a_name_and_a_number`
+`verified-by: bravebot_agent::links::a_reference_writes_its_shorthand_and_the_address_of_its_kind`
+`verified-by: bravebot_agent::links::two_references_are_the_same_item_by_owner_repository_and_number`
+`verified-by: bravebot_agent::links::a_full_address_gives_the_kind_its_path_names_and_what_follows_the_number_is_ignored`
+`verified-by: bravebot_agent::links::an_owner_repository_number_word_is_read_as_an_issue_whose_kind_was_not_named`
+`verified-by: bravebot_agent::links::a_word_that_is_not_a_reference_gives_nothing`
+`verified-by: bravebot_agent::links::what_a_sentence_puts_around_a_reference_is_taken_off`
+`verified-by: bravebot_agent::links::only_the_first_part_of_a_long_string_is_read_and_the_cut_falls_on_a_character`
+`verified-by: bravebot_agent::links::a_word_the_cut_falls_inside_is_dropped_and_not_shortened`
+`verified-by: bravebot_agent::links::one_string_adds_at_most_sixty_four_references_and_the_first_are_kept`
+`verified-by: bravebot_agent::links::a_list_holds_each_item_once_and_a_named_kind_settles_an_assumed_one_only`
+`verified-by: bravebot_agent::links::a_full_list_keeps_what_it_holds_and_drops_the_rest`
+`verified-by: bravebot_agent::links::the_item_a_gh_command_works_on_is_read_with_the_kind_of_its_noun`
+`verified-by: bravebot_agent::links::a_number_is_read_only_first_or_after_a_repository_flag`
+`verified-by: bravebot_agent::links::a_bare_number_takes_the_commands_repository_then_the_default_and_otherwise_nothing`
+`verified-by: bravebot_agent::links::a_repository_that_is_not_one_on_github_is_not_replaced_by_the_default`
+`verified-by: bravebot_agent::links::a_closing_keyword_names_an_issue_and_a_number_with_no_keyword_names_nothing`
+`verified-by: bravebot_agent::links::an_address_in_any_argument_of_a_command_is_read`
+`verified-by: bravebot_agent::links::a_command_that_names_an_item_in_two_forms_lists_it_once_with_the_named_kind`
+`verified-by: bravebot_agent::links::a_line_that_is_not_valid_shell_is_still_read_as_words`
+`verified-by: bravebot_agent::tools::tests::references::a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_then_fails`
+`verified-by: bravebot_agent::tools::tests::references::a_bare_number_in_a_command_belongs_to_the_sessions_repository_and_not_to_a_guess`
+`verified-by: bravebot_agent::tools::tests::references::an_address_the_planner_fetches_or_downloads_names_its_item`
+`verified-by: bravebot_agent::tools::tests::references::a_context_that_has_met_something_untrusted_collects_nothing_from_the_planners_arguments`
+`verified-by: bravebot_agent::tools::tests::references::a_turn_that_keeps_no_links_collects_nothing`
+`verified-by: bravebot_agent::tools::tests::references::what_a_call_names_leaves_dispatch_in_its_output`
+`verified-by: bravebot_agent::references::a_turn_that_fails_after_a_call_has_still_reported_what_the_call_named`
+`verified-by: bravebot_agent::references::an_item_is_reported_once_and_again_only_when_a_later_call_settles_its_kind`
+`verified-by: bravebot_agent::references::a_bare_number_in_a_planners_command_takes_the_repository_the_task_names`
+`verified-by: bravebot_agent::references::a_turn_whose_front_end_keeps_no_links_reports_nothing`
+`verified-by: bravebot_agent::references::what_a_vouched_file_names_is_listed`
+`verified-by: bravebot_agent::references::what_a_program_printed_is_not_listed_and_adds_nothing_to_the_trail`
+`verified-by: bravebot_tui::state::references::every_line_the_box_sends_is_read_for_what_it_names`
+`verified-by: bravebot_tui::state::references::an_item_met_again_keeps_its_place_and_a_named_kind_settles_a_guess`
+`verified-by: bravebot_tui::state::references::the_session_keeps_the_first_five_hundred_it_met_in_order`
+`verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
+`verified-by: bravebot_tui::app::the_addresses_the_command_line_gave_are_in_the_list_when_the_session_opens`
+`verified-by: bravebot_tui::from_worker::the_references_a_turn_reports_are_taken_by_both_loops_and_never_handed_back`
+`verified-by: bravebot_tui::remote_confirm::references_a_turn_found_travel_when_found_without_an_answer`
+`verified-by: bravebot_tui::sessions::a_turn_that_fails_after_naming_an_item_has_already_given_the_session_the_item`
+`verified-by: bravebot_tui::panel::what_the_session_met_follows_its_own_link_in_the_section_of_its_kind`
+`verified-by: bravebot_tui::panel::a_row_for_what_the_session_met_links_to_the_address_its_reference_builds`
+`verified-by: bravebot_tui::panel::the_sections_of_references_are_cut_to_the_room_with_a_count_of_the_rest`
+`verified-by: bravebot_tui::panel::the_references_do_not_move_where_the_context_section_fits`
+
+<a id="PANEL-17"></a>
+### PANEL-17: `/sidebar` turns each section of the panel on or off, and the choice is kept
+
+`/sidebar` opens a bordered checklist over the transcript, titled `info panel`, with one row for each
+section of the panel in the order [PANEL-9](#PANEL-9) gives: Session, Model, Goal, Pull requests,
+Issues, Context, Language servers, MCP servers, Files and Plan. A row reads `[x] Name` while its
+section is drawn and `[ ] Name` while it is turned off, and it is there whether or not the section
+has anything to show. Up and Down, and `j` and `k`, walk the list and stop at both ends. Space or
+Enter turns the row under the cursor on or off, and the cursor stays on it. A left press on a row
+puts the cursor on it and turns it on that one press, where the other pickers take a row on a second
+press ([MOUSE-15](mouse.md#MOUSE-15)), because a press here changes one box and closes nothing. The
+wheel moves the cursor, a press outside the panel closes it ([MOUSE-47](mouse.md#MOUSE-47)), and a
+press on the border, on the lines under the list or below the last row changes nothing. Escape and
+Ctrl-C close the checklist and keep every change already made, so there is no cancel that undoes
+them. Nothing is said in the transcript.
+
+The panel follows each change on the next frame, with no other key, at rest and while a turn runs.
+A section turned off is left out with its heading and rows ([PANEL-9](#PANEL-9)), has no click
+target, and the rows it frees go to the sections that remain, the Plan taking what is left
+([PANEL-10](#PANEL-10)). A section turned back on that has nothing to show is still left out. With
+every section turned off the panel is still drawn, with its last row, `{chord} hide panel`
+([PANEL-7](#PANEL-7)), as the only row. That row is still a click target, and the checklist never
+closes the panel. The files state ([FILES-4](files-mode.md#FILES-4)) does not read the choice.
+Turning Context off leaves the context reading and the cache hit rate on the hint line, as they are
+where the panel is not drawn ([PANEL-8](#PANEL-8)).
+
+`/sidebar` is the bare word ([CMD-32](commands.md#CMD-32)). It does not open the panel and does not
+write `panel`, so with the panel closed a change shows when the panel is next opened.
+
+The choice is written to `~/.bravebot/sidebar` on each change, as the panel's state is
+([PANEL-5](#PANEL-5)), so a crash or Ctrl-C while the checklist is open loses nothing. The file holds
+one section id on each line for each section turned off: `session`, `model`, `goal`,
+`pull-requests`, `issues`, `context`, `language-servers`, `mcp-servers`, `files` and `plan`. The
+ids are fixed words and are not the translated headings. The file is written empty when every
+section is on again. It is read once, at the start. No file, an empty file, one that cannot be read,
+one that is not a regular file (a pipe is not opened), one longer than 1024 bytes (the file the
+program writes is about 150) and one with a line that is not a section id each leave every section on, and a section the file
+does not name is on, so a section a later version adds is on with no migration. The ids are compared
+with the fixed list and never drawn ([PANEL-11](#PANEL-11)). The choice is the person's and is the
+same in every directory and session. It is not in the session record.
+
+**Why.** A person who watches many sessions needs some of the sections and not others, and each
+section drawn takes its heading, a blank row and its rows out of the room the other sections and the
+Plan share. The file names the sections turned off, so that an absent file means every section on: a
+person who never runs `/sidebar` sees every section, and a section added later is on with no
+migration.
+
+`verified-by: bravebot_tui::sidebar_prompt::a_row_for_each_section_in_the_panels_order_checked_while_it_is_drawn`
+`verified-by: bravebot_tui::sidebar_prompt::space_and_enter_turn_the_row_under_the_cursor_off_and_on_and_the_cursor_stays`
+`verified-by: bravebot_tui::sidebar_prompt::a_change_reports_every_section_that_is_off_and_not_only_the_last`
+`verified-by: bravebot_tui::sidebar_prompt::the_arrows_and_j_and_k_walk_the_list_and_stop_at_both_ends`
+`verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
+`verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
+`verified-by: bravebot_tui::sidebar_prompt::one_press_on_a_row_turns_it_off_and_the_next_turns_it_on_again`
+`verified-by: bravebot_tui::sidebar_prompt::a_press_turns_off_the_row_it_landed_on_and_not_the_one_under_the_cursor`
+`verified-by: bravebot_tui::sidebar_prompt::the_wheel_walks_a_press_outside_closes_and_a_press_off_the_rows_changes_nothing`
+`verified-by: bravebot_tui::sidebar_prompt::the_panel_draws_the_boxes_the_title_and_the_keys`
+`verified-by: bravebot_tui::list_picker::a_picker_that_takes_on_the_first_press_does_and_the_others_still_need_two`
+`verified-by: bravebot_tui::app::tests::pickers::the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens`
+`verified-by: bravebot_tui::app::tests::pickers::the_panel_follows_each_toggle_at_once_and_escape_keeps_them_at_rest_and_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_of_the_checklist_turns_its_section_off_and_a_press_outside_keeps_that`
+`verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
+`verified-by: bravebot_tui::panel::each_section_has_a_fixed_id_and_a_bit_of_its_own`
+`verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
+`verified-by: bravebot_tui::panel::a_section_turned_off_has_no_click_target`
+`verified-by: bravebot_tui::panel::the_rows_a_section_turned_off_frees_go_to_the_plan`
+`verified-by: bravebot_tui::panel::a_name_that_is_not_a_section_leaves_every_section_on_and_a_section_not_named_is_on`
+`verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
+`verified-by: bravebot_tui::panel::with_every_section_off_the_panel_is_drawn_with_only_its_hide_row_and_stays_open`
+`verified-by: bravebot_tui::panel::the_files_state_is_drawn_the_same_with_every_section_off`
+`verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_the_same_with_every_section_off`
+`verified-by: bravebot_tui::panel::the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off`
+`verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_tui::persist::a_sidebar_file_that_does_not_read_cleanly_leaves_every_section_on`
+`verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
+`verified-by: bravebot_tui::state_directory::a_recorded_choice_is_readable_only_by_its_owner`
+
 ## Known costs
 
 - **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
@@ -508,3 +752,55 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 - **A prompt or a picker opened under the pointer leaves the resize pointer in place.** The prompts
   and pickers read their own events and none of them reads the pointer, so a pointer on the border
   when one opens keeps its shape until the prompt closes and the pointer next moves.
+
+- **An issue the agent creates appears only when a later argument or typed line names its number
+  ([PANEL-16](#PANEL-16)).** The address `gh issue create` prints is a program's output and is never
+  read, so the list does not hold it until something the person or the planner wrote names it.
+
+- **A word shaped like `owner/repo#n` is read as a reference ([PANEL-16](#PANEL-16)).** A path with a
+  number after a hash, such as `src/main.rs#12`, has a valid owner and repository by GitHub's rules, so
+  it is listed as an issue. The list is for the person to look at and nothing acts on it.
+
+- **A command a rule then refuses still counts ([PANEL-16](#PANEL-16)).** The command is read where
+  the planner's argument is read, before the checks that refuse it, so the items it names are listed
+  though it did not run.
+
+- **The reader is bounded by count, and what it drops is not shown ([PANEL-16](#PANEL-16)).** It
+  reads 64 KiB of a string and keeps 64 items of it, a turn keeps 200 and a session 500, the first
+  met. A log that names more leaves the rest out with no note, and a record keeps what the list held
+  at the last save, so a session that ends without one loses what it named since.
+
+- **The desktop collects the list and draws none of it ([PANEL-16](#PANEL-16)).** The desktop bridge
+  keeps links so that a turn collects, and the window draws no such list, so each turn there reads the
+  planner's `run` and fetch arguments and the trusted results for a list nobody sees. The trail of a
+  desktop turn gains one `allow` event for each trusted result read, as the terminal's does.
+
+- **A pull request met as `owner/repo#n` is listed under Issues until something names it
+  ([PANEL-16](#PANEL-16)).** An address with `/pull/` or a `gh pr` command settles its kind.
+
+- **An own link that is not on GitHub is drawn as written and is not a reference
+  ([PANEL-12](#PANEL-12)).** It is not in `/issues` or `/prs` either.
+
+- **Assistant reply text is never read ([PANEL-16](#PANEL-16)).** An item the model names only in a
+  sentence is not listed. Reading it would need a gate of its own and a reversal of
+  [PANEL-11](#PANEL-11).
+
+- **A context that has met something untrusted collects nothing from the planner's arguments
+  ([PANEL-16](#PANEL-16)).** The read goes through the same gate as every argument
+  ([LABEL-5](labels.md#LABEL-5)), so the sections stop growing from the planner's commands once a page
+  or an untrusted file has been read, though what the person types still counts.
+
+- **At exactly 100 columns the checklist covers 7 of the panel's left columns ([PANEL-17](#PANEL-17)).**
+  The checklist is 42 columns wide and centred in the frame, and the panel needs 100 columns to be
+  drawn at all. On a wider terminal it does not touch the panel.
+
+- **The choice of sections is global, not per session ([PANEL-17](#PANEL-17)).** `~/.bravebot/sidebar`
+  is one file for every directory and session, and a resume draws the sections as the last change
+  left them.
+
+- **A section the file does not name is on, and one wrong line turns every section on
+  ([PANEL-17](#PANEL-17)).** A file edited by hand with a misspelt id is read as if it were absent,
+  not as if the line were skipped.
+
+- **Turning a section off while the panel is closed shows nothing ([PANEL-17](#PANEL-17)).** `/sidebar`
+  does not open the panel, so the change is first seen the next time it is opened.

@@ -221,6 +221,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         trust_answered_by_mode: false,
         checkouts: Vec::new(),
         touched: Default::default(),
+        references: Vec::new(),
         agent: None,
         skill_mode: None,
         effort: None,

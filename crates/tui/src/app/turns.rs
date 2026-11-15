@@ -611,6 +611,7 @@ pub(super) fn run_turn_animated(
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     task = with_session_style(task, session);
+    task = with_own_repository(task, session);
     task = with_session_skill_mode(task, session);
     task = with_session_limit(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
@@ -830,6 +831,8 @@ pub(super) fn run_turn_animated(
     stored.set_work(whole);
     keep_the_effort_of(stored, session);
     stored.set_written(&session.written());
+    // Kept whatever way the turn ended, since the worker reported each reference as it met it.
+    stored.set_references(session.references());
     keep_the_links_of(&finished, stored, session);
     Ok(finish_turn(
         session,
@@ -1001,6 +1004,19 @@ pub(super) fn with_firing_watch(task: Task, session: &Session) -> Task {
 /// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
 pub(super) fn with_session_style(task: Task, session: &Session) -> Task {
     task.with_style(session.style().cloned())
+}
+
+/// The repository the session's own `/pr` or `/issue` link names, carried on the turn so a bare
+/// number in a command the planner writes is read as belonging to it (PANEL-16).
+pub(super) fn with_own_repository(task: Task, session: &Session) -> Task {
+    use bravebot_agent::links::LinkKind;
+    match session
+        .own_reference(LinkKind::PullRequest)
+        .or_else(|| session.own_reference(LinkKind::Issue))
+    {
+        Some(own) => task.with_default_repository(own.owner(), own.repo()),
+        None => task,
+    }
 }
 
 /// The skill `/mode` put in force, carried on the turn by name so it reads the skill again and puts
