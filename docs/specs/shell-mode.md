@@ -129,7 +129,9 @@ the spinner.
 The rows are for the screen alone. They are not labelled, nothing is released for them, and none of
 them reaches the conversation. When the command ends they are replaced by the text
 [SHELL-3](#SHELL-3) releases, so the entry is the released text and nothing is drawn twice. A pipe
-that fails to read part way leaves the result holding what was read, which is what was drawn.
+that fails to read part way leaves the result holding what was read, which is what was drawn. The
+removal of colour codes that [RUN-21](tools/run.md#RUN-21) makes in what a `run` or a `job_output`
+result gives the planner is made on another path and does not change what is drawn here.
 
 A command that is stopped, or that runs past [`shell::LIMIT`](../../crates/agent/src/shell.rs),
 releases nothing. What it had printed stays on the screen as an entry above the note saying why it

@@ -1097,6 +1097,8 @@ the job is a comparison against the planner's words. A name that is no job of th
 was typed. A session read back off disk has no jobs, so its looks are drawn with the name alone.
 
 `verified-by: bravebot_agent::turn::a_look_at_a_job_is_drawn_with_the_command_the_job_runs`
+`verified-by: bravebot_agent::turn::a_look_at_a_vouched_job_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted`
 
 Every gate is the one a foreground run passes, at the same point and in the same order: the rules,
 the person's approval, and the label the output will carry are all settled before anything starts.
@@ -1245,6 +1247,7 @@ what was printed: nothing here reads a byte of it.
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
 `verified-by: bravebot_agent::exec::a_background_pipeline_does_not_see_this_agents_credentials`
 `verified-by: bravebot_agent::turn::a_job_keeps_the_label_it_started_with_when_the_program_is_vouched_for_afterwards`
+`verified-by: bravebot_agent::turn::a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted`
 
 <a id="RUN-17"></a>
 ### RUN-17: a look at a job may wait for it, inside the turn that owns it
@@ -2065,6 +2068,52 @@ states and from nothing the output holds: a size at or below the cap, or none st
 `verified-by: bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`
 `verified-by: bravebot_agent::turn::the_read_output_description_says_what_reading_all_of_a_long_output_costs`
 
+**What the planner reads of output has its colour codes taken out and counted.** A program that
+colours its output writes codes the planner has no use for, and they cost tokens and hide the words
+they surround. In the text of a result that the planner may read and that a program printed, each
+complete colour code ([VIEW-30](../terminal-transcript.md#VIEW-30) defines one) is taken out, and the
+result ends with a sentence saying how many were, such as `14 colour codes were taken out of this
+output.` Output with no colour code gets no sentence. Every other escape is left as it is, so a
+cursor movement or an erase is not hidden from the planner.
+
+The routes are the ones above: a foreground run, a `run` that asked to read ([RUN-22](#RUN-22)), a
+`job_output` look, the account a finished job gives, and a `read_output` page or search. The text
+of standard output and standard error is treated alike. The tool's name decides whether the result
+is a program's output, and what a server or a fetched page returned is not changed.
+
+The removal is made after the cap has cut, on the text that is going to the planner, and once. The
+slot keeps the raw bytes, so every byte offset a sample, a page trailer or a matching line names is
+an offset into the slot, and `read_output` with that offset starts where the planner was told. The
+count is of what was taken out of the text shown, not of the slot.
+
+The removal is one pass. Taking a code out from between two halves of another can leave a code
+built of the halves in the text, and the planner is given it as it is: it is one escape sequence in
+text the planner reads and nothing draws, and a second pass would change what the count says. The
+sentence is English in `bravebot-core`, next to the removal, because the removal is a kernel
+function and a catalog is read in the agent; the sentences of `crates/agent/src/turn/sentences.rs`
+are the alternative home, and the count would then be returned to the agent as a number.
+
+It is made only where the planner may read the output, which is where the value is trusted and a
+result shows its text. Output nobody vouched for stays in its slot whole, the result says only what
+[RUN-4](#RUN-4) says of it, and neither the removal nor a count is made on it, because a count of
+bytes the planner may not read is something about them. The sentence is the driver's own text in
+English, as the other sentences a result gives the planner are, and is not in the catalog
+([LOCALE-1](../localization.md#LOCALE-1)).
+
+`verified-by: bravebot_core::policy::trusted_output_is_presented_without_its_colour_codes_and_counted`
+`verified-by: bravebot_core::policy::trusted_output_with_no_colour_code_says_nothing_about_them`
+`verified-by: bravebot_core::policy::trusted_output_keeps_an_escape_that_is_not_a_colour_code`
+`verified-by: bravebot_core::policy::untrusted_output_is_not_reshaped_and_is_not_counted`
+`verified-by: bravebot_core::policy::a_result_of_the_size_the_issue_measured_is_shorter_by_its_codes_and_counted`
+`verified-by: bravebot_core::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
+`verified-by: bravebot_agent::turn::a_run_result_has_its_colour_codes_taken_out_from_both_streams_and_counted`
+`verified-by: bravebot_agent::turn::a_run_result_without_colour_codes_says_nothing_and_keeps_other_escapes`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_has_its_colour_codes_taken_out_of_the_same_result`
+`verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
+`verified-by: bravebot_agent::turn::a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::colour_codes_in_output_nobody_vouched_for_are_not_counted_for_the_planner`
+
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where the mode or a check answers
 
@@ -2074,7 +2123,8 @@ bypassed with no screening asked for ([MODE-4](../permission-modes.md#MODE-4)), 
 and then released by `read_output`'s own path, so the value is `(T,priv)`, the trail credits the
 mode in the entry [OUTPUT-1](read-output.md#OUTPUT-1) writes, and nobody is shown anything. The slot
 keeps its name, and the result gives the name beside the text, so the same bytes can still be fed to
-a line or written by reference.
+a line or written by reference. The text released in the result has its colour codes taken out and
+counted as [RUN-21](#RUN-21) has it, and the slot keeps the codes.
 
 Where screening is asked for ([CHECK-11](../vetting.md#CHECK-11)), in any mode and in a turn offered
 `read_output`, the run makes the check `read_output` would make on that slot, and the output is
@@ -2205,6 +2255,9 @@ decide it.
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
 `verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
 `verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_has_its_colour_codes_taken_out_of_the_same_result`
+`verified-by: bravebot_agent::turn::a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted`
 
 <a id="RUN-23"></a>
 ### RUN-23: how long a command may run is configurable

@@ -102061,3 +102061,498 @@ fn a_failed_git_step_in_a_linked_worktree_nobody_can_be_asked_in_names_no_person
         "an unattended run was not told nobody can be asked: {unattended}"
     );
 }
+
+/// An escape as it appears inside the JSON body of a request.
+const ESC_IN_JSON: &str = "\\u001b";
+
+/// Run one turn in which a person vouched for every run, so what it printed is readable, and
+/// return the text of each tool result after the first request.
+fn results_of_vouched_runs(
+    name: &str,
+    files: &[(&str, String)],
+    calls: Vec<String>,
+    cap: Option<usize>,
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    for (file, contents) in files {
+        std::fs::write(scratch.path.join(file), contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut script = calls;
+    script.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(script);
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("build it").with_output_cap(cap),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    std::iter::from_fn(|| received.try_recv().ok())
+        .skip(1)
+        .map(newest_tool_result)
+        .collect()
+}
+
+/// RUN-21, VIEW-30. A result the planner may read has its complete colour codes taken out and
+/// counted, from both streams. The count is the codes of both.
+///
+/// A wrong implementation takes them out of standard output only, which leaves the two on standard
+/// error in the result, or counts the ones it found on one stream.
+#[test]
+fn a_run_result_has_its_colour_codes_taken_out_from_both_streams_and_counted() {
+    let script = "printf '\\033[31mSENTINEL-OUT\\033[0m\\n'\nprintf '\\033[32mSENTINEL-ERR\\033[0m\\n' >&2\n";
+    let results = results_of_vouched_runs(
+        "colour-both-streams",
+        &[("noisy", script.to_string())],
+        vec![tool_request("run", r#"{"command":"sh ./noisy"}"#)],
+        None,
+    );
+    let [after] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    assert!(
+        after.contains("SENTINEL-OUT") && after.contains("SENTINEL-ERR"),
+        "the output did not reach the planner: {after}"
+    );
+    assert!(
+        !after.contains(ESC_IN_JSON) && !after.contains('\u{1b}'),
+        "a colour code reached the planner: {after}"
+    );
+    assert!(
+        after.contains("4 colour codes were taken out of this output."),
+        "the planner was not told how many were taken out: {after}"
+    );
+}
+
+/// RUN-21, R5, R7. Output with no colour code gets no sentence about them, and an escape that is
+/// not a colour code reaches the planner as it is and is not counted.
+///
+/// A wrong implementation always adds the sentence, or takes out every escape.
+#[test]
+fn a_run_result_without_colour_codes_says_nothing_and_keeps_other_escapes() {
+    let results = results_of_vouched_runs(
+        "colour-none",
+        &[
+            ("plain.txt", "SENTINEL-PLAIN [m] text\n".to_string()),
+            (
+                "erase.txt",
+                "SENTINEL-ERASE \u{1b}[2J \u{1b}[>4;2m\n".to_string(),
+            ),
+        ],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p plain.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p erase.txt"}"#),
+        ],
+        None,
+    );
+    let [plain, erase] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    assert!(plain.contains("SENTINEL-PLAIN [m] text"), "{plain}");
+    assert!(
+        !plain.contains("colour code"),
+        "a result with no colour code said something about them: {plain}"
+    );
+    assert!(
+        erase.contains(&format!(
+            "SENTINEL-ERASE {ESC_IN_JSON}[2J {ESC_IN_JSON}[>4;2m"
+        )),
+        "an escape that is not a colour code was changed: {erase}"
+    );
+    assert!(
+        !erase.contains("colour code"),
+        "an escape that is not a colour code was counted: {erase}"
+    );
+}
+
+/// RUN-22. A run that asks to read, under permissions bypassed with no screening, is handed its
+/// output in the same result, and the colour codes are taken out of it and counted there too.
+///
+/// A wrong implementation takes them out only of the route that hands back the reference.
+#[test]
+fn a_run_that_asks_to_read_has_its_colour_codes_taken_out_of_the_same_result() {
+    let scratch = Scratch::new("colour-run-read-bypass");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        "\u{1b}[31mSENTINEL-COLOUR-READ\u{1b}[0m\n",
+    )
+    .unwrap();
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+            reply_with("done"),
+        ],
+    );
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after = sent.last().expect("the round after the run");
+    assert!(after.contains("SENTINEL-COLOUR-READ"), "{after}");
+    assert!(
+        !after.contains(ESC_IN_JSON),
+        "a colour code reached the planner: {after}"
+    );
+    assert!(
+        after.contains("2 colour codes were taken out of this output."),
+        "{after}"
+    );
+}
+
+/// RUN-21, OUTPUT-4, OUTPUT-5. The slot is kept raw behind its reference, the cap cuts the raw
+/// bytes, and the removal is made after the cut. So every offset in a sample marker, a page trailer
+/// and a matching line is a byte of the raw slot, and a page read from an offset the planner was
+/// told lands where it was told. The codes are taken out of the sample, the page and the matches.
+///
+/// A wrong implementation removes the codes from the slot before the cut or before the page is
+/// taken, and then the trailer names the shorter text and the same offset lands elsewhere.
+#[test]
+fn colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets() {
+    let mut log = String::new();
+    for line in 0..2000 {
+        log.push_str(&format!(
+            "\u{1b}[31mline {line:05}\u{1b}[0m of a long log\n"
+        ));
+    }
+    let width = "\u{1b}[31mline 00000\u{1b}[0m of a long log\n".len();
+    let total = log.len();
+    let cap = width * 100;
+    let start = width * 1000;
+    let results = results_of_vouched_runs(
+        "colour-raw-offsets",
+        &[("build.log", log)],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+            tool_request(
+                "read_output",
+                &format!(r#"{{"ref":"ref:1","offset":{start}}}"#),
+            ),
+            tool_request("read_output", r#"{"ref":"ref:1","pattern":"line 01000"}"#),
+        ],
+        Some(cap),
+    );
+    let [sample, page, matches] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    for (what, text) in [("sample", sample), ("page", page), ("matches", matches)] {
+        assert!(
+            !text.contains(ESC_IN_JSON),
+            "a colour code reached the planner in the {what}: {text}"
+        );
+        assert!(
+            text.contains("colour codes were taken out of this output.")
+                || text.contains("colour code was taken out of this output."),
+            "the {what} did not say colour codes were taken out: {text}"
+        );
+    }
+    assert!(
+        sample.contains(&format!("from byte {}", cap / 2)),
+        "the sample does not name the raw slot's middle: {sample}"
+    );
+    let next = start + cap;
+    assert!(
+        page.contains(&format!(
+            "(bytes {start} to {next} of {total} in ref:1; read_output with offset {next} gives \
+             the next part.)"
+        )),
+        "the page trailer does not name the raw slot: {page}"
+    );
+    assert!(page.contains("line 01000 of a long log"), "{page}");
+    assert!(
+        page.contains("200 colour codes were taken out of this output."),
+        "the count is not of the page: {page}"
+    );
+    assert!(
+        matches.contains(&format!("{}:{start}:", 1001)),
+        "the matching line does not carry the raw slot's byte: {matches}"
+    );
+}
+
+/// RUN-15, RUN-22. What a background job printed that the planner asks to read, with its colour
+/// codes, comes back without them and says how many were taken out.
+///
+/// A wrong implementation handles a finished run and not the slice a job has printed so far.
+#[test]
+fn a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted() {
+    let scratch = Scratch::new("colour-job-slice");
+    std::fs::write(
+        scratch.path.join("noisy"),
+        "printf '\\033[31mSENTINEL-JOB-COLOUR\\033[0m\\n'\nsleep 30\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"kill":true,"read":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after = sent.last().expect("the round after job_output");
+    let told = message_from(after, "Result of job_output");
+    assert!(told.contains("SENTINEL-JOB-COLOUR"), "{told}");
+    assert!(
+        !told.contains(ESC_IN_JSON),
+        "a colour code reached the planner: {told}"
+    );
+    assert!(
+        told.contains("2 colour codes were taken out of this output."),
+        "{told}"
+    );
+}
+
+/// RUN-15, RUN-22. The account of an ended job whose last look asked to read has the colour codes
+/// of what it printed taken out and counted.
+///
+/// A wrong implementation handles the look and not the account the turn gives at the job's end.
+#[test]
+fn the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted() {
+    let over = over_an_ended_job_whose_look_asked_to_read(
+        "colour-ended-job",
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        "\"$(printf '\\033[31mSENTINEL-ENDED-COLOUR\\033[0m')\"",
+        None,
+        Vec::new(),
+    );
+    let account = over.account();
+    assert!(account.contains("SENTINEL-ENDED-COLOUR"), "{account}");
+    assert!(
+        !account.contains(ESC_IN_JSON),
+        "a colour code reached the planner in the account: {account}"
+    );
+    assert!(
+        account.contains("2 colour codes were taken out of this output."),
+        "{account}"
+    );
+}
+
+/// RUN-21, R12. Output nobody vouched for stays quarantined whole. Nothing of it, a count of its
+/// colour codes included, reaches the planner.
+///
+/// A wrong implementation counts the codes before it knows whether the planner may read the output
+/// and says the count, which tells the planner something about bytes it may not read.
+#[test]
+fn colour_codes_in_output_nobody_vouched_for_are_not_counted_for_the_planner() {
+    let scratch = Scratch::new("colour-quarantined");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        "\u{1b}[31mSENTINEL-UNVOUCHED-COLOUR\u{1b}[0m\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after = sent.last().expect("the round after the run");
+    assert!(
+        !after.contains("SENTINEL-UNVOUCHED-COLOUR"),
+        "unvouched bytes reached the planner: {after}"
+    );
+    assert!(
+        !after.contains("colour code"),
+        "a count of unvouched bytes reached the planner: {after}"
+    );
+    assert!(after.contains("could not be shown to you"), "{after}");
+    // The reference states the size of what the program printed: the line is
+    // ESC [ 3 1 m (5), the 25 characters of the word, ESC [ 0 m (4) and the newline, 35 bytes. A
+    // slot written after the removal would state 26.
+    assert!(
+        after.contains("35 bytes"),
+        "the slot does not hold what the program printed, whole: {after}"
+    );
+    // Neither the removal nor a count was made on the quarantined bytes, which the trail would
+    // record as a reshape of this output.
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "render", detail }
+                if detail.contains("colour codes taken out")
+        )),
+        "colour codes were taken out of output the planner may not read: {:?}",
+        sink.events()
+    );
+}
+
+/// RUN-15, RUN-16, RUN-21. A look at a background job whose program a person vouched for, made
+/// without `read`, is text the planner may read, so the slice has its colour codes taken out and
+/// counted as a run's result has.
+///
+/// A wrong implementation handles the result of a run and the release `read: true` makes, and not
+/// the slice a look hands back on its own.
+#[test]
+fn a_look_at_a_vouched_job_has_its_colour_codes_taken_out_and_counted() {
+    let results = results_of_vouched_runs(
+        "colour-job-look",
+        &[(
+            "noisy",
+            "printf '\\033[31mSENTINEL-LOOK-COLOUR\\033[0m\\n'\nsleep 30\n".to_string(),
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+            tool_request(
+                "job_output",
+                r#"{"job":"job:1","wait_seconds":30,"kill":true}"#,
+            ),
+        ],
+        None,
+    );
+    let [_started, look] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    assert!(look.contains("SENTINEL-LOOK-COLOUR"), "{look}");
+    assert!(
+        !look.contains(ESC_IN_JSON),
+        "a colour code reached the planner in the look: {look}"
+    );
+    assert!(
+        look.contains("2 colour codes were taken out of this output."),
+        "{look}"
+    );
+}
+
+/// OUTPUT-1, RUN-21. A person who reads output of a program nobody vouched for is shown the bytes
+/// as they are, colour codes included, and what the planner is given after they agree has the codes
+/// taken out and counted.
+///
+/// A wrong implementation takes the codes out of the slot before the person is shown it, which
+/// answers a question about different bytes from the ones the program printed, or leaves them in
+/// what the planner is given.
+#[test]
+fn output_a_person_approves_has_its_colour_codes_taken_out_for_the_planner_only() {
+    let scratch = Scratch::new("read-output-colour");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        "\u{1b}[31mSENTINEL-APPROVED-COLOUR\u{1b}[0m\n",
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the user was asked to read the output");
+    assert!(
+        request.output.contains("SENTINEL-APPROVED-COLOUR") && request.output.contains("[31m"),
+        "the person was not shown the colour codes: {}",
+        request.output
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let _check = received.recv().expect("the check before the question");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("SENTINEL-APPROVED-COLOUR"),
+        "approved output did not reach the planner"
+    );
+    assert!(
+        !third.contains(ESC_IN_JSON),
+        "a colour code reached the planner: {third}"
+    );
+    assert!(
+        third.contains("2 colour codes were taken out of this output."),
+        "{third}"
+    );
+}

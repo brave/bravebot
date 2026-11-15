@@ -60,7 +60,9 @@ responsibility, and nothing inspected anything.
 
 A command that colours its output is drawn without its colour codes, with a row under the output
 saying how many were left out ([the transcript](transcript.md)). That changes what the screen draws
-and not what the model is sent.
+and not what the model is sent by a command you type. The output of a command the model runs is a
+separate path: its colour codes are taken out and counted in what the model reads
+([the run tool](../reference/run-tool.md)).
 
 ## A command that starts a background process
 

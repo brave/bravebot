@@ -120,7 +120,8 @@ Every control character is replaced with a visible glyph on the way to the scree
 as well as the content. Replaced rather than dropped, since a character silently removed is one the
 user cannot tell was ever in the file.
 [VIEW-30](#VIEW-30) is the one exception: a complete colour code in output drawn for reading is
-taken out and counted.
+taken out and counted. The same removal is made on the text of a program's output that the planner
+may read ([RUN-21](tools/run.md#RUN-21)), which no screen draws.
 
 A picture or a PDF held in a slot is shown as the driver's rows about it and never as the first
 lines of the `data:` URI it is held as, which are base64 that tells a person nothing. The rows say
@@ -954,6 +955,9 @@ other, and the terminal is sent no escape.
 It applies to the output of a command typed in shell mode, whether the command is still running
 ([SHELL-7](shell-mode.md#SHELL-7)) or has ended, to the preview in a quarantined block, to the lines
 drawn under a call the planner read, and to the quarantined block a one-shot run writes to stderr.
+The same removal is made on the text of a result that the planner may read
+([RUN-21](tools/run.md#RUN-21)). The code that does it is in `bravebot-core`, so both read the same
+definition of a colour code.
 Everything else draws every byte. That includes a block's heading, where the origin can be a
 filename, a path or a name wherever one is drawn, the hunks of a write, and every prompt that asks a
 person to approve text: a write, a command's output, a read, a message, a server and its tools. A
@@ -967,12 +971,12 @@ erase the margin or ask the terminal something, and a colour code with its escap
 none of those. VIEW-3 replaces a control character and does not drop it so that the person can tell
 it was there, and the count gives the person the same for colour codes.
 
-`verified-by: bravebot_tui::colour_codes::the_codes_of_a_coloured_line_are_taken_out_and_counted`
-`verified-by: bravebot_tui::colour_codes::every_spelling_of_a_colour_code_is_taken_out_whole`
-`verified-by: bravebot_tui::colour_codes::a_sequence_that_is_not_a_colour_code_is_left_in_place`
-`verified-by: bravebot_tui::colour_codes::a_run_of_parameters_longer_than_a_colour_has_is_left_in_place`
-`verified-by: bravebot_tui::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
-`verified-by: bravebot_tui::colour_codes::codes_beside_wide_characters_are_taken_out_cleanly`
+`verified-by: bravebot_core::colour_codes::the_codes_of_a_coloured_line_are_taken_out_and_counted`
+`verified-by: bravebot_core::colour_codes::every_spelling_of_a_colour_code_is_taken_out_whole`
+`verified-by: bravebot_core::colour_codes::a_sequence_that_is_not_a_colour_code_is_left_in_place`
+`verified-by: bravebot_core::colour_codes::a_run_of_parameters_longer_than_a_colour_has_is_left_in_place`
+`verified-by: bravebot_core::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
+`verified-by: bravebot_core::colour_codes::codes_beside_wide_characters_are_taken_out_cleanly`
 `verified-by: bravebot_tui::colour_codes::nothing_is_said_where_nothing_was_taken_out`
 `verified-by: bravebot_tui::marking::colour_codes_in_a_preview_are_counted_and_not_drawn`
 `verified-by: bravebot_tui::marking::only_colour_codes_are_left_out_of_a_preview`

@@ -92,6 +92,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_cli::plain::every_line_of_an_output_is_shown_before_a_yes_releases_it`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_shown_every_line_of_an_output_before_a_yes_releases_it`
+`verified-by: bravebot_agent::turn::output_a_person_approves_has_its_colour_codes_taken_out_for_the_planner_only`
 
 <a id="OUTPUT-2"></a>
 ### OUTPUT-2: only output from a program can be read this way
@@ -236,6 +237,7 @@ it, and paging hands over the part it names without running anything again.
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::a_page_of_output_the_planner_may_read_is_no_release_and_keeps_the_slots_label`
+`verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
 
 <a id="OUTPUT-5"></a>
 ### OUTPUT-5: a pattern searches output the planner may read, and is refused on output it may not
@@ -277,6 +279,7 @@ a page would not.
 `verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::tools::matching_lines_carry_the_byte_each_starts_at`
 `verified-by: bravebot_agent::tools::a_match_whose_context_is_long_is_still_held_to_the_cap`
+`verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
 
 <a id="OUTPUT-6"></a>
 ### OUTPUT-6: a name no slot holds is refused with the form a reference is written in

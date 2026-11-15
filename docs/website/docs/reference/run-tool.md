@@ -597,6 +597,14 @@ the byte it starts at. The cap is on what enters the conversation rather than on
 printed, and the whole of it stays available as a reference, which
 [`read_output`](tools.md#read_output) reads back a page at a time without asking you.
 
+The text the planner reads has its colour codes taken out: each complete `ESC [`, digits, `;` or `:`,
+`m` sequence is removed, and the result ends with a sentence saying how many were, such as `14 colour
+codes were taken out of this output.` Output with none gets no sentence, and every other escape is
+left as it is. This is done after the cap has cut, so the byte a cut marker or a page names is a byte
+of the reference, and the reference keeps the codes. It covers a `run` result, `read: true`,
+`job_output`, the account of a job's end and a `read_output` page or search. Output the planner may
+not read is neither changed nor counted.
+
 ## Reading the output in the same result
 
 `read: true` asks for what the line printed in the result that ran it. When you

@@ -1976,18 +1976,23 @@ fn collect_jobs<S: Sink, R: Reporter>(
             .printed
             .as_ref()
             .map(|_| conversation.next_reference());
+        // What was taken out of the text the planner may read, said after it. Empty where nothing
+        // was and where the output stays quarantined (RUN-21).
+        let mut colours = String::new();
         let presented = match (&ended.printed, &reserved) {
-            (Some(printed), Some(slot)) => Some(
-                policy
-                    .present(
+            (Some(printed), Some(slot)) => {
+                let (shown, note) = policy
+                    .present_output(
                         "job_output",
                         slot.clone(),
                         &origin,
                         printed,
                         conversation.quarantine(),
                     )
-                    .map_err(|d| TurnError::Precommit(d.to_string()))?,
-            ),
+                    .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                colours = note;
+                Some(shown)
+            }
             _ => None,
         };
 
@@ -2017,8 +2022,8 @@ fn collect_jobs<S: Sink, R: Reporter>(
             {
                 match release(policy, conversation.quarantine(), reporter, &reference.slot) {
                     Some(text) => {
-                        let shown = policy
-                            .present(
+                        let (shown, note) = policy
+                            .present_output(
                                 "job_output",
                                 reference.slot.clone(),
                                 &origin,
@@ -2026,6 +2031,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
                                 conversation.quarantine(),
                             )
                             .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                        colours = note;
                         released_from = Some(reference.slot.to_string());
                         Some(shown)
                     }
@@ -2104,7 +2110,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     _ => String::new(),
                 };
                 format!(
-                    "{told} What it printed {}:\n\n{text}{rest}",
+                    "{told} What it printed {}:\n\n{text}{rest}{colours}",
                     tools::Look::SINCE
                 )
             }
@@ -2512,6 +2518,15 @@ struct Reported<'a> {
     // The links `set_link` recorded, written when the rounds end whatever way they ended, so a
     // turn that fails after recording one still hands it back (SETLINK-2).
     links: &'a mut Vec<crate::links::LinkSet>,
+}
+
+/// Whether a tool's result is text a program printed, which is shown to the planner with its
+/// complete colour codes taken out and counted (RUN-21).
+///
+/// From the tool's name, which the planner chose from the list it was offered, and never from
+/// what the tool returned.
+fn prints_a_program_output(tool: &str) -> bool {
+    matches!(tool, "run" | "job_output" | "read_output")
 }
 
 /// What `answer_the_turn` settles before the first round and `run_rounds` only reads.
@@ -4520,6 +4535,9 @@ where
                 // what the processor answered. The number is stored apart from text.
                 let a_choice = output.chosen.is_some();
                 let chosen = output.chosen.take();
+                // What the planner is told about the colour codes taken out of what a program
+                // printed: empty where none were and for every other tool.
+                let mut colours = String::new();
                 let presented = match &output.deferred {
                     Some(deferral) => policy
                         .defer(
@@ -4557,6 +4575,18 @@ where
                                 conversation.quarantine(),
                             )
                             .map(Presentation::Quarantined),
+                        None if prints_a_program_output(&output.tool) => policy
+                            .present_output(
+                                "tool_result",
+                                slot.clone(),
+                                &origin,
+                                &output.text,
+                                conversation.quarantine(),
+                            )
+                            .map(|(shown, note)| {
+                                colours = note;
+                                shown
+                            }),
                         None => policy.present(
                             "tool_result",
                             slot.clone(),
@@ -4689,15 +4719,32 @@ where
                         released
                             .text
                             .map(|released| {
-                                policy
-                                    .present(
-                                        "tool_result",
-                                        reference.slot.clone(),
-                                        &origin,
-                                        &released,
-                                        conversation.quarantine(),
-                                    )
-                                    .map(|shown| (shown, reference.slot.clone()))
+                                // Only what a program printed has its colour codes taken out.
+                                // What a server or a fetched page returned is released as it is.
+                                if a_run {
+                                    policy
+                                        .present_output(
+                                            "tool_result",
+                                            reference.slot.clone(),
+                                            &origin,
+                                            &released,
+                                            conversation.quarantine(),
+                                        )
+                                        .map(|(shown, note)| {
+                                            colours = note;
+                                            (shown, reference.slot.clone())
+                                        })
+                                } else {
+                                    policy
+                                        .present(
+                                            "tool_result",
+                                            reference.slot.clone(),
+                                            &origin,
+                                            &released,
+                                            conversation.quarantine(),
+                                        )
+                                        .map(|shown| (shown, reference.slot.clone()))
+                                }
                             })
                             .transpose()
                             .map_err(|d| TurnError::Precommit(d.to_string()))?
@@ -4899,7 +4946,7 @@ where
                         let respelled = sentences::respelled_note(output.respelled);
                         let composed = |rest: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
+                                "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}{colours}",
                                 output.tool
                             )
                         };
