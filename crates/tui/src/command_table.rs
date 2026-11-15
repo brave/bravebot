@@ -812,7 +812,7 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: MCP_COMMAND,
-            argument: "[reconnect | disable | remove]",
+            argument: "[list | reconnect | disable | remove]",
             description: t!(command_mcp),
             mid_turn: MidTurn::RunsUnlessItStarts,
         },
@@ -1400,6 +1400,30 @@ mod tests {
                     "{command} completes {word}"
                 );
             }
+        }
+    }
+
+    /// The hint drawn for `/mcp` names every subcommand the command takes, in the order the usage
+    /// message lists them. The regression it rejects is a subcommand left out of the hint, which
+    /// leaves `list` undiscoverable from the slash menu, or a hint that drifts from the usage
+    /// message.
+    #[test]
+    fn the_mcp_hint_names_every_subcommand_the_usage_message_names() {
+        let command = commands()
+            .iter()
+            .find(|candidate| candidate.name == MCP_COMMAND)
+            .copied()
+            .expect("/mcp is in the table");
+        assert_eq!(command.argument, "[list | reconnect | disable | remove]");
+        assert_eq!(command.typed_hint(), command.argument);
+        let usage = t!(mcp_command_usage);
+        let mut after = 0;
+        for word in ["list", "reconnect", "disable", "remove"] {
+            assert!(command.argument.contains(word), "the hint names {word}");
+            let at = usage[after..]
+                .find(word)
+                .unwrap_or_else(|| panic!("the usage message names {word} after byte {after}"));
+            after += at + word.len();
         }
     }
 

@@ -342,6 +342,7 @@ it.
 `verified-by: bravebot_tui::app::the_config_command_is_offered_like_every_other`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::command_table::the_mcp_hint_names_every_subcommand_the_usage_message_names`
 `verified-by: bravebot_tui::app::tests::completions::the_list_under_the_box_scrolls_to_keep_the_cursor_drawn`
 
 

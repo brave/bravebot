@@ -66,7 +66,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
-| `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
+| `/mcp` | `[list \| reconnect [alias] \| disable <alias> \| remove <alias>]` | List the MCP servers, start one that is not running, turn one off for the session, or remove one for good |
 | `/lsp` | | Say which language servers this session has started |
 | `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
@@ -928,7 +928,7 @@ Alt-A does the same and is one of the [chords you can move](../customize/configu
 action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
 the chord in force, where the plan has room for it.
 
-## `/mcp [list | reconnect [alias] | disable <alias>]`
+## `/mcp [list | reconnect [alias] | disable <alias> | remove <alias>]`
 
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
 tools stand, and each server your settings request that is not running, saying whether it was turned
@@ -936,8 +936,23 @@ off. `reconnect` starts every requested server that is not running and was not t
 `reconnect weather` starts that one, including one turned off. A start takes the road a session takes
 as it opens, so a server whose declaration changed, or that nobody approved, is put to you again.
 `disable weather` stops the server and drops its grant. It writes nothing, so the next session starts
-the server as before. Typed while a turn runs, the bare word and `list` are carried out as you type
-them, and every other form waits for the turn to end. See
+the server as before.
+
+`remove weather` is the permanent form. It runs `bravebot mcp disable weather` and then `bravebot mcp
+remove weather`, which takes the request out of every settings file that asks for the server and
+deletes its declaration and approval, so no later session starts it or asks about it, and it stops
+the server in this session. If the second program fails, the server keeps running and the failure is
+said. The alias must be an alias (letters, digits, `-` and `_`, starting with a letter or digit), and
+nothing is run in an incognito session or where there is no state directory.
+
+Where `disable` or `remove` takes an alias it also takes a pattern with a `*`, which stands for any
+run of characters. `remove brave-tabs*` removes `brave-tabs-manage` and `brave-tabs-read`, and
+`disable brave-*` turns off every server whose name starts with `brave-`. Each server the pattern
+names is handled as if you had typed it alone, and a failure for one is said and does not stop the
+others. A pattern that names no server changes nothing and says so.
+
+Typed while a turn runs, the bare word and `list` are carried out as you type them, and every other
+form waits for the turn to end. See
 [starting or stopping one during a session](../customize/mcp-servers.md#starting-or-stopping-one-during-a-session).
 
 ## `/caffeinate`
