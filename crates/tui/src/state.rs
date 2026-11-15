@@ -7711,8 +7711,8 @@ mod tests {
         );
     }
 
-    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan, a spend
-    /// limit and a repeated call are the driver's own, so they wait for the person with the setting
+    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan and a spend
+    /// limit are the driver's own, so they wait for the person with the setting
     /// in force. Rejects: the time applied to every question the interface puts.
     #[test]
     fn only_the_planners_own_questions_are_closed_on_the_clock() {

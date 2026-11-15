@@ -3,35 +3,15 @@
 //! The comparison is between two calls the planner wrote, a tool name and its arguments. Nothing
 //! here reads a tool result, so the decision depends on no content from the workspace.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use bravebot_aichat::protocol::ToolCall;
-use bravebot_core::ask::{Answer, Asking, Choice, Question, Series};
 use bravebot_core::event::Sink;
-use bravebot_core::policy::{AfterRepeatedCall, Policy};
+use bravebot_core::policy::Policy;
 use bravebot_i18n::t;
 
-use crate::confirm::Confirmer;
 use crate::report::Reporter;
 
 /// How many identical calls in a row the planner may make. The next one is held.
 pub(crate) const IN_A_ROW: usize = 3;
-
-/// What the person chose, or the planner is told when nobody could be asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Held {
-    /// The person let the call through, once.
-    Run,
-    /// The call is not run and the planner is told why.
-    Refuse,
-    /// The person ended the turn.
-    Stop,
-}
-
-/// The row that refuses the call. First, so a bare Enter on the question is the safe answer.
-const REFUSE: usize = 0;
-const RUN_IT: usize = 1;
-const STOP: usize = 2;
 
 /// The last call the planner made and how many times in a row it has made it.
 #[derive(Debug, Default, Clone)]
@@ -62,37 +42,9 @@ impl Repeats {
         self.count >= IN_A_ROW
     }
 
-    /// Start counting again. The person let the call through, and the answer covers that call.
-    pub(crate) fn clear(&mut self) {
-        self.last = None;
-        self.count = 0;
-    }
-
     pub(crate) fn count(&self) -> usize {
         self.count
     }
-}
-
-/// The question, built from a count and the tool's name.
-///
-/// Its key is new each time, because an interface remembers an answer by key and this one is about
-/// the call in front of it.
-fn asking(tool: &str, count: usize) -> Asking {
-    static ASKED: AtomicU64 = AtomicU64::new(0);
-    let mut asking = bravebot_core::ask::asking(&Series::new(vec![Question::new(
-        t!(repeated_call_header),
-        t!(repeated_call_reached, tool = tool, count = count),
-        vec![
-            Choice::new(t!(repeated_call_refuse), None),
-            Choice::new(t!(repeated_call_run_it), None),
-            Choice::new(t!(repeated_call_stop), None),
-        ],
-        false,
-    )]));
-    for prompt in &mut asking.prompts {
-        prompt.key = format!("repeated call {}", ASKED.fetch_add(1, Ordering::Relaxed));
-    }
-    asking
 }
 
 /// What the planner is told in place of a result when its call is not run.
@@ -105,61 +57,31 @@ pub(crate) fn refusal(tool: &str, count: usize) -> String {
     )
 }
 
-/// Put the question about a held call, record the answer and say what came of it.
+/// Record a held call and say on screen that it was not run.
 ///
-/// A delegate is not asked: its questions would reach a person who is watching the session and not
-/// this worker, so its call is refused. So is the call of an interface that cannot ask, and any
-/// answer that is not one of the rows.
-pub(crate) fn hold<S, C, R>(
+/// Nobody is asked. A person who started a long task and left would come back to a turn waiting on
+/// a question, and the planner is told in place of a result, so it can try another approach.
+pub(crate) fn hold<S, R>(
     call: &ToolCall,
     count: usize,
     round: usize,
-    may_ask: bool,
     policy: &mut Policy<'_, S>,
-    confirmer: &mut C,
     reporter: &mut R,
-) -> Held
-where
+) where
     S: Sink,
-    C: Confirmer + ?Sized,
     R: Reporter + ?Sized,
 {
-    let tool = call.function.name.as_str();
-    let (held, then) = if may_ask {
-        match confirmer.ask_user(&asking(tool, count)).as_slice() {
-            [Answer::Chosen(rows)] if rows.as_slice() == [RUN_IT] => {
-                (Held::Run, AfterRepeatedCall::LetThrough)
-            }
-            [Answer::Chosen(rows)] if rows.as_slice() == [STOP] => {
-                (Held::Stop, AfterRepeatedCall::Stopped)
-            }
-            [Answer::Chosen(rows)] if rows.as_slice() == [REFUSE] => {
-                (Held::Refuse, AfterRepeatedCall::Refused)
-            }
-            _ => (Held::Refuse, AfterRepeatedCall::Unanswered),
-        }
-    } else {
-        (Held::Refuse, AfterRepeatedCall::Unanswered)
-    };
-    policy.record_repeated_call(round, count, then);
-    match held {
-        Held::Run => {}
-        Held::Refuse => reporter.notice(t!(repeated_call_refused, tool = tool, count = count)),
-        Held::Stop => reporter.notice(t!(repeated_call_stopped, tool = tool, count = count)),
-    }
-    held
+    policy.record_repeated_call(round, count);
+    reporter.notice(t!(
+        repeated_call_refused,
+        tool = call.function.name.as_str(),
+        count = count
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// ASK-9: a repeated call runs only on the person's say, so its question waits for them.
-    /// Rejects: a flag set on every question the driver puts.
-    #[test]
-    fn the_repeated_call_question_is_never_closed_when_nobody_answers() {
-        assert!(!asking("read_file", 3).closes_when_idle);
-    }
 
     fn call(name: &str, arguments: &str) -> ToolCall {
         serde_json::from_value(serde_json::json!({
@@ -203,37 +125,5 @@ mod tests {
         assert!(!repeats.is_held(&call("read_file", r#"{"path":"a"}"#)));
         assert!(!repeats.is_held(&call("list_dir", r#"{"path":"a"}"#)));
         assert!(!repeats.is_held(&call("read_file", r#"{"path":"a"}"#)));
-    }
-
-    #[test]
-    fn clearing_starts_the_count_again() {
-        let mut repeats = Repeats::default();
-        let read = call("read_file", r#"{"path":"a.txt"}"#);
-        repeats.is_held(&read);
-        repeats.is_held(&read);
-        assert!(repeats.is_held(&read));
-        repeats.clear();
-        assert!(!repeats.is_held(&read));
-    }
-
-    #[test]
-    fn every_question_has_a_key_of_its_own() {
-        let first = asking("read_file", 3);
-        let second = asking("read_file", 3);
-        assert_ne!(first.prompts[0].key, second.prompts[0].key);
-    }
-
-    #[test]
-    fn the_first_row_is_the_one_that_refuses() {
-        let asked = asking("read_file", 3);
-        assert_eq!(
-            asked.prompts[0].rows[REFUSE].label,
-            t!(repeated_call_refuse)
-        );
-        assert_eq!(
-            asked.prompts[0].rows[RUN_IT].label,
-            t!(repeated_call_run_it)
-        );
-        assert_eq!(asked.prompts[0].rows[STOP].label, t!(repeated_call_stop));
     }
 }

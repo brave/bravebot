@@ -260,8 +260,8 @@ a question was closed, and the question is not remembered ([ASK-8](#ASK-8)). The
 draws for the series is the one that says so for the series, and the block under each question that
 was closed ([ASK-13](#ASK-13)) says `closed on the clock` for that question alone.
 
-Only the questions the planner puts with `ask_user` close this way. A plan to approve, a spend limit
-and a repeated call are the driver's own questions, asked of a person who has to be there, and they
+Only the questions the planner puts with `ask_user` close this way. A plan to approve and a spend
+limit are the driver's own questions, asked of a person who has to be there, and they
 wait for as long as it takes whatever the setting says. The setting is read from the person's own
 settings file and the file `--settings` names, and a project or local file that arrived with a
 checkout is ignored and named by `doctor`.
@@ -291,7 +291,6 @@ person's file alone as well.
 `verified-by: bravebot_agent::tools::tests::questions::the_planners_questions_may_be_closed_when_nobody_answers`
 `verified-by: bravebot_agent::tools::tests::questions::a_plan_put_for_approval_is_never_closed_when_nobody_answers`
 `verified-by: bravebot_agent::spend_limit::the_spend_limit_question_is_never_closed_when_nobody_answers`
-`verified-by: bravebot_agent::repeated_call::the_repeated_call_question_is_never_closed_when_nobody_answers`
 
 <a id="ASK-10"></a>
 ### ASK-10: the line under the call counts the questions asked

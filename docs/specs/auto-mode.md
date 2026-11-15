@@ -125,7 +125,7 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 
 These stay with the person in this mode: a question the planner posed and a line the person typed
 ([MODE-7](permission-modes.md#MODE-7)), the plan prompt ([MODE-14](permission-modes.md#MODE-14)), the
-limit and repeated-call questions ([TURN-8](turns.md#TURN-8), [TURN-9](turns.md#TURN-9)), a proposed
+limit question ([TURN-8](turns.md#TURN-8)), a proposed
 rule ([RULE-3](tools/propose-rule.md#RULE-3)), a message to another session
 ([MSG-3](session-messages.md#MSG-3)), a credential write, a write to a protected path and a run that
 redirects into one, the exposing

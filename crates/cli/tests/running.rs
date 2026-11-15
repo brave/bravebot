@@ -21801,8 +21801,7 @@ const PAST_THE_UNWATCHED_BOUND: usize = bravebot_agent::turn::MAX_TOOL_ROUNDS + 
 /// its own.
 ///
 /// The listing alternates between two spellings of the directory, because the same call three
-/// times in a row is held and put to a person (TURN-9), and a session in lines has no one to
-/// answer.
+/// times in a row is held and not run (TURN-9), and the run would go on refusing it.
 fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
     a_gateway_that_lists_until_reporting(rounds, None)
 }
