@@ -946,6 +946,7 @@ impl Held<'_> {
                 exposed,
                 &self.answers.rules.permissions,
                 self.run_settings,
+                self.settings,
                 self.stored,
             )?;
             let events = self.take_back(continued);

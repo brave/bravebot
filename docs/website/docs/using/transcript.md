@@ -589,8 +589,8 @@ the rest.
 | the rest of the border, dragged | gives the panel more room or less | none: Ctrl-X hides it where the width does not suit |
 
 While a turn runs, a click on a row that stands for a command does what the command typed does then:
-the pickers open and `/context`, `/lsp` and `/diff` answer at once, and `/mcp`, which waits for the turn to
-end, waits in the queue under the box. While a command you typed with `!` runs, every one of them waits in
+the pickers open and `/context`, `/lsp`, `/diff` and `/mcp` answer at once. A row whose command would
+wait for a line typed before it waits in the queue under the box. While a command you typed with `!` runs, every one of them waits in
 the queue, and is carried out when the command has ended.
 
 **Under the box**

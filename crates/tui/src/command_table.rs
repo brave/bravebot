@@ -388,7 +388,9 @@ pub enum MidTurn {
     /// turn runs, so the turn's own questions are still drawn over it.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
-    /// would start something: a loop or a goal armed mid-turn needs a look of its own.
+    /// would start something: a loop or a goal armed mid-turn needs a look of its own. `/mcp` is
+    /// carried out where it only lists, and waits where it would start a server, turn one off or
+    /// remove one, which take the terminal or change the tools the turn offers.
     RunsUnlessItStarts,
     /// Carried out as it is typed when no line waiting ahead of it could change what it acts on. It
     /// changes only what the session keeps for itself or keeps for a later session, which the turn
@@ -784,7 +786,7 @@ pub fn commands() -> Vec<Command> {
             name: MCP_COMMAND,
             argument: "[reconnect | disable | remove]",
             description: t!(command_mcp),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::RunsUnlessItStarts,
         },
         Command {
             name: LSP_COMMAND,
@@ -946,9 +948,10 @@ pub(crate) fn is_a_command_given_words(line: &str) -> bool {
 
 /// Whether the command a line is gets carried out as it is typed while a turn runs (CMD-8).
 ///
-/// Read off the table's column, and for the two words that both read and start, off the form the
+/// Read off the table's column, and for the words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work.
+/// a loop while the turn in flight is still the session's work. `/mcp` and `/mcp list` read the
+/// servers, and every other word after `/mcp` waits. Only the words the person typed are read.
 pub(crate) fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
         return false;
@@ -966,6 +969,7 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
                     !matches!(crate::goals::parse(argument), crate::goals::Asked::Set(_))
                 }
                 SCHEDULE_COMMAND => bravebot_schedule::words::reads_only(argument),
+                MCP_COMMAND => crate::mcp_command::only_lists(argument),
                 _ => false,
             }
         }
@@ -1294,12 +1298,28 @@ pub(crate) fn named(goes: Bound, line: &str) -> String {
     }
 }
 
+/// The words a mark names a waiting command by: the command word, and for `/mcp` also the first
+/// word typed after it. `/mcp` both lists, which runs, and starts or changes servers, which waits,
+/// so the mark says which form waits (`/mcp reconnect`). Only words the person typed are read.
+fn form_typed(word: &str, line: &str) -> String {
+    if word != MCP_COMMAND {
+        return word.to_string();
+    }
+    let first = argument_to(line, word)
+        .and_then(|argument| argument.split_whitespace().next())
+        .map(|form| crate::render::printable(&crate::render::head_of(form, 24)));
+    match first {
+        Some(form) => format!("{word} {form}"),
+        None => word.to_string(),
+    }
+}
+
 /// What is said under the turn when a command typed while it runs is queued, so the line does not
 /// wait without a reason (CMD-8). Read before the line is taken off the box, and from the same
 /// facts [`runs_while_working`] and [`held_back_by`] decided it with.
 pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     let command = row_typed(line)?;
-    let word = command.name;
+    let word = &form_typed(command.name, line);
     // A command the person typed is running and no turn is, so the line waits for that.
     if session.status == Status::Running {
         return Some(t!(command_waits_for_the_command, command = word).to_string());

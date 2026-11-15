@@ -111,8 +111,7 @@ fn run_with<A: Asker + ?Sized>(
     let machine = ways.machine;
     let words: Vec<&str> = argument.split_whitespace().collect();
     match words.as_slice() {
-        [] => list(session, settings),
-        [word] if *word == MCP_LIST => list(session, settings),
+        words if lists(words) => list(session, settings),
         [word] if *word == MCP_RECONNECT => {
             reconnect(session, settings, root, None, asking, asker, machine)
         }
@@ -136,6 +135,20 @@ fn run_with<A: Asker + ?Sized>(
         [word, alias] if *word == MCP_REMOVE => remove(session, root, alias, ways),
         _ => session.note(t!(mcp_command_usage)),
     }
+}
+
+/// Whether the words typed after `/mcp` ask for the list and nothing else: none, or `list` alone.
+///
+/// The one place that says which forms only read the servers the session holds, so the route that
+/// carries `/mcp` out beside a running turn (CMD-8) and the command itself read the same words.
+/// Only what the person typed is read, and no server's answer is.
+fn lists(words: &[&str]) -> bool {
+    matches!(words, [] | [MCP_LIST])
+}
+
+/// Whether `argument`, the text typed after `/mcp`, is a form that only lists the servers (CMD-8).
+pub(crate) fn only_lists(argument: &str) -> bool {
+    lists(&argument.split_whitespace().collect::<Vec<_>>())
 }
 
 /// The aliases this session requests, each once.
@@ -172,7 +185,11 @@ fn refresh(servers: &mut Servers) {
         .is_some_and(bravebot_agent::mcp::Session::confined);
 }
 
-fn list(session: &mut Session, settings: &Settings) {
+/// Say which servers are running and how their tools stand, and which are requested and are not.
+///
+/// Reads the session and the settings and starts, stops and asks nothing, so it can be carried out
+/// beside a running turn (CMD-8).
+pub(crate) fn list(session: &mut Session, settings: &Settings) {
     let running: Vec<(String, Offering)> = session
         .servers
         .session
