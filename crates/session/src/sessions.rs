@@ -2864,7 +2864,6 @@ impl Handle {
         self.references = references.to_vec();
     }
 
-    /// The issues and pull requests the session met, as the handle holds them.
     pub fn references(&self) -> &[Reference] {
         &self.references
     }

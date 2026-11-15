@@ -704,8 +704,9 @@ same in every directory and session. It is not in the session record.
 
 **Why.** A person who watches many sessions needs some of the sections and not others, and each
 section drawn takes its heading, a blank row and its rows out of the room the other sections and the
-Plan share. The file names the sections turned off so that an absent file means every section on,
-which is how the panel has always drawn, and a section added later is on with no migration.
+Plan share. The file names the sections turned off, so that an absent file means every section on: a
+person who never runs `/sidebar` sees every section, and a section added later is on with no
+migration.
 
 `verified-by: bravebot_tui::sidebar_prompt::a_row_for_each_section_in_the_panels_order_checked_while_it_is_drawn`
 `verified-by: bravebot_tui::sidebar_prompt::space_and_enter_turn_the_row_under_the_cursor_off_and_on_and_the_cursor_stays`
