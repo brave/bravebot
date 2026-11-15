@@ -1147,19 +1147,28 @@ fn units(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// [`matches_name`] over units: a `*` is any run of them and a `?` is one.
+/// [`matches_name`] over units: a `*` is any run of them and a `?` is one. A letter meets the
+/// letters it folds to as a whole, so the sharp s, one unit folded to `ss`, meets the two units
+/// `s` and `s`.
 fn matches_units(pattern: &[String], name: &[String]) -> bool {
     let (mut p, mut n) = (0, 0);
     let (mut star, mut resume) = (None, 0);
     while n < name.len() {
-        let wild = |at: usize, text: &str| pattern.get(at).is_some_and(|unit| unit == text);
-        if p < pattern.len() && !wild(p, "*") && (wild(p, "?") || pattern[p] == name[n]) {
-            p += 1;
-            n += 1;
-        } else if wild(p, "*") {
+        let literal = if p < pattern.len() && pattern[p] != "*" && pattern[p] != "?" {
+            literal_run(pattern, p, name, n)
+        } else {
+            None
+        };
+        if p < pattern.len() && pattern[p] == "*" {
             star = Some(p);
             resume = n;
             p += 1;
+        } else if p < pattern.len() && pattern[p] == "?" {
+            p += 1;
+            n += 1;
+        } else if let Some((pattern_units, name_units)) = literal {
+            p += pattern_units;
+            n += name_units;
         } else if let Some(at) = star {
             p = at + 1;
             resume += 1;
@@ -1169,6 +1178,33 @@ fn matches_units(pattern: &[String], name: &[String]) -> bool {
         }
     }
     pattern[p..].iter().all(|unit| unit == "*")
+}
+
+/// How many units of `pattern` from `p` and of `name` from `n` spell the same folded text, when
+/// the units there differ in how they split it: the one that is a prefix of the other takes the
+/// units after it until both are the same length. None when they never spell the same text, and a
+/// pattern run stops at a wildcard.
+fn literal_run(pattern: &[String], p: usize, name: &[String], n: usize) -> Option<(usize, usize)> {
+    let (mut from_pattern, mut from_name) = (pattern[p].clone(), name[n].clone());
+    let (mut pattern_units, mut name_units) = (1, 1);
+    loop {
+        if from_pattern == from_name {
+            return Some((pattern_units, name_units));
+        }
+        if from_pattern.len() < from_name.len() && from_name.starts_with(&from_pattern) {
+            let next = pattern.get(p + pattern_units)?;
+            if next == "*" || next == "?" {
+                return None;
+            }
+            from_pattern.push_str(next);
+            pattern_units += 1;
+        } else if from_name.len() < from_pattern.len() && from_pattern.starts_with(&from_name) {
+            from_name.push_str(name.get(n + name_units)?);
+            name_units += 1;
+        } else {
+            return None;
+        }
+    }
 }
 
 /// Whether `name` is met by `pattern`, where `*` is any run of characters and `?` is one.
@@ -1903,6 +1939,34 @@ mod tests {
             named_by(List::DenyRead, "CLA?.MD", &base),
             vec![PathBuf::from("clab.md"), PathBuf::from("cla\u{df}.md")]
         );
+    }
+
+    /// The sharp s folds to `ss`, so a deny glob spelled with one meets a name spelled with the
+    /// other, in either direction and with a `*` or a `?` around it.
+    #[test]
+    fn a_deny_glob_meets_a_sharp_s_and_two_letters_either_way() {
+        let base = fresh("rules-fold-sharp-s-pair");
+        fs::write(base.join("STRASSE.PEM"), "").unwrap();
+        fs::write(base.join("stra\u{df}e.key"), "").unwrap();
+        fs::write(base.join("strase.pem"), "").unwrap();
+        assert_eq!(
+            named_by(List::DenyRead, "stra\u{df}e*", &base),
+            vec![
+                PathBuf::from("STRASSE.PEM"),
+                PathBuf::from("stra\u{df}e.key")
+            ]
+        );
+        assert_eq!(
+            named_by(List::DenyRead, "strasse*", &base),
+            vec![
+                PathBuf::from("STRASSE.PEM"),
+                PathBuf::from("stra\u{df}e.key")
+            ]
+        );
+        assert!(matches_folded("*stra\u{df}e.pem", "STRASSE.PEM"));
+        assert!(matches_folded("STRA\u{df}E.*", "strasse.pem"));
+        assert!(!matches_folded("stra\u{df}e.pem", "strase.pem"));
+        assert!(!matches_folded("strass.pem", "stra\u{df}e.pem"));
     }
 
     /// A name met as written stays met whatever the fold does to it: a `?` that took the combining
