@@ -184,7 +184,8 @@ tools that open a reference (`TOOLS_READING_A_REFERENCE`), and the opening of an
 as a read, including one a call of `write_file` or `run` makes, so a path only `denyWrite` covers is
 still read. Every refusal above holds. Where the call holds no reach, which is every mode but bypass
 and every workspace the person has not trusted, the file is refused as outside the workspace and the
-refusal names `/add-dir` as before. The reference keeps the label the listing gave it, so opening it
+refusal names `/add-dir`, as a file tool's refusal does ([TRUST-10](../trust-map.md#TRUST-10) states where
+it names none). The reference keeps the label the listing gave it, so opening it
 releases nothing to the planner that [MODE-4](../permission-modes.md#MODE-4) and
 [CHECK-12](../vetting.md#CHECK-12) did not already release. The reach is decided from the tool's
 name, the live mode and the person's rules, and never from the file.
