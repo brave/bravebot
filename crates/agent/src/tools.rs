@@ -24192,9 +24192,10 @@ mod tests {
             "a rule about the lookalike did not deny it"
         );
         assert_eq!(
-            invalid_landed.flatten(),
-            None,
-            "a rule about the lookalike let the landing that is not text be named"
+            invalid_landed,
+            Some(None),
+            "a rule about the lookalike dropped the skill whose landing is not text, or let the \
+             landing be named"
         );
     }
 
