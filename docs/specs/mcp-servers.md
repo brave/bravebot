@@ -2181,6 +2181,16 @@ nothing, so the next session starts the server as before. The list ends with a l
 `remove <alias>`, which is how a person who declined a server's tools finds the way to stop being
 asked about it.
 
+Where `disable` or `remove` takes an alias, it also takes a pattern: a word of the characters an
+alias has and at least one `*`, which stands for any run of characters, including none, so
+`/mcp remove brave-tabs*` names `brave-tabs-manage` and `brave-tabs-read`. The pattern is matched
+against the aliases the session runs, the settings request and, for `remove`, the state directory
+declares, so it names no more than the person's own files and session hold. Each alias it names is
+taken as if it had been typed alone, in alphabetical order, and a failure for one is said and does
+not stop the others. A pattern that names no alias says so and changes nothing. A word with a `*`
+and any other character is not a pattern, and is refused as a word that is no alias is. The pattern
+is never given to the program: each alias is, after the alias check.
+
 `remove <alias>` runs `bravebot mcp disable <alias>` and then `bravebot mcp remove <alias>`, the
 program run as itself in the directory the session works in, and says what each printed. The first
 takes the request out of each settings file that asks for the server, the second deletes its
@@ -2218,6 +2228,12 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::removing_a_server_withdraws_the_request_then_deletes_the_declaration_and_stops_it`
 `verified-by: bravebot_tui::mcp_command::a_removal_that_fails_leaves_the_server_running_and_says_why`
 `verified-by: bravebot_tui::mcp_command::a_removal_runs_no_program_for_a_word_that_is_no_alias_or_where_nothing_may_be_written`
+`verified-by: bravebot_tui::mcp_command::removing_by_a_pattern_removes_each_server_it_names_and_no_other`
+`verified-by: bravebot_tui::mcp_command::a_pattern_removal_that_fails_for_one_server_still_removes_the_others`
+`verified-by: bravebot_tui::mcp_command::a_pattern_that_names_nothing_or_is_typed_where_nothing_may_be_written_runs_no_program`
+`verified-by: bravebot_tui::mcp_command::disabling_by_a_pattern_turns_off_each_server_it_names_and_no_other`
+`verified-by: bravebot_config::mcp::a_pattern_names_the_aliases_whose_spelling_fits_around_its_stars`
+`verified-by: bravebot_config::mcp::a_pattern_has_a_star_and_only_the_characters_of_an_alias`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
 

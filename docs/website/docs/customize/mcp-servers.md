@@ -218,7 +218,10 @@ starts without a question, and one whose declaration changed is put to you again
 weather` stops the server and drops its grant for this session. Nothing is written, so the next
 session starts it as before. `/mcp remove weather` is the permanent version: it runs `bravebot mcp
 disable weather` and then `bravebot mcp remove weather` for you, so no later session starts the
-server or asks about it, and stops it in this session. The list `/mcp` prints, which is also what a
+server or asks about it, and stops it in this session. A `*` in the name stands for any run of
+characters, so `/mcp remove brave-tabs*` does that for `brave-tabs-manage` and `brave-tabs-read`,
+and `/mcp disable brave-*` stops every server whose name starts with `brave-`. A pattern that fits
+no server changes nothing and says so. The list `/mcp` prints, which is also what a
 click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the
 command waits for the turn to end.
 

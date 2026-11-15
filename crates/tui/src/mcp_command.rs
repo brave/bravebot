@@ -122,6 +122,16 @@ fn run_with<A: Asker + ?Sized>(
         [word] if *word == MCP_DISABLE || *word == MCP_REMOVE => {
             session.note(t!(mcp_command_needs_an_alias, command = *word))
         }
+        [word, pattern]
+            if *word == MCP_DISABLE && bravebot_config::mcp::is_alias_pattern(pattern) =>
+        {
+            disable_matching(session, settings, pattern)
+        }
+        [word, pattern]
+            if *word == MCP_REMOVE && bravebot_config::mcp::is_alias_pattern(pattern) =>
+        {
+            remove_matching(session, settings, root, pattern, ways)
+        }
         [word, alias] if *word == MCP_DISABLE => disable(session, settings, alias),
         [word, alias] if *word == MCP_REMOVE => remove(session, root, alias, ways),
         _ => session.note(t!(mcp_command_usage)),
@@ -265,6 +275,29 @@ fn reconnect<A: Asker + ?Sized>(
     refresh(&mut session.servers);
 }
 
+/// Turn off each server the session holds or requests whose alias `pattern` names, as `disable`
+/// does for one, in alphabetical order.
+fn disable_matching(session: &mut Session, settings: &Settings, pattern: &str) {
+    let mut named: Vec<String> = held(session);
+    for alias in requested(settings) {
+        if !named.contains(&alias) {
+            named.push(alias);
+        }
+    }
+    named.retain(|alias| bravebot_config::mcp::alias_matches(pattern, alias));
+    named.sort();
+    if named.is_empty() {
+        session.note(t!(
+            mcp_command_no_match,
+            pattern = crate::render::printable(pattern)
+        ));
+        return;
+    }
+    for alias in named {
+        disable(session, settings, &alias);
+    }
+}
+
 fn disable(session: &mut Session, settings: &Settings, alias: &str) {
     if session.servers.disabled.iter().any(|off| off == alias) {
         session.note(t!(mcp_command_already_off, alias = alias));
@@ -304,15 +337,79 @@ fn remove(session: &mut Session, root: &Path, alias: &str, ways: &Ways<'_>) {
         ));
         return;
     }
+    if may_remove(session, ways) {
+        remove_one(session, root, alias, ways);
+    }
+}
+
+/// Whether anything may be removed here, saying why not where it may not.
+fn may_remove(session: &mut Session, ways: &Ways<'_>) -> bool {
     let home = &ways.machine.home;
     if home.directory.is_none() {
         session.note(t!(mcp_command_no_state_directory));
-        return;
+        return false;
     }
     if !home.writable {
         session.note(t!(mcp_not_while_incognito, command = MCP_REMOVE));
+        return false;
+    }
+    true
+}
+
+/// Remove each server whose alias `pattern` names, as `remove` does for one, among the aliases the
+/// person declared, the settings request, and the session holds.
+///
+/// The pattern is matched against those names and nothing else, so it can name no more than the
+/// person's own files and session hold, and each alias reaches the program only as an alias. A
+/// removal that fails is said, and the next alias is still tried.
+fn remove_matching(
+    session: &mut Session,
+    settings: &Settings,
+    root: &Path,
+    pattern: &str,
+    ways: &Ways<'_>,
+) {
+    if !may_remove(session, ways) {
         return;
     }
+    let mut named: Vec<String> = held(session);
+    let declared = ways
+        .machine
+        .home
+        .directory
+        .as_deref()
+        .and_then(|directory| bravebot_config::mcp::Declarations::read(directory).ok())
+        .map(|declarations| {
+            declarations
+                .entries()
+                .into_iter()
+                .map(|entry| entry.alias)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for alias in requested(settings).into_iter().chain(declared) {
+        if !named.contains(&alias) {
+            named.push(alias);
+        }
+    }
+    named.retain(|alias| {
+        bravebot_config::mcp::is_alias(alias) && bravebot_config::mcp::alias_matches(pattern, alias)
+    });
+    named.sort();
+    if named.is_empty() {
+        session.note(t!(
+            mcp_command_no_match,
+            pattern = crate::render::printable(pattern)
+        ));
+        return;
+    }
+    for alias in named {
+        remove_one(session, root, &alias, ways);
+    }
+}
+
+/// `remove` for an alias already checked and a machine already found writable.
+fn remove_one(session: &mut Session, root: &Path, alias: &str, ways: &Ways<'_>) {
     // The request first: a declaration removed under a request that stays is reported at the start
     // of every session as a server nobody declared.
     let withdrawn = (ways.programs)(root, &["mcp", MCP_DISABLE, alias]);
@@ -750,6 +847,11 @@ pub(crate) mod tests {
 
     /// A machine whose state directory declares `weather` as a remote server nobody approved.
     fn declaring_weather(name: &str) -> Machine {
+        declaring(name, &["weather"])
+    }
+
+    /// A machine whose state directory declares each of `aliases` as a remote server nobody approved.
+    fn declaring(name: &str, aliases: &[&str]) -> Machine {
         use bravebot_config::mcp::{Declaration, Declarations};
         let home = tempfile::Builder::new()
             .prefix(name)
@@ -757,10 +859,12 @@ pub(crate) mod tests {
             .expect("directory")
             .keep();
         let mut declarations = Declarations::default();
-        declarations.insert(
-            "weather",
-            &Declaration::http("https://weather.example/mcp".to_string()).expect("declaration"),
-        );
+        for alias in aliases {
+            declarations.insert(
+                alias,
+                &Declaration::http(format!("https://{alias}.example/mcp")).expect("declaration"),
+            );
+        }
         std::fs::write(
             bravebot_config::mcp::declarations_file(&home),
             declarations.to_text(),
@@ -841,7 +945,18 @@ pub(crate) mod tests {
         machine: &Machine,
         succeeds: impl Fn(&[&str]) -> bool,
     ) -> (std::path::PathBuf, Vec<Vec<String>>) {
-        let (settings, root) = requesting("mcp-remove", &["weather"]);
+        removing_requested(session, argument, machine, &["weather"], succeeds)
+    }
+
+    /// As `removing`, for a checkout whose settings request `aliases`.
+    fn removing_requested(
+        session: &mut Session,
+        argument: &str,
+        machine: &Machine,
+        aliases: &[&str],
+        succeeds: impl Fn(&[&str]) -> bool,
+    ) -> (std::path::PathBuf, Vec<Vec<String>>) {
+        let (settings, root) = requesting("mcp-remove", aliases);
         let calls = std::cell::RefCell::new(Vec::new());
         let programs = |directory: &Path, args: &[&str]| {
             assert_eq!(directory, root, "the program ran somewhere else");
@@ -873,6 +988,136 @@ pub(crate) mod tests {
         let mut machine = declaring_weather(name);
         machine.home.writable = true;
         machine
+    }
+
+    /// The servers of the issue: two whose aliases share a prefix and one that does not. The session
+    /// holds all three, the settings request one of the pair, and the machine declares the pair
+    /// and a third of the prefix that nothing holds or requests.
+    const TABS: [&str; 4] = [
+        "brave-page-read",
+        "brave-tabs-extra",
+        "brave-tabs-manage",
+        "brave-tabs-read",
+    ];
+
+    fn call(words: [&str; 3]) -> Vec<String> {
+        words.map(String::from).to_vec()
+    }
+
+    /// SERVERS-19. `remove brave-tabs*` removes each server that fits, as `remove <alias>` does for
+    /// one: held, requested or only declared, in alphabetical order, each by the program's own two
+    /// commands, and leaves the server it does not fit running. Rejects a pattern that matches only
+    /// what the session holds, one that reaches `brave-page-read`, and one that passes the `*` to the
+    /// program.
+    #[test]
+    fn removing_by_a_pattern_removes_each_server_it_names_and_no_other() {
+        let mut machine = declaring("mcp-remove-pattern-home", &TABS);
+        machine.home.writable = true;
+        let mut session = holding(&["brave-page-read", "brave-tabs-manage", "brave-tabs-read"]);
+
+        let (_, calls) = removing_requested(
+            &mut session,
+            "remove brave-tabs*",
+            &machine,
+            &["brave-tabs-read"],
+            |_| true,
+        );
+
+        assert_eq!(
+            calls,
+            [
+                call(["mcp", "disable", "brave-tabs-extra"]),
+                call(["mcp", "remove", "brave-tabs-extra"]),
+                call(["mcp", "disable", "brave-tabs-manage"]),
+                call(["mcp", "remove", "brave-tabs-manage"]),
+                call(["mcp", "disable", "brave-tabs-read"]),
+                call(["mcp", "remove", "brave-tabs-read"]),
+            ]
+        );
+        assert_eq!(session.servers.started, ["brave-page-read"]);
+    }
+
+    /// SERVERS-19. A removal that fails for one server says so and leaves it running, and the
+    /// servers after it are still removed. Rejects stopping at the first failure, and stopping a
+    /// server whose declaration is still there.
+    #[test]
+    fn a_pattern_removal_that_fails_for_one_server_still_removes_the_others() {
+        let mut machine = declaring("mcp-remove-pattern-fails-home", &TABS);
+        machine.home.writable = true;
+        let mut session = holding(&["brave-tabs-manage", "brave-tabs-read"]);
+
+        let (_, calls) =
+            removing_requested(&mut session, "remove brave-tabs-*", &machine, &[], |args| {
+                args[2] != "brave-tabs-manage"
+            });
+
+        assert!(calls.contains(&call(["mcp", "remove", "brave-tabs-read"])));
+        assert!(!calls.contains(&call(["mcp", "remove", "brave-tabs-manage"])));
+        assert_eq!(session.servers.started, ["brave-tabs-manage"]);
+    }
+
+    /// SERVERS-19. A pattern that names nothing runs no program and says so. A pattern in an
+    /// incognito session is refused as a removal is, and nothing is run.
+    #[test]
+    fn a_pattern_that_names_nothing_or_is_typed_where_nothing_may_be_written_runs_no_program() {
+        let mut incognito = declaring("mcp-remove-pattern-incognito-home", &TABS);
+        incognito.home.writable = false;
+        let mut writable = declaring("mcp-remove-pattern-none-home", &TABS);
+        writable.home.writable = true;
+        for (argument, machine, reply) in [
+            (
+                "remove nothing-*",
+                writable,
+                t!(mcp_command_no_match, pattern = "nothing-*").to_string(),
+            ),
+            (
+                "remove brave-tabs*",
+                incognito,
+                t!(mcp_not_while_incognito, command = MCP_REMOVE).to_string(),
+            ),
+        ] {
+            let mut session = holding(&["brave-tabs-read"]);
+
+            let (_, calls) = removing_requested(&mut session, argument, &machine, &[], |_| true);
+
+            assert!(calls.is_empty(), "{argument}: {calls:?}");
+            assert_eq!(said(&session), [reply], "{argument}");
+            assert_eq!(session.servers.started, ["brave-tabs-read"], "{argument}");
+        }
+    }
+
+    /// SERVERS-19. `disable brave-tabs*` turns off each held or requested server that fits, as
+    /// `disable <alias>` does for one, and writes nothing. Rejects touching the server it does not
+    /// fit, and a pattern with no match changing anything.
+    #[test]
+    fn disabling_by_a_pattern_turns_off_each_server_it_names_and_no_other() {
+        let (settings, root) = requesting("mcp-disable-pattern", &["brave-tabs-extra"]);
+        let mut session = holding(&["brave-page-read", "brave-tabs-manage", "brave-tabs-read"]);
+
+        typed(&mut session, &settings, &root, "disable brave-tabs*");
+
+        assert_eq!(session.servers.started, ["brave-page-read"]);
+        assert_eq!(
+            session.servers.disabled,
+            ["brave-tabs-extra", "brave-tabs-manage", "brave-tabs-read"]
+        );
+        assert_eq!(
+            said(&session),
+            [
+                t!(mcp_command_disabled, alias = "brave-tabs-extra").to_string(),
+                t!(mcp_command_disabled, alias = "brave-tabs-manage").to_string(),
+                t!(mcp_command_disabled, alias = "brave-tabs-read").to_string(),
+            ]
+        );
+
+        let mut untouched = holding(&["brave-page-read"]);
+        typed(&mut untouched, &settings, &root, "disable nothing-*");
+        assert_eq!(
+            said(&untouched),
+            [t!(mcp_command_no_match, pattern = "nothing-*").to_string()]
+        );
+        assert_eq!(untouched.servers.started, ["brave-page-read"]);
+        assert!(untouched.servers.disabled.is_empty());
     }
 
     /// SERVERS-19. `/mcp remove` takes the request out first and then deletes the declaration, both
