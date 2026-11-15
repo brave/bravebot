@@ -217,6 +217,7 @@ fn status_report(
         tokens_in_flight: session.running_tokens(),
         timing: session.timing_total(),
         cached: session.cached(),
+        breakpoints_given_up: session.breakpoints_given_up(),
         trust: rules.map_or(&empty_trust, |(trust, _)| trust),
         programs: rules.map_or(&empty_programs, |(_, programs)| programs),
         turn_holds_rules: rules.is_none(),

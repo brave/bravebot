@@ -192,7 +192,9 @@ cache figures as two rows, what was read and what was written, never summed. A t
 gives its running totals once one of its rounds has reported a completed request, and the last
 turn's figures until then, so a first turn shows them after its first round rather than at its
 end. The hit rate reads the same figures, on the hint line as well. Neither row is drawn before
-any turn or round has reported one. When the panel is not drawn, or the terminal is too
+any turn or round has reported one. A model recorded as refusing the cache breakpoints
+([BACKEND-27](backends.md#BACKEND-27)) reports no figure, and the panel draws a row saying that the
+cache is off for it in their place. When the panel is not drawn, or the terminal is too
 short for the panel to show its Context section whole, the hint line has the reading and the hit
 rate. The loop, the job count, the mode and the keys stay on the hint line in every case, because a
 loop and a job spend while nobody is watching, and the panel can be closed or the terminal too
@@ -202,6 +204,7 @@ and the hit rate, and the token total and the two cache rows are not drawn.
 
 `verified-by: bravebot_tui::panel::the_context_reading_moves_into_the_panel_in_each_state`
 `verified-by: bravebot_tui::panel::the_cache_read_and_written_are_two_figures`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_tui::app::a_first_turn_in_flight_draws_the_cache_figures_after_its_first_round`
 `verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_cache_figures_with_the_turns_running_totals`
 `verified-by: bravebot_tui::app::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`

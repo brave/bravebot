@@ -2965,6 +2965,10 @@ status-cache-lifetime = lifetime asked of the service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 hour
 status-cache-lifetime-service-default = none, the service's own
+# Shown in place of the figures when the model has refused the cache breakpoints on two requests, so
+# that requests to it carry none and the whole prompt is read at the full rate every turn. Nothing
+# else says so: a prompt that is not cached draws no figure.
+status-cache-given-up = off for this model, which refused it
 # The latest turn's cache read as a share of its prompt tokens, on the footer.
 hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
@@ -3409,6 +3413,8 @@ panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
+# The model in force refused the cache breakpoints twice, so its prompt is read in full each turn.
+panel-cache-given-up = cache off, model refused it
 # Where the info panel has no room for the whole plan, a row after the rows it draws says how many
 # rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
 # The forms of the other two are the same in English and differ in other languages.

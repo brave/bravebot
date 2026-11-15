@@ -394,6 +394,19 @@ impl Session {
         self.model_reads_effort
     }
 
+    /// Whether the model in force is recorded as refusing the cache breakpoints.
+    ///
+    /// For saying so where it does: a prefix that is paid for in full on every request draws no
+    /// cache figure, so without this nothing on the screen says the caching is off.
+    pub fn breakpoints_given_up(&self) -> bool {
+        self.breakpoints_given_up
+    }
+
+    /// Record whether the model now in force is recorded as refusing the breakpoints.
+    pub fn note_breakpoints_given_up(&mut self, given_up: bool) {
+        self.breakpoints_given_up = given_up;
+    }
+
     /// Record what the roster said about the model now in force.
     pub fn note_model_reads_effort(&mut self, reads: bool) {
         self.model_reads_effort = reads;

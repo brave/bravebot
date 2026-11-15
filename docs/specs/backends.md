@@ -1219,7 +1219,8 @@ would cost it the field that keeps a long argument from being cut off and still 
 ceiling goes before the ask for arguments because, given up wrongly, it costs a model its replies
 longer than the fallback, where the ask costs it every long argument, written into a silence the
 idle bound cuts. Where the request that answered had given up more than one, all of them are
-remembered, as on a gateway. A request refused with nothing left to give up settles nothing, and
+remembered, as on a gateway, except that the breakpoints are held back: they are remembered only as
+BACKEND-27 says. A request refused with nothing left to give up settles nothing, and
 what an earlier request settled for that model stands.
 
 **Why.** The judgment is the only description these services offer, and throwing it away leaves the
@@ -1232,6 +1233,14 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
+`verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
+`verified-by: bravebot_bedrock::lib::a_first_refusal_is_forgotten_with_the_record`
+`verified-by: bravebot_bedrock::lib::taking_the_thinking_refusal_from_an_earlier_session_counts_no_breakpoint_refusal`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
 `verified-by: bravebot_bedrock::lib::the_ask_to_show_thinking_is_given_up_before_the_level`
 `verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
@@ -1675,11 +1684,28 @@ into a `Usage`. Without that a cached round reads as a conversation that shrank 
 are also carried through separately, which is what BACKEND-31 requires and the only way anything can
 say whether this clause is working.
 
-**A model that refuses them is not sent them again.** Prompt caching is not something every model
-this backend can reach offers, and one that does not refuses the whole request rather than reading
-past the breakpoints. A request refused on its contents is therefore sent once more without them,
-and where that answers, no later request in the session carries them. Only a refusal does this:
-every other failure leaves the breakpoints in place.
+**A model that refuses them is not sent them again, once it has refused twice.** Prompt caching is
+not something every model this backend can reach offers, and one that does not refuses the whole
+request rather than reading past the breakpoints. A request refused on its contents is therefore
+sent once more without them. The status that refuses them is the one an expired credential or a
+burst of requests also gets, so one refusal that the next request answers is not proof of anything:
+it is held as a doubt, and the request that answered is the only one that goes without them. The
+model is recorded as refusing them when a request that began after that doubt was held is refused
+the same way. Requests that began together count once however many of them are refused, so a burst
+of concurrent requests cannot record a model. A request that carried them and the lifetime, and was
+answered, clears the doubt. After that record, no later request carries them until the record has
+lapsed, which it does after thirty minutes, and a request after that carries them again. The record
+is kept in the process only ([BACKEND-63](#BACKEND-63)). Only a refusal does any of this: every
+other failure leaves the breakpoints in place. The decision is made from the status and a count,
+never from the body of a reply.
+
+**A model recorded as refusing them says so.** A prefix sent without breakpoints is read at the full
+rate on every request and draws no cache figure, since the figures are drawn only above zero
+([BACKEND-31](#BACKEND-31)). So that the person is not left to infer it from a bill, the status
+report and the info panel ([PANEL-8](info-panel.md#PANEL-8)) say that the caching is off for the
+model in force while it is recorded, a fixed sentence from the catalog. The front end asks the
+backend crate through `bravebot_agent::backend::breakpoints_given_up`, which holds a status and a
+count and no content, and notes the answer after each turn and run, on a pick, and at start.
 
 **Why ask rather than know.** An inference-profile ARN does not say which model is behind it, which
 is the same fact that makes one figure stand in for every tier's context window. Asking costs one
@@ -1735,6 +1761,12 @@ for one that does not.
 `verified-by: bravebot_bedrock::protocol::no_lifetime_is_sent_where_none_was_chosen`
 `verified-by: bravebot_bedrock::lib::the_chosen_lifetime_is_sent_until_the_model_refuses_it`
 `verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
+`verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
+`verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
 `verified-by: bravebot_config::lib::a_checkouts_long_cache_lifetime_reaches_no_account`
@@ -1983,7 +2015,10 @@ figure reports one or the other.
 cache exactly as much as it says a round whose cache missed, and nothing here distinguishes them.
 Whatever presents these figures presents nothing when they are zero, rather than presenting a miss
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
-read nothing back reports the write and says nothing about the read.
+read nothing back reports the write and says nothing about the read. The one exception is a model
+recorded as refusing the cache breakpoints ([BACKEND-27](#BACKEND-27)), whose requests carry none
+and so can report no figure: the status report and the info panel say that the caching is off for
+it, in place of figures.
 
 **The status panel and footer report the last turn's.** A turn in flight reports its own running
 totals from the first round that completed a request ([PANEL-8](info-panel.md#PANEL-8)), and the
@@ -2049,6 +2084,8 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`
 `verified-by: bravebot_aichat::client::an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
 `verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 
 <a id="BACKEND-32"></a>
 ### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
@@ -3917,7 +3954,8 @@ this API is likeliest to refuse them: without the level, with the fallback ceili
 [BACKEND-41](#BACKEND-41), without the lifetime, without the breakpoints and last without the ask for
 arguments ([BACKEND-44](#BACKEND-44)). What answered is remembered as
 [BACKEND-22](#BACKEND-22) remembers the level, and a request refused with every concession given up
-settles nothing.
+settles nothing. The change that holds back the record of the breakpoints, [BACKEND-27](#BACKEND-27),
+is made in the Bedrock client alone: this entry and the gateway remember them on the answer.
 
 A reply is read whole or as server-sent events. A stream is complete once it says so, and one that
 stops before is a reply that did not finish, which is sent again. A failure the service reports part

@@ -749,6 +749,16 @@ pub fn bedrock_reads_effort(model: &str) -> bool {
     !bravebot_bedrock::refusals(model).effort
 }
 
+/// Whether the Bedrock model `model` is recorded as refusing the cache breakpoints, so that its
+/// requests carry none and the whole prefix is paid for on each of them.
+///
+/// False for a model no Bedrock account offers, whose requests this record says nothing about.
+/// Not content. What a service refused is the transport's own report, read from a status and from
+/// counts of requests ([BACKEND-27](../../../docs/specs/backends.md#BACKEND-27)).
+pub fn breakpoints_given_up(config: &Config, model: &str) -> bool {
+    config.bedrock_for(model).is_some() && bravebot_bedrock::breakpoints_given_up(model)
+}
+
 /// What the Ollama at `host` has pulled, for the import to offer: [`bravebot_aichat::ollama`]'s
 /// answer, reached from here because a front end does not talk to a backend crate itself.
 pub fn installed_on_ollama<S: Sink>(

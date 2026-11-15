@@ -2538,6 +2538,7 @@ status-cache-lifetime = durée demandée au service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 heure
 status-cache-lifetime-service-default = aucune, celle du service
+status-cache-given-up = désactivé pour ce modèle, qui l'a refusé
 hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
@@ -4194,6 +4195,7 @@ panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
+panel-cache-given-up = cache désactivé, refusé par le modèle
 # Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
 # de lignes de chaque sorte il a laissées de côté.
 panel-hidden-to-do = +{ $count } à faire
