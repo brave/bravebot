@@ -80,6 +80,9 @@ pub struct Laid {
     /// The row of the pane a prompt was drawn in above the view, where the frame drew one (VIEW-44).
     /// It is no row of the transcript, so a selection does not begin in it.
     pub pinned: Option<ratatui::layout::Rect>,
+    /// The row at the bottom of the pane the frame drew the button that returns to the tail in, where
+    /// it drew one (VIEW-45). It is no row of the transcript, so a selection does not reach it.
+    pub jump: Option<ratatui::layout::Rect>,
 }
 
 impl Laid {
@@ -941,6 +944,13 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Return the view to the tail, where it follows what arrives again. The key `ctrl-end` asks for
+    /// it, and so does a click on the hint that names it and on the button drawn above the box
+    /// (VIEW-1, VIEW-45, MOUSE-55).
+    pub fn return_to_the_tail(&mut self) {
+        self.scroll_down(u16::MAX);
     }
 
     /// Put the prompt drawn above the view at the top of it, which a click on that row asks for

@@ -1047,7 +1047,14 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     frame.render_widget(Paragraph::new(beneath), areas[4]);
     laid.targets
         .extend(queued_prompts(session, width, offered_height, areas[4]));
-    let (hints, taken) = draw_hint(frame, hint_row, session);
+    // Where the frame drew the button that returns to the tail it took a row from the transcript, which
+    // is a row more below the view than the session counted before the frame, so the line says the
+    // count the button does and the two never differ (VIEW-27, VIEW-45).
+    let below = match (laid.jump, laid.window) {
+        (Some(_), Some(window)) => laid.rows.saturating_sub(window.top + window.area.height),
+        _ => session.rows_below(),
+    };
+    let (hints, taken) = draw_hint(frame, hint_row, session, below);
     laid.targets.extend(hints);
     laid.hint_row = Some(crate::state::HintRow {
         area: hint_row,
@@ -1166,8 +1173,9 @@ fn inside_the_border(area: Rect) -> Rect {
 }
 
 /// The part of the transcript's pane a selection can reach. The scrollbar is chrome and not text, so
-/// the column it is in is left out (VIEW-39), and so is the row of a prompt drawn above the view,
-/// which is no row of the transcript (VIEW-44).
+/// the column it is in is left out (VIEW-39), and so are the row of a prompt drawn above the view
+/// (VIEW-44) and the row of the button that returns to the tail (VIEW-45), which are no rows of the
+/// transcript.
 fn text_beside_the_bar(laid: &Laid, pane: Rect) -> Rect {
     let pane = match laid.bar {
         Some(_) => Rect {
@@ -1176,10 +1184,17 @@ fn text_beside_the_bar(laid: &Laid, pane: Rect) -> Rect {
         },
         None => pane,
     };
-    match laid.pinned {
+    let pane = match laid.pinned {
         Some(row) => Rect {
             y: row.bottom(),
             height: pane.bottom().saturating_sub(row.bottom()),
+            ..pane
+        },
+        None => pane,
+    };
+    match laid.jump {
+        Some(row) => Rect {
+            height: row.y.saturating_sub(pane.y),
             ..pane
         },
         None => pane,
@@ -3380,6 +3395,7 @@ mod tests {
         /// column is the scrollbar (VIEW-39), so the picture is the whole transcript wrapped to one
         /// column fewer, with that column left out. Where a prompt is drawn above the view
         /// (VIEW-44), the picture is of the rows under it, and the row above them is that prompt.
+        /// Where a button is drawn under the view (VIEW-45), the picture is of the rows above it.
         #[test]
         fn drawing_the_visible_slice_matches_wrapping_the_whole_transcript() {
             let reference = |session: &Session, width: u16, height: u16| -> String {
@@ -3414,8 +3430,8 @@ mod tests {
                 for width in [40u16, 90] {
                     let height = 12;
                     let text_width = if captured { width - 1 } else { width };
-                    // The rows of the view, from the first row under a prompt drawn above it, and the
-                    // frame's record.
+                    // The rows of the view, from the first row under a prompt drawn above it to the
+                    // last one above the button drawn under it, and the frame's record.
                     let area = |session: &Session| {
                         let mut terminal =
                             Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -3425,7 +3441,8 @@ mod tests {
                             .expect("draw succeeds");
                         let buffer = terminal.backend().buffer();
                         let first = laid.pinned.map_or(0, |row| row.bottom());
-                        let drawn: String = (first..height)
+                        let last = laid.jump.map_or(height, |row| row.y);
+                        let drawn: String = (first..last)
                             .flat_map(|row| (0..text_width).map(move |column| (row, column)))
                             .map(|(row, column)| buffer[(column, row)].symbol())
                             .collect();
@@ -3434,6 +3451,15 @@ mod tests {
                                 .map(|column| buffer[(column, row.y)].symbol())
                                 .collect();
                             assert!(above.starts_with("> prompt "), "{above:?}");
+                        }
+                        if let Some(row) = laid.jump {
+                            let button: String = (0..text_width)
+                                .map(|column| buffer[(column, row.y)].symbol())
+                                .collect();
+                            assert!(
+                                button.trim().starts_with(&t!(jump_to_bottom).to_string()),
+                                "{button:?}"
+                            );
                         }
                         (drawn, laid)
                     };
@@ -3444,11 +3470,12 @@ mod tests {
                         "at the bottom, captured {captured}"
                     );
                     session.note_layout(laid);
-                    let mut pinned = 0;
+                    let (mut pinned, mut jumped) = (0, 0);
                     for held in [1u16, 2, 3, 7, 40, 301, 999] {
                         session.scroll = held;
                         let (drawn, laid) = area(&session);
                         pinned += usize::from(laid.pinned.is_some());
+                        jumped += usize::from(laid.jump.is_some());
                         assert_eq!(
                             drawn,
                             reference(&session, text_width, laid.height),
@@ -3456,6 +3483,7 @@ mod tests {
                         );
                     }
                     assert!(pinned > 0, "no view held a prompt above it");
+                    assert!(jumped > 0, "no view held a button under it");
                     session.scroll = 0;
                 }
             }

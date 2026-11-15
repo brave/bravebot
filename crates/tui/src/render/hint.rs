@@ -216,7 +216,9 @@ mod ordinary {
 }
 
 /// The parts of the hint line that do not depend on which mode the box is in.
-fn hint_facts(session: &Session) -> HintFacts {
+///
+/// `below` is how many rows lie below the view, which the frame that draws the line has measured.
+fn hint_facts(session: &Session, below: u16) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
     let looping = looping_part(session);
@@ -241,7 +243,7 @@ fn hint_facts(session: &Session) -> HintFacts {
     // The view is held where it was scrolled to, so what arrives goes below it and nothing else on
     // the screen says so. A count of rows from the layout and the key that returns, never any of
     // what those rows hold (VIEW-27).
-    let held = match session.rows_below() {
+    let held = match below {
         0 => String::new(),
         count => t!(held_hint, chord = "ctrl-end", count = count),
     };
@@ -495,7 +497,12 @@ fn expendable_parts(context_is_unmeasured: bool) -> [usize; 11] {
 /// Gives the cells of each hint a click acts on: the permission mode (MOUSE-14) and the parts that
 /// name a key (MOUSE-48). What the row only describes is not among them. With them, whether the row
 /// says a message that fills it and leaves no room for anything beside (MOUSE-51).
-pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> (Vec<Target>, bool) {
+pub(super) fn draw_hint(
+    frame: &mut Frame,
+    area: Rect,
+    session: &Session,
+    below: u16,
+) -> (Vec<Target>, bool) {
     // The files state names its keys in the panel and keeps the figures the panel has no section
     // for (FILES-4, FILES-9). Where the panel is not drawn nothing else shows the keys, so the line
     // names them, as it keeps a figure the panel does not draw (PANEL-8). Every other key does
@@ -534,7 +541,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> (Ve
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
         return (Vec::new(), true);
     }
-    let facts = hint_facts(session);
+    let facts = hint_facts(session, below);
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
     // user needs to know is which shell and how to get back out again.

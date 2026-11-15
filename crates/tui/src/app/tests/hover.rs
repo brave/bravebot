@@ -415,6 +415,7 @@ fn said_of(name: &str) -> Option<&'static str> {
         "the hint that pastes a picture" => t!(hover_footer_paste),
         "the scrollbar beside the transcript" => t!(hover_scrollbar),
         "the prompt drawn above the view" => t!(hover_pinned),
+        "the button that returns a held view to its tail" => t!(hover_to_tail),
         "a place in the text of the box" => return None,
         "a call at rest" => t!(hover_call_open),
         "the marker that leads a reply" => t!(hover_reply),

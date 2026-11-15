@@ -334,6 +334,17 @@ All of these work while a turn is running, and the view does not jump to follow 
 While the view is held off the latest, the bottom line says so and counts the rows that are below it,
 and names **Ctrl-End**, which returns to the latest. The cue goes when the view is back.
 
+**A button returns the view to the latest.** While the view is held off the latest, the last row of
+the transcript holds `↓ Jump to bottom` with the count of rows below it. The row under it is the
+status line while a turn or a command runs, and the box otherwise. Clicking
+it does what Ctrl-End does, and it is gone once the view is back. It takes that row from the
+transcript and covers none of its text. It is left out,
+and the line under the box is the only cue, in a pane narrower than the words or shorter than four
+rows, and it is not drawn in the scroller, a delegate's view, the view of an aside or of what a command
+printed, or the opening screen. It is not drawn while a question waits for your answer, and a click
+where it was answers nothing. The button is not part of the text, so
+a drag on it selects nothing and a copy never takes it.
+
 **The prompt you are reading the answer to stays at the top.** Once the prompt of the turn at the top
 of the view has scrolled off, the first row of the transcript holds it again, on one row and cut to
 fit, at rest and in the scroller. It is not part of the text, so a drag on it selects nothing and a
@@ -515,6 +526,7 @@ says what a click does and what does the same from the keyboard.
 | the marker at the start of a reply | copies that reply, as `/copy` does. A reply still arriving has none to click until it ends | `/copy` |
 | `copy` at the right of a code block's header | copies that block alone, as the reply wrote it | `/copy block`, or `/copy block 2` for the one before |
 | a call that has more to show | at the prompt, including while a turn runs, opens the scroller on that call, expanded. In the scroller it expands the call, and again collapses it | Ctrl-O, then `x` |
+| `↓ Jump to bottom` at the bottom of a view held off the latest | returns the view to the latest, also while a turn runs | Ctrl-End |
 | a delegate's block | opens that delegate's view, in the scroller, at the prompt and while a turn runs | Ctrl-L |
 | `‹ back` in the header of a delegate's view, or the sentence that closes it | leaves the view and returns to what it was opened over | Ctrl-L |
 | a prompt waiting behind a turn | takes it back into the box, with the prompts typed after it | Up, which takes them all |
@@ -620,7 +632,7 @@ While the mouse is captured and the transcript is longer than the room for it, a
 the last column of the transcript, in the plain view and not in the scroller, a delegate's view, the
 search over earlier prompts or the opening screen. Its thumb shows where the view is in the whole,
 and the lines wrap to the columns it leaves. It runs beside the rows under the prompt kept at the
-top, where one is. Pressing in the column puts the middle of the thumb where
+top, where one is, and above the button that returns to the latest, where one is. Pressing in the column puts the middle of the thumb where
 you pressed, and dragging the thumb scrolls with the pointer, from wherever in the window the pointer
 goes: above or below the column is the first row or the last. It answers while a turn runs. It is not
 part of the text, so a drag across it copies nothing from it. The wheel, the arrow keys and the page

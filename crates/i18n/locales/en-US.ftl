@@ -3510,6 +3510,14 @@ held-hint = { $count ->
     [one] held, { $count } row below  ·  { $chord } to return
    *[other] held, { $count } rows below  ·  { $chord } to return
     }
+# The button at the bottom of the transcript while the view is held off its tail (VIEW-45): its
+# words with how many rows lie below the view, and its words alone where the room has none for the
+# count.
+jump-to-bottom = ↓ Jump to bottom
+jump-to-bottom-rows = { $count ->
+    [one] ↓ Jump to bottom  ·  { $count } row below
+   *[other] ↓ Jump to bottom  ·  { $count } rows below
+    }
 # Said on the bottom line while a background job runs, and gone once the last one ends.
 jobs-hint = { $count ->
     [one] 1 in the background
@@ -5684,6 +5692,7 @@ hover-footer-paste = click to paste the picture
 hover-item = click to choose this one, click again to take it
 hover-scrollbar = click to move the view here, drag the thumb to scroll
 hover-pinned = click to go to this prompt
+hover-to-tail = click to return to the latest rows
 
 # The small menu a right click opens over a reply, a delegate's block or a held selection. One word
 # or short phrase to an item, and each item does what the command or the click it stands for does.

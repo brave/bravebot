@@ -1596,7 +1596,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         KeyCode::End if ctrl => {
-            session.scroll_down(u16::MAX);
+            session.return_to_the_tail();
             Action::Redraw
         }
         // How the letters become instructions, for somebody editing the way vi does, in both of the
@@ -2243,6 +2243,11 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
             session.go_to_the_pinned_prompt(row);
             true
         }
+        // The button above the box returns the view to the tail as `ctrl-end` does (MOUSE-55).
+        Hit::ToTail => {
+            session.return_to_the_tail();
+            true
+        }
         // A prompt waiting behind the turn comes back into the box, with the ones typed after it, as
         // Up takes them all. A command a click queued has nothing to put there, so the click removes
         // it, and so do the words on the row (MOUSE-28).
@@ -2436,6 +2441,7 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Wheel(_)
         | Hit::Scrollbar
         | Hit::Pinned(_)
+        | Hit::ToTail
         | Hit::Item(_)
         | Hit::Text { .. }
         | Hit::Link(_)
@@ -2498,7 +2504,7 @@ fn click_footer(session: &mut Session, target: crate::state::Footer) -> Action {
         Footer::Background => {
             session.move_to_background();
         }
-        Footer::Held => session.scroll_down(u16::MAX),
+        Footer::Held => session.return_to_the_tail(),
         Footer::CancelShell => session.clear_input(),
         Footer::Paste => return Action::Paste,
     }

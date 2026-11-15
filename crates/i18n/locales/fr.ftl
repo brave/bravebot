@@ -4056,6 +4056,14 @@ held-hint = { $count ->
     [one] figée, { $count } ligne en dessous  ·  { $chord } pour revenir
    *[other] figée, { $count } lignes en dessous  ·  { $chord } pour revenir
     }
+# Le bouton en bas de la transcription tant que la vue est remontée au-dessus de la fin
+# (VIEW-45) : ses mots avec le nombre de lignes en dessous de la vue, et ses mots seuls là où la
+# place manque pour le nombre.
+jump-to-bottom = ↓ Aller en bas
+jump-to-bottom-rows = { $count ->
+    [one] ↓ Aller en bas  ·  { $count } ligne en dessous
+   *[other] ↓ Aller en bas  ·  { $count } lignes en dessous
+    }
 # Dit sur la ligne du bas tant qu'une tâche en arrière-plan tourne, et retiré quand la dernière se
 # termine.
 jobs-hint = { $count ->
@@ -4601,6 +4609,7 @@ hover-footer-paste = cliquer pour coller l'image
 hover-item = cliquer pour choisir celui-ci, cliquer encore pour le prendre
 hover-scrollbar = cliquer pour amener la vue ici, glisser le curseur pour défiler
 hover-pinned = cliquer pour aller à cette invite
+hover-to-tail = cliquer pour revenir aux dernières lignes
 
 # Le petit menu qu'un clic droit ouvre sur une réponse, le bloc d'un délégué ou une sélection tenue.
 # Un mot ou une courte expression par entrée, et chacune fait ce que fait la commande ou le clic

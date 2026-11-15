@@ -2,6 +2,7 @@
 //! drawn beneath it.
 
 use super::hints;
+use super::jump;
 use super::pinned;
 use super::scrollbar;
 use super::*;
@@ -199,6 +200,11 @@ pub(super) fn targets() -> Vec<Target> {
             "the prompt drawn above the view",
             pinned::located_on_the_pinned_prompt,
             pinned::went_to_the_prompt,
+        ),
+        Target::plain(
+            "the button that returns a held view to its tail",
+            jump::located_on_the_button,
+            jump::returned_to_the_tail,
         ),
         Target::plain(
             "a place in the text of the box",

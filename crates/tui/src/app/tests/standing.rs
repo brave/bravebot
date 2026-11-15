@@ -160,13 +160,14 @@ enum Kind {
     Item,
     Scrollbar,
     Pinned,
+    ToTail,
     Popup,
     PopupRows,
     Match,
     SessionsScreen,
 }
 
-const KINDS: [Kind; 21] = [
+const KINDS: [Kind; 22] = [
     Kind::Back,
     Kind::Reply,
     Kind::Block,
@@ -184,6 +185,7 @@ const KINDS: [Kind; 21] = [
     Kind::Item,
     Kind::Scrollbar,
     Kind::Pinned,
+    Kind::ToTail,
     Kind::Popup,
     Kind::PopupRows,
     Kind::Match,
@@ -209,6 +211,7 @@ fn kind_of(hit: Hit) -> Kind {
         Hit::Item(_) => Kind::Item,
         Hit::Scrollbar => Kind::Scrollbar,
         Hit::Pinned(_) => Kind::Pinned,
+        Hit::ToTail => Kind::ToTail,
         Hit::Popup(_) => Kind::Popup,
         Hit::PopupRows(_) => Kind::PopupRows,
         Hit::Match(_) => Kind::Match,
@@ -273,7 +276,8 @@ const THE_LIST_UNDER_THE_BOX: Stands = [
     true, true, true, false, false, false, false, true, false, false,
 ];
 
-/// The scrollbar is kept beside the transcript by the files state.
+/// The scrollbar, and the button that returns the view to the tail, are kept in the transcript's pane
+/// by the files state.
 const THE_SCROLLBAR: Stands = [
     true, true, true, false, false, false, false, true, false, false,
 ];
@@ -322,6 +326,7 @@ fn expected(name: &str) -> (Kind, Stands) {
         }
         "the scrollbar beside the transcript" => (Kind::Scrollbar, THE_SCROLLBAR),
         "the prompt drawn above the view" => (Kind::Pinned, A_TARGET_OF_THE_TRANSCRIPT),
+        "the button that returns a held view to its tail" => (Kind::ToTail, THE_SCROLLBAR),
         "a place in the text of the box" => (Kind::Text, A_ROW_OF_THE_PLAIN_FRAME),
         "the marker that leads a reply" => (Kind::Reply, A_TARGET_OF_THE_TRANSCRIPT),
         "the word that copies a fenced block" => (Kind::Block, A_TARGET_OF_THE_TRANSCRIPT),
