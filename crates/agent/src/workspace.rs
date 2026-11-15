@@ -6137,6 +6137,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(path);
     }
 
+    /// A link that leads into a directory whose name is not text lands on no name a rule is about
+    /// (PATH-003). The regression it rejects: the landing spelled with a lossy rendering, which is
+    /// the name of a different directory. Linux only, because the name has to exist on disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_into_a_directory_whose_name_is_not_text_has_no_landing() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("not-text");
+        let invalid = path.join(std::ffi::OsStr::from_bytes(b"lint-\xff"));
+        std::fs::create_dir(&invalid).unwrap();
+        std::fs::write(invalid.join("a.md"), "a").unwrap();
+        std::os::unix::fs::symlink(&invalid, path.join("shared")).unwrap();
+        assert_eq!(workspace.landing("shared/a.md"), None);
+        assert_eq!(workspace.landing("shared"), None);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
     /// A hard link is another name for the file a rule is about, and nothing in its name says so
     /// (PERM-7). A file with one name has no other, and a walk that cannot finish says so instead
     /// of answering "none".
