@@ -903,6 +903,13 @@ the clock: that it exited 0, which stages did not and with what code, or that it
 limit and was stopped. It stands in front of what the program printed, and it is there in the same
 words where the output is quarantined and the caller holds a reference to it instead.
 
+A stage a signal ended is told by the signal's number and, where the system the program ran on
+names it, the name: `step 1 was ended by signal 9 (SIGKILL)`. A stage with no exit code and no
+signal, which is one whose status could not be read, is told as `step 1 ended without an exit
+code`, since a signal that was not read is not one to name. The number is the one the system
+reported for the stage and the name is looked up from it, so neither holds a byte the program
+printed. A command substitution a signal ended is refused with the same words.
+
 A step that `SIGPIPE` ended is not one of those stages when a later step of the same pipeline
 exited 0: the next step closed its input, as `producer | head` does, and a shell would report the
 last step. The sentence says the run exited 0 and that the step stopped because the next step closed
@@ -937,6 +944,10 @@ where it also cannot tell success from failure.
 `verified-by: bravebot_agent::exec::a_background_stage_ended_by_sigpipe_behind_head_is_closed`
 `verified-by: bravebot_agent::tools::a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
+`verified-by: bravebot_agent::tools::each_failed_step_is_named_by_its_place_and_how_it_ended`
+`verified-by: bravebot_agent::tools::a_signal_with_no_name_is_told_by_its_number_alone`
+`verified-by: bravebot_agent::turn::a_job_output_call_names_the_signal_that_ended_a_finished_job`
+`verified-by: bravebot_agent::exec::a_substitution_ended_by_a_signal_is_refused_naming_the_signal`
 
 <a id="RUN-14"></a>
 ### RUN-14: a quarantined result says what would lift the quarantine

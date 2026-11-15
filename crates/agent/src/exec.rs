@@ -321,10 +321,11 @@ pub struct Ran {
     /// Kept apart from stdout because a stage that failed usually explains itself here, and a
     /// person reading the result should be able to tell the explanation from the output.
     pub stderr: String,
-    /// The exit code of each stage, in order. `None` where a stage was killed by a signal.
+    /// The exit code of each stage, in order. `None` where a stage was ended by a signal, which
+    /// [`Ran::signals`] then names, and where its status could not be read.
     pub codes: Vec<Option<i32>>,
     /// The signal that ended each stage, in order, where one did. `None` where a stage exited on its
-    /// own, and on a platform with no signals.
+    /// own, where its status could not be read, and on a platform with no signals.
     pub signals: Vec<Option<i32>>,
     /// Whether each stage was ended by `SIGPIPE` because a later stage of the same pipeline had
     /// closed its input and exited 0, which is what `producer | head` does to the producer. Such a
@@ -411,6 +412,72 @@ impl StopSignal {
     #[cfg(not(unix))]
     pub fn name(self) -> Option<&'static str> {
         None
+    }
+}
+
+/// The name of the signal a system numbers `number`, for the signals Linux and macOS both define,
+/// and `None` for any other number.
+///
+/// The numbers differ between the two systems (`SIGUSR1` is 10 on Linux and 30 on macOS), so the
+/// lookup goes through the number the running system gives each signal and never through a table
+/// of numbers. It reads a number the kernel reported for a child this module started and no byte
+/// the child printed.
+#[cfg(unix)]
+pub fn signal_name(number: i32) -> Option<&'static str> {
+    use rustix::process::Signal;
+    let named = Signal::from_named_raw(number)?;
+    [
+        (Signal::HUP, "SIGHUP"),
+        (Signal::INT, "SIGINT"),
+        (Signal::QUIT, "SIGQUIT"),
+        (Signal::ILL, "SIGILL"),
+        (Signal::TRAP, "SIGTRAP"),
+        (Signal::ABORT, "SIGABRT"),
+        (Signal::BUS, "SIGBUS"),
+        (Signal::FPE, "SIGFPE"),
+        (Signal::KILL, "SIGKILL"),
+        (Signal::USR1, "SIGUSR1"),
+        (Signal::SEGV, "SIGSEGV"),
+        (Signal::USR2, "SIGUSR2"),
+        (Signal::PIPE, "SIGPIPE"),
+        (Signal::ALARM, "SIGALRM"),
+        (Signal::TERM, "SIGTERM"),
+        (Signal::CHILD, "SIGCHLD"),
+        (Signal::CONT, "SIGCONT"),
+        (Signal::STOP, "SIGSTOP"),
+        (Signal::TSTP, "SIGTSTP"),
+        (Signal::TTIN, "SIGTTIN"),
+        (Signal::TTOU, "SIGTTOU"),
+        (Signal::URG, "SIGURG"),
+        (Signal::XCPU, "SIGXCPU"),
+        (Signal::XFSZ, "SIGXFSZ"),
+        (Signal::VTALARM, "SIGVTALRM"),
+        (Signal::PROF, "SIGPROF"),
+        (Signal::WINCH, "SIGWINCH"),
+        (Signal::IO, "SIGIO"),
+        (Signal::SYS, "SIGSYS"),
+    ]
+    .into_iter()
+    .find(|(signal, _)| *signal == named)
+    .map(|(_, name)| name)
+}
+
+/// There are no signals to name where there are none.
+#[cfg(not(unix))]
+pub fn signal_name(number: i32) -> Option<&'static str> {
+    let _ = number;
+    None
+}
+
+/// The words that say a stage was ended by the signal numbered `number`: `signal 9 (SIGKILL)`, or
+/// `signal 64` where the number has no name here.
+///
+/// Fixed words and a number the kernel reported, so the sentence a planner reads about how a run
+/// ended is the driver's and holds nothing a program printed.
+pub fn signal_phrase(number: i32) -> String {
+    match signal_name(number) {
+        Some(name) => format!("signal {number} ({name})"),
+        None => format!("signal {number}"),
     }
 }
 
@@ -983,12 +1050,16 @@ impl<'a> Running<'a> {
                 .codes
                 .iter()
                 .zip(&inner.closed)
+                .enumerate()
                 .rev()
-                .find(|(code, closed)| !**closed && **code != Some(0))
-                .map(|(code, _)| code)
+                .find(|(_, (code, closed))| !**closed && **code != Some(0))
+                .map(|(at, (code, _))| (code, inner.signals.get(at).copied().flatten()))
             {
-                Some(Some(code)) => format!("it exited with status {code}"),
-                Some(None) => "it was ended by a signal".to_string(),
+                Some((Some(code), _)) => format!("it exited with status {code}"),
+                Some((None, Some(signal))) => {
+                    format!("it was ended by {}", signal_phrase(signal))
+                }
+                Some((None, None)) => "it ended without an exit code".to_string(),
                 None => "it failed".to_string(),
             };
             return Err(ended_in(&detail));

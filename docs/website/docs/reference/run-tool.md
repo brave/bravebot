@@ -572,7 +572,8 @@ too: a later step that succeeds does not hide an earlier failure. A step that `S
 a later step of the same pipeline closed its input and exited zero, as `producer | head` does, is
 not a failure: the result says the run exited 0 and that the step stopped because the next step
 closed its input. Any other signal, and `SIGPIPE` with no later step that exited zero, is still
-reported as a failure. It is said for quarantined output too,
+reported as a failure. A step a signal ended is named by the signal's number and, where the system
+names it, the name: `step 1 was ended by signal 9 (SIGKILL)`. It is said for quarantined output too,
 where the planner holds a reference it may not read. The verdict is read off the processes and the
 clock, never out of a byte the program printed, so it is structure exactly as a line count is and
 puts nothing in the planner's context that a program chose.

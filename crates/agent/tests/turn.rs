@@ -33757,12 +33757,18 @@ fn a_step_killed_beside_head_is_still_told_as_a_failure() {
         &format!("{} | head -n 1", killed.display()),
         mode,
     );
-    assert!(result.contains("It failed: step 1 was killed"), "{result}");
+    assert!(
+        result.contains("It failed: step 1 was ended by signal 9 (SIGKILL)"),
+        "{result}"
+    );
     assert!(!result.contains("It exited 0."), "{result}");
 
     let piped = a_stub_named(&scratch.path, "piped", "stub-piped", "kill -13 $$");
     let result = result_of_running_line(&scratch.path, &piped.display().to_string(), mode);
-    assert!(result.contains("It failed: step 1 was killed"), "{result}");
+    assert!(
+        result.contains("It failed: step 1 was ended by signal 13 (SIGPIPE)"),
+        "{result}"
+    );
 }
 
 /// The exit status is structure rather than content, so it is told even where none of the bytes
@@ -37113,7 +37119,12 @@ fn the_process_listing_sentence_is_the_same_words_for_any_exit_code() {
         ("exit-1", "pgrep", "exit 1", "step 1 exited 1"),
         ("exit-2", "pgrep", "exit 2", "step 1 exited 2"),
         ("exit-3", "pgrep", "exit 3", "step 1 exited 3"),
-        ("killed", "pgrep", "kill -9 $$", "step 1 was killed"),
+        (
+            "killed",
+            "pgrep",
+            "kill -9 $$",
+            "step 1 was ended by signal 9 (SIGKILL)",
+        ),
         ("ps-exit-71", "ps", "exit 71", "step 1 exited 71"),
         ("lsof-exit-1", "lsof", "exit 1", "step 1 exited 1"),
     ] {
@@ -66910,6 +66921,67 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
         !after.contains("It exited 0"),
         "a job that failed was reported to the planner as having exited 0: {after}"
     );
+}
+
+/// RUN-13: a job a signal ended is told to the planner with the signal's number and name, for each
+/// of three signals, so a planner can tell a kill for memory from a request to end and from a
+/// crash. The fault it rejects is the background path reading the codes alone, which says nothing
+/// of the signal, and a name table that is right for one signal only.
+#[test]
+#[cfg(unix)]
+fn a_job_output_call_names_the_signal_that_ended_a_finished_job() {
+    for (signal, words) in [
+        (9, "step 1 was ended by signal 9 (SIGKILL)"),
+        (15, "step 1 was ended by signal 15 (SIGTERM)"),
+        (11, "step 1 was ended by signal 11 (SIGSEGV)"),
+    ] {
+        let scratch = Scratch::new("background-signalled");
+        let script = scratch.path.join("signalled");
+        std::fs::write(&script, format!("#!/bin/sh\nsleep 1\nkill -{signal} $$\n")).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("run", r#"{"command":"./signalled","background":true}"#),
+            tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let mut confirmer =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it and wait for it"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        let after = bodies
+            .last()
+            .expect("the planner was asked nothing after the wait");
+        assert!(
+            after.contains(words),
+            "the signal that ended the job never reached the planner: {after}"
+        );
+        assert!(!after.contains("was killed"), "{after}");
+    }
 }
 
 /// What the flag is for, through the whole path rather than at the unit that parses it. A job that

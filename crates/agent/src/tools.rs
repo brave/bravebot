@@ -1562,6 +1562,7 @@ impl Jobs {
             } else if job.running.ended() {
                 how_it_ended(
                     job.running.codes(),
+                    job.running.signals(),
                     &job.running.closed(),
                     job.confinement.as_deref(),
                 )
@@ -1659,6 +1660,7 @@ impl Jobs {
                     name,
                     outcome: how_it_ended(
                         job.running.codes(),
+                        job.running.signals(),
                         &job.running.closed(),
                         job.confinement.as_deref(),
                     ),
@@ -1749,7 +1751,7 @@ fn write_it_yourself(beside: Beside) -> &'static str {
     }
 }
 
-/// How a job that has ended finished, read off the exit code of each of its steps.
+/// How a job that has ended finished, read off the exit code and the signal of each of its steps.
 ///
 /// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
 /// than succeeded where a step did not exit zero, because a planner that waited for a build and was
@@ -1757,10 +1759,11 @@ fn write_it_yourself(beside: Beside) -> &'static str {
 /// is the only account of it the planner ever gets.
 fn how_it_ended(
     codes: &[Option<i32>],
+    signals: &[Option<i32>],
     closed: &[bool],
     confinement: Option<&str>,
 ) -> crate::report::Outcome {
-    let failed = failed_steps(codes, closed);
+    let failed = failed_steps(codes, signals, closed);
     if !failed.is_empty() {
         crate::report::Outcome::Failed {
             detail: failed,
@@ -1784,17 +1787,30 @@ fn how_it_ended(
 /// joined by commas. A step ended by `SIGPIPE` after a later step of its pipeline exited zero is
 /// not one of them (RUN-13): `closed` marks it.
 ///
-/// Read off the exit codes and the pipeline layout alone, so no byte of what the steps printed
-/// reaches it. Empty where every step exited zero or was closed by a later step.
-fn failed_steps(codes: &[Option<i32>], closed: &[bool]) -> String {
+/// A step that exited says its code. A step a signal ended says the signal's number and, where the
+/// system names it, the name, so a planner can tell a program the kernel killed for memory
+/// (`SIGKILL`) from one that was asked to end (`SIGTERM`) or that crashed (`SIGSEGV`). A step with
+/// neither, which is one whose status could not be read, says only that it ended without an exit
+/// code, since a signal that was not read is not one to name.
+///
+/// Read off the exit codes, the signals and the pipeline layout alone, so no byte of what the steps
+/// printed reaches it. Empty where every step exited zero or was closed by a later step.
+fn failed_steps(codes: &[Option<i32>], signals: &[Option<i32>], closed: &[bool]) -> String {
     codes
         .iter()
         .enumerate()
         .filter(|(at, code)| **code != Some(0) && !closed.get(*at).copied().unwrap_or(false))
-        .map(|(at, code)| match code {
-            Some(code) => format!("step {} exited {code}", at + 1),
-            None => format!("step {} was killed", at + 1),
-        })
+        .map(
+            |(at, code)| match (code, signals.get(at).copied().flatten()) {
+                (Some(code), _) => format!("step {} exited {code}", at + 1),
+                (None, Some(signal)) => format!(
+                    "step {} was ended by {}",
+                    at + 1,
+                    crate::exec::signal_phrase(signal)
+                ),
+                (None, None) => format!("step {} ended without an exit code", at + 1),
+            },
+        )
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -12619,7 +12635,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     confinement
                         .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
                 });
-                how_it_ended(&ran.codes, &ran.closed, confinement.as_deref())
+                how_it_ended(
+                    &ran.codes,
+                    &ran.signals,
+                    &ran.closed,
+                    confinement.as_deref(),
+                )
             };
             let lines = text.lines().count();
             let mut note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
@@ -13465,6 +13486,7 @@ fn job_output<S: Sink, R: Reporter>(
     } else if ended {
         how_it_ended(
             job.running.codes(),
+            job.running.signals(),
             &job.running.closed(),
             job.confinement.as_deref(),
         )
@@ -17500,14 +17522,45 @@ mod tests {
 
     /// The planner is told which step failed and how, and acts on that number: a step counted
     /// among the failures rather than among the steps, or a killed step left out, sends it to fix
-    /// the wrong program.
+    /// the wrong program. A step a signal ended names the signal, since a program killed for memory
+    /// and one asked to end call for different next steps, and a step whose status was not read says
+    /// no signal, since none was read.
     #[test]
     fn each_failed_step_is_named_by_its_place_and_how_it_ended() {
         assert_eq!(
-            failed_steps(&[Some(2), Some(0), None], &[false, false, false]),
-            "step 1 exited 2, step 3 was killed"
+            failed_steps(
+                &[Some(2), Some(0), None],
+                &[None, None, Some(9)],
+                &[false, false, false]
+            ),
+            "step 1 exited 2, step 3 was ended by signal 9 (SIGKILL)"
         );
-        assert_eq!(failed_steps(&[Some(0), Some(0)], &[false, false]), "");
+        assert_eq!(
+            failed_steps(&[Some(0), Some(0)], &[None, None], &[false, false]),
+            ""
+        );
+        assert_eq!(
+            failed_steps(&[None], &[None], &[false]),
+            "step 1 ended without an exit code"
+        );
+        assert_eq!(
+            failed_steps(&[None], &[], &[false]),
+            "step 1 ended without an exit code"
+        );
+    }
+
+    /// RUN-13: a signal with no name on this system is still told by its number, and a signal a
+    /// stage exited with a code beside is not told, since the code is what the step did.
+    #[test]
+    fn a_signal_with_no_name_is_told_by_its_number_alone() {
+        assert_eq!(
+            failed_steps(&[None], &[Some(9999)], &[false]),
+            "step 1 was ended by signal 9999"
+        );
+        assert_eq!(
+            failed_steps(&[Some(3)], &[Some(9)], &[false]),
+            "step 1 exited 3"
+        );
     }
 
     /// RUN-13: a step `SIGPIPE` ended because a later step closed its input is not named as a
@@ -17517,17 +17570,20 @@ mod tests {
     #[test]
     fn a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is() {
         let closed = [true, false, false];
-        assert_eq!(failed_steps(&[None, Some(0), Some(0)], &closed), "");
         assert_eq!(
-            failed_steps(&[None, None, Some(0)], &closed),
-            "step 2 was killed"
+            failed_steps(&[None, Some(0), Some(0)], &[Some(13), None, None], &closed),
+            ""
+        );
+        assert_eq!(
+            failed_steps(&[None, None, Some(0)], &[Some(13), Some(9), None], &closed),
+            "step 2 was ended by signal 9 (SIGKILL)"
         );
         assert!(matches!(
-            how_it_ended(&[None, Some(0)], &[true, false], None),
+            how_it_ended(&[None, Some(0)], &[Some(13), None], &[true, false], None),
             crate::report::Outcome::Closed { steps } if steps == [1]
         ));
         assert!(matches!(
-            how_it_ended(&[None, None], &[false, false], None),
+            how_it_ended(&[None, None], &[Some(9), Some(9)], &[false, false], None),
             crate::report::Outcome::Failed { .. }
         ));
     }

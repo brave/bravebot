@@ -4370,3 +4370,37 @@ fn a_background_stage_ended_by_sigpipe_behind_head_is_closed() {
     assert_eq!(job.signals(), [Some(13), None]);
     assert_eq!(job.closed(), [true, false]);
 }
+
+/// RUN-13: a substitution a signal ended is refused naming the signal by number and name, as a step
+/// of a line is, and still names nothing the substitution printed. The fault it rejects is the
+/// general words `it was ended by a signal`, which leave a planner unable to tell a kill for memory
+/// from a crash.
+#[cfg(unix)]
+#[test]
+fn a_substitution_ended_by_a_signal_is_refused_naming_the_signal() {
+    let scratch = Scratch::new("expand-signalled");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let fail = script(
+        &scratch.path,
+        "fail.sh",
+        "#!/bin/sh\necho LEAKME-out\nkill -9 $$\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution(
+                    "fail.sh --flag",
+                    expanding(&fail, &[], Vec::new()),
+                )],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a killed substitution was used");
+    let shown = error.to_string();
+    assert!(shown.contains("signal 9 (SIGKILL)"), "{shown}");
+    assert!(!shown.contains("LEAKME"), "{shown}");
+}
