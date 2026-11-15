@@ -4068,6 +4068,15 @@ jobs-hint = { $count ->
     [one] 1 en arrière-plan
    *[other] { $count } en arrière-plan
     }
+# La ligne au-dessus de la zone de saisie quand un tour est fini et que quelque chose continue sans
+# que personne ne tape : une boucle, une ligne que /after retient, une surveillance de fichier ou une
+# tâche en arrière-plan. Le libellé ouvre la ligne, et le renvoi la ferme là où elle tient en entier.
+standing-label = toujours actif
+standing-pointer = /status pour la liste
+standing-watches = { $count ->
+    [one] surveille 1 fichier
+   *[other] surveille { $count } fichiers
+    }
 # Où en est une tâche en arrière-plan, dans la vue qu'ouvre sa ligne et dans /status. La durée vient
 # de l'horloge de ce côté, comptée depuis le lancement de la ligne.
 job-running = en cours depuis { $ran_for }

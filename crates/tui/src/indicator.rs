@@ -160,6 +160,33 @@ fn glyph_for(elapsed: Duration, stilled: bool) -> &'static str {
     FRAMES[(elapsed.as_millis() / FRAME_MILLIS) as usize % FRAMES.len()]
 }
 
+/// The light beside the row that says something goes on with no turn running: full one second and
+/// hollow the next.
+///
+/// Slower and plainer than the spinner on purpose. The spinner turns while the session spends
+/// tokens, and this row is drawn once a turn is over, so a shape that turned would say the turn is
+/// still going. A light that goes on and off says the session is there and waiting, and it is the
+/// part of the row that moves when nothing else on the screen does.
+pub fn standing_glyph_at(second: u64) -> &'static str {
+    standing_glyph_for(second, stilled())
+}
+
+/// The light for a second, given whether the indicator is standing still. The answer is taken as
+/// an argument for the reason [`glyph_for`] takes it.
+fn standing_glyph_for(second: u64, stilled: bool) -> &'static str {
+    if stilled || second.is_multiple_of(2) {
+        STANDING_ON
+    } else {
+        STANDING_OFF
+    }
+}
+
+/// The light while it is on, and where motion is not wanted.
+const STANDING_ON: &str = "●";
+
+/// The light while it is off.
+const STANDING_OFF: &str = "○";
+
 /// Format a duration the way someone waiting reads it.
 ///
 /// Seconds alone up to a minute, then minutes and seconds. No hours: a turn that ran that long
@@ -288,6 +315,28 @@ mod tests {
         let first = glyph_for(Duration::from_millis(0), false);
         let next = glyph_for(Duration::from_millis(FRAME_MILLIS as u64), false);
         assert_ne!(first, next);
+    }
+
+    /// The light is what moves on a screen where nothing else does, so each second is a different
+    /// one from the last. A light that held one shape would be the `done` line with a dot beside
+    /// it.
+    #[test]
+    fn the_standing_light_changes_every_second() {
+        let lights: Vec<&str> = (0..4)
+            .map(|second| standing_glyph_for(second, false))
+            .collect();
+        assert_eq!(
+            lights,
+            [STANDING_ON, STANDING_OFF, STANDING_ON, STANDING_OFF]
+        );
+    }
+
+    /// Declining motion leaves the light on rather than taking it away, for the reason the spinner
+    /// keeps a glyph: the row is how somebody tells a session that is waiting from one that has
+    /// ended.
+    #[test]
+    fn the_standing_light_stays_on_where_no_motion_is_asked_for() {
+        assert!((0..4).all(|second| standing_glyph_for(second, true) == STANDING_ON));
     }
 
     /// The shape asked for, end to end.

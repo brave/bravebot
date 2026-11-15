@@ -3521,6 +3521,15 @@ jobs-hint = { $count ->
     [one] 1 in the background
    *[other] { $count } in the background
     }
+# The row above the box once a turn is over, while something goes on with nobody typing: a loop, a
+# line held by /after, a file watch or a background job. The label opens the row, and the pointer
+# closes it where there is room for the whole of it.
+standing-label = still active
+standing-pointer = /status for the list
+standing-watches = { $count ->
+    [one] watching 1 file
+   *[other] watching { $count } files
+    }
 # Where a background job is, in the view a row opens and in /status. How long is this end's clock,
 # counted from when the line started.
 job-running = running { $ran_for }

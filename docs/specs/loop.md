@@ -303,12 +303,13 @@ open.
 
 Each tick is announced with the number of its loop, the one `/loop stop` takes, and its own number
 among that loop's ticks, and with how many ticks in a row have reported finding nothing where there
-have been any. Three places say a loop is live, and a session with no loop says nothing about loops in any
+have been any. Four places say a loop is live, and a session with no loop says nothing about loops in any
 of them:
 
 | Where | What it says |
 |---|---|
 | the row under the input box, whichever mode it is in | that a loop is live, or how many are, and when the next tick is due where a moment is known |
+| the row above the box, once a turn has ended ([WATCH-25](watching.md#WATCH-25)) | the same words, with the other things still active and a light that changes every second |
 | `/loop`, with no argument | each loop under its number: the repeated line, the pacing, when its next tick is due, and how to end one |
 | `/status` | a row for each loop under its number where there are several: the repeated line, the pacing, and when its next tick is due |
 

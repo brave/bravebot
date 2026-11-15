@@ -114,7 +114,8 @@ const POLL: Duration = Duration::from_millis(100);
 /// stale in.
 const COUNTDOWN: Duration = Duration::from_secs(1);
 
-/// Whether a pass with no event in it owes the row under the box a frame anyway.
+/// Whether a pass with no event in it owes the rows around the box a frame anyway: the countdown
+/// under it while a loop is live, and the light above it while anything is still active.
 fn a_countdown_is_owed_a_frame(counting_down: bool, since_drawn: Duration) -> bool {
     counting_down && since_drawn >= COUNTDOWN
 }
@@ -3314,7 +3315,7 @@ fn next_idle_action(
             return Ok(Some(action));
         }
     }
-    if a_countdown_is_owed_a_frame(session.looping().is_some(), drawn_at.elapsed()) {
+    if a_countdown_is_owed_a_frame(session.is_standing(), drawn_at.elapsed()) {
         *needs_draw = true;
     }
     // The face on the opening screen blinks and glances without a key, and is

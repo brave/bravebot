@@ -146,6 +146,32 @@ pub(crate) fn context_reading(session: &Session) -> String {
     }
 }
 
+/// What the session says about the loops it holds, or nothing where it holds none.
+///
+/// Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
+/// is live to be counted. The row above the box says the same words once a turn is over, so both
+/// read them from here.
+pub(super) fn looping_part(session: &Session) -> String {
+    let now = std::time::Instant::now();
+    let soonest = |once: bool| {
+        let held = || {
+            session
+                .loops()
+                .iter()
+                .filter(move |running| running.once() == once)
+        };
+        (
+            held().count(),
+            held().filter_map(|running| running.until(now)).min(),
+        )
+    };
+    match (soonest(false), soonest(true)) {
+        ((0, _), (0, _)) => String::new(),
+        ((0, _), (_, until)) => after_part(until),
+        ((count, until), _) => loop_part(count, until),
+    }
+}
+
 /// The six parts both lines draw, read before either branch is taken.
 struct HintFacts {
     looping: String,
@@ -193,26 +219,7 @@ mod ordinary {
 fn hint_facts(session: &Session) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
-    // Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
-    // is live to be counted.
-    let now = std::time::Instant::now();
-    let soonest = |once: bool| {
-        let held = || {
-            session
-                .loops()
-                .iter()
-                .filter(move |running| running.once() == once)
-        };
-        (
-            held().count(),
-            held().filter_map(|running| running.until(now)).min(),
-        )
-    };
-    let looping = match (soonest(false), soonest(true)) {
-        ((0, _), (0, _)) => String::new(),
-        ((0, _), (_, until)) => after_part(until),
-        ((count, until), _) => loop_part(count, until),
-    };
+    let looping = looping_part(session);
 
     // Named only once a turn has left a trail to look at. Offering the key before that is a line
     // under the box inviting a press that changes nothing on screen, and what a person learns from

@@ -7127,6 +7127,256 @@ mod tests {
         );
     }
 
+    /// Every row of the screen at `width` columns, top to bottom.
+    fn screen_rows(session: &Session, width: u16) -> Vec<String> {
+        let height = 24;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The row above the box that says the session is still active, and the row after it.
+    fn the_still_active_row(session: &Session, width: u16) -> Option<(String, String)> {
+        let rows = screen_rows(session, width);
+        let at = rows
+            .iter()
+            .position(|row| row.contains(&t!(standing_label).to_string()))?;
+        Some((rows[at].clone(), rows[at + 1].clone()))
+    }
+
+    fn a_session_whose_turn_has_ended() -> Session {
+        let mut session = Session::new("kernel-enforced");
+        session.type_char('a');
+        session.submit();
+        session.complete("done", Vec::new(), 0);
+        session
+    }
+
+    /// A turn a loop's first tick started has ended, and the loop is waiting for the next one. The
+    /// tick comes first because it is what starts the turn, and a turn starting is what clears the
+    /// line that says the last one ended.
+    fn a_session_whose_turn_has_ended_in_a_loop() -> Session {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        session
+    }
+
+    fn a_watch_on(session: &mut Session, path: &str) {
+        session.arm_watch(
+            path,
+            "/work",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+    }
+
+    /// The end of a turn says `done`, and a loop that goes on after it was a dim part at the far
+    /// end of the bottom row. The row that says it is the one against the box, under the line that
+    /// says the turn is over, because that is the pair somebody reads to decide whether to walk
+    /// away.
+    #[test]
+    fn a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line() {
+        let session = a_session_whose_turn_has_ended_in_a_loop();
+
+        let rows = screen_rows(&session, 120);
+        let done = rows
+            .iter()
+            .position(|row| row.contains("done ("))
+            .expect("the turn's own line is gone");
+        let (row, below) = the_still_active_row(&session, 120).expect("no row says it is active");
+        assert_eq!(
+            rows[done + 1],
+            row,
+            "the row is not directly under the end of the turn: {rows:?}"
+        );
+        assert!(row.contains("looping, next in"), "{row}");
+        assert!(below.contains('╭'), "the box does not follow it: {below}");
+    }
+
+    /// A session with nothing going on has nothing to add to `done`, and a row that said it was
+    /// active anyway would be the first thing somebody learns to ignore. The same goes for one
+    /// whose loop, watch and job have all ended.
+    #[test]
+    fn a_session_with_nothing_going_on_has_no_still_active_row() {
+        let session = a_session_whose_turn_has_ended();
+        assert_eq!(the_still_active_row(&session, 120), None);
+        assert!(
+            screen_rows(&session, 120)
+                .iter()
+                .any(|row| row.contains("turn 1 done"))
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        job_event(&mut session, started("job:1"));
+        assert!(the_still_active_row(&session, 120).is_some());
+        job_event(
+            &mut session,
+            bravebot_agent::report::JobEvent::Ended {
+                name: "job:1".to_string(),
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+            },
+        );
+        assert_eq!(the_still_active_row(&session, 120), None);
+    }
+
+    /// Each thing that goes on without a key says its own words. A row that named only loops would
+    /// leave a watch or a job, the two the hint line never reported at all or only dimly, as
+    /// invisible as before.
+    #[test]
+    fn each_kind_of_thing_still_active_is_named_in_the_row() {
+        let mut session = a_session_whose_turn_has_ended();
+        job_event(&mut session, started("job:1"));
+        let (row, _) = the_still_active_row(&session, 120).expect("a job is running");
+        assert!(row.contains("1 in the background"), "{row}");
+        assert!(
+            !row.contains("looping") && !row.contains("watching"),
+            "{row}"
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        a_watch_on(&mut session, "build.log");
+        let (row, _) = the_still_active_row(&session, 120).expect("a watch is armed");
+        assert!(row.contains("watching 1 file"), "{row}");
+        assert!(
+            !row.contains("looping") && !row.contains("in the background"),
+            "{row}"
+        );
+        assert!(
+            !row.contains("build.log"),
+            "the row named the path the watch was armed on: {row}"
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        session.start_after(
+            crate::loops::request_after("5m check the deploy"),
+            std::time::Instant::now(),
+        );
+        let (row, _) = the_still_active_row(&session, 120).expect("a line is held");
+        assert!(row.contains("sending in"), "{row}");
+        assert!(
+            !row.contains("looping"),
+            "an /after line was drawn as a loop: {row}"
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        a_watch_on(&mut session, "build.log");
+        job_event(&mut session, started("job:1"));
+        let (row, _) = the_still_active_row(&session, 120).expect("both are going on");
+        assert!(
+            row.contains("watching 1 file") && row.contains("1 in the background"),
+            "{row}"
+        );
+    }
+
+    /// While a turn is running the row above the box is the spinner, and the hint line is where a
+    /// loop is named. Both rows at once would read as two things going on. The turn keeps a task
+    /// list, so the area above the box has a row to spare and a wrong implementation that drew the
+    /// row anyway would have somewhere to put it.
+    #[test]
+    fn the_still_active_row_is_not_drawn_while_a_turn_is_running() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.status = Status::Working;
+        session.turns = 1;
+        session.set_todos(bravebot_core::todo::rows(&bravebot_core::todo::List::new(
+            vec![bravebot_core::todo::Item::new(
+                "check the deploy",
+                bravebot_core::todo::Status::Active,
+            )],
+        )));
+        let rows = screen_rows(&session, 120);
+        assert!(
+            rows.iter().any(|row| row.contains("check the deploy")),
+            "the task list was not drawn: {rows:?}"
+        );
+        assert_eq!(the_still_active_row(&session, 120), None);
+    }
+
+    /// A failure leaves the reason under the line that says it failed, and the row that says the
+    /// session is still active sits under both. The reason is the part cut short where the room is
+    /// short, never the row.
+    #[test]
+    fn a_failed_turn_keeps_its_reason_and_gains_the_still_active_row() {
+        let mut session = Session::new("partial");
+        session.type_char('a');
+        session.submit();
+        session.fail(
+            "the model could not be reached",
+            bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        );
+        job_event(&mut session, started("job:1"));
+
+        let rows = screen_rows(&session, 120);
+        let failed = rows
+            .iter()
+            .position(|row| row.contains("turn 1 failed"))
+            .expect("the failure was not reported");
+        let active = rows
+            .iter()
+            .position(|row| row.contains(&t!(standing_label).to_string()))
+            .expect("no row says it is active");
+        assert!(failed < active, "{rows:?}");
+        assert!(
+            rows[failed + 1..active]
+                .iter()
+                .any(|row| row.contains("could not be reached")),
+            "the reason is not between the two: {rows:?}"
+        );
+    }
+
+    /// The row is cut whole at the width. The pointer goes first and a part never loses its end,
+    /// since `1 in the` is a sentence nobody can read; a terminal with room for nothing but the
+    /// label still says the session is active.
+    #[test]
+    fn a_narrow_terminal_gives_up_the_pointer_then_the_parts_whole() {
+        let mut session = a_session_whose_turn_has_ended_in_a_loop();
+        job_event(&mut session, started("job:1"));
+        let pointer = t!(standing_pointer).to_string();
+
+        let (wide, _) = the_still_active_row(&session, 120).expect("room for all of it");
+        assert!(wide.contains(&pointer), "{wide}");
+
+        let (row, _) = the_still_active_row(&session, 70).expect("room for the parts");
+        assert!(!row.contains(&pointer), "{row}");
+        assert!(
+            row.contains("looping, next in") && row.contains("1 in the background"),
+            "{row}"
+        );
+
+        let (row, _) = the_still_active_row(&session, 50).expect("room for one part");
+        assert!(row.contains("looping, next in"), "{row}");
+        assert!(!row.contains("in the background"), "{row}");
+        assert!(!row.contains('…'), "a part was cut at the edge: {row}");
+
+        let (row, _) = the_still_active_row(&session, 20).expect("room for the label");
+        assert!(
+            row.trim_end().ends_with(&t!(standing_label).to_string()),
+            "{row}"
+        );
+    }
+
     /// The jobs go just before the loop, for the loop's reason: both spend something while nobody
     /// watches, where a reading or an offer of a key can be had again.
     #[test]
