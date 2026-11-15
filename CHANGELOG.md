@@ -79,6 +79,7 @@
  - Added `read: true` to `fetch_url` and to the tools of an MCP server, which returns the result in the same call where permissions are bypassed with no screening or the check says `safe`, and saves a model round. ([#3722](https://github.com/brave/bravebot/issues/3722))
  - Added folding to the `/model` list: Left folds the section the cursor is in, Right opens it, and PageUp and PageDown move by a screen. The cursor stops on the heading of a folded section.
  - Added removing a prompt that waits behind a turn with a click on `remove`, or on `clear all` for every waiting line, and `/mcp remove <alias>`, which disables and removes an MCP server declaration. The info panel no longer lists an MCP server whose tools you declined.
+ - Added `*` to `/mcp disable` and `/mcp remove`, so `/mcp remove brave-tabs*` removes every server whose name starts with `brave-tabs`. ([#4225](https://github.com/brave/bravebot/issues/4225))
  - Added the update line for a copy installed with `apt` or `dnf`, given at startup and by `bravebot update`. ([#3461](https://github.com/brave/bravebot/issues/3461))
  - Added the questions of an `ask_user` call and the answer to each under the call in the terminal, in lines and in the desktop window. ([#3712](https://github.com/brave/bravebot/issues/3712))
  - Added the end line of a symbol to `lsp` locations where the server sends one, and a `set_link` tool that records the issue or pull request address you typed as the session's link. ([#3191](https://github.com/brave/bravebot/issues/3191))
