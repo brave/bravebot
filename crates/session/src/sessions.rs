@@ -44,7 +44,7 @@
 
 use bravebot_agent::conversation::Snapshot;
 use bravebot_agent::workspace::Workspace;
-use bravebot_aichat::protocol::Cached;
+use bravebot_aichat::protocol::{Cached, Effort};
 use bravebot_core::command::Spelling;
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
@@ -406,6 +406,16 @@ pub struct Record {
     /// server.
     #[serde(default)]
     pub model: Option<String>,
+    /// The reasoning effort the last turn was sent with, as the word of [`Effort::as_str`].
+    ///
+    /// The level in force when the turn ran, which is nothing where the model reads none. Kept as
+    /// the word and not as the type, so a record edited by hand to hold another word is still a
+    /// record: the list reads it through [`Effort::named`] and shows nothing for a word that names
+    /// no level.
+    ///
+    /// `None` for a record written before this was kept, or one whose last turn sent no level.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The total says what the session cost; this says which turn cost it. Reading a session back
@@ -2234,6 +2244,8 @@ pub struct Handle {
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
     skill_mode: Option<String>,
+    /// The level the last turn was sent with, for the record to carry.
+    effort: Option<Effort>,
     /// What the session's file tools reached as of the last save that gave it, written again by a
     /// save that gives none (INSTR-14, INSTR-16).
     touched: bravebot_agent::workspace::TouchedRecord,
@@ -2416,6 +2428,7 @@ impl Handle {
             written: Vec::new(),
             agent: None,
             skill_mode: None,
+            effort: None,
             touched: bravebot_agent::workspace::TouchedRecord::default(),
             wrote: false,
             server_children_may_run: false,
@@ -2491,6 +2504,7 @@ impl Handle {
             written: record.written.clone(),
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
+            effort: record.effort.as_deref().and_then(Effort::named),
             touched: record.touched.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
@@ -2663,6 +2677,17 @@ impl Handle {
     /// (SKILL-21). Written with the next save.
     pub fn set_skill_mode(&mut self, name: Option<String>) {
         self.skill_mode = name;
+    }
+
+    /// Record the level the last turn was sent with, or `None` where it sent none. Written with the
+    /// next save, and kept by a resume until a turn replaces it.
+    pub fn set_effort(&mut self, effort: Option<Effort>) {
+        self.effort = effort;
+    }
+
+    /// The level the last turn was sent with.
+    pub fn effort(&self) -> Option<Effort> {
+        self.effort
     }
 
     /// Record what the session's file tools have reached, for the next save to write when it
@@ -2871,6 +2896,7 @@ impl Handle {
             tokens: standing.tokens,
             split: standing.split,
             model: standing.model.map(str::to_string),
+            effort: self.effort.map(|level| level.as_str().to_string()),
             spend: standing.spend.clone(),
             timing: standing.timing.clone(),
             todos: standing
@@ -3009,6 +3035,7 @@ impl Handle {
         record.front = Some(self.front.recorded().to_string());
         record.agent = self.agent.clone();
         record.skill_mode = self.skill_mode.clone();
+        record.effort = self.effort.map(|level| level.as_str().to_string());
         record.touched = self.touched.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
@@ -3977,6 +4004,13 @@ pub(crate) struct Listed {
     /// What the server reported answering with, as of the last turn.
     #[serde(default)]
     pub(crate) model: Option<String>,
+    /// The word the last turn's reasoning effort was recorded as. Read as a level by the one rule
+    /// for the words, so one that names none is no effort.
+    #[serde(default)]
+    pub(crate) effort: Option<String>,
+    /// How many calls changed a file and how many ran a program, and how the last program ended.
+    #[serde(default)]
+    pub(crate) work: bravebot_agent::Work,
     #[serde(default)]
     pub(crate) turns: usize,
     #[serde(default)]
@@ -6320,6 +6354,70 @@ mod tests {
         assert_eq!(old.skill_mode, None);
     }
 
+    /// SESSION-11. The level the last turn was sent with is written as its word, by a save and by a
+    /// continuation, kept by a resume until a turn replaces it, carried by a fork, and read as none
+    /// from a record written before it was kept.
+    #[test]
+    fn a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-effort");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_effort(Some(Effort::Xhigh));
+        save_a_turn_session(&mut handle);
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.effort.as_deref(), Some("xhigh"));
+
+        let id = handle.id().to_string();
+        drop(handle);
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(resumed.effort(), Some(Effort::Xhigh));
+        let forked = fork(&root, &id).expect("the session forks");
+        assert_eq!(forked.effort.as_deref(), Some("xhigh"));
+
+        resumed.set_effort(Some(Effort::Low));
+        let trust = TrustStore::new(&root);
+        let snapshot = a_record().conversation;
+        assert!(resumed.save_continuation(
+            load(&root, &id).expect("written"),
+            Continuation {
+                conversation: &snapshot,
+                prompt: "next",
+                tokens: 10,
+                split: Split::of(10, 5),
+                model: "m",
+                trust: &trust,
+                begins: 0,
+                ends: 0,
+                prompt_at: None,
+                rewind: &[],
+                timing: Default::default(),
+                answered_by_mode: false,
+            },
+        ));
+        assert_eq!(
+            load(&root, &id).expect("written").effort.as_deref(),
+            Some("low"),
+            "the continuation did not write the level its turn was sent with"
+        );
+
+        resumed.set_effort(None);
+        save_a_turn_session(&mut resumed);
+        assert_eq!(
+            load(&root, &id).expect("written").effort,
+            None,
+            "a turn that sent no level left the earlier one on disk"
+        );
+
+        let mut old = serde_json::to_value(&record).expect("serialises");
+        old.as_object_mut().expect("an object").remove("effort");
+        let old: Record = serde_json::from_value(old).expect("an old record still reads");
+        assert_eq!(old.effort, None);
+    }
+
     /// ADDRESS-3. The name the driver set is written with the record, kept by the turns that follow
     /// it, a resume, a fork and a continuation, and replaced or cleared only by the driver. A
     /// record from before the name was kept reads as naming none.
@@ -7481,6 +7579,7 @@ mod tests {
             tokens: 0,
             split: Default::default(),
             model: None,
+            effort: None,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             todos: BTreeMap::new(),

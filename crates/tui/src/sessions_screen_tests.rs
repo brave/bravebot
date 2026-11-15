@@ -32,6 +32,9 @@ fn task(id: &str, status: TaskStatus) -> Task {
         tokens: 0,
         read: 0,
         written: 0,
+        cached: None,
+        effort: None,
+        work: Default::default(),
         mode: None,
         background: false,
         live: false,
@@ -1169,6 +1172,141 @@ fn the_wheel_walks_the_cursor_and_stops_at_the_ends() {
         selected_title(&session),
         first,
         "the wheel wrapped past the first row"
+    );
+}
+
+/// A task whose details are taller than 26 rows once drawn, as a session with its links, its
+/// agent and its prompt is.
+fn tall(id: &str, status: TaskStatus) -> Task {
+    let mut task = task(id, status);
+    task.branch = Some("fix-flaky".to_string());
+    task.agent = Some("reviewer".to_string());
+    task.issue = Some("https://example.com/org/repo/issues/12".to_string());
+    task.pull_request = Some("https://example.com/org/repo/pull/34".to_string());
+    task.handed_off_from = Some("0123456789abcdef".to_string());
+    task.bytes = 12 * 1024;
+    task.tokens = 9_000;
+    task.read = 6_000;
+    task.written = 3_000;
+    task.prompt = Some("find which test races on the clock".to_string());
+    task
+}
+
+/// What the details of a frame of 120 columns say, from the first row to the one above the footer.
+fn the_details_drawn(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    (3..buffer.area.height - 1)
+        .map(|row| {
+            (80..buffer.area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .collect()
+}
+
+/// SCREEN-12. A turn of the wheel scrolls the details while the pointer is over them, by the rows
+/// `tui.wheelRows` names, and stops at their first line and their last. Anywhere else on the screen
+/// it walks the cursor, as it always did.
+#[test]
+fn the_wheel_scrolls_the_details_over_them_and_walks_the_cursor_elsewhere() {
+    let mut session = opened_over(vec![
+        tall("a", TaskStatus::Saved),
+        tall("b", TaskStatus::Saved),
+    ]);
+    session.adopt_wheel_rows(Some(2));
+    let top = the_details_drawn(&drawn(&mut session, 120, 30));
+    assert!(
+        session
+            .sessions_screen()
+            .expect("open")
+            .details()
+            .scrollable(),
+        "the details fit, so there is nothing to scroll: {top:?}"
+    );
+    let first = selected_title(&session);
+
+    handle_mouse(&mut session, mouse(MouseEventKind::ScrollDown, 10, 90));
+    let moved = the_details_drawn(&drawn(&mut session, 120, 30));
+    // The last row is the marker's.
+    assert_eq!(moved[..moved.len() - 3], top[2..top.len() - 1]);
+    assert_eq!(
+        selected_title(&session),
+        first,
+        "the wheel moved the cursor"
+    );
+
+    for _ in 0..30 {
+        handle_mouse(&mut session, mouse(MouseEventKind::ScrollDown, 10, 90));
+    }
+    let end = the_details_drawn(&drawn(&mut session, 120, 30));
+    assert!(end.iter().any(|row| row.contains("find which test races")));
+    handle_mouse(&mut session, mouse(MouseEventKind::ScrollDown, 10, 90));
+    assert_eq!(
+        the_details_drawn(&drawn(&mut session, 120, 30)),
+        end,
+        "the wheel went past the last line"
+    );
+    for _ in 0..30 {
+        handle_mouse(&mut session, mouse(MouseEventKind::ScrollUp, 10, 90));
+    }
+    assert_eq!(the_details_drawn(&drawn(&mut session, 120, 30)), top);
+    assert_eq!(
+        selected_title(&session),
+        first,
+        "the wheel moved the cursor"
+    );
+
+    // Over the list it moves the cursor and leaves the details at the first line of the next.
+    handle_mouse(&mut session, mouse(MouseEventKind::ScrollDown, 10, 10));
+    assert_eq!(selected_title(&session), "title b");
+    let other = the_details_drawn(&drawn(&mut session, 120, 30));
+    assert!(other[2].contains("title b"), "{other:?}");
+}
+
+/// SCREEN-12. While a name is being typed or a question is up, a turn of the wheel over the
+/// details scrolls nothing, as it moves no cursor over the list.
+#[test]
+fn the_wheel_over_the_details_scrolls_nothing_while_a_name_is_typed_or_a_question_is_up() {
+    for opening in ['r', 'a'] {
+        let mut session = opened_over(vec![tall("a", TaskStatus::Saved)]);
+        let top = the_details_drawn(&drawn(&mut session, 120, 30));
+        handle_key(&mut session, press(KeyCode::Char(opening)));
+        drawn(&mut session, 120, 30);
+
+        handle_mouse(&mut session, mouse(MouseEventKind::ScrollDown, 10, 90));
+
+        let sessions_screen = session.sessions_screen().expect("open");
+        assert!(
+            sessions_screen.renaming().is_some() || sessions_screen.confirming().is_some(),
+            "{opening}: nothing was asked"
+        );
+        // What is asked over the details hides them, so what the wheel did is read once it ends.
+        handle_key(&mut session, press(KeyCode::Esc));
+        let held = the_details_drawn(&drawn(&mut session, 120, 30));
+        assert_eq!(held, top, "{opening}");
+    }
+}
+
+/// SCREEN-12. A press on the details puts the cursor nowhere and opens nothing, whatever it follows.
+#[test]
+fn a_press_on_the_details_does_nothing() {
+    let mut session = opened_over(vec![
+        tall("a", TaskStatus::Saved),
+        tall("b", TaskStatus::Saved),
+    ]);
+    drawn(&mut session, 120, 30);
+    handle_mouse(&mut session, mouse(MouseEventKind::ScrollDown, 10, 10));
+    assert_eq!(selected_title(&session), "title b");
+    drawn(&mut session, 120, 30);
+
+    assert_eq!(click(&mut session, 8, 90), Action::Copy);
+    assert_eq!(click(&mut session, 8, 90), Action::Copy);
+
+    assert_eq!(selected_title(&session), "title b");
+    assert!(
+        session.showing_sessions(),
+        "the second press opened a session"
     );
 }
 

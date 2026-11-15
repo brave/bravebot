@@ -6310,6 +6310,40 @@ mod tests {
         assert_eq!(said, ["a gateway could not be listed"]);
     }
 
+    /// SESSION-11. The record a turn writes carries the level the turn was sent with: the level in
+    /// force when it ran, the next one after `/effort`, and none where the model reads none. The
+    /// regressions it rejects are a record that keeps the level the session began with, one that
+    /// keeps the choice a model that reads none was not sent, and one that never takes it. The call
+    /// from `run_turn_animated`, which needs a terminal, is reasoned only here and is shown by the
+    /// Sessions screen of a session run in a terminal.
+    #[test]
+    fn the_effort_a_turn_was_sent_with_is_what_the_record_is_given() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-turn-effort");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+
+        keep_the_effort_of(&mut stored, &session);
+        assert_eq!(stored.effort(), Some(Effort::Low));
+
+        session.choose_effort(Some(Effort::Max));
+        keep_the_effort_of(&mut stored, &session);
+        assert_eq!(stored.effort(), Some(Effort::Max));
+
+        session.note_model_reads_effort(false);
+        keep_the_effort_of(&mut stored, &session);
+        assert_eq!(stored.effort(), None);
+    }
+
     /// The step a turn takes on every frame for a model picker opened under it takes the rows when
     /// they arrive, and records what it says as said while working. The regressions it rejects are
     /// a step that does nothing, which leaves the picker on "loading" for the rest of the turn, and

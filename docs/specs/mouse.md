@@ -1611,7 +1611,9 @@ headings, the spaces between sections and the models of a folded section
 ([VIEW-40](terminal-transcript.md#VIEW-40)) are not counted. In the search over the prompts already
 sent a turn of the wheel up moves the cursor to older prompts and one down to newer ones, and stops at
 the oldest and the newest. In the lists of sessions it moves the cursor that many sessions, over the
-headings of the sessions view, and stops at the first and the last. In each of these it takes no row,
+headings of the sessions view, and stops at the first and the last, except that over the details
+beside the Sessions screen's list it scrolls them that many lines
+([SCREEN-12](sessions-screen.md#SCREEN-12)). In each of these it takes no row,
 leaves the list open, and does not scroll the transcript beneath it. Over the rows of the list
 offered under the box as a line is typed the wheel moves the cursor that many items and stops at the
 first and the last, and elsewhere on the screen it scrolls the transcript. While the scroller's key
@@ -1632,6 +1634,7 @@ deleting a record do not read the wheel. The keys stay the way to do it without 
 `verified-by: bravebot_tui::app::tests::history_search::the_wheel_walks_the_prompts_by_the_wheel_rows_and_stops_at_both_ends`
 `verified-by: bravebot_tui::sessions_view::the_wheel_moves_the_cursor_by_the_sessions_asked_over_the_headings`
 `verified-by: bravebot_tui::sessions_screen_tests::the_wheel_walks_the_cursor_and_stops_at_the_ends`
+`verified-by: bravebot_tui::sessions_screen_tests::the_wheel_scrolls_the_details_over_them_and_walks_the_cursor_elsewhere`
 `verified-by: bravebot_tui::app::tests::completions::the_wheel_over_the_list_walks_it_and_elsewhere_scrolls_the_transcript`
 `verified-by: bravebot_tui::confirm::tests::mouse_tests::a_turn_of_the_wheel_moves_the_body_of_a_question_as_the_keys_do`
 `verified-by: bravebot_tui::app::tests::popups::a_press_outside_the_scrollers_key_list_puts_it_away_and_nothing_else`
@@ -1848,7 +1851,7 @@ takes a second click as its own ([MOUSE-15](#MOUSE-15)). A path waits for the se
 whether the first was a click on it ([MOUSE-42](#MOUSE-42)). Nor is a click that did nothing: a
 double click on text that is no target, or on an address without ctrl held, selects the word.
 
-The rows, the tabs and "Show more" of the Sessions screen ([SCREEN-12](sessions-screen.md#SCREEN-12))
+The rows, the tabs, "Show more" and the details of the Sessions screen ([SCREEN-12](sessions-screen.md#SCREEN-12))
 are recorded as the cells they are drawn in, and stand while the Sessions screen is open. While it is open it
 is the whole frame, so no target of the plain frame stands.
 

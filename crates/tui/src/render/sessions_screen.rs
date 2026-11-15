@@ -60,6 +60,9 @@ const STRIP_FROM_HEIGHT: u16 = 8;
 const LIST_LEAST: u16 = 46;
 const DETAILS_WIDTH: u16 = 38;
 
+/// The keys that scroll the details (SCREEN-3), which no settings file moves (SCREEN-14).
+const DETAILS_KEYS: &str = "shift-↑/↓";
+
 /// The width of the screen at which the tabs are joined by the key that moves between them.
 const FILTER_HINT_FROM: u16 = 80;
 
@@ -145,6 +148,8 @@ pub(super) fn draw_sessions_screen(frame: &mut Frame, session: &Session) -> Laid
     };
     let area = frame.area();
     let zones = zones(area);
+    // Details that are not drawn have nothing to scroll, and the details drawn below say so again.
+    sessions_screen.details().not_drawn();
 
     draw_header(frame, &zones, sessions_screen, &mut laid);
     draw_editor(frame, zones.search, sessions_screen);
@@ -176,6 +181,10 @@ pub(super) fn draw_sessions_screen(frame: &mut Frame, session: &Session) -> Laid
         }
         if !zones.details.is_empty() {
             draw_details(frame, zones.details, sessions_screen);
+            laid.targets.push(Target::on_screen(
+                zones.details,
+                Hit::SessionsScreen(Click::Details),
+            ));
         }
     }
     draw_footer(frame, zones.footer, sessions_screen);
@@ -880,6 +889,16 @@ fn draw_task(
     }
 }
 
+/// What share of the `read` tokens the service served out of its cache, in whole percent and never
+/// past 100, or `None` where nothing was read, so there is nothing to divide by.
+fn cache_share(cached: u64, read: u64) -> Option<u64> {
+    if read == 0 {
+        return None;
+    }
+    let share = u128::from(cached) * 100 / u128::from(read);
+    Some(u64::try_from(share).map_or(100, |share| share.min(100)))
+}
+
 /// The details of the task under the cursor: what it is and what it has used, and for a task that
 /// needs the person, which kind of thing it is waiting for (SCREEN-3).
 #[expect(
@@ -952,6 +971,19 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
             dim(),
         )));
     }
+    // A record that predates the start time holds zero, and says nothing here.
+    if task.started > 0 {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_started,
+            age = crate::history_search::age_since(task.started)
+        ))));
+    }
+    if task.updated > 0 {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_last_active,
+            age = crate::history_search::age_since(task.updated)
+        ))));
+    }
     lines.push(Line::default());
     lines.push(Line::from(Span::raw(t!(
         sessions_screen_details_model,
@@ -960,6 +992,12 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
             None => t!(sessions_screen_model_unknown).to_string(),
         }
     ))));
+    if let Some(effort) = task.effort {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_reasoning,
+            effort = effort.as_str()
+        ))));
+    }
     if let Some(mode) = task.mode {
         lines.push(Line::from(Span::raw(t!(
             sessions_screen_details_mode,
@@ -983,6 +1021,28 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
                 total = crate::indicator::format_tokens(task.tokens)
             )
         })));
+    }
+    if let Some(percent) = task
+        .cached
+        .and_then(|cached| cache_share(cached, task.read))
+    {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_cache,
+            percent = percent
+        ))));
+    }
+    if task.work.writes.saturating_add(task.work.commands) > 0 {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_changes,
+            edits = task.work.writes,
+            commands = task.work.commands
+        ))));
+        if task.work.last_command_failed {
+            lines.push(Line::from(Span::styled(
+                t!(sessions_screen_details_last_command_failed),
+                Style::default().fg(theme::fail()),
+            )));
+        }
     }
     lines.push(Line::default());
     lines.push(label(t!(sessions_screen_details_project)));
@@ -1051,14 +1111,45 @@ fn draw_strip(frame: &mut Frame, area: Rect, sessions_screen: &SessionsScreen) {
     );
 }
 
+/// Draw the details of the task under the cursor from the line the scroll is at. Where the lines,
+/// wrapped to the width, are taller than the pane, the last row of the pane says whether there are
+/// more above and below and the lines have the rows above it, so that the marker never covers one
+/// (SCREEN-3).
 fn draw_details(frame: &mut Frame, area: Rect, sessions_screen: &SessionsScreen) {
     let Some(row) = sessions_screen.selected_row() else {
         return;
     };
-    frame.render_widget(
-        Paragraph::new(details_lines(row, usize::from(area.width))).wrap(Wrap { trim: false }),
-        area,
+    let details = sessions_screen.details();
+    let paragraph =
+        Paragraph::new(details_lines(row, usize::from(area.width))).wrap(Wrap { trim: false });
+    let lines = paragraph.line_count(area.width);
+    let room = usize::from(area.height);
+    // The last row is the marker's wherever the lines do not fit, whether or not one is drawn in it
+    // yet, so the lines do not change their rows as the scroll moves.
+    let rows = if lines > room { room - 1 } else { room };
+    let offset = details.fit(&row.task.id, lines, rows);
+    let (text, marker) = (
+        Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            u16::try_from(rows).unwrap_or(area.height),
+        ),
+        Rect::new(area.x, area.bottom() - 1, area.width, 1),
     );
+    frame.render_widget(
+        paragraph.scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0)),
+        text,
+    );
+    if rows < room {
+        let said = match (details.more_above(), details.more_below()) {
+            (true, true) => t!(sessions_screen_details_more_both),
+            (true, false) => t!(sessions_screen_details_more_above),
+            (false, true) => t!(sessions_screen_details_more_below),
+            (false, false) => "",
+        };
+        frame.render_widget(Paragraph::new(Span::styled(said, dim())), marker);
+    }
 }
 
 /// The keys under the list, and what each does.
@@ -1094,6 +1185,11 @@ fn footer_hints(sessions_screen: &SessionsScreen) -> Vec<(String, &'static str)>
             sessions_screen.keys().name(Action::New),
             t!(sessions_screen_hint_new),
         ));
+    }
+    // Last, so that a narrow footer is the one to lose it, and only where the details drawn have
+    // lines left out.
+    if sessions_screen.renaming().is_none() && sessions_screen.details().scrollable() {
+        hints.push((DETAILS_KEYS.into(), t!(sessions_screen_hint_scroll_details)));
     }
     hints
 }
@@ -1172,6 +1268,7 @@ fn draw_help(frame: &mut Frame, keys: &SessionsKeys, area: Rect) {
             ("enter →".into(), t!(sessions_screen_help_open)),
             ("pgup".into(), t!(sessions_screen_help_page_up)),
             ("pgdn".into(), t!(sessions_screen_help_page_down)),
+            (DETAILS_KEYS.into(), t!(sessions_screen_help_scroll_details)),
             ("ctrl-c".into(), t!(sessions_screen_help_quit)),
         ],
     );
@@ -2079,6 +2176,583 @@ mod tests {
         for wanted in [id, "12.0KB", "reviewer", "issues/12", "pull/34", "01234567"] {
             assert!(all.contains(wanted), "{wanted:?} is not in {all}");
         }
+    }
+
+    /// A session with every line the details can have, and a prompt of several lines when wrapped,
+    /// so that its details are taller than a terminal of 30 rows has room for.
+    fn everything(id: &str) -> bravebot_session::listing::Task {
+        let now = bravebot_session::sessions::now();
+        let mut task = rich(id);
+        task.status = Status::NeedsInput;
+        task.held = Some(bravebot_session::jobs::Held::Write);
+        task.current = true;
+        task.manifest = true;
+        task.updated = now - 3_600;
+        task.started = now - 86_400;
+        task.effort = Some(bravebot_session::store::Effort::High);
+        task.mode = Some(bravebot_session::jobs::Mode::Plan);
+        task.tokens = 9_000;
+        task.read = 6_000;
+        task.written = 3_000;
+        task.cached = Some(4_000);
+        task.work = bravebot_agent::Work {
+            writes: 4,
+            commands: 2,
+            ran_after_last_write: true,
+            last_command_failed: true,
+        };
+        task.directory = "/work/a/rather/long/directory/name/that/wraps/over/lines".to_string();
+        task.prompt =
+            Some("find which test races on the clock before touching anything".to_string());
+        task
+    }
+
+    const ID: &str = "0123abcd-0000-4000-8000-000000000000";
+
+    fn scrolled(session: &mut Session, code: KeyCode, times: usize) {
+        for _ in 0..times {
+            session
+                .sessions_screen_mut()
+                .expect("the Sessions screen is open")
+                .key(KeyEvent::new(code, KeyModifiers::SHIFT));
+        }
+    }
+
+    /// The rows of the details as drawn, the part of each row from the column they begin at.
+    fn pane(rows: &[String]) -> Vec<String> {
+        rows.iter()
+            .skip(3)
+            .map(|row| row.chars().skip(80).collect::<String>().trim().to_string())
+            .collect()
+    }
+
+    /// The rows of the details at 120 by 30, without the footer and the marker row.
+    fn details_at_30(session: &Session) -> Vec<String> {
+        let (rows, _, _) = screen(session, 120, 30);
+        let mut details = pane(&rows[..rows.len() - 1]);
+        details.pop();
+        details
+    }
+
+    fn marker_at_30(session: &Session) -> String {
+        let (rows, _, _) = screen(session, 120, 30);
+        pane(&rows[..rows.len() - 1]).pop().unwrap_or_default()
+    }
+
+    /// SCREEN-3. Details taller than the pane, once their long lines are wrapped, scroll a line at
+    /// a time to their last line and no further, so the whole id and the whole prompt can be read.
+    #[test]
+    fn details_taller_than_the_pane_scroll_a_line_at_a_time_to_their_last_line_and_no_further() {
+        let mut session = opened(vec![everything(ID)]);
+        let (rows, _, _) = screen(&session, 120, 30);
+        let all = rows.join("\n");
+        assert!(!all.contains(ID), "the id fits without scrolling: {all}");
+        assert!(!all.contains("before touching anything"), "{all}");
+
+        let top = details_at_30(&session);
+        scrolled(&mut session, KeyCode::Down, 1);
+        let one = details_at_30(&session);
+        assert_eq!(
+            one[..one.len() - 1],
+            top[1..],
+            "a press did not move the lines up by one"
+        );
+
+        scrolled(&mut session, KeyCode::Down, 60);
+        let end = details_at_30(&session);
+        let all = end.join("\n");
+        assert!(all.contains(ID), "the id was not reached: {all}");
+        assert_eq!(
+            end.last().map(String::as_str),
+            Some("before touching anything"),
+            "the last line of the prompt is not on the last row: {end:?}"
+        );
+        scrolled(&mut session, KeyCode::Down, 5);
+        assert_eq!(
+            details_at_30(&session),
+            end,
+            "the details scrolled past their last line"
+        );
+
+        scrolled(&mut session, KeyCode::Up, 200);
+        assert_eq!(details_at_30(&session), top, "the first line was passed");
+    }
+
+    /// SCREEN-3. Every fact of a session can be read by scrolling: the marker takes a row of its
+    /// own and covers no line.
+    #[test]
+    fn every_line_of_the_details_is_read_on_some_row_while_scrolling() {
+        let mut session = opened(vec![everything(ID)]);
+        let mut seen = details_at_30(&session);
+        for _ in 0..40 {
+            scrolled(&mut session, KeyCode::Down, 1);
+            seen.extend(details_at_30(&session));
+        }
+        let all = seen.join("\n");
+        for wanted in [
+            "Session details",
+            "fix the flaky test",
+            "Needs attention",
+            "Started: 1d ago",
+            "The last command failed.",
+            "Project",
+            "Branch",
+            "fix-flaky",
+            "reviewer",
+            "issues/12",
+            "pull/34",
+            "12.0KB",
+            "01234567",
+            ID,
+            "Prompt",
+            "find which test races",
+            "before touching anything",
+        ] {
+            assert!(all.contains(wanted), "{wanted:?} was never drawn: {all}");
+        }
+        // Each line is a row of its own: the wrapped directory is drawn whole across two rows.
+        assert!(
+            all.contains("/work/a/rather/long/directory/name/tha"),
+            "{all}"
+        );
+        assert!(all.contains("t/wraps/over/lines"), "{all}");
+    }
+
+    /// SCREEN-3. The last row of the pane says whether there are more lines above, below or both,
+    /// and says nothing where the lines fit.
+    #[test]
+    fn the_details_say_when_there_are_more_lines_above_and_below() {
+        let mut session = opened(vec![everything(ID)]);
+        assert_eq!(marker_at_30(&session), "↓ more below");
+        scrolled(&mut session, KeyCode::Down, 3);
+        assert_eq!(marker_at_30(&session), "↑↓ more above and below");
+        scrolled(&mut session, KeyCode::Down, 60);
+        assert_eq!(marker_at_30(&session), "↑ more above");
+        scrolled(&mut session, KeyCode::Up, 60);
+        assert_eq!(marker_at_30(&session), "↓ more below");
+
+        let (rows, _, _) = screen(&session, 120, 70);
+        let all = rows.join("\n");
+        assert!(
+            !all.contains("more above") && !all.contains("more below"),
+            "{all}"
+        );
+        assert!(
+            pane(&rows)
+                .iter()
+                .all(|row| !row.contains('↑') && !row.contains('↓')),
+            "{all}"
+        );
+        assert!(all.contains(ID), "{all}");
+    }
+
+    /// SCREEN-3, SCREEN-7. The footer names the keys that scroll the details where some of their
+    /// lines are left out, and the help names them always.
+    #[test]
+    fn the_footer_and_the_help_name_the_keys_that_scroll_the_details() {
+        let footer = |session: &Session, height: u16| {
+            let (rows, _, _) = screen(session, 120, height);
+            rows.last().cloned().unwrap_or_default()
+        };
+        let mut session = opened(vec![everything(ID)]);
+        assert!(
+            footer(&session, 30).contains("shift-↑/↓ scroll details"),
+            "{:?}",
+            footer(&session, 30)
+        );
+        assert!(
+            !footer(&session, 70).contains("scroll details"),
+            "{:?}",
+            footer(&session, 70)
+        );
+        let fitting = opened(mixed());
+        assert!(!footer(&fitting, 30).contains("scroll details"));
+
+        press(&mut session, KeyCode::Char('r'));
+        assert!(!footer(&session, 30).contains("scroll details"));
+        press(&mut session, KeyCode::Esc);
+        press(&mut session, KeyCode::Char('?'));
+        let (rows, _, _) = screen(&session, 120, 40);
+        let help = rows.join("\n");
+        assert!(help.contains("shift-↑/↓"), "{help}");
+        assert!(help.contains("Scroll the details"), "{help}");
+    }
+
+    /// SCREEN-3, SCREEN-7. Shift with Up or Down scrolls the details and leaves the cursor, a search
+    /// and a name being typed as they were.
+    #[test]
+    fn the_keys_that_scroll_the_details_move_no_cursor_and_type_no_text() {
+        let mut other = rich("fedcba98-0000-4000-8000-000000000000");
+        other.title = "fix the other test".to_string();
+        other.updated = 1;
+        let mut session = opened(vec![everything(ID), other]);
+        let top = details_at_30(&session);
+
+        scrolled(&mut session, KeyCode::Down, 2);
+        assert_eq!(selected(&session), "fix the flaky test", "the cursor moved");
+        assert_ne!(details_at_30(&session), top, "nothing scrolled");
+
+        // In the search the letters are text and these keys are not.
+        press(&mut session, KeyCode::Char('/'));
+        typed(&mut session, "fix");
+        let moved = details_at_30(&session);
+        scrolled(&mut session, KeyCode::Down, 1);
+        assert_eq!(session.sessions_screen().expect("open").search(), "fix");
+        assert_ne!(details_at_30(&session), moved, "no scroll from the search");
+        assert_eq!(selected(&session), "fix the flaky test");
+        press(&mut session, KeyCode::Esc);
+        press(&mut session, KeyCode::Esc);
+
+        // While a name is typed they do nothing at all.
+        press(&mut session, KeyCode::Char('r'));
+        let held = details_at_30(&session);
+        scrolled(&mut session, KeyCode::Down, 3);
+        scrolled(&mut session, KeyCode::Up, 1);
+        assert_eq!(
+            details_at_30(&session),
+            held,
+            "scrolled while a name was typed"
+        );
+        assert_eq!(
+            session
+                .sessions_screen()
+                .and_then(|screen| screen.renaming())
+                .map(|renaming| renaming.text.clone()),
+            Some("fix the flaky test".to_string()),
+            "the name was edited"
+        );
+        press(&mut session, KeyCode::Esc);
+
+        // Down alone still moves the cursor, and the other session's details start at their top.
+        press(&mut session, KeyCode::Down);
+        assert_eq!(selected(&session), "fix the other test");
+    }
+
+    fn selected(session: &Session) -> String {
+        session
+            .sessions_screen()
+            .and_then(|screen| screen.selected_row())
+            .map(|row| row.title.clone())
+            .unwrap_or_default()
+    }
+
+    /// SCREEN-3. The scroll is of one session: moving the cursor to another puts the details at
+    /// their first line, even where no frame was drawn between the moves, and a read of the list
+    /// that leaves the cursor on the session leaves the scroll.
+    #[test]
+    fn the_scroll_goes_back_to_the_top_for_another_session_and_stays_through_a_refresh() {
+        let mut other = everything("fedcba98-0000-4000-8000-000000000000");
+        other.title = "fix the other test".to_string();
+        other.updated = 1;
+        let mut session = opened(vec![everything(ID), other.clone()]);
+        let top = details_at_30(&session);
+        scrolled(&mut session, KeyCode::Down, 6);
+        let scrolled_by_six = details_at_30(&session);
+        assert_ne!(scrolled_by_six, top);
+
+        // A read of the list that holds the same sessions, one of them written since.
+        let mut written = everything(ID);
+        written.updated -= 5;
+        session.sessions_screen_mut().expect("open").replace(Page {
+            tasks: vec![written, other.clone()],
+            more: false,
+        });
+        assert_eq!(
+            details_at_30(&session),
+            scrolled_by_six,
+            "a refresh moved it"
+        );
+
+        // Another session, and back, with a frame drawn on the other.
+        press(&mut session, KeyCode::Down);
+        assert_eq!(selected(&session), "fix the other test");
+        assert_eq!(pane(&screen(&session, 120, 30).0)[2], "fix the other test");
+        press(&mut session, KeyCode::Up);
+        assert_eq!(
+            details_at_30(&session),
+            top,
+            "another session kept the scroll"
+        );
+
+        // Another session, and back, with no frame drawn on it.
+        scrolled(&mut session, KeyCode::Down, 6);
+        assert_eq!(details_at_30(&session), scrolled_by_six);
+        press(&mut session, KeyCode::Down);
+        press(&mut session, KeyCode::Up);
+        assert_eq!(
+            details_at_30(&session),
+            top,
+            "no frame was drawn on the other"
+        );
+
+        // The session the cursor was on leaves the list: the one it goes to starts at the top.
+        scrolled(&mut session, KeyCode::Down, 6);
+        session.sessions_screen_mut().expect("open").replace(Page {
+            tasks: vec![other],
+            more: false,
+        });
+        assert_eq!(selected(&session), "fix the other test");
+        assert_eq!(pane(&screen(&session, 120, 30).0)[2], "fix the other test");
+    }
+
+    /// SCREEN-3. A scroll past the last line that a taller terminal or fewer lines leave is cut back to
+    /// it, and is not restored when the room shrinks again.
+    #[test]
+    fn a_taller_terminal_or_fewer_lines_cut_the_scroll_back_to_the_last_line() {
+        let mut session = opened(vec![everything(ID)]);
+        screen(&session, 120, 30);
+        scrolled(&mut session, KeyCode::Down, 80);
+
+        // Room for all of it: nothing is left out above, so the first line is drawn.
+        let (rows, _, _) = screen(&session, 120, 70);
+        assert!(
+            pane(&rows).iter().any(|row| row == "Session details"),
+            "the lines did not start from the first: {rows:?}"
+        );
+        let (rows, _, _) = screen(&session, 120, 30);
+        assert!(
+            pane(&rows).iter().any(|row| row == "Session details"),
+            "a scroll came back after the room grew"
+        );
+
+        // Fewer lines in the same room: the scroll is cut to the new last line, drawn at the bottom.
+        scrolled(&mut session, KeyCode::Down, 80);
+        let end = details_at_30(&session);
+        let mut shorter = everything(ID);
+        shorter.prompt = None;
+        shorter.directory = "/work".to_string();
+        session.sessions_screen_mut().expect("open").replace(Page {
+            tasks: vec![shorter],
+            more: false,
+        });
+        let after = details_at_30(&session);
+        assert_ne!(after, end);
+        assert_eq!(
+            after.last().map(String::as_str),
+            Some(ID),
+            "blank rows came after the last line: {after:?}"
+        );
+    }
+
+    /// SCREEN-3. A pane of one or two rows, and a terminal with none, draw the details without a
+    /// panic.
+    #[test]
+    fn a_pane_of_a_row_or_two_draws_the_details_without_a_panic() {
+        let mut session = opened(vec![everything(ID)]);
+        for (width, height) in [
+            (94, 5),
+            (94, 6),
+            (94, 7),
+            (94, 8),
+            (120, 7),
+            (94, 2),
+            (94, 1),
+        ] {
+            screen(&session, width, height);
+            scrolled(&mut session, KeyCode::Down, 1);
+            screen(&session, width, height);
+            scrolled(&mut session, KeyCode::Up, 3);
+        }
+    }
+
+    /// SCREEN-3. The details stand where the terminal is 94 columns wide, which leaves the list 90
+    /// beside them, and not one column narrower.
+    #[test]
+    fn the_details_stand_from_ninety_four_columns() {
+        let session = opened(mixed());
+        let (narrow, _, _) = screen(&session, 93, 30);
+        let (wide, _, _) = screen(&session, 94, 30);
+        assert!(!narrow.iter().any(|row| row.contains("Session details")));
+        assert!(
+            wide.iter().any(|row| row.contains("Session details")),
+            "{wide:?}"
+        );
+    }
+
+    /// SCREEN-12. The details are recorded as a target where they are drawn, and where they are
+    /// not drawn nothing is.
+    #[test]
+    fn the_details_are_recorded_as_the_cells_they_are_drawn_in() {
+        let session = opened(vec![everything(ID)]);
+        let (rows, laid, _) = screen(&session, 120, 30);
+        let found: Vec<_> = laid
+            .targets
+            .iter()
+            .filter(|target| target.hit == Hit::SessionsScreen(Click::Details))
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let area = found[0].area;
+        let drawn = rows[usize::from(area.y)]
+            .chars()
+            .skip(usize::from(area.x))
+            .collect::<String>();
+        assert!(drawn.starts_with("Session details"), "{drawn:?}");
+        assert_eq!((area.x, area.y, area.width), (80, 3, 38));
+        assert_eq!(area.bottom(), 29, "the pane ends above the footer");
+
+        let (_, laid, _) = screen(&session, 80, 30);
+        assert!(
+            laid.targets
+                .iter()
+                .all(|target| target.hit != Hit::SessionsScreen(Click::Details))
+        );
+    }
+
+    /// The details of one task, drawn at 120 columns and tall enough that nothing is cut off.
+    fn details_of(task: bravebot_session::listing::Task) -> String {
+        let session = opened(vec![task]);
+        screen(&session, 120, 70).0.join("\n")
+    }
+
+    /// SCREEN-3. The details say how long ago the session began and how long ago it was last
+    /// written, each as its own age, and say nothing of the start where the record predates it.
+    #[test]
+    fn the_details_say_when_a_session_began_and_was_last_active_and_nothing_where_it_is_not_known()
+    {
+        let now = bravebot_session::sessions::now();
+        let mut began = task("t", "/work/one", Status::Saved, now - 2 * 3_600);
+        began.started = now - 3 * 86_400;
+        let all = details_of(began.clone());
+        assert!(all.contains("Started: 3d ago"), "{all}");
+        assert!(all.contains("Last active: 2h ago"), "{all}");
+
+        began.started = 0;
+        let all = details_of(began);
+        assert!(!all.contains("Started"), "{all}");
+        assert!(all.contains("Last active: 2h ago"), "{all}");
+    }
+
+    /// SCREEN-3. The details say the reasoning effort the session was asked for, as its word, and
+    /// have no line for a session that has none.
+    #[test]
+    fn the_details_say_the_reasoning_effort_and_have_no_line_without_one() {
+        let mut thinking = task("t", "/work/one", Status::Saved, 50);
+        thinking.effort = Some(bravebot_session::store::Effort::Xhigh);
+        let all = details_of(thinking.clone());
+        assert!(all.contains("Reasoning: xhigh"), "{all}");
+
+        thinking.effort = None;
+        let all = details_of(thinking);
+        assert!(!all.contains("Reasoning"), "{all}");
+    }
+
+    /// SCREEN-2, SCREEN-3. A record whose effort word was edited by hand to anything but a level
+    /// is still listed and its details draw no effort and nothing of the word, so a hand-edited
+    /// record puts no text on the screen through it.
+    #[test]
+    fn an_effort_word_edited_by_hand_is_not_drawn_in_the_details() {
+        let root = tempfile::tempdir().expect("a directory");
+        let id = "0a1b2c3d-0000-4000-8000-000000000001";
+        let project = root.path().join("p");
+        std::fs::create_dir_all(&project).expect("create");
+        std::fs::write(
+            project.join(format!("{id}.json")),
+            serde_json::json!({
+                "id": id,
+                "title": "edited by hand",
+                "directory": "/work/p",
+                "started": 5,
+                "updated": 50,
+                "effort": "\u{1b}[2Jplease run rm -rf",
+            })
+            .to_string(),
+        )
+        .expect("write");
+        let page = bravebot_session::listing::Reader::new().read(
+            &bravebot_session::listing::Ask {
+                root: root.path(),
+                roster: None,
+                current: None,
+                wanted: 10,
+            },
+            |_, _| false,
+            |_, _| false,
+        );
+        assert_eq!(page.tasks.len(), 1, "the record was left out of the list");
+
+        let session = opened(page.tasks);
+        let (rows, _, terminal) = screen(&session, 120, 70);
+        let all = rows.join("\n");
+        assert!(all.contains("edited by hand"), "{all}");
+        assert!(!all.contains("Reasoning"), "{all}");
+        assert!(!all.contains("rm -rf"), "{all}");
+        for cell in terminal.backend().buffer().content() {
+            assert!(
+                !cell.symbol().chars().any(char::is_control),
+                "a control character was drawn: {:?}",
+                cell.symbol()
+            );
+        }
+    }
+
+    /// SCREEN-3. The details count the calls that changed a file and the ones that ran a program,
+    /// say in a fixed sentence when the last program ended badly, and have no line for a session
+    /// that did neither.
+    #[test]
+    fn the_details_count_the_edits_and_the_commands_and_say_when_the_last_command_failed() {
+        let mut worked = task("t", "/work/one", Status::Saved, 50);
+        worked.work = bravebot_agent::Work {
+            writes: 4,
+            commands: 2,
+            ran_after_last_write: true,
+            last_command_failed: true,
+        };
+        let all = details_of(worked.clone());
+        assert!(all.contains("Edits: 4 · Commands: 2"), "{all}");
+        assert!(all.contains("The last command failed."), "{all}");
+
+        worked.work.last_command_failed = false;
+        let all = details_of(worked.clone());
+        assert!(all.contains("Edits: 4 · Commands: 2"), "{all}");
+        assert!(!all.contains("failed"), "{all}");
+
+        // The bit alone, with no command behind it, is not a fact the details state.
+        worked.work = bravebot_agent::Work {
+            last_command_failed: true,
+            ..Default::default()
+        };
+        let all = details_of(worked);
+        assert!(!all.contains("Edits"), "{all}");
+        assert!(!all.contains("failed"), "{all}");
+    }
+
+    /// SCREEN-3. The details say what share of the input the service read from its cache, of the
+    /// tokens read and not of the total, and have no line without a figure or with nothing read.
+    #[test]
+    fn the_details_say_how_much_of_the_input_was_read_from_the_cache() {
+        let mut cached = task("t", "/work/one", Status::Saved, 50);
+        cached.tokens = 1_500;
+        cached.read = 1_000;
+        cached.written = 500;
+        cached.cached = Some(800);
+        let all = details_of(cached.clone());
+        assert!(all.contains("Cache: 80% of input read from cache"), "{all}");
+
+        cached.cached = Some(0);
+        let all = details_of(cached.clone());
+        assert!(all.contains("Cache: 0% of input"), "{all}");
+
+        cached.cached = None;
+        let all = details_of(cached.clone());
+        assert!(!all.contains("Cache"), "{all}");
+
+        // Nothing was read, so there is no share to state, and nothing is divided by zero.
+        cached.cached = Some(5);
+        cached.read = 0;
+        let all = details_of(cached);
+        assert!(!all.contains("Cache"), "{all}");
+    }
+
+    /// SCREEN-3. A cache figure past the tokens read, as a gateway may state, is a share of 100
+    /// and never more, and the largest figures overflow nothing.
+    #[test]
+    fn a_cache_share_is_a_whole_percent_and_never_past_a_hundred() {
+        assert_eq!(cache_share(800, 1_000), Some(80));
+        assert_eq!(cache_share(2, 3), Some(66));
+        assert_eq!(cache_share(2_000, 1_000), Some(100));
+        assert_eq!(cache_share(u64::MAX, 1), Some(100));
+        assert_eq!(cache_share(u64::MAX, u64::MAX), Some(100));
+        assert_eq!(cache_share(5, 0), None);
     }
 
     /// SCREEN-4. A session found by what was said shows the line that holds the text under its row.
