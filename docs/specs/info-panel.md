@@ -568,7 +568,16 @@ first spelling.
 One reader takes items out of a string. It calls no model, no network and no `gh`, and touches no
 file. It finds a full `https://github.com/{owner}/{repo}/issues/{n}` or `/pull/{n}` address, which
 names its kind, and a word `{owner}/{repo}#{n}`, which names none and is listed as an issue until a
-later sighting names it. In a command it also finds the number a `gh pr` or `gh issue` subcommand works
+later sighting names it. A full address is read whatever the repository is called. The word is not read where the
+repository is a non-empty name, a dot, and then one of `rs`, `md`, `py`, `ts`, `tsx`, `jsx`, `mjs`,
+`cjs`, `toml`, `json`, `yaml`, `yml`, `txt`, `sh`, `c`, `h`, `cc`, `cpp`, `hpp`, `go`, `java`, `kt`,
+`swift`, `rb`, `css`, `html`, `lock`, `ftl` or `rst`. The extension is what follows the last dot, with
+no regard to case. So `src/main.rs#12` is a path and is not listed, while `a/rs#9` (no dot), `a/.rs#1`
+(no name before the dot) and `a/b.rs.bak#8` (the last extension is `bak`) are still read. `js` and
+`io` are left out on purpose, because `next.js` and `socket.io` are repositories, so `vercel/next.js#5`
+is still read. The same rule applies to the word after `Closes` and its other forms. A record a resume
+reads drops an item whose kind was not named and whose repository fits that rule, and keeps one whose
+kind was named. In a command it also finds the number a `gh pr` or `gh issue` subcommand works
 on (`view`, `comment`, `checkout`, `diff`, `checks`, `merge`, `review`, `close`, `reopen`, `edit`,
 `ready`, `develop`, `lock`, `unlock`, `pin`, `unpin`, `transfer`). That number is the first word after
 the subcommand, or the first one after only `-R {repo}`, `--repo {repo}`, `--repo={repo}` or `-R{repo}`,
@@ -625,6 +634,9 @@ reads cannot decide anything.
 `verified-by: bravebot_agent::links::a_full_address_gives_the_kind_its_path_names_and_what_follows_the_number_is_ignored`
 `verified-by: bravebot_agent::links::an_owner_repository_number_word_is_read_as_an_issue_whose_kind_was_not_named`
 `verified-by: bravebot_agent::links::a_word_that_is_not_a_reference_gives_nothing`
+`verified-by: bravebot_agent::links::a_path_with_a_source_extension_and_a_hash_is_not_a_reference`
+`verified-by: bravebot_agent::links::a_repository_named_like_a_file_is_still_read_by_a_full_address_and_a_name_without_an_extension_in_the_list`
+`verified-by: bravebot_session::sessions::an_assumed_item_whose_repository_names_a_file_is_dropped_on_reading`
 `verified-by: bravebot_agent::links::what_a_sentence_puts_around_a_reference_is_taken_off`
 `verified-by: bravebot_agent::links::only_the_first_part_of_a_long_string_is_read_and_the_cut_falls_on_a_character`
 `verified-by: bravebot_agent::links::a_word_the_cut_falls_inside_is_dropped_and_not_shortened`
@@ -761,8 +773,9 @@ migration.
   read, so the list does not hold it until something the person or the planner wrote names it.
 
 - **A word shaped like `owner/repo#n` is read as a reference ([PANEL-16](#PANEL-16)).** A path with a
-  number after a hash, such as `src/main.rs#12`, has a valid owner and repository by GitHub's rules, so
-  it is listed as an issue. The list is for the person to look at and nothing acts on it.
+  number after a hash whose last part does not end in one of the listed extensions, such as
+  `lib/util.cfg#12` or `a/b.js#12`, has a valid owner and repository by GitHub's rules, so it is listed
+  as an issue. The list is for the person to look at and nothing acts on it.
 
 - **A command a rule then refuses still counts ([PANEL-16](#PANEL-16)).** The command is read where
   the planner's argument is read, before the checks that refuse it, so the items it names are listed

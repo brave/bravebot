@@ -225,7 +225,33 @@ fn bounded(text: &str) -> &str {
     }
 }
 
-/// The reference one word is, where it is one: a full address, or `owner/repo#n`.
+/// The extensions of the files a path such as `src/main.rs#12` ends in. A repository whose name ends
+/// in one is read as a file, so the shorthand `{owner}/{repo}#{n}` is not read of it.
+///
+/// `js` and `io` are left out: `next.js`, `socket.io` and `three.js` are repositories.
+const FILE_EXTENSIONS: [&str; 29] = [
+    "rs", "md", "py", "ts", "tsx", "jsx", "mjs", "cjs", "toml", "json", "yaml", "yml", "txt", "sh",
+    "c", "h", "cc", "cpp", "hpp", "go", "java", "kt", "swift", "rb", "css", "html", "lock", "ftl",
+    "rst",
+];
+
+/// Whether `repo` ends in the extension of a source or document file, with no regard to case, so
+/// that `main.rs` is a file name and `next.js` is not.
+///
+/// This looks at the characters of one name and nothing else. The shorthand reader and the read of
+/// a stored item use it to leave a path out of the list (PANEL-16), and a full address is not
+/// held to it.
+pub fn names_a_file(repo: &str) -> bool {
+    repo.rsplit_once('.').is_some_and(|(stem, extension)| {
+        !stem.is_empty()
+            && FILE_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(extension))
+    })
+}
+
+/// The reference one word is, where it is one: a full address, or `owner/repo#n` where the
+/// repository is not named like a file.
 fn reference_in(word: &str) -> Option<Reference> {
     if let Some(path) = word.strip_prefix("https://github.com/") {
         let mut parts = path.split('/');
@@ -242,6 +268,9 @@ fn reference_in(word: &str) -> Option<Reference> {
     }
     let (name, number) = word.split_once('#')?;
     let (owner, repo) = name.split_once('/')?;
+    if names_a_file(repo) {
+        return None;
+    }
     Reference::new(owner, repo, number_of(number)?, LinkKind::Issue).map(Reference::assumed)
 }
 
@@ -581,6 +610,94 @@ mod tests {
                 references_in_text(text)
             );
         }
+    }
+
+    /// The regression it rejects: a path with a line number after a hash, such as `src/main.rs#12`,
+    /// listed as an issue of a repository named `main.rs`, in a typed line and after a closing
+    /// keyword alike.
+    #[test]
+    fn a_path_with_a_source_extension_and_a_hash_is_not_a_reference() {
+        for text in [
+            "src/main.rs#12",
+            "see src/main.rs#12",
+            "docs/README.MD#3",
+            "a/b.py#1",
+            "a/b.ts#1",
+            "a/b.tsx#1",
+            "a/b.jsx#1",
+            "a/b.mjs#1",
+            "a/b.cjs#1",
+            "a/Cargo.toml#1",
+            "a/b.json#1",
+            "a/b.yaml#1",
+            "a/b.yml#1",
+            "a/b.txt#1",
+            "a/b.sh#1",
+            "a/b.c#1",
+            "a/b.h#1",
+            "a/b.cc#1",
+            "a/b.cpp#1",
+            "a/b.hpp#1",
+            "a/b.go#1",
+            "a/b.java#1",
+            "a/b.kt#1",
+            "a/b.swift#1",
+            "a/b.rb#1",
+            "a/b.css#1",
+            "a/b.html#1",
+            "a/Cargo.lock#1",
+            "a/b.ftl#1",
+            "a/b.rst#1",
+            "a/b.test.rs#1",
+        ] {
+            assert!(
+                references_in_text(text).is_empty(),
+                "{text:?} gave {:?}",
+                references_in_text(text)
+            );
+            let closing = format!(
+                "git commit -m \"Closes {}\"",
+                text.rsplit(' ').next().unwrap()
+            );
+            assert!(command(&closing, None).is_empty(), "{closing}");
+            assert!(
+                command(&closing, Some(("brave", "bravebot"))).is_empty(),
+                "{closing}"
+            );
+        }
+    }
+
+    /// The regression it rejects: a file-name check that drops a repository whose name ends in
+    /// `.js` or `.io`, or any address, so a real reference is lost.
+    #[test]
+    fn a_repository_named_like_a_file_is_still_read_by_a_full_address_and_a_name_without_an_extension_in_the_list()
+     {
+        assert_eq!(
+            items(&references_in_text(
+                "vercel/next.js#5 socket-io/socket.io#6 mrdoob/three.js#7 a/b.rs.bak#8 a/rs#9 a/.rs#1"
+            )),
+            [
+                "vercel/next.js#5 Issue named=false",
+                "socket-io/socket.io#6 Issue named=false",
+                "mrdoob/three.js#7 Issue named=false",
+                "a/b.rs.bak#8 Issue named=false",
+                "a/rs#9 Issue named=false",
+                "a/.rs#1 Issue named=false",
+            ]
+        );
+        assert_eq!(
+            items(&references_in_text(
+                "https://github.com/src/main.rs/issues/12 https://github.com/src/main.rs/pull/13"
+            )),
+            [
+                "src/main.rs#12 Issue named=true",
+                "src/main.rs#13 PullRequest named=true"
+            ]
+        );
+        assert_eq!(
+            command("git commit -m \"Closes vercel/next.js#5\"", None),
+            ["vercel/next.js#5 Issue named=true"]
+        );
     }
 
     /// The regression it rejects: a reader that takes a word whole, so a reference in brackets, in
