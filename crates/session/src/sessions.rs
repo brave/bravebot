@@ -2297,7 +2297,6 @@ impl Url {
         bravebot_core::url::web_address(text).map(|text| Self(text.to_string()))
     }
 
-    /// The link as written.
     pub fn as_str(&self) -> &str {
         &self.0
     }

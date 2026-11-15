@@ -81,7 +81,6 @@ impl Picker {
             .fold(Sections::default(), |off, row| off.toggled(row.section))
     }
 
-    /// Turn the row under the cursor on or off.
     fn toggle(&mut self) -> Outcome {
         if let Some(row) = self.chosen_mut() {
             row.shown = !row.shown;

@@ -589,7 +589,8 @@ There are three sources, and only these.
    `download_url` are read where the call is made, after the same gate that lets the driver read an
    argument at all ([LABEL-5](labels.md#LABEL-5)), and only then. A context that has met something
    untrusted is refused that read, so it collects nothing from the planner's arguments, and the call
-   fails as it did before. No gate was added and nothing is declassified. The call is read before the
+   fails as any call whose argument the gate refuses. The reader has no gate of its own and
+   declassifies nothing. The call is read before the
    credential, directory, rules and approval checks, so a command one of them then refuses still names
    what it was about. Only a turn whose front end keeps links (the terminal and the desktop, as
    [SETLINK-2](tools/set-link.md#SETLINK-2) says) collects. A delegate, a one-shot run and a plain run
