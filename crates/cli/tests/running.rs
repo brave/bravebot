@@ -5283,6 +5283,62 @@ fn doctor_names_a_top_level_key_it_does_not_read() {
     );
 }
 
+/// BACKEND-36, RUN-28 and SANDBOX-25 from the process that reads the file: each restriction that
+/// names nothing is said by `doctor` with the file that holds it, and the value is not.
+///
+/// One file with the four entries the issue reports: a misspelled key inside each of the three
+/// blocks, Claude Code's `disableBypassPermissionsMode`, and a `denyWrite` that starts with
+/// `$HOME`. The bypass line has to name `permissions.bypassUnreachable`, the key that does the job,
+/// and the `$HOME` entry has to be reported as not in force and not listed as a path that is.
+///
+/// The `scrubEnv` whitespace needs no line: the name is read without it, so the stage loses the
+/// variable, which `a_name_listed_with_trailing_whitespace_is_withheld_as_the_name` holds.
+#[test]
+fn doctor_names_a_restriction_that_names_nothing() {
+    let scratch = Scratch::new("cli-running-unread-inside").with_settings(
+        r#"{"permissions": {"disableBypassPermissionsMode": "disable"},
+            "sandbox": {"filesystem": {"denyread": ["~/.config/gh"],
+                                       "denyWrite": ["$HOME/.config/gh"]}},
+            "run": {"scrubenv": ["a-value-nothing-else-prints"]}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    let file = scratch.path.join(".bravebot").join("settings.json");
+    for key in [
+        "permissions.disableBypassPermissionsMode",
+        "sandbox.filesystem.denyread",
+        "run.scrubenv",
+    ] {
+        assert!(
+            stdout.contains(&format!("{key} in {}", file.display())),
+            "{key} was read and discarded with nothing said: {stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("permissions.bypassUnreachable"),
+        "the bypass key was not pointed at the key that makes bypass unreachable: {stdout}"
+    );
+    assert!(
+        stdout.contains("denyWrite $HOME/.config/gh is not in force"),
+        "a denyWrite that starts with a variable was listed as in force: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a-value-nothing-else-prints"),
+        "the report printed what the key was set to: {stdout}"
+    );
+}
+
 /// PERM-14's exclusion, from the same process: a checkout's `allow` entry that is not a rule is
 /// named for what is wrong with it, under PERM-11, and not as a grant that was withheld.
 ///

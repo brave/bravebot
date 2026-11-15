@@ -8,8 +8,10 @@ description: Configure deny, ask and allow permission rules, understand matching
 
 The `permissions` block of `~/.bravebot/settings.json` holds three lists (`deny`, `ask` and `allow`)
 saying which actions to refuse outright and which to stop and ask you about. They are the same three
-lists Claude Code keeps, with the same spellings, so a block copied out of `~/.claude/settings.json`
-governs bravebot unedited. See
+lists Claude Code keeps, with the same spellings, so those three lists in a block copied out of
+`~/.claude/settings.json` govern bravebot unedited. A key of that block that bravebot does not read,
+such as `disableBypassPermissionsMode`, restricts nothing, and `bravebot doctor` names it. The key
+that makes the bypass mode unreachable here is `bypassUnreachable`. See
 [Configuration](../customize/configuration.md#permissions) for how a rule is written.
 
 **A rule decides whether you are asked, and whether an action happens at all. Nothing else.**

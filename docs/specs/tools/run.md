@@ -2431,7 +2431,9 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 An entry in `run.scrubEnv` may hold `*`, standing for any run of characters including none, and
 `?`, standing for exactly one. It is matched against the whole of a variable name, ignoring case, so
 `AWS_*` withholds `AWS_PROFILE` and `aws_region` and leaves `PATH`, and `MY_AWS_KEY` is not matched
-by it. An entry holding neither character is an exact name and is compared as one. A pattern
+by it. An entry holding neither character is an exact name and is compared as one, after the
+whitespace at its ends is removed, since no variable name holds any and an entry kept with it would
+withhold nothing. A pattern
 matching a variable already withheld leaves it withheld once. A pattern matching nothing withholds
 nothing, while an exact name is withheld whether this process holds the variable or not. `*` and `?`
 are the whole of the syntax: there is no character class and no brace group. A pattern is read from
@@ -2473,6 +2475,8 @@ went out of date without saying so.
 `verified-by: bravebot_config::scrub::a_pattern_matching_a_built_in_credential_does_not_list_it_twice`
 `verified-by: bravebot_config::scrub::a_pattern_naming_no_variable_adds_nothing_and_an_exact_name_still_does`
 `verified-by: bravebot_config::scrub::a_pattern_is_not_one_of_this_agents_own`
+`verified-by: bravebot_config::scrub::a_name_listed_with_trailing_whitespace_is_withheld_as_the_name`
+`verified-by: bravebot_config::settings::a_scrub_name_is_read_without_the_whitespace_at_its_ends`
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
 `verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`

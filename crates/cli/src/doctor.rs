@@ -638,13 +638,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     each(
         t!(doctor_settings_unread),
         settings.unread_keys(),
-        |(path, key)| {
-            t!(
-                doctor_settings_unread_key,
-                key = progress::printable(key),
-                path = progress::printable_path(path)
-            )
-        },
+        |(path, key)| unread_key_line(path, key),
     );
 
     // The same, for a key that only refuses and was spelled as something other than a boolean: it
@@ -685,6 +679,29 @@ fn report_managed_server_entries(managed: &Managed) {
         bravebot_agent::mcp::managed_entries_unusable(managed),
         |sentence| sentence,
     );
+}
+
+/// The line for a key nothing reads, naming the file and not the value.
+///
+/// Claude Code's key for the bypass switch is the one unread key whose writer believes a
+/// restriction is in force, so it is said with the key that does the job (BACKEND-36).
+fn unread_key_line(path: &Path, key: &str) -> String {
+    let bypass = format!(
+        "permissions.{}",
+        bravebot_config::Narrowing::CLAUDE_DISABLE_BYPASS
+    );
+    match key == bypass {
+        true => t!(
+            doctor_settings_unread_bypass,
+            key = progress::printable(key),
+            path = progress::printable_path(path)
+        ),
+        false => t!(
+            doctor_settings_unread_key,
+            key = progress::printable(key),
+            path = progress::printable_path(path)
+        ),
+    }
 }
 
 /// The network for the programs `run` starts, named only where it is not open, with who decided
