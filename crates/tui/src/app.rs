@@ -858,6 +858,14 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_panel();
         return Action::Redraw;
     }
+    // Opens the checklist of the panel's sections. It edits the session and nothing else, so it is
+    // the same at rest and while a turn runs (PANEL-17).
+    if line.trim() == SIDEBAR_COMMAND {
+        session.open_picking(crate::picking::Picking::Sidebar(
+            crate::sidebar_prompt::Picker::new(session.panel_sections()),
+        ));
+        return Action::Redraw;
+    }
     if line.trim() == DIFF_COMMAND {
         session.toggle_files();
         return Action::Redraw;
@@ -26259,6 +26267,7 @@ mod tests {
                 SANDBOX_COMMAND,
                 SCHEDULE_COMMAND,
                 SESSIONS_COMMAND,
+                SIDEBAR_COMMAND,
                 STATUS_COMMAND,
                 STYLE_COMMAND,
                 THEME_COMMAND,
@@ -28834,6 +28843,9 @@ mod tests {
             (CONFIG_COMMAND, |picking| {
                 matches!(picking, Picking::Editing(_))
             }),
+            (SIDEBAR_COMMAND, |picking| {
+                matches!(picking, Picking::Sidebar(_))
+            }),
         ] {
             let mut session = a_turn_running_on("first");
 
@@ -28855,6 +28867,40 @@ mod tests {
             assert_eq!(session.input(), "", "{line} was left in the box");
             assert!(said_under_the_turn(&session).is_empty());
         }
+    }
+
+    /// PANEL-17, CMD-8. A section turned off in the checklist a turn is running under is kept for
+    /// the next start as it is turned off, and the turn is not touched: nothing is queued, handed
+    /// to the turn, said under it or cancelled, and the turn goes on.
+    ///
+    /// Rejects: a toggle that is saved when the checklist closes or only at rest, one that is
+    /// queued for the turn's end, and one that is handed to the turn as a line to answer.
+    #[test]
+    fn a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_persisting_turn_running_on("first");
+        let cancel = nothing_beside(|beside| {
+            let cancel =
+                typed_during_a_turn(&mut session, SIDEBAR_COMMAND, key(KeyCode::Enter), beside);
+            for code in [KeyCode::Char(' '), KeyCode::Char('j'), KeyCode::Enter] {
+                turn_key(&mut session, key(code), &cancel, beside);
+            }
+            cancel
+        });
+
+        assert!(session.picking().is_some(), "the checklist closed");
+        assert_eq!(
+            bravebot_session::store::load_sidebar(),
+            Some(vec!["session".to_string(), "model".to_string()])
+        );
+        assert!(session.queued.is_empty(), "a toggle waited");
+        assert_eq!(session.interjections().take(), None);
+        assert!(said_under_the_turn(&session).is_empty());
+        assert_eq!(session.input(), "");
+        assert!(!cancel.is_cancelled());
+        assert!(session.a_turn_is_running());
     }
 
     /// While a picker opened mid-turn is open it takes the keys, and a row taken is carried out as
@@ -30824,7 +30870,14 @@ mod tests {
                 MidTurn::Waits => continue,
                 // The bare word opens a picker or the Sessions screen, which are modes of the session and
                 // say nothing.
-                _ if [CONFIG_COMMAND, MODEL_COMMAND, SESSIONS_COMMAND].contains(&command.name) => {
+                _ if [
+                    CONFIG_COMMAND,
+                    MODEL_COMMAND,
+                    SESSIONS_COMMAND,
+                    SIDEBAR_COMMAND,
+                ]
+                .contains(&command.name) =>
+                {
                     continue;
                 }
                 _ if [THEME_COMMAND, EFFORT_COMMAND].contains(&command.name) => {

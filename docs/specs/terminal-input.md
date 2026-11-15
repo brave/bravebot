@@ -26,6 +26,7 @@ governs:
   - crates/tui/src/vim.rs
   - crates/tui/src/config_prompt.rs
   - crates/tui/src/list_picker.rs
+  - crates/tui/src/sidebar_prompt.rs
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
@@ -1472,6 +1473,11 @@ each one means and marking the one in force. Enter takes the row under the curso
 transcript; Escape leaves the style alone. Whichever style is chosen, the box comes back taking
 letters as letters, with no instruction left waiting for a key.
 
+The checklist `/sidebar` opens ([PANEL-17](info-panel.md#PANEL-17)) is the same picker with the same
+keys: Up and Down, and `j` and `k`, walk the list and stop at both ends, and Escape and Ctrl-C close
+it. Its rows are boxes, so Enter and Space both turn the row under the cursor on or off and leave the
+checklist open, with the cursor on the row. Space with Control, Alt or Shift held turns nothing.
+
 Vi editing has two modes over the same line. INSERT is the box everybody has, where a typed
 character lands at the caret. NORMAL takes a letter as an instruction, and a letter it has no
 instruction for does nothing at all rather than being typed. NORMAL opens two more for a while,
@@ -1535,6 +1541,10 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::list_picker::escape_and_ctrl_c_cancel`
 `verified-by: bravebot_tui::list_picker::the_arrows_and_vis_own_keys_walk_the_list`
 `verified-by: bravebot_tui::list_picker::enter_takes_the_row_under_the_cursor`
+`verified-by: bravebot_tui::sidebar_prompt::space_and_enter_turn_the_row_under_the_cursor_off_and_on_and_the_cursor_stays`
+`verified-by: bravebot_tui::sidebar_prompt::the_arrows_and_j_and_k_walk_the_list_and_stop_at_both_ends`
+`verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
+`verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
 `verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 

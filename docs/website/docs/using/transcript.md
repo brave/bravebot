@@ -609,6 +609,7 @@ Parts of the row that only report, such as the context reading and what a copy t
 | Click | What it does | The same from the keyboard |
 |---|---|---|
 | a row of the `/effort`, `/config`, `/theme` and `/model` pickers | the first click moves the cursor to it, and `/theme` shows the theme under it. The second takes it, when it is on the same row | Up, Down and Enter |
+| a row of the `/sidebar` checklist | turns that section of the info panel on or off, on the one click | Up, Down, Space and Enter |
 | a prompt in the search over earlier prompts | the first click moves the cursor to it and the second puts it in the box, sending nothing | Up, Down and Enter |
 | a session in the [Sessions screen](sessions-screen.md#the-mouse) or the list `bravebot sessions` opens | the first click moves the cursor to it and the second opens it as Enter does, or attaches to it. A click on a tab of the Sessions screen chooses it | Up, Down and Enter |
 | outside a picker or the search over earlier prompts | closes it, with nothing changed | Escape |

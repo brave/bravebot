@@ -1885,6 +1885,8 @@ config-picker-title = mode d'édition
 config-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
 config-editing-hint-ordinary = les flèches et les raccourcis readline
 config-editing-hint-vi = édition modale, avec hjkl et les opérateurs
+sidebar-picker-title = panneau d'informations
+sidebar-picker-keys = ↑↓ aller · Espace cocher · Échap fermer
 
 effort-picker-title = effort
 effort-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
@@ -2852,6 +2854,7 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
+command-sidebar = Choisir les sections que le panneau d'informations affiche
 command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente

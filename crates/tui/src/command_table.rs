@@ -192,6 +192,9 @@ pub(crate) const SESSIONS_COMMAND: &str = "/sessions";
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
+/// The line that opens the checklist of the info panel's sections (PANEL-17).
+pub(crate) const SIDEBAR_COMMAND: &str = "/sidebar";
+
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const DIFF_COMMAND: &str = "/diff";
 
@@ -649,6 +652,12 @@ pub fn commands() -> Vec<Command> {
             name: PANEL_COMMAND,
             argument: "",
             description: t!(command_panel),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: SIDEBAR_COMMAND,
+            argument: "",
+            description: t!(command_sidebar),
             mid_turn: MidTurn::Runs,
         },
         Command {

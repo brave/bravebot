@@ -2231,6 +2231,9 @@ config-picker-title = editor mode
 config-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
 config-editing-hint-ordinary = arrows and the readline chords
 config-editing-hint-vi = modal editing, with hjkl and the operators
+# Choosing which sections the info panel draws. The names of the sections are the panel's headings.
+sidebar-picker-title = info panel
+sidebar-picker-keys = ↑↓ move · Space toggle · Esc close
 picker-premium = premium
 # The heading over the models Brave's own endpoint serves. Named rather than left blank, because a
 # list whose other sections name a service reads as though the unlabelled rows came from nowhere.
@@ -3630,6 +3633,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-sessions = Open the Sessions screen: every session and what each is doing
 command-panel = Show or hide the info panel beside the transcript
+command-sidebar = Choose which sections the info panel draws
 command-diff = List the files the session wrote and show every edit to the one highlighted
 command-todos = Print the whole plan, every task with its status
 command-unfinished = List what this session left open, and whose move each is

@@ -691,10 +691,12 @@ impl Session {
         }
     }
 
-    /// Open the info panel where it was left open last time.
+    /// Open the info panel where it was left open last time, at the width and with the sections
+    /// it was left with.
     ///
     /// Read only for a session that persists, as the editing style is, so a test is not handed the
-    /// developer's own choice. Closed where nothing was recorded.
+    /// developer's own choice. Closed where nothing was recorded, and with every section drawn
+    /// where no sections were recorded or the record does not read cleanly.
     pub fn adopt_panel(&mut self) {
         self.panel = self
             .persist
@@ -706,6 +708,13 @@ impl Session {
             .then(bravebot_session::store::load_panel_width)
             .flatten()
             .unwrap_or(crate::panel::WIDTH);
+        self.panel_sections = self
+            .persist
+            .then(bravebot_session::store::load_sidebar)
+            .flatten()
+            .map_or_else(crate::panel::Sections::default, |ids| {
+                crate::panel::Sections::from_ids(&ids)
+            });
     }
 
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
@@ -715,6 +724,21 @@ impl Session {
             return crate::files_mode::columns(columns);
         }
         crate::panel::clamped(self.panel_width, columns)
+    }
+
+    /// The sections of the info panel that are turned off (PANEL-17).
+    pub fn panel_sections(&self) -> crate::panel::Sections {
+        self.panel_sections
+    }
+
+    /// Turn the sections of the info panel on and off as `sections` says. The next frame draws the
+    /// panel as it now is, and a session that persists keeps the choice for the next one.
+    pub fn set_panel_sections(&mut self, sections: crate::panel::Sections) {
+        self.panel_sections = sections;
+        if self.persist {
+            let hidden: Vec<&str> = sections.hidden().map(crate::panel::Section::id).collect();
+            bravebot_session::store::save_sidebar(&hidden);
+        }
     }
 
     /// Whether a press here is on the panel's border, the column a drag resizes it by.

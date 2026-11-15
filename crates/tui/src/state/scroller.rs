@@ -329,6 +329,7 @@ impl Session {
                 self.picking = None;
                 self.picked = Some(picked);
             }
+            crate::picking::Step::Changed(sections) => self.set_panel_sections(sections),
         }
     }
 
@@ -543,6 +544,7 @@ impl Session {
                 self.pick_click = None;
                 self.picked = Some(picked);
             }
+            crate::picking::Step::Changed(sections) => self.set_panel_sections(sections),
         }
     }
 

@@ -548,6 +548,8 @@ pub struct Session {
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
+    /// The sections of the info panel the person turned off with `/sidebar` (PANEL-17).
+    panel_sections: crate::panel::Sections,
     /// Whether a drag that began on the panel's border is still held (PANEL-6).
     panel_drag: bool,
     /// Where on the thumb the scrollbar was taken hold of, while a drag that began on it is held.
@@ -1428,6 +1430,7 @@ impl Session {
             panel: false,
             files: None,
             panel_width: crate::panel::WIDTH,
+            panel_sections: crate::panel::Sections::default(),
             panel_drag: false,
             bar_drag: None,
             words_held: None,

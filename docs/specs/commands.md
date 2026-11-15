@@ -53,7 +53,8 @@ this program carries and starts no turn, which is CMD-25. `/todos` prints the pl
 and starts no turn, which is CMD-28. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19. `/open` is
 the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30. `/issues` and `/prs` list the issues and pull requests the session has met,
-which is CMD-31.
+which is CMD-31. `/sidebar` opens the checklist that turns the sections of the info panel on or off, and
+starts no turn, which is CMD-32.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -395,7 +396,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -1913,4 +1914,27 @@ said is printed, so nothing branches on untrusted content.
 `verified-by: bravebot_tui::state::references::the_commands_print_each_item_with_its_address_or_say_there_are_none`
 `verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
+<a id="CMD-32"></a>
+### CMD-32: `/sidebar` opens the checklist of the info panel's sections, and starts no turn
+
+`/sidebar` opens a checklist with a row for each section of the info panel, and the rows turn the
+sections on or off ([PANEL-17](info-panel.md#PANEL-17)). It reads nothing, sends nothing, spends no
+tokens and starts no turn. It takes no argument, so `/sidebar` followed by words is a prompt (CMD-2),
+and it is a command of its own beside `/panel`, which shows and hides the whole panel
+([PANEL-5](info-panel.md#PANEL-5)) and does not open the checklist. It does not open the panel. It
+touches nothing a running turn holds, so typed during one it opens the checklist as it is typed and
+the turn goes on (CMD-8), and the same keys and presses work at rest and while a turn runs. A prompt
+file or skill named `sidebar` is shadowed by the command (CMD-17), and a slash offers the word with
+the commands that begin like it (CMD-9).
+
+**Why.** Which sections the panel draws is a choice about the screen and the person's own
+preference, so it needs no model and no turn, and a person who is watching a long turn is the one
+most likely to want fewer sections.
+
+`verified-by: bravebot_tui::app::tests::pickers::the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens`
+`verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`

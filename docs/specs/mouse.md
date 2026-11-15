@@ -15,6 +15,7 @@ governs:
   - crates/tui/src/confirm.rs
   - crates/tui/src/panel.rs
   - crates/tui/src/list_picker.rs
+  - crates/tui/src/sidebar_prompt.rs
   - crates/tui/src/model_prompt.rs
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/sessions_screen.rs
@@ -442,6 +443,13 @@ covers, and it takes only what the frame drew, so a row the pane had no room for
 click. The keys that `?` lists have nothing to take, so a click on one does nothing, and a click in
 the box is [MOUSE-16](#MOUSE-16)'s. The keys stay the way to do it without a mouse.
 
+The checklist `/sidebar` opens ([PANEL-17](info-panel.md#PANEL-17)) is the one picker that takes a
+row on a single left press. Its rows are boxes that turn on or off and the checklist stays open, so
+the press that puts the cursor on a row also turns it, and the next press on it turns it back. The
+press lands on the row drawn under the pointer and not on the row the cursor was on, a press on the
+border, on the lines under the list or below the last row changes nothing, and the wheel moves the
+cursor ([MOUSE-46](#MOUSE-46)).
+
 `verified-by: bravebot_tui::list_picker::a_press_moves_the_cursor_and_a_second_press_takes_the_row`
 `verified-by: bravebot_tui::list_picker::two_presses_on_different_rows_or_far_apart_take_nothing`
 `verified-by: bravebot_tui::list_picker::a_press_inside_the_panel_but_off_the_rows_and_anything_but_a_left_press_leave_it_alone`
@@ -452,6 +460,10 @@ the box is [MOUSE-16](#MOUSE-16)'s. The keys stay the way to do it without a mou
 `verified-by: bravebot_tui::list_picker::a_key_after_a_press_moves_the_list_as_the_keys_alone_do`
 `verified-by: bravebot_tui::list_picker::the_panel_and_its_rows_are_drawn_where_placed_says_they_are`
 `verified-by: bravebot_tui::list_picker::the_picker_opened_at_rest_reads_the_pointer`
+`verified-by: bravebot_tui::list_picker::a_picker_that_takes_on_the_first_press_does_and_the_others_still_need_two`
+`verified-by: bravebot_tui::sidebar_prompt::one_press_on_a_row_turns_it_off_and_the_next_turns_it_on_again`
+`verified-by: bravebot_tui::sidebar_prompt::a_press_turns_off_the_row_it_landed_on_and_not_the_one_under_the_cursor`
+`verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_of_the_checklist_turns_its_section_off_and_a_press_outside_keeps_that`
 `verified-by: bravebot_tui::theme_prompt::the_pointer_previews_the_row_and_an_outside_press_puts_the_old_theme_back`
 `verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_moves_the_cursor_and_a_second_takes_it_in_a_picker_opened_mid_turn`
 `verified-by: bravebot_tui::app::tests::pickers::presses_on_two_rows_or_off_the_rows_take_nothing_in_a_picker_opened_mid_turn`
@@ -1661,6 +1673,7 @@ nothing else, and the release that follows it is the panel's.
 | Panel | What Escape does | A left press outside it |
 |---|---|---|
 | the pickers `/effort`, `/config`, `/theme` and `/model` open, at rest and while a turn runs | leaves what was in force alone, and `/theme` puts back the theme it opened on | closes it the same way |
+| the checklist `/sidebar` opens, at rest and while a turn runs | closes it and keeps every change already made | closes it the same way |
 | the search over the prompts already sent | closes it, leaving the box as it was | closes it the same way |
 | the Sessions screen and the list `bravebot sessions` opens | leaves without resuming or attaching | there is nothing outside them: each takes the whole screen |
 | the list offered under the box as a line is typed | clears the line, which discards what was typed | does nothing |
@@ -1669,6 +1682,7 @@ nothing else, and the release that follows it is the panel's.
 
 `verified-by: bravebot_tui::list_picker::a_left_press_outside_the_panel_cancels_and_takes_nothing`
 `verified-by: bravebot_tui::model_prompt::a_left_press_outside_the_panel_keeps_the_current_model`
+`verified-by: bravebot_tui::sidebar_prompt::the_wheel_walks_a_press_outside_closes_and_a_press_off_the_rows_changes_nothing`
 `verified-by: bravebot_tui::app::tests::history_search::a_press_outside_the_search_closes_it_and_leaves_the_box_as_it_was`
 `verified-by: bravebot_tui::theme_prompt::the_pointer_previews_the_row_and_an_outside_press_puts_the_old_theme_back`
 `verified-by: bravebot_tui::app::tests::pickers::a_press_outside_a_picker_opened_mid_turn_closes_it_and_clicks_nothing_beneath`

@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/title.rs
   - crates/tui/src/panel.rs
+  - crates/tui/src/sidebar_prompt.rs
   - crates/tui/src/pointer.rs
   - crates/tui/src/state/references.rs
   - crates/agent/src/links.rs
@@ -16,7 +17,8 @@ documented-by: docs/website/docs/using/sessions.md
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
 issues and pull requests it is for and has met, the model and effort it runs on, its context and
-cache, its token total, the language servers and MCP servers it has started, and its plan. A session
+cache, its token total, the language servers and MCP servers it has started, and its plan, and the
+checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
 gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
 [`set_link`](tools/set-link.md) for an address the person typed. It lists the other issues and pull
 requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed, from the
@@ -92,7 +94,9 @@ panel is open to `~/.bravebot/panel`, and the next start reads it, as the theme 
 leaves the panel closed. The choice is not in the session record, so a resume opens with the panel
 as the last press left it. The width the panel was last dragged to ([PANEL-6](#PANEL-6)) is kept
 the same way in `~/.bravebot/panel-width`, a single whole number of columns; no file, or one that
-holds anything else, leaves the panel at 36.
+holds anything else, leaves the panel at 36. The sections the person turned off with `/sidebar`
+([PANEL-17](#PANEL-17)) are kept the same way in `~/.bravebot/sidebar`, and are not in the session
+record either.
 
 **Why `ctrl-x`.** Ctrl-I is Tab to a terminal, Ctrl-H, Ctrl-M and Ctrl-[ are Backspace, Enter and
 Escape, Ctrl-Z suspends, Ctrl-Q is flow control, and the box answers the other Ctrl letters. A
@@ -109,6 +113,11 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 `verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
+`verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
+`verified-by: bravebot_session::store::an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read`
+`verified-by: bravebot_session::store::a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up`
+`verified-by: bravebot_tui::panel::references_over_a_panel_with_nothing_above_them_leave_the_context_and_the_plan_their_rows`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits
@@ -187,7 +196,9 @@ any turn or round has reported one. When the panel is not drawn, or the terminal
 short for the panel to show its Context section whole, the hint line has the reading and the hit
 rate. The loop, the job count, the mode and the keys stay on the hint line in every case, because a
 loop and a job spend while nobody is watching, and the panel can be closed or the terminal too
-narrow for it.
+narrow for it. The same holds while the Context section is turned off with `/sidebar`
+([PANEL-17](#PANEL-17)): the panel has no Context section then, so the hint line keeps the reading
+and the hit rate, and the token total and the two cache rows are not drawn.
 
 `verified-by: bravebot_tui::panel::the_context_reading_moves_into_the_panel_in_each_state`
 `verified-by: bravebot_tui::panel::the_cache_read_and_written_are_two_figures`
@@ -196,6 +207,8 @@ narrow for it.
 `verified-by: bravebot_tui::app::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`
 `verified-by: bravebot_tui::panel::the_loop_stays_on_the_hint_line_while_the_panel_is_drawn`
 `verified-by: bravebot_tui::panel::the_context_reading_stays_on_the_hint_line_where_the_panel_is_too_short_for_it`
+`verified-by: bravebot_tui::panel::the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off`
+`verified-by: bravebot_tui::panel::the_reading_moves_to_the_panel_where_the_sections_left_on_have_the_room`
 
 <a id="PANEL-9"></a>
 ### PANEL-9: the sections, in order, each left out when it has nothing
@@ -253,7 +266,9 @@ narrow for it.
    the rows it leaves, as PANEL-13 says of the server sections.
 10. **Plan.** PANEL-10.
 
-A section with nothing to show has no heading. Control characters in any row are drawn as visible
+A section with nothing to show has no heading. A section the person turned off with `/sidebar`
+([PANEL-17](#PANEL-17)) is left out the same way, with its heading, its rows and the blank row
+before it, whatever it holds, and it is not counted in the room the other sections share. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
 whatever whoever made it chose.
 
@@ -280,6 +295,9 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 `verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 `verified-by: bravebot_tui::app::tests::herdr::sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends`
+`verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
+`verified-by: bravebot_tui::panel::a_section_turned_off_has_no_click_target`
+`verified-by: bravebot_tui::panel::the_references_are_not_cut_for_the_rows_of_a_section_turned_off`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
@@ -289,7 +307,8 @@ with a mark for its status, and a finished row struck through. It
 stays after the turn that wrote it ends, is replaced by the next report that has rows, and is
 emptied by `/clear`. A report with no rows leaves it as it was, since the session record does not
 tell a turn that emptied its list from one that kept none. It is the last section and has the rows
-the others leave, the language servers and MCP servers included.
+the others leave, the language servers and MCP servers included, and the rows of a section turned
+off with `/sidebar` ([PANEL-17](#PANEL-17)) are rows it has. Turned off itself, it is not drawn.
 
 A plan longer than that shows the rows that fit less the row after them that says what was left out,
 and less the key row where that is drawn. The rows shown are chosen from each row's status and from
@@ -366,6 +385,7 @@ says the work is finished reads as work still going.
 `verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
 `verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
 `verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`
+`verified-by: bravebot_tui::panel::the_rows_a_section_turned_off_frees_go_to_the_plan`
 
 <a id="PANEL-11"></a>
 ### PANEL-11: the panel draws only on what the person and the driver said
@@ -385,7 +405,11 @@ the session wrote with the counts the kernel made ([FILES-2](files-mode.md#FILES
 reply, an untrusted tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed. A row of the two sections of references is built from
 an owner, a repository and a number that [PANEL-16](#PANEL-16) validated, so a reply or a result that
-names an item adds no row, and a row cannot hold a character the validation does not allow.
+names an item adds no row, and a row cannot hold a character the validation does not allow. The
+checklist `/sidebar` opens ([PANEL-17](#PANEL-17)) has one row for each section, drawn from the
+section's fixed name in the message catalog. The lines of `~/.bravebot/sidebar` are compared with the
+fixed ids of the sections and are never drawn, so no text from a file, a reply or a tool result
+reaches it.
 
 The files state, and no other state of the panel, also draws the changes of a write, under
 [FILES-6](files-mode.md#FILES-6) and [FILES-7](files-mode.md#FILES-7). Those rows are in a region of
@@ -401,6 +425,7 @@ No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
 `verified-by: bravebot_tui::panel::control_characters_in_a_link_row_are_drawn_as_pictures`
 `verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
+`verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
 
 <a id="PANEL-12"></a>
 ### PANEL-12: the person says which issue and pull request the session is for
@@ -635,6 +660,82 @@ reads cannot decide anything.
 `verified-by: bravebot_tui::panel::the_sections_of_references_are_cut_to_the_room_with_a_count_of_the_rest`
 `verified-by: bravebot_tui::panel::the_references_do_not_move_where_the_context_section_fits`
 
+<a id="PANEL-17"></a>
+### PANEL-17: `/sidebar` turns each section of the panel on or off, and the choice is kept
+
+`/sidebar` opens a bordered checklist over the transcript, titled `info panel`, with one row for each
+section of the panel in the order [PANEL-9](#PANEL-9) gives: Session, Model, Goal, Pull requests,
+Issues, Context, Language servers, MCP servers, Files and Plan. A row reads `[x] Name` while its
+section is drawn and `[ ] Name` while it is turned off, and it is there whether or not the section
+has anything to show. Up and Down, and `j` and `k`, walk the list and stop at both ends. Space or
+Enter turns the row under the cursor on or off, and the cursor stays on it. A left press on a row
+puts the cursor on it and turns it on that one press, where the other pickers take a row on a second
+press ([MOUSE-15](mouse.md#MOUSE-15)), because a press here changes one box and closes nothing. The
+wheel moves the cursor, a press outside the panel closes it ([MOUSE-47](mouse.md#MOUSE-47)), and a
+press on the border, on the lines under the list or below the last row changes nothing. Escape and
+Ctrl-C close the checklist and keep every change already made, so there is no cancel that undoes
+them. Nothing is said in the transcript.
+
+The panel follows each change on the next frame, with no other key, at rest and while a turn runs.
+A section turned off is left out with its heading and rows ([PANEL-9](#PANEL-9)), has no click
+target, and the rows it frees go to the sections that remain, the Plan taking what is left
+([PANEL-10](#PANEL-10)). A section turned back on that has nothing to show is still left out. With
+every section turned off the panel is still drawn, with its last row, `{chord} hide panel`
+([PANEL-7](#PANEL-7)), as the only row. That row is still a click target, and the checklist never
+closes the panel. The files state ([FILES-4](files-mode.md#FILES-4)) does not read the choice.
+Turning Context off leaves the context reading and the cache hit rate on the hint line, as they are
+where the panel is not drawn ([PANEL-8](#PANEL-8)).
+
+`/sidebar` is the bare word ([CMD-32](commands.md#CMD-32)). It does not open the panel and does not
+write `panel`, so with the panel closed a change shows when the panel is next opened.
+
+The choice is written to `~/.bravebot/sidebar` on each change, as the panel's state is
+([PANEL-5](#PANEL-5)), so a crash or Ctrl-C while the checklist is open loses nothing. The file holds
+one section id on each line for each section turned off: `session`, `model`, `goal`,
+`pull-requests`, `issues`, `context`, `language-servers`, `mcp-servers`, `files` and `plan`. The
+ids are fixed words and are not the translated headings. The file is written empty when every
+section is on again. It is read once, at the start. No file, an empty file, one that cannot be read,
+one that is not a regular file (a pipe is not opened), one longer than 1024 bytes (the file the
+program writes is about 150) and one with a line that is not a section id each leave every section on, and a section the file
+does not name is on, so a section a later version adds is on with no migration. The ids are compared
+with the fixed list and never drawn ([PANEL-11](#PANEL-11)). The choice is the person's and is the
+same in every directory and session. It is not in the session record.
+
+**Why.** A person who watches many sessions needs some of the sections and not others, and each
+section drawn takes its heading, a blank row and its rows out of the room the other sections and the
+Plan share. The file names the sections turned off so that an absent file means every section on,
+which is how the panel has always drawn, and a section added later is on with no migration.
+
+`verified-by: bravebot_tui::sidebar_prompt::a_row_for_each_section_in_the_panels_order_checked_while_it_is_drawn`
+`verified-by: bravebot_tui::sidebar_prompt::space_and_enter_turn_the_row_under_the_cursor_off_and_on_and_the_cursor_stays`
+`verified-by: bravebot_tui::sidebar_prompt::a_change_reports_every_section_that_is_off_and_not_only_the_last`
+`verified-by: bravebot_tui::sidebar_prompt::the_arrows_and_j_and_k_walk_the_list_and_stop_at_both_ends`
+`verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
+`verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
+`verified-by: bravebot_tui::sidebar_prompt::one_press_on_a_row_turns_it_off_and_the_next_turns_it_on_again`
+`verified-by: bravebot_tui::sidebar_prompt::a_press_turns_off_the_row_it_landed_on_and_not_the_one_under_the_cursor`
+`verified-by: bravebot_tui::sidebar_prompt::the_wheel_walks_a_press_outside_closes_and_a_press_off_the_rows_changes_nothing`
+`verified-by: bravebot_tui::sidebar_prompt::the_panel_draws_the_boxes_the_title_and_the_keys`
+`verified-by: bravebot_tui::list_picker::a_picker_that_takes_on_the_first_press_does_and_the_others_still_need_two`
+`verified-by: bravebot_tui::app::tests::pickers::the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens`
+`verified-by: bravebot_tui::app::tests::pickers::the_panel_follows_each_toggle_at_once_and_escape_keeps_them_at_rest_and_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_of_the_checklist_turns_its_section_off_and_a_press_outside_keeps_that`
+`verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
+`verified-by: bravebot_tui::panel::each_section_has_a_fixed_id_and_a_bit_of_its_own`
+`verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
+`verified-by: bravebot_tui::panel::a_section_turned_off_has_no_click_target`
+`verified-by: bravebot_tui::panel::the_rows_a_section_turned_off_frees_go_to_the_plan`
+`verified-by: bravebot_tui::panel::a_name_that_is_not_a_section_leaves_every_section_on_and_a_section_not_named_is_on`
+`verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
+`verified-by: bravebot_tui::panel::with_every_section_off_the_panel_is_drawn_with_only_its_hide_row_and_stays_open`
+`verified-by: bravebot_tui::panel::the_files_state_is_drawn_the_same_with_every_section_off`
+`verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_the_same_with_every_section_off`
+`verified-by: bravebot_tui::panel::the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off`
+`verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_tui::persist::a_sidebar_file_that_does_not_read_cleanly_leaves_every_section_on`
+`verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
+`verified-by: bravebot_tui::state_directory::a_recorded_choice_is_readable_only_by_its_owner`
+
 ## Known costs
 
 - **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
@@ -686,3 +787,18 @@ reads cannot decide anything.
   ([PANEL-16](#PANEL-16)).** The read goes through the same gate as every argument
   ([LABEL-5](labels.md#LABEL-5)), so the sections stop growing from the planner's commands once a page
   or an untrusted file has been read, though what the person types still counts.
+
+- **At exactly 100 columns the checklist covers 7 of the panel's left columns ([PANEL-17](#PANEL-17)).**
+  The checklist is 42 columns wide and centred in the frame, and the panel needs 100 columns to be
+  drawn at all. On a wider terminal it does not touch the panel.
+
+- **The choice of sections is global, not per session ([PANEL-17](#PANEL-17)).** `~/.bravebot/sidebar`
+  is one file for every directory and session, and a resume draws the sections as the last change
+  left them.
+
+- **A section the file does not name is on, and one wrong line turns every section on
+  ([PANEL-17](#PANEL-17)).** A file edited by hand with a misspelt id is read as if it were absent,
+  not as if the line were skipped.
+
+- **Turning a section off while the panel is closed shows nothing ([PANEL-17](#PANEL-17)).** `/sidebar`
+  does not open the panel, so the change is first seen the next time it is opened.

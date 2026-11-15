@@ -355,6 +355,17 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   room is under three rows, the plan fills the room to its last row, or the row would take the place
   of a task still to do. The `?` list always names it.
 
+Type `/sidebar` to choose which of these sections the panel draws. It opens a checklist with a row
+for each, `[x]` while the section is drawn and `[ ]` while it is not. Up and Down, or `j` and `k`,
+move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the same.
+The panel changes as you go, and Escape closes the checklist and keeps what you chose. A section
+you turn off is left out with its heading, and the rows it held go to the sections that remain. If
+you turn every section off, the panel is still drawn with its last row. The choice is kept in
+`~/.bravebot/sidebar` and is the same for every session. A section that file does not name is on. The
+checklist is 42 columns wide and sits in the middle of the screen, so at exactly 100 columns it
+covers part of the panel while it is open. With Context off, the context reading and the cache hit
+rate stay on the hint line under the box, as they do where the panel is not drawn.
+
 Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
 hint line under the box, unless the terminal is too short for the panel to show them; the mode, a
 running loop and the job count stay there. It needs a terminal at least 100 columns wide: a press

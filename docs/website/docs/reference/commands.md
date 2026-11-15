@@ -51,6 +51,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/sessions` | | Open the Sessions screen: every session on this machine and what each is doing. Left over an empty box does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
+| `/sidebar` | | Open a checklist that turns each section of the info panel on or off |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/unfinished` | | List what this session left open, and whose move each is |
@@ -852,7 +853,24 @@ Shows or hides the info panel on the right of the screen, as Ctrl-X does. The pa
 session's name, directory and branch, the goal, how full the context is with the cache figures, and
 the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
-has the rest.
+has the rest. [`/sidebar`](#sidebar) chooses which sections it draws.
+
+## `/sidebar`
+
+Opens a checklist titled `info panel` with a row for each section of the info panel: Session, Model,
+Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
+`[x]` while the panel draws the section and `[ ]` while it is turned off. Up and Down, or `j` and
+`k`, move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the
+same in one press. The panel follows each change as it is made. Escape closes the checklist and keeps
+what you changed. It works at the prompt and while a turn runs, and the turn is not touched.
+
+The choice is kept in `~/.bravebot/sidebar` and applies to every session. A section the file does not
+name is on, so a section added later is on. A file with a line that is not a section's name leaves
+every section on. With every section off, the panel is still drawn with its last row, the one that
+names the key that hides it. While Context is off, the context reading and the cache hit rate stay on
+the hint line under the box, as they do where the panel is not drawn. `/sidebar` does not open the
+panel, so with the panel closed a change shows the next time it is opened. Nothing typed after the
+word is used: `/sidebar` followed by words is sent as a prompt.
 
 ## `/diff`
 
@@ -1675,7 +1693,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
