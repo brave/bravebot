@@ -2798,11 +2798,13 @@ pub fn state_confinement(
         .iter()
         .any(|tool| tool.function.name == "request_path");
     let Some(stated) = crate::confine::stated_in_the_description_for(
-        confine_runs,
         sandbox,
-        requests_offered,
-        request_path_listed,
-        crate::confine::Askable::nobody_when(nobody_to_ask),
+        crate::confine::RunStatement {
+            confine_runs,
+            requests_offered,
+            request_path_listed,
+            askable: crate::confine::Askable::nobody_when(nobody_to_ask),
+        },
     ) else {
         return;
     };

@@ -73,9 +73,9 @@ saw.
 `verified-by: bravebot_core::ask::a_series_key_says_how_many_questions_are_in_it`
 `verified-by: bravebot_core::ask::shaping_a_series_never_drops_a_question`
 `verified-by: bravebot_core::policy::a_refused_series_yields_no_answer_at_all`
-`verified-by: bravebot_agent::tools::more_than_four_questions_are_refused_rather_than_trimmed`
-`verified-by: bravebot_agent::tools::exactly_four_questions_are_asked_whole`
-`verified-by: bravebot_agent::tools::the_gate_runs_once_for_a_call_however_many_questions_it_holds`
+`verified-by: bravebot_agent::tools::tests::questions::more_than_four_questions_are_refused_rather_than_trimmed`
+`verified-by: bravebot_agent::tools::tests::questions::exactly_four_questions_are_asked_whole`
+`verified-by: bravebot_agent::tools::tests::questions::the_gate_runs_once_for_a_call_however_many_questions_it_holds`
 
 <a id="ASK-3"></a>
 ### ASK-3: asking stops once the planner's context has met something untrusted
@@ -212,7 +212,7 @@ was answered already.
 `verified-by: bravebot_core::ask::no_question_can_spell_the_key_of_another`
 `verified-by: bravebot_core::ask::a_choice_with_no_detail_differs_from_one_with_an_empty_detail`
 `verified-by: bravebot_core::ask::the_key_is_stable_for_the_same_question`
-`verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
+`verified-by: bravebot_agent::tools::tests::questions::the_same_plan_proposed_again_is_put_under_a_new_key`
 `verified-by: bravebot_core::ask::two_series_holding_the_same_questions_in_a_different_order_have_different_keys`
 `verified-by: bravebot_core::ask::a_question_with_its_choices_reordered_is_a_different_question`
 `verified-by: bravebot_core::ask::a_series_answered_entirely_from_memory_asks_nothing`
@@ -288,8 +288,8 @@ person's file alone as well.
 `verified-by: bravebot_tui::state::only_the_planners_own_questions_are_closed_on_the_clock`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_long_a_question_waits`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_how_long_a_question_waits`
-`verified-by: bravebot_agent::tools::the_planners_questions_may_be_closed_when_nobody_answers`
-`verified-by: bravebot_agent::tools::a_plan_put_for_approval_is_never_closed_when_nobody_answers`
+`verified-by: bravebot_agent::tools::tests::questions::the_planners_questions_may_be_closed_when_nobody_answers`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_put_for_approval_is_never_closed_when_nobody_answers`
 `verified-by: bravebot_agent::spend_limit::the_spend_limit_question_is_never_closed_when_nobody_answers`
 `verified-by: bravebot_agent::repeated_call::the_repeated_call_question_is_never_closed_when_nobody_answers`
 
@@ -304,10 +304,10 @@ are drawn under it by [ASK-13](#ASK-13), and the line is the same with or withou
 questions were settled when they were skipped. The kernel puts the replies into words for the planner,
 and the line does not read them a second time to count them.
 
-`verified-by: bravebot_agent::tools::the_line_counts_a_skipped_question_as_asked_and_not_as_answered`
-`verified-by: bravebot_agent::tools::the_line_counts_the_questions_asked_where_no_reply_came_back`
-`verified-by: bravebot_agent::tools::the_line_counts_every_question_asked_where_each_was_answered`
-`verified-by: bravebot_agent::tools::the_line_counts_one_question_in_the_singular`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_a_skipped_question_as_asked_and_not_as_answered`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_the_questions_asked_where_no_reply_came_back`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_every_question_asked_where_each_was_answered`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_one_question_in_the_singular`
 `verified-by: bravebot_agent::turn::the_line_under_a_skipped_question_does_not_call_it_an_answer`
 
 <a id="ASK-13"></a>

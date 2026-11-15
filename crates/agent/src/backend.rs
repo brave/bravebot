@@ -1492,11 +1492,9 @@ impl<'a> Backend<'a> {
                 cancel,
                 session,
             } => {
-                let mut client = gateway_client(config, provider, wire_model, egress)?
-                    .with_cache_key(provider, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client =
+                    gateway_client(config, provider, wire_model, egress, cancel.as_ref())?
+                        .with_cache_key(provider, session.as_ref());
                 client.complete(policy, request)
             }
             Self::Account {
@@ -1506,10 +1504,13 @@ impl<'a> Backend<'a> {
                 session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client = account_client(
+                    wire_model,
+                    egress,
+                    &mut sign_in,
+                    session.as_ref(),
+                    cancel.as_ref(),
+                );
                 client.complete(policy, request)
             }
             Self::XaiAccount {
@@ -1597,11 +1598,9 @@ impl<'a> Backend<'a> {
                 cancel,
                 session,
             } => {
-                let mut client = gateway_client(config, provider, wire_model, egress)?
-                    .with_cache_key(provider, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client =
+                    gateway_client(config, provider, wire_model, egress, cancel.as_ref())?
+                        .with_cache_key(provider, session.as_ref());
                 client.complete_streaming(policy, request, progress)
             }
             Self::Account {
@@ -1611,10 +1610,13 @@ impl<'a> Backend<'a> {
                 session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client = account_client(
+                    wire_model,
+                    egress,
+                    &mut sign_in,
+                    session.as_ref(),
+                    cancel.as_ref(),
+                );
                 client.complete_streaming(policy, request, progress)
             }
             Self::XaiAccount {
@@ -1665,7 +1667,8 @@ fn bedrock_client<'a>(
     client
 }
 
-/// A client for the ChatGPT account, asking `sign_in` for a token before each request.
+/// A client for the ChatGPT account, asking `sign_in` for a token before each request and stopped by
+/// `cancel` where one is given.
 ///
 /// The service, its protocol and its headers are constants, and the session identifier is the one of
 /// `session`, or one of its own where the request belongs to none. A request that asks for an effort
@@ -1677,6 +1680,7 @@ fn account_client<'a>(
     egress: &'a Egress,
     sign_in: &'a mut crate::chatgpt::StoredSignIn,
     session: Option<&crate::chatgpt::AccountSession>,
+    cancel: Option<&Cancel>,
 ) -> GatewayClient<'a> {
     let identifier = match session {
         Some(session) => session.identifier().to_string(),
@@ -1691,10 +1695,14 @@ fn account_client<'a>(
         sign_in,
         identifier,
     );
-    GatewayClient::Responses(match session {
+    let client = GatewayClient::Responses(match session {
         Some(session) => client.holding_the_level(session.effort()),
         None => client,
-    })
+    });
+    match cancel {
+        Some(cancel) => client.with_cancel(cancel.clone()),
+        None => client,
+    }
 }
 
 /// A client for the xAI account, presenting `token`.
@@ -1748,19 +1756,20 @@ fn cache_key(
 ///
 /// The token is read here rather than held on the variant, because it is read from the process
 /// environment at the point a request needs signing: a value read once at startup would go stale in a
-/// session where somebody exported a new one.
+/// session where somebody exported a new one. The client is stopped by `cancel` where one is given.
 fn gateway_client<'a>(
     config: &'a Config,
     provider: &'a bravebot_config::provider::Provider,
     wire_model: &str,
     egress: &'a Egress,
+    cancel: Option<&Cancel>,
 ) -> Result<GatewayClient<'a>, BackendError> {
     let ((token, headers), access_token) = gateway_parts_or_google_token(
         provider,
         |name| std::env::var(name).ok(),
         crate::gcloud::token,
     )?;
-    Ok(match provider.protocol() {
+    let client = match provider.protocol() {
         Protocol::ChatCompletions => {
             let client = AichatClient::new(config, egress)
                 .for_gateway(provider, wire_model, token)
@@ -1789,6 +1798,10 @@ fn gateway_client<'a>(
                     config.context_budget,
                 )),
         ),
+    };
+    Ok(match cancel {
+        Some(cancel) => client.with_cancel(cancel.clone()),
+        None => client,
     })
 }
 
@@ -3257,6 +3270,59 @@ mod tests {
         }
     }
 
+    /// A stop reaches a streamed request on a configured gateway, so a person who presses it is not kept
+    /// waiting for a host that has not answered. The client is made in `gateway_client`, which applies
+    /// the stop. The regression it rejects is a client made without the stop, which leaves the turn
+    /// waiting for as long as the host is silent.
+    #[test]
+    fn a_stop_reaches_a_request_on_a_gateway_and_does_not_wait_for_the_host() {
+        use std::time::{Duration, Instant};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        // The host accepts the connection and never answers, until the test ends.
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let host = std::thread::spawn(move || {
+            let connection = listener.accept().expect("accept");
+            let _ = held.recv();
+            drop(connection);
+        });
+        let config = with_providers(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "http://127.0.0.1:{port}/v1", "apiKey": "a-key"}},
+                "models": {{"m": {{}}}}}}}}}}"#
+        ));
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_may_fetch(&mut sink);
+        let request = ChatRequest::new(
+            "gateway-a/m",
+            vec![bravebot_aichat::protocol::Message::user("a question")],
+        );
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut backend =
+            Backend::select(&config, &egress, "gateway-a/m").with_cancel(cancel.clone());
+        assert!(matches!(backend, Backend::Gateway { .. }));
+        let stopping = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stopping.cancel();
+        });
+
+        let started = Instant::now();
+        let error = backend
+            .complete_streaming(&mut policy, &request, |_| {})
+            .expect_err("a stopped request produced a completion");
+
+        assert!(error.is_cancelled(), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the stop waited for the host: {:?}",
+            started.elapsed()
+        );
+        release.send(()).expect("the host is waiting");
+        host.join().expect("host");
+    }
+
     /// XAI-16: a stop given to the backend is the one its request carries, and is the turn's own: the
     /// variant holds it where the client is made from it. A backend whose `with_cancel` ignores the xAI
     /// account would hold none.
@@ -3905,7 +3971,7 @@ mod tests {
         let asks = ChatRequest::new("m", Vec::new()).with_effort(Some(Effort::High));
         let mut sent = |session: Option<&crate::chatgpt::AccountSession>| {
             let GatewayClient::Responses(client) =
-                account_client("m", &egress, &mut sign_in, session)
+                account_client("m", &egress, &mut sign_in, session, None)
             else {
                 panic!("the account is spoken to in the Responses protocol");
             };
@@ -5168,7 +5234,7 @@ mod tests {
         let config = with_a_gateway();
         let egress = Egress::new();
         let (provider, wire) = config.provider_for("z-ai/glm-4.6").expect("offered");
-        let failure = gateway_client(&config, provider, wire, &egress)
+        let failure = gateway_client(&config, provider, wire, &egress, None)
             .err()
             .expect("refused");
         assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
@@ -5337,7 +5403,7 @@ mod tests {
             "a gateway that names no credential was given one anyway"
         );
         assert!(
-            gateway_client(&config, provider, wire, &egress).is_ok(),
+            gateway_client(&config, provider, wire, &egress, None).is_ok(),
             "a gateway that names no credential was refused one"
         );
     }
@@ -5834,7 +5900,7 @@ mod tests {
         let config = with_a_gateway();
         let egress = Egress::new();
         let (provider, wire) = config.provider_for("z-ai/glm-4.6").expect("offered");
-        let failure = gateway_client(&config, provider, wire, &egress)
+        let failure = gateway_client(&config, provider, wire, &egress, None)
             .err()
             .expect("refused");
 

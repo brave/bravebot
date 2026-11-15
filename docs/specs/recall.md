@@ -112,22 +112,22 @@ The planner proposes a rule with the `propose_rule` tool, giving its text, its s
 
 A delegate cannot propose a rule. No permission mode answers the question. Where nobody can be asked, as in a one-shot run, the proposal is refused ([PROMPT-9](prompting.md#PROMPT-9)). In a background session it waits for a person, as a held prompt does ([BG-7](background-sessions.md#BG-7)). The question has its row in the register ([PROMPT-11](prompting.md#PROMPT-11)): the answer is kept only as the line it writes. An incognito session can propose no rule.
 
-`verified-by: bravebot_agent::tools::an_approved_rule_is_appended_with_date_and_why`
-`verified-by: bravebot_agent::tools::a_project_rule_goes_to_the_projects_rules_file_beside_its_id`
-`verified-by: bravebot_agent::tools::a_refused_rule_writes_nothing`
-`verified-by: bravebot_agent::tools::an_edited_rule_keeps_the_persons_words`
+`verified-by: bravebot_agent::tools::tests::questions::an_approved_rule_is_appended_with_date_and_why`
+`verified-by: bravebot_agent::tools::tests::questions::a_project_rule_goes_to_the_projects_rules_file_beside_its_id`
+`verified-by: bravebot_agent::tools::tests::questions::a_refused_rule_writes_nothing`
+`verified-by: bravebot_agent::tools::tests::questions::an_edited_rule_keeps_the_persons_words`
 `verified-by: bravebot_agent::rule_approval::a_typed_reply_that_names_a_choice_is_that_choice`
-`verified-by: bravebot_agent::tools::a_newline_in_a_rule_cannot_forge_a_second_rule_line`
-`verified-by: bravebot_agent::tools::a_context_that_met_something_untrusted_is_refused_before_asking`
-`verified-by: bravebot_agent::tools::a_one_shot_run_refuses_a_rule`
-`verified-by: bravebot_agent::tools::a_delegate_cannot_propose_a_rule`
-`verified-by: bravebot_agent::tools::an_incognito_session_proposes_no_rule`
-`verified-by: bravebot_agent::tools::a_rule_answer_is_never_reused`
-`verified-by: bravebot_agent::tools::a_private_context_offers_no_keep_and_only_typed_words_write`
-`verified-by: bravebot_agent::tools::no_permission_mode_answers_a_rule`
-`verified-by: bravebot_agent::tools::propose_rule_offers_no_reference_field`
-`verified-by: bravebot_agent::tools::a_home_rule_is_not_appended_to_a_rules_file_spelled_in_another_case`
-`verified-by: bravebot_agent::tools::a_home_rule_follows_a_link_spelled_agents_md`
+`verified-by: bravebot_agent::tools::tests::questions::a_newline_in_a_rule_cannot_forge_a_second_rule_line`
+`verified-by: bravebot_agent::tools::tests::questions::a_context_that_met_something_untrusted_is_refused_before_asking`
+`verified-by: bravebot_agent::tools::tests::questions::a_one_shot_run_refuses_a_rule`
+`verified-by: bravebot_agent::tools::tests::questions::a_delegate_cannot_propose_a_rule`
+`verified-by: bravebot_agent::tools::tests::questions::an_incognito_session_proposes_no_rule`
+`verified-by: bravebot_agent::tools::tests::questions::a_rule_answer_is_never_reused`
+`verified-by: bravebot_agent::tools::tests::questions::a_private_context_offers_no_keep_and_only_typed_words_write`
+`verified-by: bravebot_agent::tools::tests::questions::no_permission_mode_answers_a_rule`
+`verified-by: bravebot_agent::tools::tests::questions::propose_rule_offers_no_reference_field`
+`verified-by: bravebot_agent::tools::tests::questions::a_home_rule_is_not_appended_to_a_rules_file_spelled_in_another_case`
+`verified-by: bravebot_agent::tools::tests::questions::a_home_rule_follows_a_link_spelled_agents_md`
 `verified-by: bravebot_agent::recall::store::a_home_rule_is_appended_only_to_the_file_spelled_agents_md`
 `verified-by: bravebot_agent::rewind::undo_takes_back_a_rule_appended_to_the_home_agents_file`
 `verified-by: bravebot_agent::rewind::undo_does_not_remove_a_home_rules_file_spelled_in_another_case`
@@ -160,10 +160,10 @@ A file with no front matter, or with a field missing, reads as `source: agent`, 
 `verified-by: bravebot_agent::recall::store::a_nested_key_is_written_and_loaded`
 `verified-by: bravebot_agent::recall::store::loading_makes_no_directory`
 `verified-by: bravebot_agent::recall::store::a_file_that_is_not_text_is_named_and_skipped`
-`verified-by: bravebot_agent::tools::a_fact_is_saved_and_its_line_shown`
-`verified-by: bravebot_agent::tools::a_project_fact_is_kept_under_the_project`
-`verified-by: bravebot_agent::tools::a_text_that_looks_like_front_matter_is_only_a_body`
-`verified-by: bravebot_agent::tools::a_session_id_with_a_control_character_is_not_written`
+`verified-by: bravebot_agent::tools::tests::remember::a_fact_is_saved_and_its_line_shown`
+`verified-by: bravebot_agent::tools::tests::remember::a_project_fact_is_kept_under_the_project`
+`verified-by: bravebot_agent::tools::tests::remember::a_text_that_looks_like_front_matter_is_only_a_body`
+`verified-by: bravebot_agent::tools::tests::remember::a_session_id_with_a_control_character_is_not_written`
 
 <a id="RECALL-5"></a>
 ### RECALL-5: the planner saves a fact on its own judgement, and every save is shown
@@ -176,14 +176,14 @@ Nothing is saved without the tool. The driver never pulls a fact out of a conver
 
 **Why a tool of its own.** [MEMORY-6](definition-memory.md#MEMORY-6) gives a definition's memory no tool, because a tool that wrote only the memory would be a write gated on which file it is. These files are not in the workspace and no other tool reaches them ([RECALL-8](#RECALL-8)), so `remember` is not a gate on a path but the only way in. A save is a write into `~/.bravebot` that no person opens, so each one is shown and can be undone.
 
-`verified-by: bravebot_agent::tools::a_fact_is_saved_and_its_line_shown`
-`verified-by: bravebot_agent::tools::a_delegate_cannot_save_a_fact`
-`verified-by: bravebot_agent::tools::a_delegate_reaching_the_handler_anyway_is_refused`
-`verified-by: bravebot_agent::tools::an_incognito_session_keeps_no_fact`
-`verified-by: bravebot_agent::tools::remember_works_in_plan_mode`
-`verified-by: bravebot_agent::tools::remember_offers_no_reference_field`
-`verified-by: bravebot_agent::tools::a_bad_key_is_refused`
-`verified-by: bravebot_agent::tools::saving_asks_the_workspace_to_keep_what_it_replaces`
+`verified-by: bravebot_agent::tools::tests::remember::a_fact_is_saved_and_its_line_shown`
+`verified-by: bravebot_agent::tools::tests::remember::a_delegate_cannot_save_a_fact`
+`verified-by: bravebot_agent::tools::tests::remember::a_delegate_reaching_the_handler_anyway_is_refused`
+`verified-by: bravebot_agent::tools::tests::remember::an_incognito_session_keeps_no_fact`
+`verified-by: bravebot_agent::tools::tests::remember::remember_works_in_plan_mode`
+`verified-by: bravebot_agent::tools::tests::remember::remember_offers_no_reference_field`
+`verified-by: bravebot_agent::tools::tests::remember::a_bad_key_is_refused`
+`verified-by: bravebot_agent::tools::tests::remember::saving_asks_the_workspace_to_keep_what_it_replaces`
 `verified-by: bravebot_agent::turn::a_save_is_undone_by_undo`
 `verified-by: bravebot_agent::rewind::undo_removes_a_fact_a_turn_made`
 `verified-by: bravebot_agent::rewind::undo_puts_back_a_fact_a_turn_replaced`
@@ -203,10 +203,10 @@ A save under a new key is compared with the live facts in its scope by the share
 
 **Where the numbers come from.** On lattice's store, true duplicates scored 60% or more and distinct pairs under 45%.
 
-`verified-by: bravebot_agent::tools::a_fact_close_to_a_kept_one_is_refused_naming_it`
-`verified-by: bravebot_agent::tools::saving_over_a_kept_key_is_not_a_duplicate`
-`verified-by: bravebot_agent::tools::new_true_saves_past_the_refusal`
-`verified-by: bravebot_agent::tools::every_save_lists_facts_above_45`
+`verified-by: bravebot_agent::tools::tests::remember::a_fact_close_to_a_kept_one_is_refused_naming_it`
+`verified-by: bravebot_agent::tools::tests::remember::saving_over_a_kept_key_is_not_a_duplicate`
+`verified-by: bravebot_agent::tools::tests::remember::new_true_saves_past_the_refusal`
+`verified-by: bravebot_agent::tools::tests::remember::every_save_lists_facts_above_45`
 `verified-by: bravebot_agent::recall::rank::term_share_of_near_duplicates_is_over_60`
 
 <a id="RECALL-7"></a>
@@ -214,10 +214,10 @@ A save under a new key is compared with the live facts in its scope by the share
 
 `remember` with `supersedes: <key>` saves the new fact and sets `superseded-by` on the old one. Recall leaves superseded facts out. Reading one with `recall` shows its text and the key that replaced it. Deleting is the person's, by hand or by `/undo`.
 
-`verified-by: bravebot_agent::tools::superseding_marks_the_old_fact`
-`verified-by: bravebot_agent::tools::superseding_a_fact_that_is_not_kept_saves_nothing`
-`verified-by: bravebot_agent::tools::recall_leaves_superseded_facts_out_of_a_query`
-`verified-by: bravebot_agent::tools::reading_a_superseded_fact_by_key_names_its_replacement`
+`verified-by: bravebot_agent::tools::tests::remember::superseding_marks_the_old_fact`
+`verified-by: bravebot_agent::tools::tests::remember::superseding_a_fact_that_is_not_kept_saves_nothing`
+`verified-by: bravebot_agent::tools::tests::recalling::recall_leaves_superseded_facts_out_of_a_query`
+`verified-by: bravebot_agent::tools::tests::recalling::reading_a_superseded_fact_by_key_names_its_replacement`
 
 <a id="RECALL-8"></a>
 ### RECALL-8: only `remember` and the person write a fact, and a fact keeps the confidentiality of what it was written from
@@ -240,10 +240,10 @@ A fact is trusted. Its confidentiality is the planner context's at the moment of
 `verified-by: bravebot_agent::workspace::a_link_spelled_in_another_case_is_refused_by_name_and_by_landing_only_where_it_is_the_rules`
 `verified-by: bravebot_agent::workspace::a_link_spelled_agents_md_is_refused_by_name_whatever_it_leads_to`
 `verified-by: bravebot_sandbox::base::programs_are_refused_the_fact_store`
-`verified-by: bravebot_agent::tools::a_redirection_reading_from_the_stores_is_refused_before_it_runs`
-`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
-`verified-by: bravebot_agent::tools::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_reading_from_the_stores_is_refused_before_it_runs`
+`verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
 `verified-by: bravebot_agent::workspace::git_leaves_the_stores_out_of_a_repository_that_tracks_them`
 `verified-by: bravebot_agent::rewind::undo_removes_a_fact_a_turn_made`
 `verified-by: bravebot_agent::rewind::undo_puts_back_a_fact_a_turn_replaced`
@@ -255,12 +255,12 @@ A fact is trusted. Its confidentiality is the planner context's at the moment of
 `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was`
 `verified-by: bravebot_core::policy::the_planners_words_are_kept_as_a_fact_only_while_the_context_is_trusted`
 `verified-by: bravebot_core::policy::a_trusted_value_is_not_kept_as_a_fact_once_the_context_has_fallen`
-`verified-by: bravebot_agent::tools::a_refusal_naming_a_private_fact_makes_the_context_private`
-`verified-by: bravebot_agent::tools::a_listing_of_a_private_fact_makes_the_context_private`
-`verified-by: bravebot_agent::tools::a_fact_saved_from_a_private_context_is_private`
-`verified-by: bravebot_agent::tools::saving_over_a_private_fact_from_a_public_context_keeps_it_private`
-`verified-by: bravebot_agent::tools::a_fact_from_a_context_that_met_something_untrusted_is_refused`
-`verified-by: bravebot_agent::tools::remember_offers_no_reference_field`
+`verified-by: bravebot_agent::tools::tests::remember::a_refusal_naming_a_private_fact_makes_the_context_private`
+`verified-by: bravebot_agent::tools::tests::remember::a_listing_of_a_private_fact_makes_the_context_private`
+`verified-by: bravebot_agent::tools::tests::remember::a_fact_saved_from_a_private_context_is_private`
+`verified-by: bravebot_agent::tools::tests::remember::saving_over_a_private_fact_from_a_public_context_keeps_it_private`
+`verified-by: bravebot_agent::tools::tests::remember::a_fact_from_a_context_that_met_something_untrusted_is_refused`
+`verified-by: bravebot_agent::tools::tests::remember::remember_offers_no_reference_field`
 
 <a id="RECALL-9"></a>
 ### RECALL-9: at most three facts reach a prompt unasked, each over two floors, and each is marked as background
@@ -305,14 +305,14 @@ A query answers with at most eight live facts, from the project's facts and the 
 `verified-by: bravebot_agent::recall::rank::matched_terms_counts_distinct_query_terms`
 `verified-by: bravebot_agent::recall::rank::text_with_no_spaces_or_only_punctuation_ranks_without_panic`
 `verified-by: bravebot_agent::recall::rank::links_reads_both_forms`
-`verified-by: bravebot_agent::tools::recall_finds_a_fact_by_its_words`
-`verified-by: bravebot_agent::tools::recall_says_weak_when_nothing_matches`
-`verified-by: bravebot_agent::tools::recall_follows_links_one_hop_from_the_top_three`
-`verified-by: bravebot_agent::tools::recall_reads_the_project_and_every_project`
-`verified-by: bravebot_agent::tools::recall_answers_at_most_the_result_count`
-`verified-by: bravebot_agent::tools::recalling_a_private_fact_makes_the_context_private`
-`verified-by: bravebot_agent::tools::a_private_fact_linked_to_makes_the_context_private`
-`verified-by: bravebot_agent::tools::a_delegate_cannot_recall`
+`verified-by: bravebot_agent::tools::tests::recalling::recall_finds_a_fact_by_its_words`
+`verified-by: bravebot_agent::tools::tests::recalling::recall_says_weak_when_nothing_matches`
+`verified-by: bravebot_agent::tools::tests::recalling::recall_follows_links_one_hop_from_the_top_three`
+`verified-by: bravebot_agent::tools::tests::recalling::recall_reads_the_project_and_every_project`
+`verified-by: bravebot_agent::tools::tests::recalling::recall_answers_at_most_the_result_count`
+`verified-by: bravebot_agent::tools::tests::recalling::recalling_a_private_fact_makes_the_context_private`
+`verified-by: bravebot_agent::tools::tests::recalling::a_private_fact_linked_to_makes_the_context_private`
+`verified-by: bravebot_agent::tools::tests::recalling::a_delegate_cannot_recall`
 
 <a id="RECALL-11"></a>
 ### RECALL-11: `/memory` shows rules and facts with their standing

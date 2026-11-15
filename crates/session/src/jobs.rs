@@ -134,6 +134,24 @@ impl Held {
             Self::Message => "message",
         }
     }
+
+    /// The word the list, the sessions screen and the BG-6 lines say for this kind of prompt, from
+    /// the message catalog. Both clients call this, so they say it in the same words (SCREEN-16).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Write => t!(sessions_held_write),
+            Self::Run => t!(sessions_held_run),
+            Self::Read => t!(sessions_held_read),
+            Self::Fetch => t!(sessions_held_fetch),
+            Self::Server => t!(sessions_held_server),
+            Self::Vouch => t!(sessions_held_vouch),
+            Self::Tools => t!(sessions_held_tools),
+            Self::Move => t!(sessions_held_move),
+            Self::Manifest => t!(sessions_held_manifest),
+            Self::Question => t!(sessions_held_question),
+            Self::Message => t!(sessions_held_message),
+        }
+    }
 }
 
 /// The mode a background session runs in, for as long as its process runs (BG-8).
@@ -790,6 +808,33 @@ fn lock(_file: &std::fs::File, hold: Hold) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EVERY_HELD: [Held; 11] = [
+        Held::Write,
+        Held::Run,
+        Held::Read,
+        Held::Fetch,
+        Held::Server,
+        Held::Vouch,
+        Held::Tools,
+        Held::Move,
+        Held::Manifest,
+        Held::Question,
+        Held::Message,
+    ];
+
+    /// SCREEN-16: each kind of held prompt has its own non-empty word, so a kind given an empty
+    /// word or another kind's key shows here. A kind dropped from `Held::label` does not compile,
+    /// and a kind added to `Held` has to be added to `EVERY_HELD`.
+    #[test]
+    fn each_kind_of_held_prompt_has_a_word_of_its_own() {
+        let mut said = std::collections::HashSet::new();
+        for held in EVERY_HELD {
+            let label = held.label();
+            assert!(!label.is_empty(), "{held:?} has no word");
+            assert!(said.insert(label), "{held:?} repeats the word {label}");
+        }
+    }
 
     fn roster() -> (tempfile::TempDir, Roster) {
         let dir = tempfile::tempdir().expect("temp dir");

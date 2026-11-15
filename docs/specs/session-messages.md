@@ -80,7 +80,7 @@ machine is not reachable.
 about where text goes. The text is what the planner wrote and is carried to that place, so it is
 content, as a delegate's task is content.
 
-`verified-by: bravebot_agent::tools::a_target_that_is_not_one_live_other_session_is_refused_before_anyone_is_asked`
+`verified-by: bravebot_agent::tools::tests::session_messages::a_target_that_is_not_one_live_other_session_is_refused_before_anyone_is_asked`
 `verified-by: bravebot_core::policy::a_text_over_the_bound_is_refused_whole_and_one_at_the_bound_is_sent`
 `verified-by: bravebot_cli::host::a_name_finds_one_live_session_other_than_the_sender_and_says_why_it_found_none`
 `verified-by: bravebot_agent::turn::message_session_is_offered_only_to_a_session_that_can_send`
@@ -106,8 +106,8 @@ for it, because the context already has one.
 
 `verified-by: bravebot_core::policy::a_message_is_sent_only_from_a_context_that_has_met_nothing_untrusted`
 `verified-by: bravebot_core::policy::a_message_carries_the_label_of_the_context_that_wrote_it`
-`verified-by: bravebot_agent::tools::a_context_that_has_met_something_untrusted_sends_nothing_and_reads_no_roster`
-`verified-by: bravebot_agent::tools::the_person_is_shown_the_roster_entry_the_whole_text_and_the_label_and_a_decline_sends_nothing`
+`verified-by: bravebot_agent::tools::tests::session_messages::a_context_that_has_met_something_untrusted_sends_nothing_and_reads_no_roster`
+`verified-by: bravebot_agent::tools::tests::session_messages::the_person_is_shown_the_roster_entry_the_whole_text_and_the_label_and_a_decline_sends_nothing`
 
 <a id="MSG-3"></a>
 ### MSG-3: the first message to a session is put to a person, with the target and the whole text
@@ -130,7 +130,7 @@ background session, which is the only kind that sends.
 were not shown. The text is shown in full because it is what the receiver will be told, and a person
 who reads it is the only check on it that does not rest on the sender's model.
 
-`verified-by: bravebot_agent::tools::the_person_is_shown_the_roster_entry_the_whole_text_and_the_label_and_a_decline_sends_nothing`
+`verified-by: bravebot_agent::tools::tests::session_messages::the_person_is_shown_the_roster_entry_the_whole_text_and_the_label_and_a_decline_sends_nothing`
 `verified-by: bravebot_cli::plain::a_message_is_asked_in_lines_with_two_answers_and_anything_else_sends_nothing`
 `verified-by: bravebot_cli::plain_retention_tests::the_planner_of_a_hosted_session_is_offered_message_session_and_its_call_reaches_the_courier`
 `verified-by: bravebot_cli::plain::a_long_message_is_asked_about_whole_in_lines`
@@ -151,7 +151,7 @@ A message sent under it is still drawn in the sender's transcript as it is sent 
 person on each. A grant that lasts past the turn would let the next turn, whose first prompt the
 person typed for another purpose, send without asking.
 
-`verified-by: bravebot_agent::tools::a_standing_answer_covers_the_later_messages_to_that_session_and_no_other`
+`verified-by: bravebot_agent::tools::tests::session_messages::a_standing_answer_covers_the_later_messages_to_that_session_and_no_other`
 `verified-by: bravebot_agent::turn::a_standing_answer_ends_with_the_turn_that_gave_it`
 `verified-by: bravebot_cli::plain::a_message_is_asked_in_lines_with_two_answers_and_anything_else_sends_nothing`
 `verified-by: bravebot_cli::progress::a_message_that_was_sent_is_drawn_under_its_receiver_with_the_words_quoted`
@@ -175,7 +175,7 @@ has read it.
 planner the power the roster reserves to a typed line. A roster that held a message would hold the
 planner's words in a place the list is drawn from.
 
-`verified-by: bravebot_agent::tools::what_became_of_a_message_is_told_and_recorded_without_the_text`
+`verified-by: bravebot_agent::tools::tests::session_messages::what_became_of_a_message_is_told_and_recorded_without_the_text`
 `verified-by: bravebot_cli::host::a_courier_offers_a_message_to_the_process_and_says_what_it_answered`
 `verified-by: bravebot_cli::host::a_name_finds_one_live_session_other_than_the_sender_and_says_why_it_found_none`
 `verified-by: bravebot_agent::turn::an_approved_message_is_delivered_queued_and_drawn_and_the_planner_is_not_told_it_was_read`
@@ -291,7 +291,7 @@ that target until the next turn. A refused call does not ask a person.
 **Why.** A planner in a loop could otherwise fill a receiver's queue ([MSG-6](#MSG-6)) or put a prompt
 in front of a person each round.
 
-`verified-by: bravebot_agent::tools::a_turn_puts_at_most_ten_messages_to_one_session_whether_or_not_they_were_sent`
+`verified-by: bravebot_agent::tools::tests::session_messages::a_turn_puts_at_most_ten_messages_to_one_session_whether_or_not_they_were_sent`
 
 <a id="MSG-11"></a>
 ### MSG-11: both transcripts show the message, and the trail records that it happened
@@ -333,7 +333,7 @@ answered as any other unknown name is. A processor, which has no tools, is not.
 person to arbitrate something they never set up. What a delegate has to say goes in its report, and its
 parent decides whether to say it to another session.
 
-`verified-by: bravebot_agent::tools::a_call_to_message_session_nobody_was_offered_is_answered_as_an_unknown_name`
+`verified-by: bravebot_agent::tools::tests::session_messages::a_call_to_message_session_nobody_was_offered_is_answered_as_an_unknown_name`
 `verified-by: bravebot_agent::turn::a_delegate_is_offered_no_message_session_and_its_call_is_an_unknown_name`
 
 ## What this changes in other specs

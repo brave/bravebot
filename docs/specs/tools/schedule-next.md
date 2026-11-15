@@ -27,7 +27,7 @@ the interface, and it is sent again unchanged.
 minutes" can be read and agreed to without knowing what "that" is; a field naming the next prompt
 would make the same call unreadable, and would let a turn write its own next instruction.
 
-`verified-by: bravebot_agent::tools::nothing_on_this_tool_says_what_the_next_turn_asks`
+`verified-by: bravebot_agent::tools::tests::scheduling::nothing_on_this_tool_says_what_the_next_turn_asks`
 
 <a id="SCHED-2"></a>
 ### SCHED-2: withdrawn, it is offered to a tick of a self-paced loop and to nothing else
@@ -47,7 +47,7 @@ number it asked for.
 **Why.** A tool that echoed what it was given would have the next answer describing a schedule
 that is not going to happen.
 
-`verified-by: bravebot_agent::tools::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 
 <a id="SCHED-4"></a>
 ### SCHED-4: a call missing a delay or a verdict is refused rather than filled in
@@ -63,11 +63,11 @@ an observation. `stop` is one routing boolean a person could approve alone ("end
 only end a loop the person started, never start, lengthen or change what runs, and the reason that
 goes with it is content released only for display ([SCHED-5](#SCHED-5)).
 
-`verified-by: bravebot_agent::tools::a_schedule_missing_what_it_needs_is_refused`
-`verified-by: bravebot_agent::tools::a_finished_loop_is_ended_rather_than_given_another_wait`
-`verified-by: bravebot_agent::tools::stop_from_a_turn_arranging_a_look_is_not_read`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_schedule_missing_what_it_needs_is_refused`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_finished_loop_is_ended_rather_than_given_another_wait`
+`verified-by: bravebot_agent::tools::tests::scheduling::stop_from_a_turn_arranging_a_look_is_not_read`
 `verified-by: bravebot_agent::turn::stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn`
-`verified-by: bravebot_agent::tools::stop_is_offered_only_to_a_tick_of_a_self_paced_loop`
+`verified-by: bravebot_agent::tools::tests::scheduling::stop_is_offered_only_to_a_tick_of_a_self_paced_loop`
 
 <a id="SCHED-5"></a>
 ### SCHED-5: what the turn says it is waiting on reaches a screen and stops there
@@ -76,8 +76,8 @@ goes with it is content released only for display ([SCHED-5](#SCHED-5)).
 released for display like any other line a tool puts on the screen. Nothing waits on it, no later
 turn reads it back, and it is not sent anywhere.
 
-`verified-by: bravebot_agent::tools::what_the_turn_is_waiting_on_reaches_the_person_watching`
-`verified-by: bravebot_agent::tools::the_reason_is_labelled_from_its_context_and_released_for_display_alone`
+`verified-by: bravebot_agent::tools::tests::scheduling::what_the_turn_is_waiting_on_reaches_the_person_watching`
+`verified-by: bravebot_agent::tools::tests::scheduling::the_reason_is_labelled_from_its_context_and_released_for_display_alone`
 
 <a id="SCHED-6"></a>
 ### SCHED-6: a turn that will be asked again may arrange the next look
@@ -113,11 +113,11 @@ will ask again has the same wait dropped for the opposite reason, and the confir
 matters more: the planner is told a later look is arranged and needs nothing from the person, and
 it writes that to somebody who then believes a watch exists that nothing is keeping.
 
-`verified-by: bravebot_agent::tools::any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is`
-`verified-by: bravebot_agent::tools::a_tick_the_person_timed_is_offered_no_way_to_schedule_one`
-`verified-by: bravebot_agent::tools::a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one`
-`verified-by: bravebot_agent::tools::a_turn_outside_a_loop_is_told_the_next_look_is_already_arranged`
-`verified-by: bravebot_agent::tools::a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name`
+`verified-by: bravebot_agent::tools::tests::scheduling::any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_tick_the_person_timed_is_offered_no_way_to_schedule_one`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_turn_outside_a_loop_is_told_the_next_look_is_already_arranged`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name`
 `verified-by: bravebot_agent::tools::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
 `verified-by: bravebot_agent::turn::a_turn_that_is_not_a_tick_can_arrange_the_next_look`
 `verified-by: bravebot_agent::turn::a_turn_nothing_will_ask_again_cannot_arrange_a_later_look`

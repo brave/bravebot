@@ -817,15 +817,15 @@ one place left to say what each of them was for.
 `verified-by: bravebot_cli::progress::a_call_is_printed_with_the_reason_it_was_made`
 `verified-by: bravebot_ui_bridge::wire::a_call_carries_the_reason_it_was_made`
 `verified-by: bravebot_agent::conversation::every_call_in_a_round_is_recounted`
-`verified-by: bravebot_agent::tools::a_stored_call_names_its_command_output_and_file_but_not_a_credential`
+`verified-by: bravebot_agent::tools::tests::activity::a_stored_call_names_its_command_output_and_file_but_not_a_credential`
 `verified-by: bravebot_agent::turn::a_run_call_is_drawn_with_the_command_it_runs`
 `verified-by: bravebot_agent::turn::a_run_call_of_several_lines_is_drawn_as_its_first`
 `verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: bravebot_agent::mcp::a_call_answer_two_lets_through_is_drawn_with_what_it_sends`
 `verified-by: bravebot_agent::mcp::a_call_carrying_a_credential_is_drawn_without_its_arguments`
 `verified-by: bravebot_agent::mcp::a_call_to_a_tool_no_server_offers_is_drawn_as_a_resumed_session_draws_it`
-`verified-by: bravebot_agent::tools::a_servers_call_is_drawn_with_the_arguments_it_is_sent`
-`verified-by: bravebot_agent::tools::a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential`
+`verified-by: bravebot_agent::tools::tests::activity::a_servers_call_is_drawn_with_the_arguments_it_is_sent`
+`verified-by: bravebot_agent::tools::tests::activity::a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential`
 `verified-by: bravebot_tui::render::a_resumed_call_to_a_servers_tool_shows_what_it_sent`
 `verified-by: bravebot_ui_bridge::servers::a_call_to_a_servers_tool_reaches_the_window_with_what_it_sends`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup after the call while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`

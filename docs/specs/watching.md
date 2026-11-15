@@ -212,20 +212,20 @@ reading: taking the screen for it makes choosing between two delegates cost the 
 up to them. A delegate's own lines are a transcript, scrolled and read for as long as the run
 lasts, and a panel is the wrong container for that.
 
-`verified-by: bravebot_tui::app::ctrl_l_watches_the_delegate_that_is_working`
-`verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_no_delegate_has_run`
-`verified-by: bravebot_tui::app::ctrl_l_lists_the_delegate_and_not_the_command`
-`verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_only_commands_have_run`
-`verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
-`verified-by: bravebot_tui::app::alt_l_opens_the_outputs_and_not_the_agents`
-`verified-by: bravebot_tui::app::alt_l_says_what_the_outputs_command_says_where_no_command_has_run`
-`verified-by: bravebot_tui::app::ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path`
-`verified-by: bravebot_tui::app::alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents`
-`verified-by: bravebot_tui::app::alt_l_over_the_agents_with_no_command_says_so_and_stays`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_watches_the_delegate_that_is_working`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_does_nothing_where_no_delegate_has_run`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_lists_the_delegate_and_not_the_command`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_does_nothing_where_only_commands_have_run`
+`verified-by: bravebot_tui::app::tests::watching::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_opens_the_outputs_and_not_the_agents`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_says_what_the_outputs_command_says_where_no_command_has_run`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_over_the_agents_with_no_command_says_so_and_stays`
 `verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
 `verified-by: bravebot_tui::state::the_watch_list_holds_the_delegate_and_not_the_command`
 `verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
-`verified-by: bravebot_tui::app::enter_opens_the_delegate_the_list_is_on`
+`verified-by: bravebot_tui::app::tests::watching::enter_opens_the_delegate_the_list_is_on`
 `verified-by: bravebot_tui::state::watching_opens_on_the_delegate_that_is_working`
 `verified-by: bravebot_tui::state::there_is_nothing_to_watch_until_a_delegate_has_run`
 `verified-by: bravebot_tui::state::several_delegates_are_opened_on_the_list_of_them`
@@ -258,7 +258,7 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::render::a_delegates_view_opens_on_what_it_was_asked_above_its_lines`
 `verified-by: bravebot_tui::render::a_delegates_view_ends_on_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegates_view_does_not_open_on_the_mark`
-`verified-by: bravebot_tui::app::n_and_p_move_between_delegates`
+`verified-by: bravebot_tui::app::tests::watching::n_and_p_move_between_delegates`
 `verified-by: bravebot_tui::render::a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there`
 
 <a id="WATCH-9"></a>
@@ -298,26 +298,26 @@ row opened. A person handed a recap after being away, or one who clicked a deleg
 reading the conversation and never saw the list. Going back to the list would show them a screen
 they did not open, and they would need a second press to reach the conversation.
 
-`verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_a_delegate_is_watched`
-`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open`
-`verified-by: bravebot_tui::app::q_goes_back_to_the_list_before_it_closes`
-`verified-by: bravebot_tui::app::q_closes_outright_where_there_is_no_list_to_go_back_to`
-`verified-by: bravebot_tui::app::the_way_back_from_an_answer_the_view_opened_by_itself_closes_it`
-`verified-by: bravebot_tui::app::an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back`
+`verified-by: bravebot_tui::app::tests::watching::a_typed_character_does_not_reach_the_box_while_a_delegate_is_watched`
+`verified-by: bravebot_tui::app::tests::watching::a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open`
+`verified-by: bravebot_tui::app::tests::watching::q_goes_back_to_the_list_before_it_closes`
+`verified-by: bravebot_tui::app::tests::watching::q_closes_outright_where_there_is_no_list_to_go_back_to`
+`verified-by: bravebot_tui::app::tests::watching::the_way_back_from_an_answer_the_view_opened_by_itself_closes_it`
+`verified-by: bravebot_tui::app::tests::watching::an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back`
 `verified-by: bravebot_tui::app::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
 `verified-by: bravebot_tui::render::the_footer_says_q_closes_a_row_the_list_did_not_open`
-`verified-by: bravebot_tui::app::escape_leaves_the_view_the_way_q_does`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_a_single_request_does`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_turn_does`
-`verified-by: bravebot_tui::app::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
-`verified-by: bravebot_tui::app::ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command`
-`verified-by: bravebot_tui::app::escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close`
-`verified-by: bravebot_tui::app::the_press_after_the_view_closes_stops_the_command`
-`verified-by: bravebot_tui::app::the_view_left_open_under_a_running_command_still_moves_between_delegates`
-`verified-by: bravebot_tui::app::x_stops_the_delegate_the_view_is_on_and_no_other`
-`verified-by: bravebot_tui::app::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
-`verified-by: bravebot_tui::app::a_chord_on_x_does_not_stop_a_delegate`
+`verified-by: bravebot_tui::app::tests::watching::escape_leaves_the_view_the_way_q_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_a_single_request_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_the_goal_check_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_the_turn_does`
+`verified-by: bravebot_tui::app::tests::watching::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command`
+`verified-by: bravebot_tui::app::tests::watching::escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close`
+`verified-by: bravebot_tui::app::tests::watching::the_press_after_the_view_closes_stops_the_command`
+`verified-by: bravebot_tui::app::tests::watching::the_view_left_open_under_a_running_command_still_moves_between_delegates`
+`verified-by: bravebot_tui::app::tests::watching::x_stops_the_delegate_the_view_is_on_and_no_other`
+`verified-by: bravebot_tui::app::tests::watching::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
+`verified-by: bravebot_tui::app::tests::watching::a_chord_on_x_does_not_stop_a_delegate`
 `verified-by: bravebot_tui::render::the_footer_offers_the_stop_key_while_working_and_says_when_it_is_asked`
 
 <a id="WATCH-10"></a>
@@ -463,7 +463,7 @@ press of enter into an exit.
 `verified-by: bravebot_tui::state::moving_up_from_the_first_delegate_in_the_list_reaches_the_session`
 `verified-by: bravebot_tui::state::going_back_to_the_list_lands_on_the_delegate_that_was_open`
 `verified-by: bravebot_tui::state::moving_down_from_the_session_in_the_list_reaches_the_first_delegate`
-`verified-by: bravebot_tui::app::opening_the_session_row_goes_back_to_the_conversation`
+`verified-by: bravebot_tui::app::tests::watching::opening_the_session_row_goes_back_to_the_conversation`
 
 <a id="WATCH-15"></a>
 ### WATCH-15: what a command printed is a row of the outputs list, which the view opens
@@ -495,7 +495,7 @@ things happened would move the row under them every time a command finished.
 `verified-by: bravebot_tui::render::a_command_row_says_whether_the_planner_read_it`
 `verified-by: bravebot_tui::state::stepping_through_the_outputs_list_reaches_every_command`
 `verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
-`verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::app::tests::watching::the_outputs_command_opens_what_commands_printed`
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_a_command_being_read`
 `verified-by: bravebot_tui::render::opening_a_command_shows_what_it_printed`
 `verified-by: bravebot_tui::render::output_the_planner_was_kept_from_is_marked_on_every_row`

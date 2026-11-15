@@ -47,7 +47,7 @@ part of the answer's, so the answer is private where the instruction is
 ([PROC-3](../processors.md#PROC-3)).
 
 `verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_answer_over_a_public_page`
-`verified-by: bravebot_agent::tools::a_processor_cannot_be_started_from_a_context_that_met_untrusted_content`
+`verified-by: bravebot_agent::tools::tests::arguments::a_processor_cannot_be_started_from_a_context_that_met_untrusted_content`
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 
 <a id="SPAWN-3"></a>
@@ -97,8 +97,8 @@ the same call again word for word. It then sent an empty list to have a processo
 from nothing, and the kernel's refusal said there was nothing quarantined to work on without saying
 that the planner could write the file itself.
 
-`verified-by: bravebot_agent::tools::a_processor_call_naming_its_references_wrongly_is_told_what_is_wrong`
-`verified-by: bravebot_agent::tools::a_processor_given_nothing_to_read_is_pointed_at_write_file`
+`verified-by: bravebot_agent::tools::tests::arguments::a_processor_call_naming_its_references_wrongly_is_told_what_is_wrong`
+`verified-by: bravebot_agent::tools::tests::arguments::a_processor_given_nothing_to_read_is_pointed_at_write_file`
 `verified-by: bravebot_agent::turn::a_processor_call_sending_read_is_told_the_argument_is_reads_in_a_whole_turn`
 
 <a id="SPAWN-6"></a>

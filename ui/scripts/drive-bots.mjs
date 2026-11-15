@@ -26,12 +26,12 @@
 // This driver runs against a scratch user-data directory and state directory, and it puts its own key back: the bots
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
-import { checker, launch, SIDEBAR_TAB, BOT_OPEN_BUTTON } from './drive-support.mjs'
+import { checker, launch, SIDEBAR_TAB, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 import { appBots, appState, scratchProfile } from './drive-profile.mjs'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 /// A pattern matching exactly this name, with every metacharacter in it taken literally.
 ///
@@ -136,7 +136,7 @@ if ((await page.locator('.bot').count()) === 0) {
 } else {
   console.log('  --   the empty state is untested: this machine already has bots')
 }
-await page.screenshot({ path: '/tmp/bravebot-ui/20-bots-empty.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/20-bots-empty.png` })
 
 // The session list is hidden rather than unmounted, which is what lets a filter and a fold
 // survive a look at the other tab.
@@ -188,7 +188,7 @@ const first = await faceOf(mine)
 const second = await faceOf(other)
 check(!!first && !!second, `each bot has a face (${first})`)
 check(first !== second, `and two bots do not have the same one (${second})`)
-await page.screenshot({ path: '/tmp/bravebot-ui/21-bots-listed.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/21-bots-listed.png` })
 
 // --- the face survives a rename ----------------------------------------------------------
 
@@ -203,7 +203,7 @@ check(
   (await page.locator('[data-test="bot-details"] [data-test="bot-memory"]').count()) === 1,
   'and its details show what the bot has remembered',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/23-bots-form.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/23-bots-form.png` })
 await editDetail(page, 'Bot name', 'Release Notes (weekly)')
 
 const renamed = rowFor('Release Notes (weekly)')
@@ -239,7 +239,7 @@ check(
   (await backMine.locator('.bot-avatar').getAttribute('data-avatar')) === first,
   'and the same face, built from a seed on disk rather than from the name',
 )
-await back.screenshot({ path: '/tmp/bravebot-ui/22-bots-relaunched.png' })
+await back.screenshot({ path: `${SHOTS_DIR}/22-bots-relaunched.png` })
 
 // --- what the window may not write --------------------------------------------------------
 
@@ -312,7 +312,7 @@ check(
   'and draws its face still: an archive is the list that could grow to rows nobody is looking ' +
     'at, so none of them is animated',
 )
-await back.screenshot({ path: '/tmp/bravebot-ui/23-bots-archived.png' })
+await back.screenshot({ path: `${SHOTS_DIR}/23-bots-archived.png` })
 
 await archivedRow.getByRole('button', { name: /^Actions for / }).click()
 await archivedRow.locator('.bot-restore').click()
@@ -363,7 +363,7 @@ check(
   onDisk(MINE[0]) !== null && (await back.locator('[data-test="delete-cancel"]').count()) === 1,
   'pressing Delete asks rather than deletes, and offers the way out first',
 )
-await back.screenshot({ path: '/tmp/bravebot-ui/24-bots-delete.png' })
+await back.screenshot({ path: `${SHOTS_DIR}/24-bots-delete.png` })
 await back.locator('[data-test="delete-cancel"]').click()
 await back.waitForTimeout(400)
 check(

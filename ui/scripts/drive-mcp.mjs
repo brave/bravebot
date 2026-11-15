@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 
 const WIRE = 'mcp__weather__get_forecast'
 
@@ -47,7 +47,7 @@ const { root, home, project, profile, env } = makeWorld('bravebot-mcp-', { servi
 writeFileSync(join(home, '.bravebot/mcp.json'), JSON.stringify({ servers: { weather: { transport: 'http', url } } }))
 writeFileSync(join(project, '.bravebot/settings.json'), JSON.stringify({ mcp: { request: ['weather'] } }))
 
-const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
+const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

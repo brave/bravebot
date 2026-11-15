@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { ASSISTANT_BUBBLE, BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
+import { ASSISTANT_BUBBLE, BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust, SHOTS_DIR } from './drive-support.mjs'
 
 // Every request lists each definition's purpose among the delegate kinds, so the sentence the
 // agent adds to a turn addressed to a definition is what says which one the turn ran under. The
@@ -29,7 +29,7 @@ const { service, rounds } = await startModelService(({ body, messages }) =>
 const ranUnder = (round) => under(rounds[round] ?? '')
 
 const { root, project, profile, env } = makeWorld('bravebot-bot-summon-', { service })
-const output = process.env.BOT_SUMMON_OUTPUT || '/tmp/bravebot-ui'
+const output = process.env.BOT_SUMMON_OUTPUT || SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

@@ -184,7 +184,7 @@ can say so in its answer, where somebody reads it, rather than by going quiet fo
 `verified-by: bravebot_tui::loops::an_interval_within_the_bounds_is_reported_as_unadjusted`
 `verified-by: bravebot_tui::loops::a_wait_a_turn_asked_for_is_held_to_the_bounds`
 `verified-by: bravebot_tui::state::an_interval_outside_the_bounds_is_reported_as_the_one_that_will_happen`
-`verified-by: bravebot_agent::tools::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 
 <a id="LOOP-8"></a>
 ### LOOP-8: where the person gave an interval, the driver keeps it and no turn can change it
@@ -515,7 +515,7 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
 `verified-by: bravebot_tui::render::the_hint_line_counts_loops_and_not_a_held_after_line`
 `verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
-`verified-by: bravebot_tui::app::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
+`verified-by: bravebot_tui::app::tests::pasting::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
 `verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_is_due_at_once_when_its_delay_passed_before_the_turn_ended`
 `verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_waits_for_what_is_left_of_its_delay`
 `verified-by: bravebot_tui::app::an_after_line_typed_at_rest_counts_its_delay_from_now`

@@ -25,7 +25,7 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, BOT_GREETING, COMPOSER_SEND, approveTrust, trustQuestion } from '../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, BOT_GREETING, COMPOSER_SEND, APPROVE_BUTTON, approveTrust, trustQuestion } from '../drive-support.mjs'
 import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -294,8 +294,8 @@ async function settle(page, seconds = 180) {
         if (await choice.count()) await choice.click()
         else await block.locator('.typed').first().fill('whatever you think best')
       }
-      const approve = card.locator('.confirm-actions .approve:not(.always)').first()
-      await (await approve.count() ? approve : card.locator('.confirm-actions .approve').first()).click()
+      const approve = card.locator(`${APPROVE_BUTTON}:not(.always)`).first()
+      await (await approve.count() ? approve : card.locator(APPROVE_BUTTON).first()).click()
       await page.waitForTimeout(800)
       continue
     }

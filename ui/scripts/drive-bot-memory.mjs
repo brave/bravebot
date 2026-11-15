@@ -31,12 +31,12 @@
 // directory holds copies of the real `settings.json`, `model` and `leo-premium.json`, so the agent
 // can reach the backend the real one is configured for, and the copies are removed when it ends.
 
-import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON } from './drive-support.mjs'
+import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -156,7 +156,7 @@ check(
   (await page.locator('.bubble.user').last().textContent())?.includes(LOOKALIKE) === true,
   'a prompt that reads like house-keeping is drawn as the prompt it is',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/26-bot-memory-nudged.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/26-bot-memory-nudged.png` })
 
 const memory = join(home, '.bravebot-ui', 'bots', `${MINE}.md`)
 check(existsSync(memory), 'the memory file is still where the bot can edit it')
@@ -205,7 +205,7 @@ check(
   (await page2.locator('.bubble.user .fork-here').count()) === bubbles.length,
   'every one of them offers the cut that is taken on its ordinal',
 )
-await page2.screenshot({ path: '/tmp/bravebot-ui/27-bot-memory-replayed.png' })
+await page2.screenshot({ path: `${SHOTS_DIR}/27-bot-memory-replayed.png` })
 
 await back.close()
 

@@ -277,11 +277,7 @@ fn every_program_the_bridge_process_starts_goes_through_the_spawn_gate() {
 
     for krate in linked_crates(&workspace) {
         visit(&workspace.join(&krate).join("src"), &mut |path, text| {
-            // A file that is a test module of its own is declared elsewhere with `mod x_tests;`.
-            if path
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
-            {
+            if is_a_test_module_file(path) {
                 return;
             }
             // The Windows backend creates its process with `CreateProcessW` rather than a `Command`,
@@ -300,6 +296,39 @@ fn every_program_the_bridge_process_starts_goes_through_the_spawn_gate() {
         "a program is started outside the spawn gate:\n{}",
         offences.join("\n")
     );
+}
+
+/// Whether `path` is a file that is a test module of its own: declared elsewhere with
+/// `mod x_tests;`, or one of the files in a `tests` directory under `src` that a
+/// `#[cfg(test)] mod tests` declares.
+fn is_a_test_module_file(path: &Path) -> bool {
+    let named_as_tests = path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"));
+    let in_a_tests_directory = path
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .skip_while(|part| part.as_os_str() != "src")
+        .any(|part| part.as_os_str() == "tests");
+    named_as_tests || in_a_tests_directory
+}
+
+#[test]
+fn a_file_in_a_tests_directory_under_src_is_a_test_module() {
+    assert!(is_a_test_module_file(Path::new(
+        "../agent/src/tools/tests/editing.rs"
+    )));
+    assert!(is_a_test_module_file(Path::new(
+        "../ui-bridge/src/opening_tests.rs"
+    )));
+    assert!(!is_a_test_module_file(Path::new(
+        "../agent/src/tools/editing.rs"
+    )));
+    // A `tests` directory above `src` holds integration tests, which no crate's `src` walk reaches.
+    assert!(!is_a_test_module_file(Path::new(
+        "/work/tests/agent/src/tools.rs"
+    )));
 }
 
 /// The line numbers in `text`, outside its test modules, that start a program other than inside

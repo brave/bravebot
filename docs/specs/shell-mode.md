@@ -172,7 +172,7 @@ after standard output, and the rows put each where it was read.
 `verified-by: bravebot_tui::app::what_a_command_printed_after_the_last_frame_is_taken_when_it_ends`
 `verified-by: bravebot_tui::app::a_command_whose_output_was_refused_leaves_none_of_it_on_the_screen`
 `verified-by: bravebot_tui::app::a_private_command_that_ended_is_drawn_as_released_and_says_it_was_not_sent`
-`verified-by: bravebot_tui::app::the_view_left_open_under_a_running_command_does_not_draw_what_it_prints`
+`verified-by: bravebot_tui::app::tests::watching::the_view_left_open_under_a_running_command_does_not_draw_what_it_prints`
 
 <a id="SHELL-4"></a>
 ### SHELL-4: only a line a human typed

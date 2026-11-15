@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND, SHOTS_DIR } from './drive-support.mjs'
 
 // The website, under two names. The person's file allows one and refuses the other.
 const reached = []
@@ -52,7 +52,7 @@ writeFileSync(checkout, JSON.stringify({
   permissions: { allow: ['WebFetch(domain:localhost)'], additionalDirectories: ['../other'] },
 }))
 
-const output = '/tmp/bravebot-ui'
+const output = SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

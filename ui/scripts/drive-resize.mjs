@@ -3,10 +3,10 @@
 // The positive case is easy to eyeball; the interesting assertions are the limits. A
 // divider that can be dragged past its clamp, or that forgets its position on relaunch,
 // looks fine in a screenshot and is wrong.
-import { checker, launch } from './drive-support.mjs'
+import { checker, launch, SHOTS_DIR } from './drive-support.mjs'
 import { mkdirSync } from 'node:fs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -88,7 +88,7 @@ check(Math.abs((await widths(page)).left - 276) <= 2, 'arrow keys move the divid
 // --- what gets remembered ------------------------------------------------------------
 await drag(page, 0, 60)
 const remembered = (await widths(page)).left
-await page.screenshot({ path: '/tmp/bravebot-ui/06-resize.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/06-resize.png` })
 await app.close()
 
 app = await launch()
@@ -103,4 +103,4 @@ if (problems.length > 0) {
   console.log(`\nRESULT: ${problems.length} failed`)
   process.exit(1)
 }
-console.log('\nRESULT: ok — shot in /tmp/bravebot-ui/06-resize.png')
+console.log(`\nRESULT: ok — shot in ${SHOTS_DIR}/06-resize.png`)

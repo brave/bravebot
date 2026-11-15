@@ -22,7 +22,7 @@
 // checkout as it was, and is a better shot than an approval nobody meant to give.
 
 import { join } from 'node:path'
-import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE, readTrust, trustQuestion } from '../../drive-support.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE, APPROVE_BUTTON, REJECT_BUTTON, readTrust, trustQuestion } from '../../drive-support.mjs'
 
 /** How each of the five reads on screen, in the order somebody meets them. */
 const QUESTIONS = {
@@ -159,18 +159,18 @@ async function answerEverything(s, { shot }) {
           await s.slowType(block.locator('.typed').first(), 'whichever reads best at the call site')
         }
       }
-      const closing = ((await card.locator('.confirm-actions .approve').first().textContent()) ?? '').trim() === 'Answer'
+      const closing = ((await card.locator(APPROVE_BUTTON).first().textContent()) ?? '').trim() === 'Answer'
       if (closing) await s.say('Answered here', 'In the transcript, where the question was, and nowhere else.', 2.4)
     }
 
     await s.shot(`${shot}-${seen}-${kind}`)
     if (answer === 'reject') {
-      await s.click(card.locator('.confirm-actions .reject').first())
+      await s.click(card.locator(REJECT_BUTTON).first())
     } else {
       // Never `.always`: running once and vouching for the program forever are different
       // answers, and a demo should not be seen giving the broader one by reflex.
-      const once = card.locator('.confirm-actions .approve:not(.always)').first()
-      await s.click((await once.count()) ? once : card.locator('.confirm-actions .approve').first())
+      const once = card.locator(`${APPROVE_BUTTON}:not(.always)`).first()
+      await s.click((await once.count()) ? once : card.locator(APPROVE_BUTTON).first())
     }
     seen++
     await s.beat(1)

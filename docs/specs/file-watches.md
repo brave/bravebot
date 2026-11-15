@@ -93,7 +93,7 @@ to watch it.
 `verified-by: bravebot_agent::watch::a_look_that_sees_what_the_last_one_saw_fires_nothing`
 `verified-by: bravebot_agent::watch::a_look_is_measured_against_the_one_before_it_rather_than_against_the_first`
 `verified-by: bravebot_agent::watch::the_look_taken_when_a_watch_is_armed_is_what_the_next_one_is_measured_against`
-`verified-by: bravebot_agent::tools::the_first_look_is_taken_at_the_call_and_not_after_the_turn`
+`verified-by: bravebot_agent::tools::tests::watching::the_first_look_is_taken_at_the_call_and_not_after_the_turn`
 `verified-by: bravebot_tui::state::a_change_begins_a_turn_with_no_turn_running_to_notice_it`
 
 <a id="FSWATCH-2"></a>
@@ -112,7 +112,7 @@ has no business being in a prompt at all.
 A path fixed at arming time is also what makes a fire's prompt free of anything new: every word of
 it was already in the context of the turn that armed the watch.
 
-`verified-by: bravebot_agent::tools::a_directory_is_refused_rather_than_watched`
+`verified-by: bravebot_agent::tools::tests::watching::a_directory_is_refused_rather_than_watched`
 `verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
 
 <a id="FSWATCH-3"></a>
@@ -238,7 +238,7 @@ are waiting on in order to watch a file.
 
 `verified-by: bravebot_tui::state::a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why`
 `verified-by: bravebot_tui::state::a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended`
-`verified-by: bravebot_agent::tools::a_session_already_doing_something_untyped_refuses_and_says_which`
+`verified-by: bravebot_agent::tools::tests::watching::a_session_already_doing_something_untyped_refuses_and_says_which`
 `verified-by: bravebot_tui::state::a_later_look_a_turn_asked_for_is_refused_while_a_watch_is_live`
 
 <a id="FSWATCH-7"></a>
@@ -287,10 +287,10 @@ inside an added directory that survived the move survives with it. A path starti
 as the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)), so it is such a path too and
 does not end at the first move for reading as a relative one.
 
-`verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
+`verified-by: bravebot_agent::tools::tests::watching::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
 `verified-by: bravebot_agent::turn::under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass`
 `verified-by: bravebot_agent::turn::a_watch_is_refused_at_arming_where_a_read_of_the_path_is`
-`verified-by: bravebot_agent::tools::a_file_named_from_the_home_directory_is_armed_on_the_path_it_stands_for`
+`verified-by: bravebot_agent::tools::tests::watching::a_file_named_from_the_home_directory_is_armed_on_the_path_it_stands_for`
 `verified-by: bravebot_agent::watch::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
 `verified-by: bravebot_agent::watch::each_look_is_asked_for_the_directory_that_watch_was_armed_under`
 `verified-by: bravebot_agent::workspace::a_look_holding_a_reach_is_judged_by_the_refusals_of_a_read_and_records_nothing`
@@ -298,9 +298,9 @@ does not end at the first move for reading as a relative one.
 `verified-by: bravebot_ui_bridge::bridge::a_watch_inside_the_project_is_looked_at_while_a_turn_holds_the_session`
 `verified-by: bravebot_ui_bridge::bridge::a_watch_beside_the_project_expires_while_a_turn_holds_the_session`
 `verified-by: bravebot_agent::watch::a_look_the_caller_cannot_judge_leaves_the_watch_armed_and_still_ages_it`
-`verified-by: bravebot_agent::tools::a_watch_beside_the_project_is_reached_under_bypass_in_a_trusted_project_only`
-`verified-by: bravebot_agent::tools::a_watch_inside_the_project_is_seen_whatever_the_mode_and_the_map`
-`verified-by: bravebot_agent::tools::a_watch_asks_the_trust_question_a_call_asks`
+`verified-by: bravebot_agent::tools::tests::looking_at_a_watch::a_watch_beside_the_project_is_reached_under_bypass_in_a_trusted_project_only`
+`verified-by: bravebot_agent::tools::tests::looking_at_a_watch::a_watch_inside_the_project_is_seen_whatever_the_mode_and_the_map`
+`verified-by: bravebot_agent::tools::tests::looking_at_a_watch::a_watch_asks_the_trust_question_a_call_asks`
 `verified-by: bravebot_ui_bridge::bridge::a_poll_keeps_reads_inside_the_project_where_the_settings_ask_for_it`
 `verified-by: bravebot_agent::watch::a_move_ends_a_watch_that_has_a_fire_waiting_rather_than_letting_it_go_out`
 `verified-by: bravebot_agent::workspace::a_relative_look_is_out_of_reach_once_the_working_directory_has_moved`
@@ -446,7 +446,7 @@ look is something a later look can differ from, and the file's first appearance 
 appearance rather than as a write nobody saw. A file removed and written back between two fires is
 one write.
 
-`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_armed_to_report_it_appearing`
+`verified-by: bravebot_agent::tools::tests::watching::a_path_that_names_nothing_is_armed_to_report_it_appearing`
 `verified-by: bravebot_agent::watch::a_path_with_nothing_at_it_is_armed_and_fires_when_a_file_appears`
 `verified-by: bravebot_agent::watch::a_path_out_of_reach_is_refused_rather_than_armed`
 `verified-by: bravebot_tui::state::a_path_that_cannot_be_looked_at_is_refused_and_said_so`

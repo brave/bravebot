@@ -170,8 +170,8 @@ one, and a tree or file named by its id alone, with no path, is refused.
 than by what it holds, a file the map distrusts would reach the planner through its history.
 
 `verified-by: bravebot_agent::turn::a_history_answer_showing_a_distrusted_path_is_quarantined`
-`verified-by: bravebot_agent::tools::the_git_refusal_names_run_only_where_the_turn_holds_it`
-`verified-by: bravebot_agent::tools::an_untrusted_git_answer_is_refused_in_the_helpers_words`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_git_refusal_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::an_untrusted_git_answer_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::workspace::a_repository_below_the_root_is_read_under_the_rules_on_its_own_path`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_a_path_it_showed_is`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_anything_under_git_is`
@@ -223,7 +223,7 @@ not a regular expression, and a list of tags given a path are each refused by na
 forms this reader knows is `HEAD^`, so it would come back as a confident answer to something else.
 A pattern or a path dropped without a word is the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
-`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::arguments::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::read_git_lists_the_tags_a_revision_reaches_newest_version_first`

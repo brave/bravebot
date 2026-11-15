@@ -248,22 +248,54 @@ fn functions_of_the_code() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// The steps `event_loop` takes in functions of their own: what it settles before each frame and
+/// the action it takes at rest. They are read with `event_loop`, since each is a part of the one
+/// loop and none answers the mouse alone.
+const STEPS_OF_THE_LOOP_AT_REST: [&str; 2] = ["settle_between_frames", "next_idle_action"];
+
 /// The loops that answer a mouse report, among `functions`: the one at rest through `idle_action`,
-/// and those while work runs through `answer_mouse`.
+/// and those while work runs through `answer_mouse`. The loop at rest is `event_loop` with the text
+/// of its steps in `STEPS_OF_THE_LOOP_AT_REST`.
 fn the_loops_that_answer_the_mouse(
     functions: &[(&'static str, &'static str)],
-) -> Vec<(&'static str, &'static str)> {
+) -> Vec<(&'static str, String)> {
+    let event_loop = functions
+        .iter()
+        .find(|(name, _)| *name == "event_loop")
+        .map(|(_, text)| *text)
+        .unwrap_or_else(|| panic!("event_loop is not found"));
+    let mut at_rest = String::new();
+    for step in STEPS_OF_THE_LOOP_AT_REST {
+        assert!(
+            event_loop.contains(&format!("{step}(")),
+            "event_loop does not call {step}, so its text is not read as part of the loop"
+        );
+        let (_, text) = functions
+            .iter()
+            .find(|(name, _)| *name == step)
+            .unwrap_or_else(|| {
+                panic!("{step} is not found, and so not read as part of event_loop")
+            });
+        at_rest.push_str(text);
+    }
     let loops: Vec<_> = functions
         .iter()
+        .filter(|(name, _)| !STEPS_OF_THE_LOOP_AT_REST.contains(name))
+        .map(|(name, text)| {
+            if *name == "event_loop" {
+                (*name, format!("{text}{at_rest}"))
+            } else {
+                (*name, (*text).to_string())
+            }
+        })
         .filter(|(name, text)| {
             *name != "answer_mouse"
                 && *name != "idle_action"
                 && (text.contains("answer_mouse(") || text.contains("idle_action("))
         })
-        .copied()
         .collect();
     let names: Vec<&str> = loops.iter().map(|(name, _)| *name).collect();
-    for expected in ["pump_terminal", "run_command"] {
+    for expected in ["event_loop", "pump_terminal", "run_command"] {
         assert!(
             names.contains(&expected),
             "{expected} is not read as a loop: {names:?}"

@@ -2933,6 +2933,8 @@ it and was writing the text when the ceiling fell.
 `verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
 `verified-by: bravebot_aichat::client::a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools`
 `verified-by: bravebot_aichat::client::a_reply_the_ceiling_stopped_before_it_wrote_anything_names_the_ceiling`
+`verified-by: bravebot_aichat::lib::a_reply_the_ceiling_stopped_is_described_in_one_sentence_per_state`
+`verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_is_described_as_the_aichat_client_describes_it`
 `verified-by: bravebot_agent::failure_categories::a_reply_the_ceiling_stopped_before_it_wrote_anything_is_diagnosed_at_its_ceiling`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`
@@ -3063,7 +3065,7 @@ written.
 `verified-by: bravebot_bedrock::lib::a_streamed_argument_that_does_not_parse_is_handed_on_as_written`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
 `verified-by: bravebot_bedrock::protocol::unparseable_arguments_become_an_empty_object_rather_than_dropping_the_call`
-`verified-by: bravebot_agent::tools::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
+`verified-by: bravebot_agent::tools::tests::arguments::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
 `verified-by: bravebot_aichat::anthropic::protocol::asking_for_arguments_as_written_marks_every_tool_and_nothing_else`
 `verified-by: bravebot_aichat::client::a_whole_anthropic_request_asks_for_neither_a_stream_nor_arguments_as_written`
 `verified-by: bravebot_aichat::client::an_anthropic_stream_refused_on_its_contents_gives_up_the_ask_for_arguments_last`

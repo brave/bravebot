@@ -7,7 +7,7 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_session::jobs::{Held, Lookup, Mode, Roster, Seen, State, Stopped};
+use bravebot_session::jobs::{Lookup, Mode, Roster, Seen, State, Stopped};
 use bravebot_session::listing::{Reader, Task};
 use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
@@ -780,22 +780,9 @@ fn lines_of(tasks: &[Task]) -> Vec<String> {
 fn state_in_words(task: &Task) -> String {
     match (task.status.process_state(), task.held) {
         (Some(State::Working), _) => t!(sessions_state_working).to_string(),
-        (Some(State::NeedsInput), Some(held)) => t!(
-            sessions_state_needs_input,
-            kind = match held {
-                Held::Write => t!(sessions_held_write),
-                Held::Run => t!(sessions_held_run),
-                Held::Read => t!(sessions_held_read),
-                Held::Fetch => t!(sessions_held_fetch),
-                Held::Server => t!(sessions_held_server),
-                Held::Vouch => t!(sessions_held_vouch),
-                Held::Tools => t!(sessions_held_tools),
-                Held::Move => t!(sessions_held_move),
-                Held::Manifest => t!(sessions_held_manifest),
-                Held::Question => t!(sessions_held_question),
-                Held::Message => t!(sessions_held_message),
-            }
-        ),
+        (Some(State::NeedsInput), Some(held)) => {
+            t!(sessions_state_needs_input, kind = held.label())
+        }
         (Some(State::NeedsInput), None) => t!(sessions_state_needs_input_unnamed).to_string(),
         (Some(State::Idle), _) => t!(sessions_state_idle).to_string(),
         (Some(State::Interrupted), _) => t!(sessions_state_interrupted).to_string(),
@@ -806,6 +793,7 @@ fn state_in_words(task: &Task) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_session::jobs::Held;
 
     /// BG-8: the person attached is told the mode in words, one for each mode a background
     /// session can run in, and never the mode a session cannot be in.

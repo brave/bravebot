@@ -8,27 +8,16 @@
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, approveTrust, trustQuestion } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, APPROVE_BUTTON, openFirstSession, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
 const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
-if ((await page.locator('.session').count()) === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
-
-await page.locator('.session').first().click()
-await page.waitForTimeout(1500)
-if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await approveTrust(trustQuestion(page))
-  await page.waitForTimeout(600)
-}
+await openFirstSession(app, page)
 
 await page.locator(COMPOSER_INPUT).fill(
   'I want to add a --json flag to this project. Do not write anything. First, in ONE ask_user ' +
@@ -48,7 +37,7 @@ const asked = await page
 
 if (!asked) {
   console.log('  --   the planner answered without asking; nothing to drive this run')
-  await page.screenshot({ path: '/tmp/bravebot-ui/16-not-asked.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/16-not-asked.png` })
   await app.close()
   process.exit(0)
 }
@@ -82,7 +71,7 @@ check(
   (placeholder ?? '').includes('questions'),
   `and the composer says what is waiting (${placeholder})`,
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/16-asked.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/16-asked.png` })
 
 check(questions >= 2, `several questions arrive in one series (${questions})`)
 
@@ -106,7 +95,7 @@ for (let at = 0; at < questions; at++) {
   } else {
     await block.locator('.typed input').fill('whatever you think best')
   }
-  await card.locator('.confirm-actions .approve').click()
+  await card.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(300)
 }
 await page.waitForTimeout(1200)
@@ -149,13 +138,13 @@ if (again) {
   const secondChoices = await second.locator('.choices .choice').count()
   if (secondChoices > 0) await second.locator('.choices .choice').first().click()
   else await second.locator('.typed input').first().fill('either is fine')
-  await second.locator('.confirm-actions .approve').click()
+  await second.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(1200)
   check(
     (await second.locator('.asked-answer').count()) > 0,
     'and it records what was answered',
   )
-  await page.screenshot({ path: '/tmp/bravebot-ui/18-asked-again.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/18-asked-again.png` })
 } else {
   console.log('  --   the planner did not ask a second time this run')
 }
@@ -166,7 +155,7 @@ const done = await page
   .then(() => true)
   .catch(() => false)
 check(done, 'the turn carries on with the answers')
-await page.screenshot({ path: '/tmp/bravebot-ui/17-answered.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/17-answered.png` })
 
 await app.close()
 console.log(problems.length ? `\nRESULT: ${problems.length} failed` : '\nRESULT: ok')

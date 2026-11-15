@@ -117,7 +117,7 @@ beside the session's directories is refused by the operating system, and the sen
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
-`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
 `verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
@@ -129,7 +129,7 @@ The tool is in the set no delegate is offered, and a call naming it anyway is an
 unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
-`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
+`verified-by: bravebot_agent::tools::tests::confinement::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 
 <a id="PATHREQ-7"></a>
 ### PATHREQ-7: a yes does not reach the file tools, and the mode that answers every question reaches them with no request
@@ -230,7 +230,7 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
-`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::leaving_bypass_with_the_key_ends_the_reach_to_a_sibling_directory`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_sibling_directory_is_read_and_not_written`
@@ -239,7 +239,7 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::workspace::a_new_entry_directly_in_the_home_directory_or_a_persistence_location_is_refused`
 `verified-by: bravebot_agent::workspace::the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass`
 `verified-by: bravebot_agent::tools::every_tool_that_names_a_path_is_given_the_reach_or_says_why_not`
-`verified-by: bravebot_agent::tools::reads_taken_beforehand_hold_the_reach_the_mode_gives_them`
+`verified-by: bravebot_agent::tools::tests::reading_together::reads_taken_beforehand_hold_the_reach_the_mode_gives_them`
 `verified-by: bravebot_tui::status::the_report_lists_the_directories_bypass_took_the_file_tools_into`
 `verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`

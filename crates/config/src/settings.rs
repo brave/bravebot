@@ -905,6 +905,426 @@ pub fn local_settings_file(checkout: &Path) -> PathBuf {
     checkout.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE)
 }
 
+/// What the settings layers said, collected one layer at a time for [`Settings::layered`].
+///
+/// Each field is settled per layer and not off the merged root, because the merge cannot say which
+/// file a name came from, and for each of these that decides whether the name is obeyed or only
+/// reported. One method per concern reads one layer's root into it, so a key that is settled per
+/// layer is added here as a field and a line in the method for its concern.
+/// [`LayerFacts::apply`] puts what was collected on the settings.
+#[derive(Default)]
+struct LayerFacts {
+    /// The file that last set each environment name, and the files that overrode an earlier one.
+    winner: BTreeMap<String, PathBuf>,
+    contested: BTreeMap<String, PathBuf>,
+    /// Settled per layer rather than off the merged root, because the merge cannot say which
+    /// file a name came from and this is the one name where that decides whether it is obeyed.
+    vetting: Option<bool>,
+    vetting_ignored: Vec<PathBuf>,
+    /// Settled per layer as well, and for the opposite reason: every layer may ask for one of
+    /// these, and what is wanted is the strictest thing any of them said rather than what the
+    /// last one to speak said. The merged root can only give the second (PERM-18).
+    narrowing: Narrowing,
+    narrowed_by: Vec<(PathBuf, &'static str)>,
+    narrowing_unreadable: Vec<(PathBuf, &'static str)>,
+    /// Settled per layer for the same reason, and for a stronger one: the merge unions every
+    /// list, so an `allow` entry a checkout wrote would otherwise be indistinguishable from one
+    /// the person wrote in their own file. See [`Settings::allow_ignored`].
+    allow: Vec<String>,
+    allow_ignored: Vec<(PathBuf, String)>,
+    rule_sources: Vec<RuleSource>,
+    /// Settled per layer for the same reason: which file chose a mode decides whether it binds.
+    sandbox_chosen: Option<(SandboxMode, PathBuf)>,
+    sandbox_asked_strict: Vec<PathBuf>,
+    retrieval_from: Option<PathBuf>,
+    sandbox_ignored: Vec<(PathBuf, SandboxMode)>,
+    sandbox_unreadable: Vec<PathBuf>,
+    sandbox_hold_back_temporary: bool,
+    /// Settled per layer for the same reason as `vetting`: a key of [`HOME_ONLY`] a checkout
+    /// wrote picks where a request is sent, what the planner is told, or what the person's own
+    /// records are kept for, so the merge must never see it. Each is removed from the layer's
+    /// own root before it reaches the merge, and the file is kept under the key.
+    not_obeyed: BTreeMap<&'static str, Vec<PathBuf>>,
+    /// Settled per layer for the reason `model` is: how long the person's own records are kept is
+    /// theirs to state, and the merge keeps whichever file spoke last.
+    retention_unreadable: Vec<PathBuf>,
+    misshapen: Vec<(PathBuf, String)>,
+    mcp_declared: Vec<(PathBuf, String)>,
+    mcp_requested: Vec<(PathBuf, String)>,
+    /// Settled per layer because the merge cannot say which file a key came from, and a key
+    /// nothing reads is only worth reporting against the file somebody has to edit to remove it.
+    unread: Vec<(PathBuf, String)>,
+    /// Settled per layer for the reason `model` is: the merge keeps whichever file spoke last,
+    /// and these names are the person's to state and not a checkout's (BACKEND-33).
+    network: Vec<(String, String, PathBuf)>,
+    network_ignored: Vec<(PathBuf, String)>,
+    /// Settled per layer, because the layers are not equal about it: see [`Settings::run_network`].
+    /// `stated` is what the layers entitled to say either word last said, and `closed_by` is a
+    /// checkout's file that asked for `closed`, which nothing below it can lift.
+    run_network_stated: Option<(bravebot_sandbox::network::Network, PathBuf)>,
+    run_network_closed_by: Option<PathBuf>,
+    run_network_ignored: Vec<PathBuf>,
+    run_network_unreadable: Vec<PathBuf>,
+    /// Settled per layer for the reason `run_network` is: a refusal is every layer's to write and
+    /// an addition of reach is not a checkout's (see [`Settings::sandbox_filesystem`]).
+    sandbox_filesystem: bravebot_sandbox::rules::Lists,
+    sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)>,
+    sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)>,
+    sandbox_hosts: crate::sandbox_network::Hosts,
+    sandbox_hosts_ignored: Vec<(PathBuf, &'static str)>,
+    sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)>,
+    /// Settled per layer for the reason `sandbox.mode` is: which file chose a key decides
+    /// whether it binds.
+    git_identities: crate::git_identities::Identities,
+    git_identities_ignored: Vec<PathBuf>,
+    git_identities_misshapen: Vec<(PathBuf, String)>,
+    /// Which kind of layer spelled `effort` last, which is the layer the merge lets answer for
+    /// it. The merged root cannot say, and it decides whether a saved pick outranks the answer.
+    /// The named file is read after all three and is the one layer above the home one that may
+    /// still name `model` and `provider`: the flag naming it is the person's own act
+    /// (BACKEND-24), where the project and local layers arrive with the clone.
+    model_above_home: bool,
+    effort_above_home: bool,
+}
+
+impl LayerFacts {
+    /// A person's own file that is there and cannot be read may state a period this run would
+    /// otherwise replace with the built-in one, so the sweep waits. A name that leads nowhere, as
+    /// a link to a file that is not there does, states none.
+    fn unreadable_file(&mut self, path: &Path, own: bool) {
+        if own
+            && !std::fs::metadata(path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            self.retention_unreadable.push(path.to_path_buf());
+        }
+    }
+
+    /// Removed here rather than read and dropped later, because the merge unions every name
+    /// a layer set and a removed key cannot reach [`Settings::from_map`] at all.
+    fn home_only(&mut self, root: &mut Document, path: &Path, own: bool, named_here: bool) {
+        for (key, entitled) in HOME_ONLY {
+            if !entitled.admits(own, named_here) && root.remove(key) {
+                self.not_obeyed
+                    .entry(*key)
+                    .or_default()
+                    .push(path.to_path_buf());
+            }
+        }
+    }
+
+    fn retention(&mut self, root: &Document, path: &Path, own: bool) {
+        if own
+            && root
+                .get(RETENTION_KEY)
+                .is_some_and(|stated| retention_days(stated).is_none())
+        {
+            self.retention_unreadable.push(path.to_path_buf());
+        }
+    }
+
+    fn vetting_and_narrowing(&mut self, root: &Document, path: &Path, own: bool) {
+        if root.contains_key(VETTING_BLOCK) {
+            match own {
+                true => self.vetting = auto_vetting(root),
+                false => self.vetting_ignored.push(path.to_path_buf()),
+            }
+        }
+        // Every layer, the person's own and a checkout's alike (PERM-18). Neither key can be
+        // lifted by a layer above, so which file asked decides only what a refusal names.
+        let (stated, unreadable) = narrowing_stated(root);
+        self.narrowing = self.narrowing.strictest(stated);
+        if stated.reads_stay_in_workspace == Some(true) {
+            self.narrowed_by
+                .push((path.to_path_buf(), Narrowing::READS_STAY_IN_WORKSPACE));
+        }
+        if stated.bypass_unreachable == Some(true) {
+            self.narrowed_by
+                .push((path.to_path_buf(), Narrowing::BYPASS_UNREACHABLE));
+        }
+        for key in unreadable {
+            self.narrowing_unreadable.push((path.to_path_buf(), key));
+        }
+    }
+
+    /// The file that spoke last for the retrieval switch, and whether the layer that spoke last
+    /// for `model` and for `effort` was one above the home layer.
+    fn last_speaker(&mut self, root: &Document, path: &Path, own: bool) {
+        if retrieval_stated(root).is_some() {
+            self.retrieval_from = Some(path.to_path_buf());
+        }
+        if root.contains_key("model") {
+            self.model_above_home = !own;
+        }
+        if root.contains_key("effort") {
+            self.effort_above_home = !own;
+        }
+    }
+
+    /// Every layer, the person's own among them: what a settings file names about a server
+    /// is never a declaration, so which file said it decides only what the report names.
+    fn mcp(&mut self, root: &Document, path: &Path) {
+        for key in server_keys(root) {
+            self.mcp_declared.push((path.to_path_buf(), key));
+        }
+        for alias in requested_servers(root) {
+            if !self.mcp_requested.iter().any(|(_, held)| *held == alias) {
+                self.mcp_requested.push((path.to_path_buf(), alias));
+            }
+        }
+    }
+
+    fn run_network(&mut self, root: &Document, path: &Path, granting: bool) {
+        match network_word(root) {
+            NetworkStated::Absent => {}
+            NetworkStated::Unreadable => self.run_network_unreadable.push(path.to_path_buf()),
+            NetworkStated::Word(network) if granting => {
+                self.run_network_stated = Some((network, path.to_path_buf()));
+            }
+            NetworkStated::Word(network) if network.is_closed() => {
+                self.run_network_closed_by
+                    .get_or_insert_with(|| path.to_path_buf());
+            }
+            NetworkStated::Word(_) => self.run_network_ignored.push(path.to_path_buf()),
+        }
+    }
+
+    fn sandbox(&mut self, root: &Document, path: &Path, granting: bool) {
+        match crate::sandbox::stated(root) {
+            Stated::Absent => {}
+            Stated::Unreadable => self.sandbox_unreadable.push(path.to_path_buf()),
+            Stated::Mode(mode) if granting => {
+                self.sandbox_chosen = Some((mode, path.to_path_buf()));
+            }
+            Stated::Mode(SandboxMode::Strict) => self.sandbox_asked_strict.push(path.to_path_buf()),
+            Stated::Mode(mode) => self.sandbox_ignored.push((path.to_path_buf(), mode)),
+        }
+        if granting && crate::sandbox::holds_back_temporary_directory(root) {
+            self.sandbox_hold_back_temporary = true;
+        }
+        for list in FILESYSTEM_LISTS {
+            match filesystem_list(root, list) {
+                ListStated::Absent => {}
+                ListStated::Unreadable => {
+                    self.sandbox_filesystem_misshapen
+                        .push((path.to_path_buf(), list.key()));
+                }
+                ListStated::Entries(_) if !list.is_a_denial() && !granting => {
+                    self.sandbox_filesystem_ignored
+                        .push((path.to_path_buf(), list.key()));
+                }
+                ListStated::Entries(entries) => {
+                    let target = filesystem_target(&mut self.sandbox_filesystem, list);
+                    target.extend(entries.into_iter().map(|entry| {
+                        bravebot_sandbox::rules::Entry {
+                            path: entry,
+                            by: Some(path.to_path_buf()),
+                            pinned: false,
+                        }
+                    }));
+                }
+            }
+        }
+        self.sandbox_hosts.absorb(
+            root,
+            Some(path),
+            granting,
+            &mut self.sandbox_hosts_ignored,
+            &mut self.sandbox_hosts_misshapen,
+        );
+    }
+
+    fn git_identities(&mut self, root: &Document, path: &Path, granting: bool) {
+        self.git_identities.absorb(
+            root,
+            Some(path),
+            granting,
+            &mut self.git_identities_ignored,
+            &mut self.git_identities_misshapen,
+        );
+    }
+
+    /// The `allow` entries this layer may grant, and the ones it may not, read before the layer's
+    /// `/x` rules are anchored (PERM-3).
+    fn allow_rules(
+        &mut self,
+        root: &Document,
+        path: &Path,
+        own: bool,
+        granting: bool,
+        anchor: &str,
+    ) {
+        let stated = permission_lists(root);
+        for (rule, reason) in stated.allow.into_iter().zip(stated.reasons.allow) {
+            // A blank entry goes through whatever layer wrote it. It grants nothing whoever
+            // wrote it, since the rule language calls an empty rule empty and refuses it, and
+            // reporting it here would say a rule was withheld where PERM-11 is already about
+            // to say there was no rule.
+            match granting || rule.trim().is_empty() {
+                true => {
+                    let anchored = anchor_slash_rule(&rule, anchor);
+                    self.rule_sources.push(RuleSource {
+                        list: "allow",
+                        anchored: anchored.clone(),
+                        written: rule,
+                        file: path.to_path_buf(),
+                        reason: reason.filter(|_| own),
+                    });
+                    self.allow.push(anchored);
+                }
+                false => self.allow_ignored.push((path.to_path_buf(), rule)),
+            }
+        }
+    }
+
+    fn misshapen_rules(&mut self, root: &Document, path: &Path) {
+        for value in misshapen_rule_lists(root, &["deny", "ask", "allow"]) {
+            self.misshapen.push((path.to_path_buf(), value));
+        }
+    }
+
+    fn env(&mut self, root: &Document, path: &Path, granting: bool) {
+        for name in crate::env_var::person_only() {
+            let Some(value) = env_string(root, name) else {
+                continue;
+            };
+            match granting {
+                // Blank ones too, so the name is still reported as set and a blank one in a
+                // later layer still silences what an earlier one stated, as it does elsewhere.
+                true => self
+                    .network
+                    .push((name.to_string(), value, path.to_path_buf())),
+                false if !value.trim().is_empty() => {
+                    self.network_ignored
+                        .push((path.to_path_buf(), name.to_string()));
+                }
+                false => {}
+            }
+        }
+        for name in env_names(root) {
+            // A layer that does not grant a name decides nothing for it, so it wins nothing the
+            // report could name.
+            if !granting && crate::env_var::is_person_only(&name) {
+                continue;
+            }
+            // Whoever set it before lost it here, which is the only thing worth telling somebody:
+            // a name one file sets needs no explanation of where it came from.
+            if self
+                .winner
+                .insert(name.clone(), path.to_path_buf())
+                .is_some()
+            {
+                self.contested.insert(name, path.to_path_buf());
+            }
+        }
+    }
+
+    /// Read off this layer's own root rather than the merged one: the merge keeps every key a
+    /// layer set, so a key two files wrote would be reported once against whichever of them
+    /// spoke last, and the other file would go unnamed.
+    fn unread(&mut self, root: &Document, path: &Path, granting: bool) {
+        for key in unread_keys(root, granting) {
+            self.unread.push((path.to_path_buf(), key));
+        }
+    }
+
+    /// The `deny` and `ask` rules, which anchor the layer's `/x` rules in `root` on the way, so
+    /// what the merge takes from it is the anchored text.
+    fn deny_and_ask_rules(&mut self, root: &mut Document, path: &Path, own: bool, anchor: &str) {
+        let written = permission_lists(root);
+        root.anchor_slash_rules(anchor);
+        let anchored = permission_lists(root);
+        for (list, written, anchored, reasons) in [
+            ("deny", written.deny, anchored.deny, anchored.reasons.deny),
+            ("ask", written.ask, anchored.ask, anchored.reasons.ask),
+        ] {
+            self.rule_sources
+                .extend(written.into_iter().zip(anchored).zip(reasons).map(
+                    |((written, anchored), reason)| RuleSource {
+                        list,
+                        anchored,
+                        written,
+                        file: path.to_path_buf(),
+                        reason: reason.filter(|_| own),
+                    },
+                ));
+        }
+    }
+
+    /// Put what the layers said on `settings`, which holds what the merged root read.
+    fn apply(self, settings: &mut Settings) {
+        settings.contested = self.contested;
+        // Overwritten rather than merged in, so that the only value here is the home layer's own.
+        // A project file that set it has already been recorded as ignored when the layers were read, and what it said
+        // cannot reach this even where the home layer said nothing.
+        settings.vetting = self.vetting;
+        settings.vetting_ignored = self.vetting_ignored;
+        // Overwritten for the reason above it: the merged root holds whichever layer spoke last
+        // about either key, and what is in force is the strictest thing any of them said.
+        settings.narrowing = self.narrowing;
+        settings.narrowed_by = self.narrowed_by;
+        settings.narrowing_unreadable = self.narrowing_unreadable;
+        // Overwritten for the same reason: a checkout's `closed` stands over a person's `open`.
+        (settings.run_network, settings.run_network_by) =
+            match (self.run_network_closed_by, self.run_network_stated) {
+                (Some(by), _) => (Some(bravebot_sandbox::network::Network::Closed), Some(by)),
+                (None, Some((network, by))) => (Some(network), Some(by)),
+                (None, None) => (None, None),
+            };
+        settings.run_network_ignored = self.run_network_ignored;
+        settings.run_network_unreadable = self.run_network_unreadable;
+        settings.sandbox_chosen = self.sandbox_chosen;
+        settings.retrieval_from = self.retrieval_from;
+        settings.sandbox_asked_strict = self.sandbox_asked_strict;
+        settings.sandbox_ignored = self.sandbox_ignored;
+        settings.sandbox_unreadable = self.sandbox_unreadable;
+        settings.sandbox_hold_back_temporary = self.sandbox_hold_back_temporary;
+        settings.sandbox_filesystem = self.sandbox_filesystem;
+        settings.sandbox_filesystem_ignored = self.sandbox_filesystem_ignored;
+        settings.sandbox_filesystem_misshapen = self.sandbox_filesystem_misshapen;
+        settings.sandbox_hosts = self.sandbox_hosts;
+        settings.sandbox_hosts_ignored = self.sandbox_hosts_ignored;
+        settings.sandbox_hosts_misshapen = self.sandbox_hosts_misshapen;
+        settings.git_identities = self.git_identities;
+        settings.git_identities_ignored = self.git_identities_ignored;
+        settings.git_identities_misshapen = self.git_identities_misshapen;
+        // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
+        // `ask` keep every layer's entries because both only ever narrow, and this one is put back
+        // to the entries a layer entitled to grant wrote.
+        settings.permissions.allow = self.allow;
+        settings.allow_ignored = self.allow_ignored;
+        settings.rule_sources = self.rule_sources;
+        settings.misshapen = self.misshapen;
+        settings.mcp_declared = self.mcp_declared;
+        settings.mcp_requested = self.mcp_requested;
+        settings.unread = self.unread;
+        // Put back to what the entitled layers said, a checkout's value having been merged in earlier
+        // under the same name. Scrubbed on the way, the values being a proxy address that may carry
+        // a credential.
+        for name in crate::env_var::person_only() {
+            if let Some(mut stale) = settings.env.remove(name) {
+                crate::scrub(&mut stale);
+            }
+        }
+        for (name, value, path) in self.network {
+            match value.trim().is_empty() {
+                true => settings.network_by.remove(&name),
+                false => settings.network_by.insert(name.clone(), path),
+            };
+            settings.env.insert(name, value);
+        }
+        settings.network_ignored = self.network_ignored;
+        // Overwritten rather than merged in, for the reason `not_obeyed` is kept: what every
+        // layer but the named one stated has been dropped by now, so what stands here is the home
+        // layer's own or the file the person named, and a saved pick cannot be outranked by a file
+        // it was never told about.
+        settings.model_outranks_a_pick = self.model_above_home && settings.model.is_some();
+        settings.effort_outranks_a_pick = self.effort_above_home && settings.effort.is_some();
+        settings.not_obeyed = self.not_obeyed;
+        settings.retention_unreadable = self.retention_unreadable;
+    }
+}
+
 impl Settings {
     /// Read every settings layer in force for this user, in this directory, plus the file the
     /// command line named, and the `deny` and `ask` rules the administrator pinned.
@@ -1079,77 +1499,8 @@ impl Settings {
 
         let mut merged = Document::default();
         let mut found = Vec::new();
-        let mut winner = BTreeMap::new();
-        let mut contested = BTreeMap::new();
-        // Settled per layer rather than off the merged root, because the merge cannot say which
-        // file a name came from and this is the one name where that decides whether it is obeyed.
-        let mut vetting = None;
-        let mut vetting_ignored = Vec::new();
-        // Settled per layer as well, and for the opposite reason: every layer may ask for one of
-        // these, and what is wanted is the strictest thing any of them said rather than what the
-        // last one to speak said. The merged root can only give the second (PERM-18).
-        let mut narrowing = Narrowing::default();
-        let mut narrowed_by: Vec<(PathBuf, &'static str)> = Vec::new();
-        let mut narrowing_unreadable: Vec<(PathBuf, &'static str)> = Vec::new();
-        // Settled per layer for the same reason, and for a stronger one: the merge unions every
-        // list, so an `allow` entry a checkout wrote would otherwise be indistinguishable from one
-        // the person wrote in their own file. See [`Settings::allow_ignored`].
-        let mut allow = Vec::new();
-        let mut allow_ignored = Vec::new();
-        let mut rule_sources = Vec::new();
-        // Settled per layer for the same reason: which file chose a mode decides whether it binds.
-        let mut sandbox_chosen = None;
-        let mut sandbox_asked_strict = Vec::new();
-        let mut retrieval_from = None;
-        let mut sandbox_ignored = Vec::new();
-        let mut sandbox_unreadable = Vec::new();
-        let mut sandbox_hold_back_temporary = false;
-        // Settled per layer for the same reason as `vetting`: a key of [`HOME_ONLY`] a checkout
-        // wrote picks where a request is sent, what the planner is told, or what the person's own
-        // records are kept for, so the merge must never see it. Each is removed from the layer's
-        // own root below, before it reaches the merge, and the file is kept under the key.
-        let mut not_obeyed: BTreeMap<&'static str, Vec<PathBuf>> = BTreeMap::new();
-        // Settled per layer for the reason `model` is: how long the person's own records are kept is
-        // theirs to state, and the merge keeps whichever file spoke last.
-        let mut retention_unreadable = Vec::new();
-        let mut misshapen = Vec::new();
-        let mut mcp_declared = Vec::new();
-        let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
-        // Settled per layer because the merge cannot say which file a key came from, and a key
-        // nothing reads is only worth reporting against the file somebody has to edit to remove it.
-        let mut unread: Vec<(PathBuf, String)> = Vec::new();
-        // Settled per layer for the reason `model` is: the merge keeps whichever file spoke last,
-        // and these names are the person's to state and not a checkout's (BACKEND-33).
-        let mut network: Vec<(String, String, PathBuf)> = Vec::new();
-        let mut network_ignored: Vec<(PathBuf, String)> = Vec::new();
-        // Which kind of layer spelled `effort` last, which is the layer the merge lets answer for
-        // it. The merged root cannot say, and it decides whether a saved pick outranks the answer.
-        // The named file is read after all three and is the one layer above the home one that may
-        // still name `model` and `provider`: the flag naming it is the person's own act
-        // (BACKEND-24), where the project and local layers arrive with the clone.
+        let mut facts = LayerFacts::default();
         let named_path = named.map(Path::to_path_buf);
-        // Settled per layer, because the layers are not equal about it: see [`Settings::run_network`].
-        // `stated` is what the layers entitled to say either word last said, and `closed_by` is a
-        // checkout's file that asked for `closed`, which nothing below it can lift.
-        let mut run_network_stated: Option<(bravebot_sandbox::network::Network, PathBuf)> = None;
-        let mut run_network_closed_by: Option<PathBuf> = None;
-        let mut run_network_ignored: Vec<PathBuf> = Vec::new();
-        let mut run_network_unreadable: Vec<PathBuf> = Vec::new();
-        // Settled per layer for the reason `run_network` is: a refusal is every layer's to write and
-        // an addition of reach is not a checkout's (see [`Settings::sandbox_filesystem`]).
-        let mut sandbox_filesystem = bravebot_sandbox::rules::Lists::default();
-        let mut sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
-        let mut sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
-        let mut sandbox_hosts = crate::sandbox_network::Hosts::default();
-        let mut sandbox_hosts_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
-        let mut sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
-        // Settled per layer for the reason `sandbox.mode` is: which file chose a key decides
-        // whether it binds.
-        let mut git_identities = crate::git_identities::Identities::default();
-        let mut git_identities_ignored: Vec<PathBuf> = Vec::new();
-        let mut git_identities_misshapen: Vec<(PathBuf, String)> = Vec::new();
-        let mut model_above_home = false;
-        let mut effort_above_home = false;
         // Where a `/x` rule in a checkout's file starts, and what a start inside the workspace is
         // spelled relative to (PERM-3).
         let workspace = cwd.map(resolved);
@@ -1163,15 +1514,7 @@ impl Settings {
             }
             let own = Some(&path) == home_layer.as_ref();
             let Some(mut root) = read(&path) else {
-                // A person's own file that is there and cannot be read may state a period this
-                // run would otherwise replace with the built-in one, so the sweep waits. A name
-                // that leads nowhere, as a link to a file that is not there does, states none.
-                if own
-                    && !std::fs::metadata(&path)
-                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                {
-                    retention_unreadable.push(path.clone());
-                }
+                facts.unreadable_file(&path, own);
                 continue;
             };
             let named_here = Some(&path) == named_path.as_ref();
@@ -1180,266 +1523,30 @@ impl Settings {
             // `allow` entry or an `off` read out of one would let whoever last edited the
             // repository answer for whoever cloned it.
             let granting = own || named_here;
-            // Removed here rather than read and dropped later, because the merge unions every name
-            // a layer set and a removed key cannot reach [`Settings::from_map`] at all.
-            for (key, entitled) in HOME_ONLY {
-                if !entitled.admits(own, named_here) && root.remove(key) {
-                    not_obeyed.entry(*key).or_default().push(path.clone());
-                }
-            }
-            if own
-                && root
-                    .get(RETENTION_KEY)
-                    .is_some_and(|stated| retention_days(stated).is_none())
-            {
-                retention_unreadable.push(path.clone());
-            }
-            if root.contains_key(VETTING_BLOCK) {
-                match own {
-                    true => vetting = auto_vetting(&root),
-                    false => vetting_ignored.push(path.clone()),
-                }
-            }
-            // Every layer, the person's own and a checkout's alike (PERM-18). Neither key can be
-            // lifted by a layer above, so which file asked decides only what a refusal names.
-            let (stated, unreadable) = narrowing_stated(&root);
-            narrowing = narrowing.strictest(stated);
-            if stated.reads_stay_in_workspace == Some(true) {
-                narrowed_by.push((path.clone(), Narrowing::READS_STAY_IN_WORKSPACE));
-            }
-            if stated.bypass_unreachable == Some(true) {
-                narrowed_by.push((path.clone(), Narrowing::BYPASS_UNREACHABLE));
-            }
-            for key in unreadable {
-                narrowing_unreadable.push((path.clone(), key));
-            }
-            if retrieval_stated(&root).is_some() {
-                retrieval_from = Some(path.clone());
-            }
-            if root.contains_key("model") {
-                model_above_home = !own;
-            }
-            if root.contains_key("effort") {
-                effort_above_home = !own;
-            }
-            // Every layer, the person's own among them: what a settings file names about a server
-            // is never a declaration, so which file said it decides only what the report names.
-            for key in server_keys(&root) {
-                mcp_declared.push((path.clone(), key));
-            }
-            for alias in requested_servers(&root) {
-                if !mcp_requested.iter().any(|(_, held)| *held == alias) {
-                    mcp_requested.push((path.clone(), alias));
-                }
-            }
-            match network_word(&root) {
-                NetworkStated::Absent => {}
-                NetworkStated::Unreadable => run_network_unreadable.push(path.clone()),
-                NetworkStated::Word(network) if granting => {
-                    run_network_stated = Some((network, path.clone()));
-                }
-                NetworkStated::Word(network) if network.is_closed() => {
-                    run_network_closed_by.get_or_insert_with(|| path.clone());
-                }
-                NetworkStated::Word(_) => run_network_ignored.push(path.clone()),
-            }
-            match crate::sandbox::stated(&root) {
-                Stated::Absent => {}
-                Stated::Unreadable => sandbox_unreadable.push(path.clone()),
-                Stated::Mode(mode) if granting => sandbox_chosen = Some((mode, path.clone())),
-                Stated::Mode(SandboxMode::Strict) => sandbox_asked_strict.push(path.clone()),
-                Stated::Mode(mode) => sandbox_ignored.push((path.clone(), mode)),
-            }
-            if granting && crate::sandbox::holds_back_temporary_directory(&root) {
-                sandbox_hold_back_temporary = true;
-            }
-            for list in FILESYSTEM_LISTS {
-                match filesystem_list(&root, list) {
-                    ListStated::Absent => {}
-                    ListStated::Unreadable => {
-                        sandbox_filesystem_misshapen.push((path.clone(), list.key()));
-                    }
-                    ListStated::Entries(_) if !list.is_a_denial() && !granting => {
-                        sandbox_filesystem_ignored.push((path.clone(), list.key()));
-                    }
-                    ListStated::Entries(entries) => {
-                        let target = filesystem_target(&mut sandbox_filesystem, list);
-                        target.extend(entries.into_iter().map(|entry| {
-                            bravebot_sandbox::rules::Entry {
-                                path: entry,
-                                by: Some(path.clone()),
-                                pinned: false,
-                            }
-                        }));
-                    }
-                }
-            }
-            sandbox_hosts.absorb(
-                &root,
-                Some(&path),
-                granting,
-                &mut sandbox_hosts_ignored,
-                &mut sandbox_hosts_misshapen,
-            );
-            git_identities.absorb(
-                &root,
-                Some(&path),
-                granting,
-                &mut git_identities_ignored,
-                &mut git_identities_misshapen,
-            );
+            facts.home_only(&mut root, &path, own, named_here);
+            facts.retention(&root, &path, own);
+            facts.vetting_and_narrowing(&root, &path, own);
+            facts.last_speaker(&root, &path, own);
+            facts.mcp(&root, &path);
+            facts.run_network(&root, &path, granting);
+            facts.sandbox(&root, &path, granting);
+            facts.git_identities(&root, &path, granting);
             // One of the checkout's two files is one however the command line reached it, so naming
             // it does not move where its rules start.
             let a_checkouts_file = !own && (!named_here || is_a_checkouts_file(&path, cwd));
             let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
-            let stated = permission_lists(&root);
-            for (rule, reason) in stated.allow.into_iter().zip(stated.reasons.allow) {
-                // A blank entry goes through whatever layer wrote it. It grants nothing whoever
-                // wrote it, since the rule language calls an empty rule empty and refuses it, and
-                // reporting it here would say a rule was withheld where PERM-11 is already about
-                // to say there was no rule.
-                match granting || rule.trim().is_empty() {
-                    true => {
-                        let anchored = anchor_slash_rule(&rule, &anchor);
-                        rule_sources.push(RuleSource {
-                            list: "allow",
-                            anchored: anchored.clone(),
-                            written: rule,
-                            file: path.clone(),
-                            reason: reason.filter(|_| own),
-                        });
-                        allow.push(anchored);
-                    }
-                    false => allow_ignored.push((path.clone(), rule)),
-                }
-            }
-            for value in misshapen_rule_lists(&root, &["deny", "ask", "allow"]) {
-                misshapen.push((path.clone(), value));
-            }
-            for name in crate::env_var::person_only() {
-                let Some(value) = env_string(&root, name) else {
-                    continue;
-                };
-                match granting {
-                    // Blank ones too, so the name is still reported as set and a blank one in a
-                    // later layer still silences what an earlier one stated, as it does elsewhere.
-                    true => network.push((name.to_string(), value, path.clone())),
-                    false if !value.trim().is_empty() => {
-                        network_ignored.push((path.clone(), name.to_string()));
-                    }
-                    false => {}
-                }
-            }
-            for name in env_names(&root) {
-                // A layer that does not grant a name decides nothing for it, so it wins nothing the
-                // report could name.
-                if !granting && crate::env_var::is_person_only(&name) {
-                    continue;
-                }
-                // Whoever set it before lost it here, which is the only thing worth telling somebody:
-                // a name one file sets needs no explanation of where it came from.
-                if winner.insert(name.clone(), path.clone()).is_some() {
-                    contested.insert(name, path.clone());
-                }
-            }
-            // Read off this layer's own root rather than the merged one: the merge keeps every key a
-            // layer set, so a key two files wrote would be reported once against whichever of them
-            // spoke last, and the other file would go unnamed.
-            for key in unread_keys(&root, granting) {
-                unread.push((path.clone(), key));
-            }
-            let written = permission_lists(&root);
+            facts.allow_rules(&root, &path, own, granting, &anchor);
+            facts.misshapen_rules(&root, &path);
+            facts.env(&root, &path, granting);
+            facts.unread(&root, &path, granting);
             found.push(path.clone());
-            root.anchor_slash_rules(&anchor);
-            let anchored = permission_lists(&root);
-            for (list, written, anchored, reasons) in [
-                ("deny", written.deny, anchored.deny, anchored.reasons.deny),
-                ("ask", written.ask, anchored.ask, anchored.reasons.ask),
-            ] {
-                rule_sources.extend(written.into_iter().zip(anchored).zip(reasons).map(
-                    |((written, anchored), reason)| RuleSource {
-                        list,
-                        anchored,
-                        written,
-                        file: path.clone(),
-                        reason: reason.filter(|_| own),
-                    },
-                ));
-            }
+            facts.deny_and_ask_rules(&mut root, &path, own, &anchor);
             merge(&mut merged, root.take());
         }
 
         let mut settings = Self::from_map(&merged);
         settings.layers = found;
-        settings.contested = contested;
-        // Overwritten rather than merged in, so that the only value here is the home layer's own.
-        // A project file that set it has already been recorded as ignored above, and what it said
-        // cannot reach this even where the home layer said nothing.
-        settings.vetting = vetting;
-        settings.vetting_ignored = vetting_ignored;
-        // Overwritten for the reason above it: the merged root holds whichever layer spoke last
-        // about either key, and what is in force is the strictest thing any of them said.
-        settings.narrowing = narrowing;
-        settings.narrowed_by = narrowed_by;
-        settings.narrowing_unreadable = narrowing_unreadable;
-        // Overwritten for the same reason: a checkout's `closed` stands over a person's `open`.
-        (settings.run_network, settings.run_network_by) =
-            match (run_network_closed_by, run_network_stated) {
-                (Some(by), _) => (Some(bravebot_sandbox::network::Network::Closed), Some(by)),
-                (None, Some((network, by))) => (Some(network), Some(by)),
-                (None, None) => (None, None),
-            };
-        settings.run_network_ignored = run_network_ignored;
-        settings.run_network_unreadable = run_network_unreadable;
-        settings.sandbox_chosen = sandbox_chosen;
-        settings.retrieval_from = retrieval_from;
-        settings.sandbox_asked_strict = sandbox_asked_strict;
-        settings.sandbox_ignored = sandbox_ignored;
-        settings.sandbox_unreadable = sandbox_unreadable;
-        settings.sandbox_hold_back_temporary = sandbox_hold_back_temporary;
-        settings.sandbox_filesystem = sandbox_filesystem;
-        settings.sandbox_filesystem_ignored = sandbox_filesystem_ignored;
-        settings.sandbox_filesystem_misshapen = sandbox_filesystem_misshapen;
-        settings.sandbox_hosts = sandbox_hosts;
-        settings.sandbox_hosts_ignored = sandbox_hosts_ignored;
-        settings.sandbox_hosts_misshapen = sandbox_hosts_misshapen;
-        settings.git_identities = git_identities;
-        settings.git_identities_ignored = git_identities_ignored;
-        settings.git_identities_misshapen = git_identities_misshapen;
-        // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
-        // `ask` keep every layer's entries because both only ever narrow, and this one is put back
-        // to the entries a layer entitled to grant wrote.
-        settings.permissions.allow = allow;
-        settings.allow_ignored = allow_ignored;
-        settings.rule_sources = rule_sources;
-        settings.misshapen = misshapen;
-        settings.mcp_declared = mcp_declared;
-        settings.mcp_requested = mcp_requested;
-        settings.unread = unread;
-        // Put back to what the entitled layers said, a checkout's value having been merged in above
-        // under the same name. Scrubbed on the way, the values being a proxy address that may carry
-        // a credential.
-        for name in crate::env_var::person_only() {
-            if let Some(mut stale) = settings.env.remove(name) {
-                crate::scrub(&mut stale);
-            }
-        }
-        for (name, value, path) in network {
-            match value.trim().is_empty() {
-                true => settings.network_by.remove(&name),
-                false => settings.network_by.insert(name.clone(), path),
-            };
-            settings.env.insert(name, value);
-        }
-        settings.network_ignored = network_ignored;
-        // Overwritten rather than merged in, for the reason `not_obeyed` is kept: what every
-        // layer but the named one stated has been dropped above, so what stands here is the home
-        // layer's own or the file the person named, and a saved pick cannot be outranked by a file
-        // it was never told about.
-        settings.model_outranks_a_pick = model_above_home && settings.model.is_some();
-        settings.effort_outranks_a_pick = effort_above_home && settings.effort.is_some();
-        settings.not_obeyed = not_obeyed;
-        settings.retention_unreadable = retention_unreadable;
+        facts.apply(&mut settings);
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -1480,148 +1587,107 @@ impl Settings {
             })
             .unwrap_or_default();
         let (references, references_unread) = reference_entries(root);
-        Self {
-            env,
-            scrub: scrub_list(root),
-            permissions: permission_lists(root),
-            model: word(root, "model"),
-            advisor_model: word(root, "advisorModel"),
-            fallback_model: word(root, "fallbackModel"),
-            summary_model: word(root, "summaryModel"),
-            plan_model: word(root, "planModel"),
-            // `inherit` is how other agents' definitions name no model, so it reads back as none,
-            // as it does in a definition (DELEGATE-22).
-            processor_model: word(root, "processorModel")
-                .and_then(|name| processor_model_named(&name)),
-            commit_message_instructions: object(root, COMMIT_MESSAGE_BLOCK)
-                .and_then(|block| word(block, "instructions")),
-            agent: word(root, "agent"),
-            references,
-            references_unread,
-            effort: word(root, "effort"),
-            prompt_cache_ttl: word(root, "promptCacheTtl")
-                .and_then(|word| crate::CacheTtl::parse(&word)),
-            // False here, one root being read as the person's own until [`Settings::layered`]
-            // says which file it was.
-            model_outranks_a_pick: false,
-            effort_outranks_a_pick: false,
-            editor_mode: word(root, "editorMode"),
-            limit: match root.get("limit") {
-                Some(serde_json::Value::Number(count)) => count
-                    .as_u64()
-                    .filter(|tokens| *tokens > 0)
-                    .map(crate::limit::Limit::tokens),
-                Some(serde_json::Value::String(text)) => {
-                    crate::limit::parse(text, crate::limit::Unit::Tokens)
-                }
-                _ => None,
-            },
-            defer_mcp_tools_above: match root.get("deferMcpToolsAbove") {
-                Some(serde_json::Value::Number(count)) => {
-                    count.as_u64().filter(|tokens| *tokens > 0)
-                }
-                Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
-                _ => None,
-            },
-            terminal_title: flag(root, "terminalTitle"),
-            suggestions: flag(root, "suggestions"),
-            update_check: flag(root, "updateCheck"),
-            retrieval: retrieval_stated(root),
-            embeddings: crate::embeddings::Choice::from_retrieval(object(root, RETRIEVAL_BLOCK)),
-            away_summary_enabled: flag(root, "awaySummaryEnabled"),
-            away_summary_idle_seconds: positive(root.get("awaySummaryIdleSeconds")),
-            ask_idle_seconds: positive(root.get("askIdleSeconds")),
-            // A count past what a `u32` holds is more delegates than a turn could start, which is
-            // no bound at all, so it is read as the largest the kernel counts rather than dropped.
-            max_running_delegates: positive(root.get("maxRunningDelegates"))
-                .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
-            notification_method: word(root, "notificationMethod"),
-            notification_condition: word(root, "notificationCondition"),
-            retention_days: root.get(RETENTION_KEY).and_then(retention_days),
-            retention_unreadable: Vec::new(),
-            // Read here so one file's worth can be parsed on its own, and overwritten by
-            // [`Settings::layered`], which is the only caller that knows which layer this came
-            // from and so the only one entitled to answer.
-            vetting: auto_vetting(root),
-            vetting_ignored: Vec::new(),
-            // Read here so one root's worth can be parsed on its own, which is what the managed
-            // layer is, and overwritten by [`Settings::layered`] for the four layers it reads: the
-            // strictest answer is a fact about the set of them rather than about one root.
-            narrowing: narrowing_stated(root).0,
-            narrowed_by: Vec::new(),
-            narrowing_unreadable: Vec::new(),
-            // Filled by [`Settings::layered`], which knows which file each was written in.
-            retrieval_from: None,
-            sandbox_chosen: None,
-            sandbox_asked_strict: Vec::new(),
-            sandbox_ignored: Vec::new(),
-            sandbox_unreadable: Vec::new(),
-            sandbox_hold_back_temporary: false,
-            // Empty here, and filled by [`Settings::layered`] for the same reason: one root does
-            // not say which file it was read out of, and that is the whole of what decides whether
-            // an `allow` entry in it grants anything.
-            allow_ignored: Vec::new(),
-            rule_sources: Vec::new(),
-            layers_said_no_permissions: None,
-            // Filled by [`Settings::layered`], which knows which file each key was written in.
-            misshapen: Vec::new(),
-            mcp_declared: Vec::new(),
-            mcp_requested: Vec::new(),
-            unread: Vec::new(),
-            network_by: BTreeMap::new(),
-            network_ignored: Vec::new(),
-            keybindings: keybindings_block(root),
-            sessions_keys: strings_block(root, "sessionsKeys"),
-            attribution: attribution_block(root),
-            search: search_caps(root),
-            run_output: run_output_cap(root),
-            download_max: download_max_bytes(root),
-            run_deadlines: run_deadlines(root),
-            wheel_rows: wheel_rows(root),
-            tui_mouse: tui_mouse(root),
-            tui_context_menu: tui_context_menu(root),
-            deep_links: flag(root, "deepLinks"),
-            // The word one root states, there being no file to name. [`Settings::layered`]
-            // overwrites it with what the layers come to.
-            run_network: match network_word(root) {
-                NetworkStated::Word(network) => Some(network),
-                NetworkStated::Absent | NetworkStated::Unreadable => None,
-            },
-            run_network_by: None,
-            run_network_ignored: Vec::new(),
-            run_network_unreadable: Vec::new(),
-            // The lists one root states, there being no file to name and no layer to refuse it.
-            // [`Settings::layered`] overwrites them with what the layers come to.
-            sandbox_filesystem: filesystem_lists(root, None),
-            sandbox_filesystem_ignored: Vec::new(),
-            sandbox_filesystem_misshapen: Vec::new(),
-            // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
-            sandbox_hosts: {
-                let mut hosts = crate::sandbox_network::Hosts::default();
-                hosts.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
-                hosts
-            },
-            sandbox_hosts_ignored: Vec::new(),
-            sandbox_hosts_misshapen: Vec::new(),
-            // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
-            git_identities: {
-                let mut identities = crate::git_identities::Identities::default();
-                identities.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
-                identities
-            },
-            git_identities_ignored: Vec::new(),
-            git_identities_misshapen: Vec::new(),
-            providers: crate::provider::Provider::all(root),
-            providers_refused: crate::provider::Provider::refused(root),
-            bedrock_region_refused: crate::provider::Provider::refused_region(root),
-            chatgpt_models: crate::provider::account_models(root),
-            layers: Vec::new(),
-            contested: BTreeMap::new(),
-            not_obeyed: BTreeMap::new(),
-            style: word(root, "style"),
-            shared_skills: strings(root, SHARED_SKILLS_KEY),
-            language: word(root, "language"),
-        }
+        let mut settings = Self::default();
+        settings.env = env;
+        settings.scrub = scrub_list(root);
+        settings.permissions = permission_lists(root);
+        settings.model = word(root, "model");
+        settings.advisor_model = word(root, "advisorModel");
+        settings.fallback_model = word(root, "fallbackModel");
+        settings.summary_model = word(root, "summaryModel");
+        settings.plan_model = word(root, "planModel");
+        // `inherit` is how other agents' definitions name no model, so it reads back as none,
+        // as it does in a definition (DELEGATE-22).
+        settings.processor_model =
+            word(root, "processorModel").and_then(|name| processor_model_named(&name));
+        settings.commit_message_instructions =
+            object(root, COMMIT_MESSAGE_BLOCK).and_then(|block| word(block, "instructions"));
+        settings.agent = word(root, "agent");
+        settings.references = references;
+        settings.references_unread = references_unread;
+        settings.effort = word(root, "effort");
+        settings.prompt_cache_ttl =
+            word(root, "promptCacheTtl").and_then(|word| crate::CacheTtl::parse(&word));
+        settings.editor_mode = word(root, "editorMode");
+        settings.limit = match root.get("limit") {
+            Some(serde_json::Value::Number(count)) => count
+                .as_u64()
+                .filter(|tokens| *tokens > 0)
+                .map(crate::limit::Limit::tokens),
+            Some(serde_json::Value::String(text)) => {
+                crate::limit::parse(text, crate::limit::Unit::Tokens)
+            }
+            _ => None,
+        };
+        settings.defer_mcp_tools_above = match root.get("deferMcpToolsAbove") {
+            Some(serde_json::Value::Number(count)) => count.as_u64().filter(|tokens| *tokens > 0),
+            Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
+            _ => None,
+        };
+        settings.terminal_title = flag(root, "terminalTitle");
+        settings.suggestions = flag(root, "suggestions");
+        settings.update_check = flag(root, "updateCheck");
+        settings.retrieval = retrieval_stated(root);
+        settings.embeddings =
+            crate::embeddings::Choice::from_retrieval(object(root, RETRIEVAL_BLOCK));
+        settings.away_summary_enabled = flag(root, "awaySummaryEnabled");
+        settings.away_summary_idle_seconds = positive(root.get("awaySummaryIdleSeconds"));
+        settings.ask_idle_seconds = positive(root.get("askIdleSeconds"));
+        // A count past what a `u32` holds is more delegates than a turn could start, which is
+        // no bound at all, so it is read as the largest the kernel counts rather than dropped.
+        settings.max_running_delegates = positive(root.get("maxRunningDelegates"))
+            .map(|count| u32::try_from(count).unwrap_or(u32::MAX));
+        settings.notification_method = word(root, "notificationMethod");
+        settings.notification_condition = word(root, "notificationCondition");
+        settings.retention_days = root.get(RETENTION_KEY).and_then(retention_days);
+        // Read here so one file's worth can be parsed on its own, and overwritten by
+        // [`Settings::layered`], which is the only caller that knows which layer this came
+        // from and so the only one entitled to answer.
+        settings.vetting = auto_vetting(root);
+        // Read here so one root's worth can be parsed on its own, which is what the managed
+        // layer is, and overwritten by [`Settings::layered`] for the four layers it reads: the
+        // strictest answer is a fact about the set of them rather than about one root.
+        settings.narrowing = narrowing_stated(root).0;
+        settings.keybindings = keybindings_block(root);
+        settings.sessions_keys = strings_block(root, "sessionsKeys");
+        settings.attribution = attribution_block(root);
+        settings.search = search_caps(root);
+        settings.run_output = run_output_cap(root);
+        settings.download_max = download_max_bytes(root);
+        settings.run_deadlines = run_deadlines(root);
+        settings.wheel_rows = wheel_rows(root);
+        settings.tui_mouse = tui_mouse(root);
+        settings.tui_context_menu = tui_context_menu(root);
+        settings.deep_links = flag(root, "deepLinks");
+        // The word one root states, there being no file to name. [`Settings::layered`]
+        // overwrites it with what the layers come to.
+        settings.run_network = match network_word(root) {
+            NetworkStated::Word(network) => Some(network),
+            NetworkStated::Absent | NetworkStated::Unreadable => None,
+        };
+        // The lists one root states, there being no file to name and no layer to refuse it.
+        // [`Settings::layered`] overwrites them with what the layers come to.
+        settings.sandbox_filesystem = filesystem_lists(root, None);
+        // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
+        settings.sandbox_hosts = {
+            let mut hosts = crate::sandbox_network::Hosts::default();
+            hosts.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
+            hosts
+        };
+        // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
+        settings.git_identities = {
+            let mut identities = crate::git_identities::Identities::default();
+            identities.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
+            identities
+        };
+        settings.providers = crate::provider::Provider::all(root);
+        settings.providers_refused = crate::provider::Provider::refused(root);
+        settings.bedrock_region_refused = crate::provider::Provider::refused_region(root);
+        settings.chatgpt_models = crate::provider::account_models(root);
+        settings.style = word(root, "style");
+        settings.shared_skills = strings(root, SHARED_SKILLS_KEY);
+        settings.language = word(root, "language");
+        settings
     }
 
     /// What the settings in force say about the keys of the Sessions screen.

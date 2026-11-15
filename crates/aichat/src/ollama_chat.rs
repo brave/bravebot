@@ -14,12 +14,11 @@
 pub mod protocol;
 
 use crate::anthropic::what_was_written;
-use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
+use crate::call::{CallState, Concession, Driven, Plan, drive};
 use crate::protocol::{ChatRequest, ToolCall, Usage};
 use crate::{
-    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, addressed, learned_key,
-    log_retry, pause_before_retry, read_in_background, remember, remembered, reply_bound,
-    worth_another_attempt_or_report,
+    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, addressed, learned_key,
+    pause_before_retry, read_in_background, reply_bound, worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -39,7 +38,6 @@ const ASSUMED_CEILING: u64 = 32_768;
 
 /// One client for one request, to an Ollama server.
 pub struct OllamaChatClient<'a> {
-    spent: Spent,
     egress: &'a Egress,
     provider: &'a Provider,
     /// What the server calls the model, without the provider's id in front.
@@ -49,10 +47,10 @@ pub struct OllamaChatClient<'a> {
     headers: Vec<(String, Secret)>,
     /// The window the server is asked to allocate, which is the one the session budgets for.
     window: Option<u64>,
-    /// Never anything: nothing this client sends is given up on a refusal. Held because the driver
-    /// keeps a model's refusals for every client.
-    refusals: Refusals,
-    pace: Pace,
+    /// What this call has spent, how it waits and learns that it should stop, and what the model
+    /// has refused. Nothing this client sends is given up on a refusal, so the refusals stay
+    /// empty; they are held because the driver keeps a model's refusals for every client.
+    call: CallState,
 }
 
 impl Driven for OllamaChatClient<'_> {
@@ -62,28 +60,12 @@ impl Driven for OllamaChatClient<'_> {
         ChatError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
-    }
-
-    fn recall(&self, key: &str) -> Refusals {
-        remembered(key)
-    }
-
-    fn remember(&self, key: &str, found: Refusals) {
-        remember(key, found);
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     /// No field is given up: the request sends no thinking level, no cache marks and no ceiling
@@ -105,11 +87,7 @@ impl Driven for OllamaChatClient<'_> {
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
-        pause_before_retry(self.pace.backoff, failures, error)
-    }
-
-    fn log_retry(&self, attempt: u32, pause: Duration) {
-        log_retry(attempt, pause);
+        pause_before_retry(self.call.pace.backoff, failures, error)
     }
 }
 
@@ -123,15 +101,13 @@ impl<'a> OllamaChatClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             egress,
             provider,
             model: model.into(),
             token,
             headers: Vec::new(),
             window: None,
-            refusals: Refusals::default(),
-            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -143,27 +119,27 @@ impl<'a> OllamaChatClient<'a> {
 
     /// Requests handed to egress in the last call.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, which is none.
     pub fn conceded(&self) -> crate::call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     pub fn completed_usage(&self) -> Option<Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -175,7 +151,7 @@ impl<'a> OllamaChatClient<'a> {
 
     /// Wait this long before the first retry instead of the default one-second wait.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
@@ -255,7 +231,7 @@ impl<'a> OllamaChatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let key = self.refusal_key();
         let plan = Plan {
             key: &key,
@@ -277,7 +253,7 @@ impl<'a> OllamaChatClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
         let http = self.build(request, false)?;
-        self.spent.sent();
+        self.call.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol: the bytes come out to find the reply inside, and the reply is
@@ -302,7 +278,7 @@ impl<'a> OllamaChatClient<'a> {
             }
         };
         let usage = parsed.usage();
-        self.spent.record(usage);
+        self.call.spent.record(usage);
         let usage = usage.unwrap_or_default();
 
         let (text, calls, thinking) = parsed.parts();
@@ -343,7 +319,7 @@ impl<'a> OllamaChatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let key = self.refusal_key();
         let plan = Plan {
             key: &key,
@@ -372,12 +348,12 @@ impl<'a> OllamaChatClient<'a> {
             .build(request, true)?
             .header("accept", "application/x-ndjson")
             .patient_on_this_machine();
-        self.spent.sent();
+        self.call.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
@@ -389,7 +365,7 @@ impl<'a> OllamaChatClient<'a> {
         let decoding = policy.decode_transport("ollama chat stream", Label::untrusted_public());
 
         loop {
-            let piece = match arriving.next(&self.pace) {
+            let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
                 Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
@@ -406,7 +382,7 @@ impl<'a> OllamaChatClient<'a> {
                 }
             }
             if reply.ended {
-                self.spent.record(reply.usage);
+                self.call.spent.record(reply.usage);
             }
 
             progress(Progress {
@@ -431,7 +407,7 @@ impl<'a> OllamaChatClient<'a> {
                 return Err(ChatError::Reported { failure });
             }
             if reply.ended {
-                self.spent.record(reply.usage);
+                self.call.spent.record(reply.usage);
             }
         }
 

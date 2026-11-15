@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  APPROVE_BUTTON,
   ASSISTANT_BUBBLE,
   BOT_GREETING,
   BOT_OPEN_BUTTON,
@@ -16,13 +17,18 @@ import {
   COMPOSER_INPUT,
   COMPOSER_NAME,
   COMPOSER_SEND,
+  CONFIRM_BUTTON,
+  REJECT_BUTTON,
   SIDEBAR_TAB,
   TRUST_APPROVE,
   approveTrust,
+  approveTrustIfAsked,
   checker,
   launchArguments,
   launchLive,
+  openFirstSession,
   readTrust,
+  sessionsOrSkip,
   showSessions,
   trustQuestion,
 } from './drive-support.mjs'
@@ -165,6 +171,19 @@ test('the send, name, reply, bot and trust constants name what the renderer draw
   assert.equal(TRUST_APPROVE, '[data-test="trust-approve"]')
 })
 
+test('the confirm card constants name the row and the buttons the renderer draws', () => {
+  const read = (file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', file), 'utf8')
+  // `Answers` draws the `confirm-actions` row by default, and the question card puts its buttons in one.
+  assert.match(read('Approval.tsx'), /className = 'confirm-actions'/)
+  assert.match(read('Approval.tsx'), /className = 'approve'/)
+  assert.match(read('Transcript.tsx'), /<div className="confirm-actions">\s[\s\S]*?className="reject"[\s\S]*?className="approve"/)
+  assert.equal(CONFIRM_BUTTON, '.confirm-actions leo-button')
+  assert.equal(APPROVE_BUTTON, '.confirm-actions .approve')
+  assert.equal(REJECT_BUTTON, '.confirm-actions .reject')
+  // A variant is the constant with a filter appended, so the filter shares the row's prefix.
+  assert.equal(`${APPROVE_BUTTON}:not(.always)`, '.confirm-actions .approve:not(.always)')
+})
+
 // The trust question's yes is held shut until the question has been read, so a driver that means to
 // press it reads first. These pin the order and the names, against a question that records its calls.
 function questionDouble() {
@@ -194,6 +213,97 @@ test('approveTrust reads the question through before it presses the yes', async 
   const { question, calls } = questionDouble()
   await approveTrust(question)
   assert.deepEqual(calls, [['evaluate'], ['click', '[data-test="trust-approve"]']])
+})
+
+// A page showing `sessions` rows and a trust question when `trust` is set, recording each call in
+// order. `trustProbeFails` makes the `.trust` visibility check throw, as it does when the page
+// closes under it. `exits` records `process.exit`, which the test replaces for the run.
+function sessionPage({ sessions = 1, trust = false, trustProbeFails = false } = {}) {
+  const calls = []
+  const { question, calls: asked } = questionDouble()
+  const page = {
+    locator: (selector) => ({
+      count: async () => { calls.push(['count', selector]); return sessions },
+      first: () => ({ click: async () => calls.push(['click', selector]) }),
+      isVisible: async () => {
+        calls.push(['isVisible', selector])
+        if (trustProbeFails) throw new Error('closed')
+        return trust
+      },
+    }),
+    getByRole: () => question,
+    waitForTimeout: async (ms) => calls.push(['waitForTimeout', ms]),
+  }
+  const app = { close: async () => calls.push(['close']) }
+  return { page, app, calls, asked }
+}
+
+async function withExitStubbed(run) {
+  const original = process.exit
+  const exits = []
+  process.exit = (code) => {
+    exits.push(code)
+    throw new Error('exit')
+  }
+  try {
+    const result = await captureLog(() => run().then(() => undefined, (error) => error.message))
+    return { exits, ...result }
+  } finally {
+    process.exit = original
+  }
+}
+
+test('with no session a driver prints the skip, closes the app and exits 0 without clicking', async () => {
+  const { page, app, calls } = sessionPage({ sessions: 0 })
+  const { exits, lines, value } = await withExitStubbed(() => openFirstSession(app, page))
+  assert.equal(value, 'exit')
+  assert.deepEqual(exits, [0])
+  assert.deepEqual(lines, ['RESULT: skipped — no sessions to open'])
+  assert.deepEqual(calls, [['count', '.session'], ['close']])
+})
+
+test('sessionsOrSkip returns the count and leaves the app open when there are sessions', async () => {
+  const { page, app, calls } = sessionPage({ sessions: 3 })
+  const { exits, value } = await withExitStubbed(async () => assert.equal(await sessionsOrSkip(app, page), 3))
+  assert.equal(value, undefined)
+  assert.deepEqual(exits, [])
+  assert.deepEqual(calls, [['count', '.session']])
+})
+
+test('the first session is clicked, waited for 1500 ms, and no trust is approved when none is asked', async () => {
+  const { page, app, calls, asked } = sessionPage({ sessions: 2 })
+  await openFirstSession(app, page)
+  assert.deepEqual(calls, [
+    ['count', '.session'],
+    ['click', '.session'],
+    ['waitForTimeout', 1500],
+    ['isVisible', '.trust'],
+  ])
+  assert.deepEqual(asked, [])
+})
+
+test('a visible trust question is read, approved and waited for 600 ms after the session settles', async () => {
+  const { page, app, calls, asked } = sessionPage({ trust: true })
+  await openFirstSession(app, page, { settle: 1600 })
+  assert.deepEqual(calls, [
+    ['count', '.session'],
+    ['click', '.session'],
+    ['waitForTimeout', 1600],
+    ['isVisible', '.trust'],
+    ['waitForTimeout', 600],
+  ])
+  assert.deepEqual(asked, [['evaluate'], ['click', '[data-test="trust-approve"]']])
+})
+
+test('a trust check that throws counts as no question, and approveTrustIfAsked takes its own wait', async () => {
+  const failing = sessionPage({ trustProbeFails: true })
+  await approveTrustIfAsked(failing.page, 500)
+  assert.deepEqual(failing.asked, [])
+  assert.deepEqual(failing.calls, [['isVisible', '.trust']])
+  const asking = sessionPage({ trust: true })
+  await approveTrustIfAsked(asking.page, 500)
+  assert.deepEqual(asking.asked, [['evaluate'], ['click', '[data-test="trust-approve"]']])
+  assert.deepEqual(asking.calls.at(-1), ['waitForTimeout', 500])
 })
 
 test('a launch names the user-data directory it is given, and none otherwise', () => {

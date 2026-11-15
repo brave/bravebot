@@ -1534,14 +1534,12 @@ impl Bridge {
             }
         }
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // A model the machine-level layer refuses is not requested, whichever service would have
-        // answered for it and whoever asked. The roster this window draws leaves such a model out,
-        // so reaching here means the name came from somewhere else (BACKEND-48).
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let attribution = settings.attribution().clone();
         // The level the terminal's `/effort` and this window's picker record, ranked against the
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
@@ -1681,11 +1679,12 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.ready_for_work()?;
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let state = Arc::clone(&open.state);
         // Taken here, on the thread that holds the state, because a conversation is not `Clone`
         // and what crosses to the worker is the request and not the exchange.
@@ -1789,14 +1788,12 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.ready_for_work()?;
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // A model the machine-level layer refuses is not requested, whichever service would have
-        // answered for it and whoever asked. The roster this window draws leaves such a model out,
-        // so reaching here means the name came from somewhere else (BACKEND-48).
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let effort = recorded_effort(&settings);

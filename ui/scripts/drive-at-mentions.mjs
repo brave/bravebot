@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { ASSISTANT_BUBBLE, BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
+import { ASSISTANT_BUBBLE, BOT_GREETING, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust, SHOTS_DIR } from './drive-support.mjs'
 
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
@@ -31,7 +31,7 @@ writeFileSync(join(project, 'src/main.rs'), 'fn main() {}\n')
 writeFileSync(join(project, 'README.md'), '# Project\n')
 writeFileSync(join(root, 'outside.txt'), 'A secret outside the project.\n')
 
-const output = process.env.AT_MENTIONS_OUTPUT || '/tmp/bravebot-ui'
+const output = process.env.AT_MENTIONS_OUTPUT || SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {
