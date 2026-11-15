@@ -341,7 +341,7 @@ that has nothing to do, and without it a long watch is twenty identical answers 
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live_in_shell_mode_too`
 `verified-by: bravebot_tui::render::the_loop_part_names_a_moment_only_while_one_is_still_ahead`
-`verified-by: bravebot_tui::app::a_countdown_is_owed_a_frame_once_a_second_and_only_while_a_loop_runs`
+`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_loop_in_a_session_with_none`
 `verified-by: bravebot_tui::state::the_loop_report_says_what_is_repeating_and_how_to_end_it`
 `verified-by: bravebot_tui::state::a_session_with_no_loop_says_so_when_asked`

@@ -787,11 +787,9 @@ share is the indicator, and the hint line names the same things then. A goal is 
 sends no work until a turn ends, so it is not something that goes on with nobody typing.
 
 **Why.** The line that says `done` is the last thing a turn draws, so it reads as the end of
-everything. A loop, a watch or a job that goes on after it was named only by a dim part at the far
-end of the bottom row, which a narrow terminal drops, and a watch was named nowhere but `/status`.
-A person had to ask whether the session was still working, which costs a turn. The Codex terminal
-interface keeps a row above its composer for background terminals for the same reason, and Claude
-Code's agent view gives a loop that is sleeping between runs an icon of its own.
+everything. Without the row, a loop, a watch or a job that goes on after it is named only by a dim
+part at the far end of the bottom row, which a narrow terminal drops, or by `/status`, and a person
+has to spend a turn asking whether the session is still working.
 
 **Why a light and not the spinner.** A turning shape beside `done` says the turn has not finished.
 
@@ -801,6 +799,7 @@ Code's agent view gives a loop that is sleeping between runs an icon of its own.
 `verified-by: bravebot_tui::render::the_still_active_row_is_not_drawn_while_a_turn_is_running`
 `verified-by: bravebot_tui::render::a_failed_turn_keeps_its_reason_and_gains_the_still_active_row`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_pointer_then_the_parts_whole`
+`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
 `verified-by: bravebot_tui::indicator::the_standing_light_changes_every_second`
 `verified-by: bravebot_tui::indicator::the_standing_light_stays_on_where_no_motion_is_asked_for`
 
