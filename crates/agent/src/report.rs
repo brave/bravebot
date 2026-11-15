@@ -656,6 +656,18 @@ pub enum Outcome {
     /// Separate from [`Outcome::Stopped`] because the planner did not ask for it and no limit was
     /// reached: a planner told its job outstayed a limit tries it again with a longer one.
     StoppedByTheUser(std::time::Duration),
+    /// A stage was found stopped by a signal, with what the job had run for by then, and the job
+    /// was ended (RUN-17).
+    ///
+    /// Separate from [`Outcome::Running`] because a stopped process runs nothing, so a planner told
+    /// it is still running waits on a program that cannot make progress, and separate from
+    /// [`Outcome::Stopped`] because no limit was reached and a longer one changes nothing. The
+    /// signal is named where it is one that stops a process. Structure only: it is the state the
+    /// kernel reports for a child the driver started, and it says nothing about what was printed.
+    StoppedBySignal {
+        ran_for: std::time::Duration,
+        signal: Option<&'static str>,
+    },
     /// It was still going when it was looked at, and was left going.
     ///
     /// Separate from [`Outcome::Stopped`] because nothing stopped it: a look at a background job is
@@ -734,6 +746,15 @@ impl Outcome {
                  the user asks you to.",
                 seconds(*after)
             ),
+            Self::StoppedBySignal { ran_for, signal } => format!(
+                "A stage was stopped by {} after {} and could not run, so it was ended. This is \
+                 what it had printed by then and not the whole of what it would print. It is \
+                 stopped by a signal when it reads or configures a terminal it does not own, \
+                 so run it without that, or with its input and output redirected. \
+                 {WHAT_A_STOP_LEAVES}",
+                signal.unwrap_or("a signal"),
+                seconds(*ran_for)
+            ),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -770,6 +791,11 @@ impl Outcome {
                 after.as_secs()
             ),
             Self::StoppedByTheUser(after) => format!("stopped by you after {}", seconds(*after)),
+            Self::StoppedBySignal { ran_for, signal } => format!(
+                "stopped by {} after {}, so it was ended",
+                signal.unwrap_or("a signal"),
+                seconds(*ran_for)
+            ),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -1740,6 +1766,34 @@ mod tests {
             !going.contains("lock files"),
             "a run nothing stopped is warned about the effects of a stop: {going}"
         );
+    }
+
+    /// A stage stopped by a signal is said to be stopped, and ended, and by which signal: a planner
+    /// told it is still running waits on a program that cannot run, and one told it reached a limit
+    /// retries with a longer one. It is also warned that a stop can leave files behind.
+    #[test]
+    fn a_stage_stopped_by_a_signal_is_not_described_as_running_or_as_out_of_time() {
+        let stopped = Outcome::StoppedBySignal {
+            ran_for: std::time::Duration::from_secs(3),
+            signal: Some("SIGTTOU"),
+        };
+        let said = stopped.describe();
+        assert!(said.contains("SIGTTOU"), "the signal is not named: {said}");
+        assert!(
+            said.contains("ended"),
+            "it does not say it was ended: {said}"
+        );
+        assert!(
+            !said.contains("still running") && !said.contains("longer limit"),
+            "a stopped stage reads as running or as out of time: {said}"
+        );
+        assert!(said.contains("A stop can leave lock files or partly written output behind"));
+        assert!(stopped.summary().contains("stopped by SIGTTOU"));
+        let unnamed = Outcome::StoppedBySignal {
+            ran_for: std::time::Duration::from_secs(3),
+            signal: None,
+        };
+        assert!(unnamed.describe().contains("a signal"));
     }
 
     /// The first wait is the one that needs explaining: the model has the task and nothing

@@ -302,7 +302,16 @@ pub struct Ran {
     /// from one that was working exactly as asked. So the output is collected either way and the
     /// distinction is carried here, where a caller can say which happened without reading a byte
     /// of what was printed.
+    ///
+    /// Also set when a stage was found stopped by a signal and was ended for that reason, with how
+    /// long the pipeline had run by then. [`Ran::stopped_by_signal`] says which of the two it was.
     pub stopped: Option<Duration>,
+    /// The signal that had stopped a stage, where the pipeline was ended because of one (RUN-17).
+    ///
+    /// A stopped process runs nothing and exits nothing, so waiting for it is waiting for the
+    /// deadline. The state is the kernel's account of a child this module started, read without
+    /// reading a byte the child printed. `None` where no stage was found stopped.
+    pub stopped_by_signal: Option<StopSignal>,
     /// Whether the line ended well, the way its own branches decide.
     ///
     /// A pipeline is as good as its worst step, which is what [`Ran::succeeded`] says. A line with
@@ -330,6 +339,39 @@ impl Ran {
     /// reaches it. Says nothing about the deadline: [`Ran::succeeded`] adds that.
     pub fn stages_ended_well(&self) -> bool {
         all_ended_well(&self.codes, &self.closed)
+    }
+}
+
+/// A stage found stopped by a signal, which is the state a terminal puts a background process in
+/// when it reads or configures the terminal (`SIGTTIN`, `SIGTTOU`) or is asked to stop
+/// (`SIGTSTP`, `SIGSTOP`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopSignal {
+    /// The signal's number on this system.
+    pub number: i32,
+}
+
+impl StopSignal {
+    /// The signal's name, for the signals that stop a process, and `None` for any other number.
+    #[cfg(unix)]
+    pub fn name(self) -> Option<&'static str> {
+        use rustix::process::Signal;
+        let named = Signal::from_named_raw(self.number)?;
+        [
+            (Signal::STOP, "SIGSTOP"),
+            (Signal::TSTP, "SIGTSTP"),
+            (Signal::TTIN, "SIGTTIN"),
+            (Signal::TTOU, "SIGTTOU"),
+        ]
+        .into_iter()
+        .find(|(signal, _)| *signal == named)
+        .map(|(_, name)| name)
+    }
+
+    /// There are no stop signals to name where there are no signals.
+    #[cfg(not(unix))]
+    pub fn name(self) -> Option<&'static str> {
+        None
     }
 }
 
@@ -748,6 +790,8 @@ struct Running<'a> {
     signals: Vec<Option<i32>>,
     closed: Vec<bool>,
     stopped: Option<Duration>,
+    /// The signal that stopped a stage, where the run was ended for that (see [`Ran::stopped_by_signal`]).
+    stopped_by_signal: Option<StopSignal>,
     /// The directory this session was given, where it has one.
     scratch: Option<&'a std::path::Path>,
     /// The bytes the policy layer supplied for standard input, until a step has been given them.
@@ -804,6 +848,7 @@ impl<'a> Running<'a> {
             signals: Vec::new(),
             closed: Vec::new(),
             stopped: None,
+            stopped_by_signal: None,
             scratch,
             stdin,
             handoff: None,
@@ -826,6 +871,7 @@ impl<'a> Running<'a> {
             signals: self.signals,
             closed: self.closed,
             stopped: self.stopped,
+            stopped_by_signal: self.stopped_by_signal,
             ended_well,
         }
     }
@@ -887,6 +933,9 @@ impl<'a> Running<'a> {
             Err(ExecError::Cancelled) => return Err(ExecError::Cancelled),
             Err(other) => return Err(failed(SubstitutionFailure::Inside(Box::new(other)))),
         };
+        if inner.stopped_by_signal.is_some() {
+            return Err(ended_in("it was stopped by a signal"));
+        }
         if inner.stopped.is_some() {
             return Err(ended_in("it ran out of time"));
         }
@@ -1205,6 +1254,19 @@ impl<'a> Running<'a> {
                 return Ok(Ending::Over(Ends { codes, signals }));
             }
 
+            // A stage the kernel reports as stopped will not exit, so the wait would last until the
+            // deadline (RUN-17). It is ended now, as the deadline ends it, and the signal is kept.
+            let held = children
+                .iter()
+                .zip(&finished)
+                .find_map(|(child, done)| if *done { None } else { child.stopped_by() });
+            if let Some(signal) = held {
+                stop(children);
+                self.stopped = Some(self.started.elapsed());
+                self.stopped_by_signal = Some(signal);
+                return Ok(Ending::Over(Ends { codes, signals }));
+            }
+
             // Both of these kill. Something still running is an effect in progress, and neither a
             // cancellation nor the deadline is served by leaving it to finish unwatched.
             if self.cancel.is_cancelled() {
@@ -1285,8 +1347,9 @@ fn from_upstream(upstream: &mut Option<Handle>) -> Result<Handle, ExecError> {
 
 /// A started step: an ordinary child, or on Windows a process in a container.
 enum Process {
-    /// On Unix the child leads a process group of its own (see [`crate::confine::begin`]), so its
-    /// number is also the number of the group everything it started belongs to.
+    /// On Unix the child leads a session of its own and so a process group of its own (see
+    /// [`crate::confine::begin`]), so its number is also the number of the group everything it
+    /// started belongs to.
     Plain {
         child: Child,
         /// Whether the child has been waited for. Its number is free to be given to another
@@ -1322,6 +1385,40 @@ impl Process {
             self.waited_for();
         }
         status
+    }
+
+    /// The signal the stage is stopped by, while it is stopped and has not been waited for.
+    ///
+    /// Asked of the kernel with `waitid` for a stop alone, without waiting and without collecting
+    /// anything, so the stage's exit is still there for [`Process::try_wait`] to find.
+    /// `Child::try_wait` does not report a stop. The stage's own number is used, never a group's,
+    /// and none is used once the stage has been waited for (see [`Process::Plain`]). A program in
+    /// the stage's group that is stopped while the stage runs on is not a stop of the stage.
+    #[cfg(unix)]
+    fn stopped_by(&self) -> Option<StopSignal> {
+        use rustix::process::{WaitId, WaitIdOptions};
+        let Self::Plain { child, reaped } = self;
+        if *reaped {
+            return None;
+        }
+        let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).ok()?)?;
+        let status = rustix::process::waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::STOPPED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )
+        .ok()??;
+        if !status.stopped() {
+            return None;
+        }
+        Some(StopSignal {
+            number: status.stopping_signal()?,
+        })
+    }
+
+    /// No process of this platform is reported stopped.
+    #[cfg(not(unix))]
+    fn stopped_by(&self) -> Option<StopSignal> {
+        None
     }
 
     #[cfg(unix)]
@@ -1816,6 +1913,18 @@ impl Background {
         self.finished.iter().all(|done| *done)
     }
 
+    /// The signal a step that has not exited is stopped by, if one is.
+    ///
+    /// Read from the kernel's account of the first such step (see [`StopSignal`]) and never from
+    /// anything the job printed. Only a step that has not been collected is asked, so a stage
+    /// whose number was given up is never addressed.
+    pub fn stopped_by_signal(&self) -> Option<StopSignal> {
+        self.children
+            .iter()
+            .zip(&self.finished)
+            .find_map(|(child, done)| if *done { None } else { child.stopped_by() })
+    }
+
     /// Whether every pipe has reached its end, so nothing more of the output is to come.
     fn drained(&self) -> bool {
         self.stdout.finished() && self.stderr.iter().all(Drain::finished)
@@ -1932,9 +2041,10 @@ impl Background {
         );
     }
 
-    /// Wait for something to happen, and return at the first of six things.
+    /// Wait for something to happen, and return at the first of seven things.
     ///
-    /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
+    /// Output past `seen` being there, every step having exited, a step being found stopped by a
+    /// signal (RUN-17), `bound` running out, `cancel`
     /// being set, one of `stops` being set, and `arrival` reporting a line the turn may take.
     /// `seen` is where the caller's last look left off, so output that arrived after that look and
     /// before this call ends the wait at once. Which it was is not reported, because the caller
@@ -1968,9 +2078,9 @@ impl Background {
         self.wait(Some(seen), bound, cancel, stops, arrival);
     }
 
-    /// Wait for the job to end, and return at the first of five things.
+    /// Wait for the job to end, and return at the first of six things.
     ///
-    /// Every step having exited, `bound` running out, `cancel` being set, one of `stops` being
+    /// Every step having exited, a step being found stopped by a signal, `bound` running out, `cancel` being set, one of `stops` being
     /// set, and `arrival` reporting a line the turn may take. Output arriving ends none of it,
     /// whether it arrives during the wait or was already there, unseen, when the wait began: that is
     /// the difference from [`Background::wait_for_more`], whose caller gets back at the next line
@@ -2013,6 +2123,7 @@ impl Background {
                 || arrival.is_waiting()
                 || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
+                || self.stopped_by_signal().is_some()
             {
                 return;
             }

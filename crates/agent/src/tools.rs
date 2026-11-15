@@ -1052,6 +1052,10 @@ struct Job {
     /// How long it had run when the person's stop was carried out, so a look after the account
     /// says the person stopped it and not how a killed program exited.
     stopped_by_the_person: Option<std::time::Duration>,
+    /// How long it had run when a stage of it was found stopped by a signal and the job was ended
+    /// for that, and the signal's name where it is one that stops a process (RUN-17). Kept so a
+    /// look after the account says what stopped it and not how a killed program exited.
+    stopped_by_a_signal: Option<(std::time::Duration, Option<&'static str>)>,
     /// What its programs were confined to, where they were, told with a failure so the planner
     /// reads a refusal as the sandbox's and not the file's.
     confinement: Option<String>,
@@ -1146,6 +1150,40 @@ impl Job {
         self.running.ended();
         self.stopped_by_the_person = Some(ran_for);
         ran_for
+    }
+
+    /// Whether a stage of the job is stopped by a signal, ending the job at the first look that
+    /// finds it so (RUN-17).
+    ///
+    /// A stopped process runs nothing and exits nothing, so a job left alone is reported as running
+    /// for as long as anybody asks. The state is the kernel's account of a child the driver
+    /// started, and nothing the job printed is read. A job the person already stopped, or whose
+    /// steps have all exited, is not asked: their exit codes are the account. Ended as the person's
+    /// stop is, before the output is taken, so what is handed over is all it printed.
+    fn stopped_by_a_signal(&mut self) -> bool {
+        if self.stopped_by_a_signal.is_some() {
+            return true;
+        }
+        if self.stopped_by_the_person.is_some() || self.running.steps_exited() {
+            return false;
+        }
+        let Some(signal) = self.running.stopped_by_signal() else {
+            return false;
+        };
+        let ran_for = self.running.ran_for();
+        self.running.kill();
+        self.running.ended();
+        self.stopped_by_a_signal = Some((ran_for, signal.name()));
+        true
+    }
+
+    /// The outcome of a job a stage of which was found stopped by a signal.
+    ///
+    /// Only asked once [`Job::stopped_by_a_signal`] has said so, and falls back to the job having
+    /// run no time at all rather than failing where it was not.
+    fn signal_outcome(&self) -> crate::report::Outcome {
+        let (ran_for, signal) = self.stopped_by_a_signal.unwrap_or_default();
+        crate::report::Outcome::StoppedBySignal { ran_for, signal }
     }
 
     /// The label this job's output may carry now, rather than the one fixed before it started.
@@ -1423,6 +1461,7 @@ impl Jobs {
                 read_asked: false,
                 stop: stop.clone(),
                 stopped_by_the_person: None,
+                stopped_by_a_signal: None,
                 confinement: None,
                 tree: None,
             },
@@ -1517,6 +1556,8 @@ impl Jobs {
                 crate::report::Outcome::StoppedByTheUser(ran_for)
             } else if job.stop_asked() {
                 crate::report::Outcome::StoppedByTheUser(job.stop_for_the_person())
+            } else if job.stopped_by_a_signal() {
+                job.signal_outcome()
             } else if job.running.ended() {
                 how_it_ended(
                     job.running.codes(),
@@ -12553,7 +12594,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // Said in the driver's own words, from the exit codes and the clock, which are
             // structure rather than content: nothing here reads a byte of what the program
             // printed.
-            let outcome = if let Some(after) = ran.stopped {
+            let outcome = if let Some(signal) = ran.stopped_by_signal {
+                crate::report::Outcome::StoppedBySignal {
+                    ran_for: ran.stopped.unwrap_or_default(),
+                    signal: signal.name(),
+                }
+            } else if let Some(after) = ran.stopped {
                 crate::report::Outcome::Stopped(after)
             } else {
                 // The codes and not `ended_well`: that is the verdict of the part that ran last, so
@@ -13378,6 +13424,10 @@ fn job_output<S: Sink, R: Reporter>(
         });
 
     let ended = job.running.ended();
+    // A stage found stopped by a signal is ended before the output is taken, as the person's stop
+    // is, and said so at this look and at every later one (RUN-17).
+    let held = !ended && !job.reported && job.stopped_by_a_signal();
+    let ended = ended || held;
     // The person's stop, read at this step as at a round's (RUN-27), and carried out before the
     // output is taken and the finish reported. One already reported has been given its account
     // and killed.
@@ -13398,6 +13448,8 @@ fn job_output<S: Sink, R: Reporter>(
     // person stopped is said to be theirs at every look, since its exit codes are the kill's.
     let outcome = if let Some(after) = job.stopped_by_the_person {
         crate::report::Outcome::StoppedByTheUser(after)
+    } else if job.stopped_by_a_signal.is_some() {
+        job.signal_outcome()
     } else if ended {
         how_it_ended(
             job.running.codes(),

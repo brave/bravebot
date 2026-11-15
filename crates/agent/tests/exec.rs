@@ -1119,6 +1119,208 @@ fn still_counting(at: &std::path::Path) -> bool {
     false
 }
 
+/// A program the stage runs that stops itself the way a terminal stops a background job: the
+/// stage writes its number, and `ready`, and then stops. It ends on `SIGTERM` and says so in a
+/// file, so a test can tell an end that was asked for from a kill.
+#[cfg(unix)]
+const STOPS_ITSELF: &str = "#!/bin/sh\ntrap 'echo term > termed; exit 143' TERM\necho $$ > pid\necho ready\nkill -STOP $$\nsleep 30\n";
+
+/// Whether the process whose number `at/pid` holds still exists.
+#[cfg(unix)]
+fn stage_exists(at: &std::path::Path) -> bool {
+    let number: i32 = std::fs::read_to_string(at.join("pid"))
+        .expect("the stage wrote its number")
+        .trim()
+        .parse()
+        .expect("a number");
+    let pid = rustix::process::Pid::from_raw(number).expect("a process number");
+    rustix::process::test_kill_process(pid).is_ok()
+}
+
+/// A stage stopped by a signal runs nothing and exits nothing, so a limit that waited for it would
+/// report it as running until the deadline. It is reported as stopped by the signal as soon as it
+/// is found so, ended, and the run comes back long before its limit (RUN-17).
+///
+/// Rejects a wait loop that only watches for exits and the deadline: the run would come back at
+/// the limit, with `stopped_by_signal` unset.
+#[cfg(unix)]
+#[test]
+fn a_stage_stopped_by_a_signal_is_reported_as_stopped_and_ended_before_the_limit() {
+    let scratch = Scratch::new("stopped-by-signal");
+    let resolved = [script(&scratch.path, "stage", STOPS_ITSELF)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let limit = Duration::from_secs(60);
+
+    let started = std::time::Instant::now();
+    let ran = stopped_within(&pipeline, &resolved, &scratch.path, limit);
+    let took = started.elapsed();
+
+    let signal = ran
+        .stopped_by_signal
+        .expect("a stage stopped by a signal was not reported as such");
+    assert_eq!(signal.name(), Some("SIGSTOP"));
+    assert!(ran.stopped.is_some(), "the run was not marked ended");
+    assert!(!ran.succeeded());
+    assert!(
+        took < limit / 2,
+        "the run waited {took:?} of its {limit:?} limit on a stage that could not run"
+    );
+    assert_eq!(ran.stdout.trim(), "ready", "what it printed was lost");
+    assert!(
+        !stage_exists(&scratch.path),
+        "the stopped stage was left behind"
+    );
+}
+
+/// Ending a stopped stage continues it after asking it to end, so the request is delivered and the
+/// stage can undo what it holds. A stopped process holds `SIGTERM` back until it is continued, and
+/// would otherwise be killed after the grace with nothing undone (RUN-11).
+///
+/// Rejects an end that sends `SIGTERM` without `SIGCONT`: the stage is killed after the grace and
+/// never runs its handler, so `termed` is not written.
+#[cfg(unix)]
+#[test]
+fn a_stopped_stage_is_continued_so_the_request_to_end_reaches_it() {
+    let scratch = Scratch::new("stopped-continued");
+    let resolved = [script(&scratch.path, "stage", STOPS_ITSELF)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let ran = stopped_within(&pipeline, &resolved, &scratch.path, Duration::from_secs(60));
+
+    assert!(ran.stopped_by_signal.is_some());
+    assert!(
+        scratch.path.join("termed").exists(),
+        "the stopped stage was killed without the request to end ever reaching it"
+    );
+}
+
+/// A background job is asked whether a stage is stopped without being waited for, so a look can say
+/// so, and ending it takes the stage with it.
+///
+/// Rejects a job that reports only exits: `stopped_by_signal` stays `None` for as long as the stage
+/// is stopped and the job is reported as running.
+#[cfg(unix)]
+#[test]
+fn a_background_job_with_a_stopped_stage_says_which_signal_and_is_ended_by_a_kill() {
+    let scratch = Scratch::new("background-stopped");
+    let resolved = [script(&scratch.path, "stage", STOPS_ITSELF)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("it starts");
+
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    let signal = loop {
+        if let Some(signal) = job.stopped_by_signal() {
+            break signal;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "a stopped stage was never found stopped"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(signal.name(), Some("SIGSTOP"));
+    assert!(!job.ended(), "a stopped stage was counted as having exited");
+
+    job.kill();
+    assert!(
+        !stage_exists(&scratch.path),
+        "the stopped stage survived the kill"
+    );
+}
+
+/// A stage that exits is not a stage that is stopped: the stop is asked of the kernel without
+/// collecting the stage, and a stage that has exited and been collected is not asked at all.
+///
+/// Rejects a check that treats any child it cannot find running as stopped.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_exited_is_not_reported_stopped_by_a_signal() {
+    let scratch = Scratch::new("exited-not-stopped");
+    let resolved = [script(&scratch.path, "quick", "#!/bin/sh\necho done\n")];
+    let pipeline = Pipeline::new(vec![Stage::new("quick", Vec::new())]);
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("it starts");
+    until_ended(&mut job);
+    assert!(job.stopped_by_signal().is_none());
+    assert_eq!(job.codes(), [Some(0)]);
+
+    let ran = run(
+        Pipeline::new(vec![Stage::new("echo", vec!["done".into()])]),
+        &scratch.path,
+    )
+    .expect("echo runs");
+    assert!(ran.stopped_by_signal.is_none());
+}
+
+/// Where a controlling terminal exists, a stage is not in its session and cannot open it, so it
+/// cannot be stopped by the terminal's job control signals and cannot read the person's keys.
+///
+/// The test runs again inside a terminal, which `script` provides, because without one the open
+/// fails whether or not the stage was detached. Inside it, a program started with a plain
+/// `Command` opens `/dev/tty`, which shows the terminal is there, and a stage does not.
+///
+/// Rejects a start that gives the stage a process group and no session of its own: the stage
+/// opens `/dev/tty`.
+#[cfg(unix)]
+#[test]
+fn a_stage_cannot_open_the_controlling_terminal() {
+    const INSIDE: &str = "BRAVEBOT_TEST_INSIDE_A_TERMINAL";
+    if std::env::var_os(INSIDE).is_none() {
+        let me = std::env::current_exe().expect("this test binary");
+        let name = "a_stage_cannot_open_the_controlling_terminal";
+        let mut command = std::process::Command::new("/usr/bin/script");
+        #[cfg(target_os = "macos")]
+        command
+            .args(["-q", "/dev/null"])
+            .arg(&me)
+            .args([name, "--exact", "--nocapture"]);
+        #[cfg(target_os = "linux")]
+        command.args([
+            "-qec",
+            &format!("'{}' {name} --exact --nocapture", me.display()),
+            "/dev/null",
+        ]);
+        let output = command
+            .env(INSIDE, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("script runs this test in a terminal");
+        let shown = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            shown.contains("stage refused the terminal"),
+            "the test did not reach its end inside a terminal: {shown}"
+        );
+        return;
+    }
+
+    let control = std::process::Command::new("/bin/sh")
+        .args(["-c", ": </dev/tty"])
+        .status()
+        .expect("sh runs");
+    assert!(
+        control.success(),
+        "no controlling terminal here, so the check would pass for any stage"
+    );
+
+    let scratch = Scratch::new("no-terminal");
+    let resolved = [script(
+        &scratch.path,
+        "stage",
+        "#!/bin/sh\nif : </dev/tty 2>/dev/null; then echo opened; else echo refused; fi\n",
+    )];
+    let ran = run_within(
+        &Pipeline::new(vec![Stage::new("stage", Vec::new())]),
+        &resolved,
+        &scratch.path,
+        Duration::from_secs(30),
+    )
+    .expect("the stage runs");
+    assert_eq!(
+        ran.stdout.trim(),
+        "refused",
+        "the stage opened the terminal"
+    );
+    println!("stage refused the terminal");
+}
+
 /// What `git commit -a` does while a hook runs: it holds `.git/index.lock`, and it removes the
 /// file when it is told to end, which it cannot do once it has been killed. A run stopped at its
 /// limit that killed the stage outright left the lock for every later `git` command to fail on.

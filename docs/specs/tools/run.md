@@ -700,7 +700,8 @@ a stop must be abandonable: a stage can leave a child holding the write end of t
 child left the stage's process group or the stage ended by itself with the child still running, so
 the run may not wait on that pipe reaching its end, and keeps whatever had been read by then.
 
-**How a stage is stopped.** On Linux and macOS every stage leads a process group of its own. A stop
+**How a stage is stopped.** On Linux and macOS every stage leads a session of its own, and so a
+process group of its own, whether it is confined or not. A stop
 asks each stage to end by sending `SIGTERM` to its group, so the programs the stage started are
 asked with it, and gives every group the same two seconds to empty, which is how long a program that
 undoes what it holds has to do so after the stage itself has gone. Whatever is left of a group after
@@ -718,10 +719,34 @@ or partly written output behind, and that programs the line started may need che
 group, such as the `SIGINT` the terminal sends for Ctrl-C at a one-shot run, the `SIGHUP` of a
 closed terminal, or the `SIGTERM` that stops a background session, does not reach a stage, and a
 session that such a signal ends leaves the stages it was running. A stage the session ends itself, at
-the deadline, on a cancellation or when the turn ends, is stopped as above. The stage is also a
-background process group of the terminal, so one that reads the terminal is stopped by it until the
-deadline. A stage that ignores the request holds a stop for the two seconds. A confined stage on
-Linux is also the leader of a session of its own.
+the deadline, on a cancellation or when the turn ends, is stopped as above. A stage that ignores the
+request holds a stop for the two seconds.
+
+**A stage has no controlling terminal.** Every stage on Linux and macOS is started as the leader of a
+session, by `setsid` in the child before it executes the program, and the backend that confines a
+stage does it for that stage. The unconfined start does it too, on Linux as on macOS. A stage is
+started with either a session or a process group of its own and never both, since `setsid` fails in
+a process that already leads a group. A program that opens `/dev/tty` or configures the terminal
+therefore gets an error from the open and can exit with it. Without the session, the stage is a
+background process group of the terminal and `SIGTTIN` or `SIGTTOU` stops it, which nothing ends
+but the deadline, and a background job has none. The cost is that a program that needs the
+terminal, such as one that prompts on `/dev/tty`, fails to start its prompt and reads or writes
+what the pipeline gave it instead. A program the stage started can still stop itself or be stopped
+by a signal sent to it.
+
+**A stage found stopped is ended and reported as stopped.** A stopped process runs nothing and
+exits nothing, so waiting for it is waiting for the deadline. The pipeline's wait and a look at a
+job each ask the kernel, with `waitid` for a stop alone and without collecting the child's exit,
+whether a stage that has not exited is stopped and by which signal. A stage found stopped is ended
+as the deadline ends it: its group is sent `SIGTERM` and then `SIGCONT`, because a stopped process
+holds `SIGTERM` back until it is continued, and whatever remains after the two seconds is killed.
+The result carries the signal and how long the pipeline had run, and the report says the stage was
+stopped by that signal and was ended, so the planner does not read it as still running or as having
+reached a limit that a longer one would change. Only the leader of a stage is asked, by its own
+number and never by its group's, and none is asked once it has been waited for. A program in the
+stage's group that is stopped while the leader runs on is not a stop of the stage. This is structure
+only: the state of a child the driver started, read from the kernel and compared with nothing the
+stage printed, so it does not change the label of the output, which is RUN-4's to decide.
 
 **Why.** The limit is for the program that does not end, and the commonest such program is doing
 exactly what was asked: a server told to serve a page serves it, prints as it goes, and never
@@ -748,6 +773,11 @@ RUN-4's to decide.
 `verified-by: bravebot_agent::exec::what_a_stage_left_running_after_it_ended_by_itself_is_not_signalled`
 `verified-by: bravebot_agent::confine::a_confined_stage_stopped_at_the_limit_is_asked_to_end_and_what_it_started_ends_with_it`
 `verified-by: bravebot_agent::report::a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not`
+`verified-by: bravebot_agent::exec::a_stage_cannot_open_the_controlling_terminal`
+`verified-by: bravebot_agent::exec::a_stage_stopped_by_a_signal_is_reported_as_stopped_and_ended_before_the_limit`
+`verified-by: bravebot_agent::exec::a_stopped_stage_is_continued_so_the_request_to_end_reaches_it`
+`verified-by: bravebot_agent::exec::a_stage_that_exited_is_not_reported_stopped_by_a_signal`
+`verified-by: bravebot_agent::turn::a_foreground_run_with_a_stage_stopped_by_a_signal_says_so_and_ends_it`
 
 <a id="RUN-12"></a>
 ### RUN-12: a program is not handed this agent's own credentials
@@ -1111,6 +1141,15 @@ job kept past its turn is exposed to that for the length of the session, where a
 exposed only for the length of the turn. Ending jobs on a terminal hangup needs the process to
 handle the signal, which no code here does yet.
 
+**A job has no terminal to be stopped by.** Each stage is started in a session of its own with no
+controlling terminal ([RUN-11](#RUN-11)), so a program that opens or configures the terminal gets an
+error and can exit, where a stage in a background group of the terminal would be stopped by
+`SIGTTIN` or `SIGTTOU` for as long as the job lived, since a job has no deadline. A stage that is
+stopped by a signal anyway is found by a look, reported as stopped and ended
+([RUN-17](#RUN-17)). That report is the state of a child the driver started, read from the kernel,
+and the output of the job keeps the label its plan was given ([RUN-16](#RUN-16)) whether it was
+stopped or not.
+
 **Ended means the account is complete.** A job is reported as ended once every step has exited and
 every pipe has reached its end, which are not the same moment: a step can print and exit with its
 output still in the pipe, unread. A caller told a job ended stops asking, so reporting it at the
@@ -1140,6 +1179,8 @@ message has come yet or not, since nothing the tool can see says which. "No such
 a fact about the delegate. The name is compared with the numbers the kernel minted, as it is with
 the job names the driver minted.
 
+`verified-by: bravebot_agent::exec::a_stage_cannot_open_the_controlling_terminal`
+`verified-by: bravebot_agent::exec::a_stage_that_exited_is_not_reported_stopped_by_a_signal`
 `verified-by: bravebot_agent::exec::a_background_pipeline_reports_what_it_printed_while_it_is_still_running`
 `verified-by: bravebot_agent::exec::a_background_pipeline_that_finishes_says_so_and_reports_its_code`
 `verified-by: bravebot_agent::exec::a_background_pipeline_reported_as_ended_has_all_of_its_output`
@@ -1277,6 +1318,19 @@ something that happened to a pipeline; a look is not. Reporting a look at a live
 deadline is reported tells the planner the job is over, which is exactly the wrong thing to tell one
 that is waiting for the job to print again.
 
+**A job a stage of which is stopped by a signal is reported as stopped and is ended.** A stage that a
+terminal or a signal has stopped runs nothing and exits nothing, and a background job has no
+deadline, so a look that reported it as running would report it so for as long as anybody asked. A
+wait ends when a step that has not exited is found stopped, as it does when the steps exit. The look
+that finds one ends the job as the person's stop ends it ([RUN-27](#RUN-27)), before the output is
+taken, so what is handed over is all it printed. The answer says the stage was stopped by the signal,
+named where it is one that stops a process, and that the job was ended, so the planner does not wait
+on it or retry with a longer limit. Every later look says the same. The end is reported once: the
+turn's own look between rounds ([CMDLINE-14](command-line.md#CMDLINE-14)) and a look by the
+planner do not each report it. A foreground run that finds a stage stopped says the same and ends,
+instead of running to its deadline ([RUN-11](#RUN-11)). The state is read from the kernel for a stage
+the driver started, and no byte the job printed is read or compared to find it.
+
 **A job that has ended is reported by the codes its steps exited with.** Not as having succeeded, and
 not as whatever the look then did to it. A caller that waited for a build to finish and was told it
 exited zero reports a red build as green, and where the output is quarantined that one sentence is the
@@ -1356,6 +1410,10 @@ the window.
 `verified-by: bravebot_agent::turn::looks_at_a_job_shown_as_text_list_no_earlier_references`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
+`verified-by: bravebot_agent::turn::a_look_at_a_job_stopped_by_a_signal_says_so_ends_it_and_reports_the_end_once`
+`verified-by: bravebot_agent::turn::a_job_stopped_by_a_signal_is_reported_between_rounds_once`
+`verified-by: bravebot_agent::exec::a_background_job_with_a_stopped_stage_says_which_signal_and_is_ended_by_a_kill`
+`verified-by: bravebot_agent::report::a_stage_stopped_by_a_signal_is_not_described_as_running_or_as_out_of_time`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
 `verified-by: bravebot_agent::report::a_look_that_waited_says_nothing_is_watching_the_job_now`
 `verified-by: bravebot_agent::tools::job_output_says_its_wait_ends_with_the_turn`
@@ -2579,6 +2637,13 @@ show that a model follows them.
 
 ## Known costs
 
+- **A stage cannot use the terminal, and a stop by a signal is found by asking the leader.** Every
+  stage starts in a session with no controlling terminal ([RUN-11](#RUN-11)), so a program that
+  prompts on `/dev/tty` fails where it would have prompted. A stage is found stopped only when its
+  leader is stopped ([RUN-17](#RUN-17)): a program the leader started that is stopped while the
+  leader runs on is not reported. Both are pinned by
+  `bravebot_agent::exec::a_stage_cannot_open_the_controlling_terminal` and
+  `bravebot_agent::exec::a_stage_that_exited_is_not_reported_stopped_by_a_signal`.
 - **A probe the sandbox refuses looks like a port nobody listens on.** [RUN-30](#RUN-30) tells the
   planner to ask about quitting or relaunching a browser once its probe is refused, and the
   description does not know whether the line is held to a host list's proxy port, which refuses

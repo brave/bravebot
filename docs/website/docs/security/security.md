@@ -482,7 +482,8 @@ whatever the step exited with or printed. It is not said on Linux or Windows.
 
 **On Linux every program starts in a session of its own**, so it has no controlling terminal and
 cannot type into yours, which kernels before 6.10 would otherwise allow. A terminal's interrupt and
-hangup do not reach it.
+hangup do not reach it. On macOS every program starts in a session of its own as well, so one that
+opens or configures the terminal gets an error and is not stopped by it with nothing to end the stop.
 
 **A `PATH=` assignment on a `run` line chooses nothing a stage may read.** The directories a stage's
 programs are read from come from Brave Bot's own `PATH`, and a program location that is, holds or lies

@@ -196,10 +196,10 @@ pub trait Sandbox: Send {
     /// no such command, so there is no method there, and a caller cannot reach one unconfined
     /// by asking.
     ///
-    /// On Linux the process the command starts leads a session of its own, and so a process group
-    /// of its own. A caller that stops the process by signalling its group relies on that, and
-    /// must not ask for a group as well: the `setsid` the backend calls fails in a process that
-    /// already leads one.
+    /// On Linux and macOS the process the command starts leads a session of its own, and so a
+    /// process group of its own, with no controlling terminal. A caller that stops the process by
+    /// signalling its group relies on that, and must not ask for a group as well: `setsid` fails
+    /// in a process that already leads one.
     #[cfg(unix)]
     fn command(
         &self,

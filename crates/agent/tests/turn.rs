@@ -68484,6 +68484,258 @@ fn a_look_at_a_job_the_person_stopped_stops_it_and_says_who_did() {
     assert_eq!(job_stops_in(&sink, "job:1"), 1, "{:?}", sink.events());
 }
 
+/// A look at a job one of whose stages stopped itself, as a terminal stops a background job, says
+/// a signal stopped it and ends it, where it used to say the job was still running for as long as
+/// anybody asked. A look after that says the same, the end is reported to the person once, and the
+/// turn's own look between rounds does not report it again (RUN-17, CMDLINE-14).
+///
+/// Rejects a `job_output` that reports only exits: the first answer says the job is still running,
+/// the process is left alive, and no end is reported. Also rejects an end that is reported at each
+/// look: more than one `Ended` event.
+#[cfg(unix)]
+#[test]
+fn a_look_at_a_job_stopped_by_a_signal_says_so_ends_it_and_reports_the_end_once() {
+    let scratch = Scratch::new("background-look-at-a-stopped-job");
+    let script = scratch.path.join("serve");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ntrap 'exit 143' TERM\necho $$ > pid\necho ready\nkill -STOP $$\nsleep 120\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":60}"#),
+        tool_request("job_output", r#"{"job":"job:1"}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let began = std::time::Instant::now();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and look at it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(50),
+        "the look sat out its wait on a stage that could not run: {:?}",
+        began.elapsed()
+    );
+    let bodies = every_request(&received);
+    let first = newest_tool_result(bodies[2].clone());
+    assert!(
+        first.contains("stopped by SIGSTOP"),
+        "the look did not say a signal stopped the job: {first}"
+    );
+    assert!(
+        !first.contains("still running"),
+        "the look said a stopped job was still running: {first}"
+    );
+    let second = newest_tool_result(bodies[3].clone());
+    assert!(
+        second.contains("stopped by SIGSTOP"),
+        "a look after the end did not say the same: {second}"
+    );
+    use bravebot_agent::report::{JobEvent, Outcome};
+    let ended: Vec<&JobEvent> = reporter
+        .jobs
+        .iter()
+        .filter(|event| matches!(event, JobEvent::Ended { .. }))
+        .collect();
+    assert!(
+        matches!(
+            ended.as_slice(),
+            [JobEvent::Ended { name, outcome: Outcome::StoppedBySignal { signal: Some("SIGSTOP"), .. } }]
+                if name == "job:1"
+        ),
+        "the end was not reported exactly once as a stop by a signal: {:?}",
+        reporter.jobs
+    );
+    let last = bodies.last().expect("a last request");
+    assert!(
+        !last.contains(JOB_1_FINISHED),
+        "the turn's look between rounds reported again an end the look had reported"
+    );
+    assert!(
+        !process_is_alive(&scratch.path.join("pid")),
+        "the stopped stage was left behind"
+    );
+}
+
+/// A stopped job nobody asks about is found by the turn's look between rounds, which reports it as
+/// stopped by a signal and ends it, once.
+///
+/// Rejects a between-rounds look that learns only of exits: the job is never reported, and the
+/// turn runs to its round limit.
+#[cfg(unix)]
+#[test]
+fn a_job_stopped_by_a_signal_is_reported_between_rounds_once() {
+    let scratch = Scratch::new("background-stopped-between-rounds");
+    let script = scratch.path.join("serve");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ntrap 'exit 143' TERM\necho $$ > pid\nkill -STOP $$\nsleep 120\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./serve","background":true}"#,
+    ));
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies = every_request(&received);
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(JOB_1_FINISHED).count(),
+        1,
+        "the end was not reported between rounds exactly once"
+    );
+    assert!(
+        last.contains("stopped by SIGSTOP"),
+        "the end was not said to be a stop by a signal"
+    );
+    use bravebot_agent::report::{JobEvent, Outcome};
+    assert!(
+        matches!(
+            reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Ended { .. }))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [JobEvent::Ended {
+                outcome: Outcome::StoppedBySignal { .. },
+                ..
+            }]
+        ),
+        "{:?}",
+        reporter.jobs
+    );
+    assert!(
+        !process_is_alive(&scratch.path.join("pid")),
+        "the stopped stage was left behind"
+    );
+}
+
+/// A foreground `run` whose stage stops itself with a signal comes back well before its deadline
+/// and says a signal stopped the stage and it was ended, with what the stage had printed by then.
+/// Without that it sits until the deadline and reports a stop for time, which tells the planner to
+/// retry with a longer one (RUN-11).
+///
+/// Rejects a foreground `run` that waits for the deadline of a stage that cannot run: the call
+/// takes the whole deadline. Also rejects a report that words the end as the deadline's, or as a
+/// process still running, and a stage left behind.
+#[cfg(unix)]
+#[test]
+fn a_foreground_run_with_a_stage_stopped_by_a_signal_says_so_and_ends_it() {
+    let scratch = Scratch::new("foreground-stopped-stage");
+    let script = scratch.path.join("serve");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ntrap 'exit 143' TERM\necho $$ > pid\necho ready\nkill -STOP $$\nsleep 120\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","deadline_seconds":90}"#),
+        reply_with("done"),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let began = std::time::Instant::now();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("run it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(45),
+        "the run sat out its deadline on a stage that could not run: {:?}",
+        began.elapsed()
+    );
+    let bodies = every_request(&received);
+    let told = newest_tool_result(bodies[1].clone());
+    assert!(
+        told.contains("stopped by SIGSTOP"),
+        "the report did not say a signal stopped the stage: {told}"
+    );
+    assert!(
+        told.contains("could not run, so it was ended"),
+        "the report did not say the stage was ended: {told}"
+    );
+    assert!(
+        told.contains("ready"),
+        "the report lost what the stage had printed before it stopped: {told}"
+    );
+    assert!(
+        !told.contains("still running") && !told.contains("ran out of time"),
+        "the report worded a stop by a signal as the deadline's or as a run still going: {told}"
+    );
+    assert!(
+        !process_is_alive(&scratch.path.join("pid")),
+        "the stopped stage was left behind"
+    );
+}
+
 /// A look at one job comes back when the person stops another, so the stop is carried out at the
 /// next round and not after the look's whole window. The job the look was at is left running.
 #[cfg(unix)]
