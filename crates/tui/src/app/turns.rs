@@ -825,6 +825,7 @@ pub(super) fn run_turn_animated(
     let mut whole = session.work();
     whole.then(finished.work);
     stored.set_work(whole);
+    keep_the_effort_of(stored, session);
     stored.set_written(&session.written());
     keep_the_links_of(&finished, stored, session);
     Ok(finish_turn(
@@ -839,6 +840,16 @@ pub(super) fn run_turn_animated(
         finished,
         retained,
     ))
+}
+
+/// The level a turn was sent with, kept for the record the turn's save writes, so the Sessions
+/// screen can say how hard the model was asked to think. It is nothing for a model that reads no
+/// level, since none was sent, and it follows `/effort` from one turn to the next.
+pub(super) fn keep_the_effort_of(
+    stored: &mut bravebot_session::sessions::Handle,
+    session: &Session,
+) {
+    stored.set_effort(session.effort_in_force());
 }
 
 /// The links the turn recorded with `set_link`, read as links again by the one definition of one

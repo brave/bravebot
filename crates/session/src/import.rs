@@ -223,6 +223,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         touched: Default::default(),
         agent: None,
         skill_mode: None,
+        effort: None,
     }
 }
 

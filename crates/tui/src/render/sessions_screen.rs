@@ -880,6 +880,16 @@ fn draw_task(
     }
 }
 
+/// What share of the `read` tokens the service served out of its cache, in whole percent and never
+/// past 100, or `None` where nothing was read, so there is nothing to divide by.
+fn cache_share(cached: u64, read: u64) -> Option<u64> {
+    if read == 0 {
+        return None;
+    }
+    let share = u128::from(cached) * 100 / u128::from(read);
+    Some(u64::try_from(share).map_or(100, |share| share.min(100)))
+}
+
 /// The details of the task under the cursor: what it is and what it has used, and for a task that
 /// needs the person, which kind of thing it is waiting for (SCREEN-3).
 #[expect(
@@ -952,6 +962,19 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
             dim(),
         )));
     }
+    // A record that predates the start time holds zero, and says nothing here.
+    if task.started > 0 {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_started,
+            age = crate::history_search::age_since(task.started)
+        ))));
+    }
+    if task.updated > 0 {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_last_active,
+            age = crate::history_search::age_since(task.updated)
+        ))));
+    }
     lines.push(Line::default());
     lines.push(Line::from(Span::raw(t!(
         sessions_screen_details_model,
@@ -960,6 +983,12 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
             None => t!(sessions_screen_model_unknown).to_string(),
         }
     ))));
+    if let Some(effort) = task.effort {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_reasoning,
+            effort = effort.as_str()
+        ))));
+    }
     if let Some(mode) = task.mode {
         lines.push(Line::from(Span::raw(t!(
             sessions_screen_details_mode,
@@ -983,6 +1012,28 @@ fn details_lines(row: &Row, width: usize) -> Vec<Line<'static>> {
                 total = crate::indicator::format_tokens(task.tokens)
             )
         })));
+    }
+    if let Some(percent) = task
+        .cached
+        .and_then(|cached| cache_share(cached, task.read))
+    {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_cache,
+            percent = percent
+        ))));
+    }
+    if task.work.writes.saturating_add(task.work.commands) > 0 {
+        lines.push(Line::from(Span::raw(t!(
+            sessions_screen_details_changes,
+            edits = task.work.writes,
+            commands = task.work.commands
+        ))));
+        if task.work.last_command_failed {
+            lines.push(Line::from(Span::styled(
+                t!(sessions_screen_details_last_command_failed),
+                Style::default().fg(theme::fail()),
+            )));
+        }
     }
     lines.push(Line::default());
     lines.push(label(t!(sessions_screen_details_project)));
@@ -2079,6 +2130,163 @@ mod tests {
         for wanted in [id, "12.0KB", "reviewer", "issues/12", "pull/34", "01234567"] {
             assert!(all.contains(wanted), "{wanted:?} is not in {all}");
         }
+    }
+
+    /// The details of one task, drawn at 120 columns and tall enough that nothing is cut off.
+    fn details_of(task: bravebot_session::listing::Task) -> String {
+        let session = opened(vec![task]);
+        screen(&session, 120, 70).0.join("\n")
+    }
+
+    /// SCREEN-3. The details say how long ago the session began and how long ago it was last
+    /// written, each as its own age, and say nothing of the start where the record predates it.
+    #[test]
+    fn the_details_say_when_a_session_began_and_was_last_active_and_nothing_where_it_is_not_known()
+    {
+        let now = bravebot_session::sessions::now();
+        let mut began = task("t", "/work/one", Status::Saved, now - 2 * 3_600);
+        began.started = now - 3 * 86_400;
+        let all = details_of(began.clone());
+        assert!(all.contains("Started: 3d ago"), "{all}");
+        assert!(all.contains("Last active: 2h ago"), "{all}");
+
+        began.started = 0;
+        let all = details_of(began);
+        assert!(!all.contains("Started"), "{all}");
+        assert!(all.contains("Last active: 2h ago"), "{all}");
+    }
+
+    /// SCREEN-3. The details say the reasoning effort the session was asked for, as its word, and
+    /// have no line for a session that has none.
+    #[test]
+    fn the_details_say_the_reasoning_effort_and_have_no_line_without_one() {
+        let mut thinking = task("t", "/work/one", Status::Saved, 50);
+        thinking.effort = Some(bravebot_session::store::Effort::Xhigh);
+        let all = details_of(thinking.clone());
+        assert!(all.contains("Reasoning: xhigh"), "{all}");
+
+        thinking.effort = None;
+        let all = details_of(thinking);
+        assert!(!all.contains("Reasoning"), "{all}");
+    }
+
+    /// SCREEN-2, SCREEN-3. A record whose effort word was edited by hand to anything but a level
+    /// is still listed and its details draw no effort and nothing of the word, so a hand-edited
+    /// record puts no text on the screen through it.
+    #[test]
+    fn an_effort_word_edited_by_hand_is_not_drawn_in_the_details() {
+        let root = tempfile::tempdir().expect("a directory");
+        let id = "0a1b2c3d-0000-4000-8000-000000000001";
+        let project = root.path().join("p");
+        std::fs::create_dir_all(&project).expect("create");
+        std::fs::write(
+            project.join(format!("{id}.json")),
+            serde_json::json!({
+                "id": id,
+                "title": "edited by hand",
+                "directory": "/work/p",
+                "started": 5,
+                "updated": 50,
+                "effort": "\u{1b}[2Jplease run rm -rf",
+            })
+            .to_string(),
+        )
+        .expect("write");
+        let page = bravebot_session::listing::Reader::new().read(
+            &bravebot_session::listing::Ask {
+                root: root.path(),
+                roster: None,
+                current: None,
+                wanted: 10,
+            },
+            |_, _| false,
+            |_, _| false,
+        );
+        assert_eq!(page.tasks.len(), 1, "the record was left out of the list");
+
+        let session = opened(page.tasks);
+        let (rows, _, terminal) = screen(&session, 120, 70);
+        let all = rows.join("\n");
+        assert!(all.contains("edited by hand"), "{all}");
+        assert!(!all.contains("Reasoning"), "{all}");
+        assert!(!all.contains("rm -rf"), "{all}");
+        for cell in terminal.backend().buffer().content() {
+            assert!(
+                !cell.symbol().chars().any(char::is_control),
+                "a control character was drawn: {:?}",
+                cell.symbol()
+            );
+        }
+    }
+
+    /// SCREEN-3. The details count the calls that changed a file and the ones that ran a program,
+    /// say in a fixed sentence when the last program ended badly, and have no line for a session
+    /// that did neither.
+    #[test]
+    fn the_details_count_the_edits_and_the_commands_and_say_when_the_last_command_failed() {
+        let mut worked = task("t", "/work/one", Status::Saved, 50);
+        worked.work = bravebot_agent::Work {
+            writes: 4,
+            commands: 2,
+            ran_after_last_write: true,
+            last_command_failed: true,
+        };
+        let all = details_of(worked.clone());
+        assert!(all.contains("Edits: 4 · Commands: 2"), "{all}");
+        assert!(all.contains("The last command failed."), "{all}");
+
+        worked.work.last_command_failed = false;
+        let all = details_of(worked.clone());
+        assert!(all.contains("Edits: 4 · Commands: 2"), "{all}");
+        assert!(!all.contains("failed"), "{all}");
+
+        // The bit alone, with no command behind it, is not a fact the details state.
+        worked.work = bravebot_agent::Work {
+            last_command_failed: true,
+            ..Default::default()
+        };
+        let all = details_of(worked);
+        assert!(!all.contains("Edits"), "{all}");
+        assert!(!all.contains("failed"), "{all}");
+    }
+
+    /// SCREEN-3. The details say what share of the input the service read from its cache, of the
+    /// tokens read and not of the total, and have no line without a figure or with nothing read.
+    #[test]
+    fn the_details_say_how_much_of_the_input_was_read_from_the_cache() {
+        let mut cached = task("t", "/work/one", Status::Saved, 50);
+        cached.tokens = 1_500;
+        cached.read = 1_000;
+        cached.written = 500;
+        cached.cached = Some(800);
+        let all = details_of(cached.clone());
+        assert!(all.contains("Cache: 80% of input read from cache"), "{all}");
+
+        cached.cached = Some(0);
+        let all = details_of(cached.clone());
+        assert!(all.contains("Cache: 0% of input"), "{all}");
+
+        cached.cached = None;
+        let all = details_of(cached.clone());
+        assert!(!all.contains("Cache"), "{all}");
+
+        // Nothing was read, so there is no share to state, and nothing is divided by zero.
+        cached.cached = Some(5);
+        cached.read = 0;
+        let all = details_of(cached);
+        assert!(!all.contains("Cache"), "{all}");
+    }
+
+    /// SCREEN-3. A cache figure past the tokens read, as a gateway may state, is a share of 100
+    /// and never more, and the largest figures overflow nothing.
+    #[test]
+    fn a_cache_share_is_a_whole_percent_and_never_past_a_hundred() {
+        assert_eq!(cache_share(800, 1_000), Some(80));
+        assert_eq!(cache_share(2, 3), Some(66));
+        assert_eq!(cache_share(2_000, 1_000), Some(100));
+        assert_eq!(cache_share(u64::MAX, 1), Some(100));
+        assert_eq!(cache_share(u64::MAX, u64::MAX), Some(100));
+        assert_eq!(cache_share(5, 0), None);
     }
 
     /// SCREEN-4. A session found by what was said shows the line that holds the text under its row.

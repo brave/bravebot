@@ -81,12 +81,16 @@ see.
 ### SCREEN-2: a session has a closed set of fields, and none of them is content
 
 A session holds its id, the directory it ran in, its name, its status, the kind of prompt held where one
-is, when its record was last written and when it began, the model that answered, the branch, the
-turns and the tokens it spent, the last prompt a person typed where it has a roster entry, the mode a
-background session runs in, the agent definition it was started with, the issue and pull request a
-person linked, the id of the session it was handed off from, what it takes up on disk, and whether it
-has a roster entry, a process running it, this terminal or a manifest run. Each is something a person typed, a fact about a process or a file, or a word from
-a fixed set. There is no field for a reply, a tool result, a file's contents, a command's output or
+is, when its record was last written and when it began, the model that answered, the reasoning effort
+it was asked for at its last turn, the branch, the turns and the tokens it spent, how many of those
+the service served out of its prompt cache where it stated a figure, how many calls changed a file and
+how many ran a program and whether the last program ended badly, the last prompt a person typed where
+it has a roster entry, the mode a background session runs in, the agent definition it was started
+with, the issue and pull request a person linked, the id of the session it was handed off from, what
+it takes up on disk, and whether it has a roster entry, a process running it, this terminal or a
+manifest run. Each is something a person typed, a fact about a process or a file, or a word from
+a fixed set. The reasoning effort is read through the fixed set of effort words
+([SESSION-15](sessions.md#SESSION-15)), so a record edited by hand to hold another word has none. There is no field for a reply, a tool result, a file's contents, a command's output or
 the text of a question, and the reader parses only the fields it names, so the text of a turn is
 never taken from the record.
 
@@ -116,6 +120,7 @@ lets a reader of a diff check that nothing untrusted is among them. Parsing 40 r
 be the cost of every refresh.
 
 `verified-by: bravebot_session::listing::sessions_of_every_project_are_listed_with_their_fields`
+`verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_session::listing::a_page_holds_the_newest_and_says_when_there_are_older`
 `verified-by: bravebot_session::listing::a_live_session_is_listed_past_the_room_and_takes_none`
 `verified-by: bravebot_session::listing::a_running_session_with_no_record_yet_is_listed_from_its_roster_entry`
@@ -124,6 +129,7 @@ be the cost of every refresh.
 `verified-by: bravebot_tui::sessions_screen::a_control_character_in_what_a_row_holds_is_pictured`
 `verified-by: bravebot_tui::sessions_screen::a_name_of_several_lines_is_one_row_of_its_first`
 `verified-by: bravebot_tui::render::sessions_screen::a_control_character_in_what_a_row_holds_is_never_drawn`
+`verified-by: bravebot_tui::render::sessions_screen::an_effort_word_edited_by_hand_is_not_drawn_in_the_details`
 `verified-by: bravebot_tui::sessions_screen::a_hidden_task_stays_off_the_list_through_a_refresh`
 `verified-by: bravebot_tui::sessions_screen_tests::a_hidden_task_stays_hidden_the_next_time_the_sessions_screen_is_opened_in_this_session`
 
@@ -140,9 +146,14 @@ stopped, and `saved` is a record nothing runs. A roster entry whose process is g
 terminal says, whatever the roster or the lock says.
 
 Where the screen is 90 columns wide beside the list, the details of the session under the cursor stand
-at the right: its name, status, model, mode, turns, tokens as read and written, directory, branch, agent, the
+at the right: its name, status, when it began and was last written as ages, model, the reasoning
+effort, mode, turns, tokens as read and written, the share of the input the service served from its
+prompt cache, the number of edits and of commands it made and whether the last command failed,
+directory, branch, agent, the
 issue and pull request linked, the session it was handed off from, size, the whole id and the last
-prompt. Where the screen is too narrow for them, a line under the list says the branch, the size and
+prompt. A line is drawn only where its fact is known: a record that predates the start time, the
+effort, the work counts or the cache figures has no line for it, and the cache share is not drawn
+where no input was read. Where the screen is too narrow for them, a line under the list says the branch, the size and
 the start of the id of the session under the cursor, and where the list is 100 columns wide the branch
 and the size are columns of every row. A manifest run, which can be read and not continued, says so on
 its row. A session that needs a person says that it does and which kind of prompt it holds, by a
@@ -162,6 +173,11 @@ is idle or working would be a guess.
 `verified-by: bravebot_tui::render::sessions_screen::the_status_and_age_columns_are_dropped_where_the_list_is_too_narrow`
 `verified-by: bravebot_tui::render::sessions_screen::the_row_under_the_cursor_is_marked_and_filled_edge_to_edge`
 `verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_say_when_a_session_began_and_was_last_active_and_nothing_where_it_is_not_known`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_say_the_reasoning_effort_and_have_no_line_without_one`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_count_the_edits_and_the_commands_and_say_when_the_last_command_failed`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_say_how_much_of_the_input_was_read_from_the_cache`
+`verified-by: bravebot_tui::render::sessions_screen::a_cache_share_is_a_whole_percent_and_never_past_a_hundred`
 `verified-by: bravebot_tui::render::sessions_screen::a_wide_list_has_the_branch_and_the_size_of_each_session_in_columns`
 `verified-by: bravebot_tui::render::sessions_screen::a_narrow_list_says_the_branch_size_and_id_of_the_cursor_row_under_it`
 

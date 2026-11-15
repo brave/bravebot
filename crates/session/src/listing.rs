@@ -14,6 +14,8 @@
 
 use crate::jobs::{Held, Mode, Roster, State};
 use crate::sessions::{self, Listed};
+use bravebot_agent::Work;
+use bravebot_aichat::protocol::{Cached, Effort};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -203,6 +205,15 @@ pub struct Task {
     pub tokens: u64,
     pub read: u64,
     pub written: u64,
+    /// Of `read`, how many tokens the service served out of its prompt cache, or `None` where the
+    /// record holds no cache figure.
+    pub cached: Option<u64>,
+    /// The reasoning effort the last turn was sent with, read through the fixed set of levels, so a
+    /// word the record holds that names none of them is `None`.
+    pub effort: Option<Effort>,
+    /// How many calls changed a file and how many ran a program, and whether the last program
+    /// ended badly. Counts the driver kept and a fact about an exit status.
+    pub work: Work,
     /// The mode a background session runs in.
     pub mode: Option<Mode>,
     /// Whether the session has a roster entry, a process running it or not.
@@ -514,6 +525,11 @@ fn task_of(
         tokens: listed.tokens,
         read: listed.split.read,
         written: listed.split.written,
+        cached: Some(listed.split.cache)
+            .filter(Cached::any)
+            .map(|cache| cache.read_tokens),
+        effort: listed.effort.as_deref().and_then(Effort::named),
+        work: listed.work,
         mode: entry.map(|entry| entry.job.mode),
         background: entry.is_some(),
         live: entry.is_some_and(|entry| entry.live),
@@ -560,6 +576,9 @@ pub fn task_of_entry(entry: &crate::jobs::Seen) -> Task {
         tokens: 0,
         read: 0,
         written: 0,
+        cached: None,
+        effort: None,
+        work: Work::default(),
         mode: Some(entry.job.mode),
         background: true,
         live: entry.live,
@@ -732,6 +751,7 @@ mod tests {
     const ONE: &str = "0a1b2c3d-0000-4000-8000-000000000001";
     const TWO: &str = "0a1b2c3d-0000-4000-8000-000000000002";
     const THREE: &str = "0a1b2c3d-0000-4000-8000-000000000003";
+    const FOUR: &str = "0a1b2c3d-0000-4000-8000-000000000004";
 
     fn scratch(name: &str) -> PathBuf {
         let path = crate::testutil::scratch_dir(name);
@@ -792,6 +812,85 @@ mod tests {
         assert_eq!((first.read, first.written, first.turns), (1000, 500, 3));
         assert_eq!(first.status, Status::Saved);
         assert!(!page.more);
+    }
+
+    /// `fields` merged into the record file at `path`, over what `record` wrote.
+    fn amend(path: &Path, fields: serde_json::Value) {
+        let mut body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("read")).expect("json");
+        for (name, value) in fields.as_object().expect("an object") {
+            body[name.as_str()] = value.clone();
+        }
+        std::fs::write(path, body.to_string()).expect("write");
+    }
+
+    /// SCREEN-2. The reasoning effort, the counts of what the session changed and ran, and the cache
+    /// figure are listed from the record, a record without them lists none, and a word that names
+    /// no level lists no effort and is not left out.
+    #[test]
+    fn a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none() {
+        let root = scratch("sessions-screen-effort-work-cache");
+        let full = record(&root, "a", ONE, "full", 400);
+        amend(
+            &full,
+            serde_json::json!({
+                "effort": "xhigh",
+                "work": {"writes": 4, "commands": 2, "last_command_failed": true},
+                "split": {
+                    "read": 1000,
+                    "written": 500,
+                    "cache": {"read_tokens": 800, "written_tokens": 100}
+                },
+            }),
+        );
+        record(&root, "a", TWO, "older", 300);
+        let edited = record(&root, "a", THREE, "edited", 200);
+        amend(&edited, serde_json::json!({"effort": "\u{1b}[2Jhigh"}));
+        let written_only = record(&root, "a", FOUR, "written only", 100);
+        amend(
+            &written_only,
+            serde_json::json!({
+                "effort": "High",
+                "split": {"read": 1000, "written": 500, "cache": {"written_tokens": 100}},
+            }),
+        );
+
+        let page = read(&mut Reader::new(), &ask(&root, None, 10));
+
+        let by = |title: &str| {
+            page.tasks
+                .iter()
+                .find(|task| task.title == title)
+                .expect(title)
+        };
+        let full = by("full");
+        assert_eq!(full.effort, Some(Effort::Xhigh));
+        assert_eq!(
+            full.work,
+            Work {
+                writes: 4,
+                commands: 2,
+                ran_after_last_write: false,
+                last_command_failed: true
+            }
+        );
+        assert_eq!(full.cached, Some(800));
+        let older = by("older");
+        assert_eq!(older.effort, None);
+        assert_eq!(older.work, Work::default());
+        assert_eq!(older.cached, None);
+        assert_eq!(
+            by("edited").effort,
+            None,
+            "a word that names no level was listed as one"
+        );
+        let written_only = by("written only");
+        assert_eq!(written_only.effort, Some(Effort::High));
+        assert_eq!(
+            written_only.cached,
+            Some(0),
+            "a cache written into and never read from is a figure of zero, not no figure"
+        );
     }
 
     /// SCREEN-2. Room is counted in tasks, the ones past it are said to exist, and a record past the

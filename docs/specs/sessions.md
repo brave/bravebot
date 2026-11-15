@@ -384,6 +384,15 @@ The status panel does not read them back. It reports the last turn run in this p
 resumed session shows no cache until a turn has run in it
 ([PANEL-8](info-panel.md#PANEL-8)).
 
+The record also keeps the reasoning effort the terminal sent with the last turn it ran, as the word
+of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was sent, as with a model
+that reads none, and a record written before it was kept has none. The list reads the word through
+the fixed set of levels, so a word that names none of them is listed as no effort and the record is
+still listed. The list also reads the record's counts of the calls that changed a file and that ran a
+program and whether the last program ended badly, and the cache figures of the split, so that the
+Sessions screen can say them ([SCREEN-3](sessions-screen.md#SCREEN-3)). A resume keeps the word until
+its next turn replaces it.
+
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
 session, and `schedule history` reads the tokens it spent from the record.
@@ -418,6 +427,9 @@ than the one in force at the time.
 `verified-by: bravebot_session::sessions::a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn`
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
+`verified-by: bravebot_session::sessions::a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it`
+`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
 `verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`

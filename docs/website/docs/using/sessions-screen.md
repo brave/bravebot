@@ -54,8 +54,11 @@ too narrow for the details, a line under the list gives the branch, the size and
 of the session under the cursor. A manifest run, which can be read and not continued, is marked on its
 row.
 
-On a screen wide enough, the details of the session under the cursor stand at the right: its model,
-the mode a background session runs in, the turns and tokens it has spent, its directory and branch,
+On a screen wide enough, the details of the session under the cursor stand at the right: when it
+began and when it was last active, its model, the reasoning effort it was asked for at its last turn,
+the mode a background session runs in, the turns and tokens it has spent, how much of its input the
+service read from its prompt cache, how many edits and commands it made and whether the last command
+failed, its directory and branch,
 its agent, the issue and pull request you linked, the session it was handed off from, its size, its
 whole id and the last prompt you typed to it. A session that needs you says which kind of question it holds.
 It does not show what the model said, so a name or a status on this screen is always something you

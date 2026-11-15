@@ -165,12 +165,16 @@ fr:sessions-screen-delete-title
 fr:sessions-screen-details-agent
 fr:sessions-screen-details-attention
 fr:sessions-screen-details-branch
+fr:sessions-screen-details-cache
+fr:sessions-screen-details-changes
 fr:sessions-screen-details-elsewhere
 fr:sessions-screen-details-handed-off
 fr:sessions-screen-details-here
 fr:sessions-screen-details-id
 fr:sessions-screen-details-interrupted
 fr:sessions-screen-details-issue
+fr:sessions-screen-details-last-active
+fr:sessions-screen-details-last-command-failed
 fr:sessions-screen-details-manifest
 fr:sessions-screen-details-mode
 fr:sessions-screen-details-model
@@ -178,7 +182,9 @@ fr:sessions-screen-details-open-to-answer
 fr:sessions-screen-details-project
 fr:sessions-screen-details-prompt
 fr:sessions-screen-details-pull-request
+fr:sessions-screen-details-reasoning
 fr:sessions-screen-details-size
+fr:sessions-screen-details-started
 fr:sessions-screen-details-title
 fr:sessions-screen-details-tokens-split
 fr:sessions-screen-details-tokens-total
