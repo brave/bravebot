@@ -34,6 +34,7 @@ pub mod agent;
 #[cfg(all(test, unix))]
 mod alloc_probe;
 pub mod base;
+mod canonical;
 pub mod crash;
 pub mod hosts;
 pub mod inspection;

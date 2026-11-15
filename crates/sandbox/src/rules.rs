@@ -859,7 +859,7 @@ fn one(
     }
     let named = if wildcard {
         // What a pattern names is judged where it leads, as a path written out is.
-        expand(&path, anchor.components().count())?
+        expand(&path, anchor.components().count(), list.is_a_denial())?
             .iter()
             .map(|found| resolved(found))
             .collect()
@@ -1013,7 +1013,11 @@ fn same_path(left: &Path, right: &Path) -> bool {
 /// The directory its fixed leading names reach is walked, listing each directory once and not
 /// following a link, so the walk is the same listing the Linux backend makes when it grants entry
 /// by entry. A pattern that is not met by anything is not an error and names nothing.
-fn expand(pattern: &Path, anchored: usize) -> Result<Vec<PathBuf>, Reason> {
+///
+/// `folding` is whether a name is also met in the other case and the other normalisation form
+/// ([`matches_folded`]), which a list that takes reach away asks for and a list that adds it does
+/// not.
+fn expand(pattern: &Path, anchored: usize, folding: bool) -> Result<Vec<PathBuf>, Reason> {
     let mut fixed = PathBuf::new();
     let mut rest: Vec<String> = Vec::new();
     for (at, part) in pattern.components().enumerate() {
@@ -1030,7 +1034,11 @@ fn expand(pattern: &Path, anchored: usize) -> Result<Vec<PathBuf>, Reason> {
     let mut out = Vec::new();
     let mut seen = 0usize;
     let mut bound = false;
-    walk(&start, &rest, 0, &mut seen, &mut bound, &mut out);
+    let matches: fn(&str, &str) -> bool = match folding {
+        true => matches_folded,
+        false => matches_name,
+    };
+    walk(&start, &rest, 0, &mut seen, &mut bound, &mut out, matches);
     match bound {
         true => Err(Reason::TooBroad),
         false => Ok(out),
@@ -1044,6 +1052,7 @@ fn walk(
     seen: &mut usize,
     bound: &mut bool,
     out: &mut Vec<PathBuf>,
+    matches: fn(&str, &str) -> bool,
 ) {
     let Some((first, after)) = rest.split_first() else {
         return;
@@ -1057,7 +1066,7 @@ fn walk(
             out.push(directory.to_path_buf());
             return;
         }
-        walk(directory, after, depth, seen, bound, out);
+        walk(directory, after, depth, seen, bound, out, matches);
     }
     if depth >= GLOB_DEPTH_BOUND {
         *bound = true;
@@ -1077,14 +1086,123 @@ fn walk(
         let is_a_directory = entry.file_type().is_ok_and(|kind| kind.is_dir());
         if first == "**" {
             if is_a_directory {
-                walk(&child, rest, depth + 1, seen, bound, out);
+                walk(&child, rest, depth + 1, seen, bound, out, matches);
             }
-        } else if matches_name(first, &name) {
+        } else if matches(first, &name) {
             if after.is_empty() {
                 out.push(child);
             } else if is_a_directory {
-                walk(&child, after, depth + 1, seen, bound, out);
+                walk(&child, after, depth + 1, seen, bound, out, matches);
             }
+        }
+    }
+}
+
+/// Whether `name` is met by `pattern` as written, or once both are in the form a volume that
+/// folds case and Unicode form compares names in.
+///
+/// A volume such as APFS lists a name as it was made and opens it under another case or another
+/// canonically equivalent form, so a refusal of `*.pem` has to name `SERVER.PEM`. The fold is the
+/// one the trust map compares names under (TRUST-2): canonical decomposition, then upper case and
+/// lower case, which joins `\u{17f}` and `s` and the sharp s with two letters, and no compatibility
+/// form, accent or space. A `?` in the folded comparison is one letter as a person reads it: the
+/// letter with the marks that follow it, a Hangul syllable written as its jamo, or a letter whose
+/// case fold is longer than one character, such as the sharp s. The name as written is tried as
+/// well, where a `?` is one character of the name as it is stored. A volume that holds two names
+/// apart is refused more than the entry spells and never less.
+fn matches_folded(pattern: &str, name: &str) -> bool {
+    matches_name(pattern, name) || matches_units(&units(pattern), &units(name))
+}
+
+/// `text` as the letters a person reads in it, each decomposed with its case folded out, upper case
+/// first so a letter whose lower case is itself still meets the letter a volume folds it to, and
+/// decomposed again since a case mapping can leave a string undecomposed. A `*` or a `?` is a unit
+/// of its own.
+fn units(text: &str) -> Vec<String> {
+    let mut units: Vec<String> = Vec::new();
+    let mut previous_is_wildcard = false;
+    for c in crate::canonical::decompose(text).chars() {
+        // A combining mark and a Hangul vowel or trailing jamo continue the letter before them.
+        let continues =
+            crate::canonical::combining_class(c) != 0 || matches!(u32::from(c), 0x1160..=0x11FF);
+        match units.last_mut() {
+            Some(last) if continues && !previous_is_wildcard => last.push(c),
+            _ => units.push(c.to_string()),
+        }
+        previous_is_wildcard = matches!(c, '*' | '?');
+    }
+    units
+        .into_iter()
+        .map(|unit| match unit.as_str() {
+            "*" | "?" => unit,
+            _ => {
+                let cased: String = unit
+                    .chars()
+                    .flat_map(char::to_uppercase)
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                crate::canonical::decompose(&cased)
+            }
+        })
+        .collect()
+}
+
+/// [`matches_name`] over units: a `*` is any run of them and a `?` is one. A letter meets the
+/// letters it folds to as a whole, so the sharp s, one unit folded to `ss`, meets the two units
+/// `s` and `s`.
+fn matches_units(pattern: &[String], name: &[String]) -> bool {
+    let (mut p, mut n) = (0, 0);
+    let (mut star, mut resume) = (None, 0);
+    while n < name.len() {
+        let literal = if p < pattern.len() && pattern[p] != "*" && pattern[p] != "?" {
+            literal_run(pattern, p, name, n)
+        } else {
+            None
+        };
+        if p < pattern.len() && pattern[p] == "*" {
+            star = Some(p);
+            resume = n;
+            p += 1;
+        } else if p < pattern.len() && pattern[p] == "?" {
+            p += 1;
+            n += 1;
+        } else if let Some((pattern_units, name_units)) = literal {
+            p += pattern_units;
+            n += name_units;
+        } else if let Some(at) = star {
+            p = at + 1;
+            resume += 1;
+            n = resume;
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|unit| unit == "*")
+}
+
+/// How many units of `pattern` from `p` and of `name` from `n` spell the same folded text, when
+/// the units there differ in how they split it: the one that is a prefix of the other takes the
+/// units after it until both are the same length. None when they never spell the same text, and a
+/// pattern run stops at a wildcard.
+fn literal_run(pattern: &[String], p: usize, name: &[String], n: usize) -> Option<(usize, usize)> {
+    let (mut from_pattern, mut from_name) = (pattern[p].clone(), name[n].clone());
+    let (mut pattern_units, mut name_units) = (1, 1);
+    loop {
+        if from_pattern == from_name {
+            return Some((pattern_units, name_units));
+        }
+        if from_pattern.len() < from_name.len() && from_name.starts_with(&from_pattern) {
+            let next = pattern.get(p + pattern_units)?;
+            if next == "*" || next == "?" {
+                return None;
+            }
+            from_pattern.push_str(next);
+            pattern_units += 1;
+        } else if from_name.len() < from_pattern.len() && from_pattern.starts_with(&from_name) {
+            from_name.push_str(name.get(n + name_units)?);
+            name_units += 1;
+        } else {
+            return None;
         }
     }
 }
@@ -1700,6 +1818,187 @@ mod tests {
             &base,
         );
         assert_eq!(refusal_of(&write), Some(Reason::GlobOnAWrite));
+    }
+
+    /// The paths a `denyRead` or `allowRead` glob names in `base`, relative to `base`.
+    fn named_by(list: List, glob: &str, base: &Path) -> Vec<PathBuf> {
+        let home = fresh("rules-fold-home");
+        let rules = resolve(&only(list, glob), Some(&home), None, base);
+        let State::InForce(paths) = &rules.items()[0].state else {
+            panic!("refused");
+        };
+        let root = resolved(base);
+        let mut named: Vec<PathBuf> = paths
+            .iter()
+            .map(|path| path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect();
+        named.sort();
+        named
+    }
+
+    /// A volume that folds case opens `SERVER.PEM` as `server.pem` and lists it as it was made, so
+    /// a glob that compared names exactly would hold back nothing over it. The glob also meets a
+    /// name in another case on a volume that holds the two apart, which holds back more than the
+    /// entry spells and never less. A name the glob does not spell in any case stays readable.
+    #[test]
+    fn a_deny_glob_meets_a_name_in_any_case() {
+        let base = fresh("rules-fold-case");
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("SERVER.PEM"), "").unwrap();
+        fs::write(base.join("sub/Prod.Pem"), "").unwrap();
+        fs::write(base.join("lower.pem"), "").unwrap();
+        fs::write(base.join("server.pem.bak"), "").unwrap();
+        fs::write(base.join("notes.txt"), "").unwrap();
+        for glob in ["*.pem", "**/*.pem", "*.PEM", "sub/*.pEm"] {
+            let named = named_by(List::DenyRead, glob, &base);
+            let wanted: &[&str] = match glob {
+                "sub/*.pEm" => &["sub/Prod.Pem"],
+                "*.pem" | "*.PEM" => &["SERVER.PEM", "lower.pem"],
+                _ => &["SERVER.PEM", "lower.pem", "sub/Prod.Pem"],
+            };
+            let mut named = named;
+            named.sort();
+            let mut wanted: Vec<PathBuf> = wanted.iter().map(PathBuf::from).collect();
+            wanted.sort();
+            assert_eq!(named, wanted, "{glob}");
+        }
+    }
+
+    /// A directory segment of a glob that holds a wildcard is met in any case as well, since the
+    /// walk reads each segment the way it reads a file name. A segment with no wildcard is a name
+    /// the volume resolves itself.
+    #[test]
+    fn a_deny_glob_meets_a_directory_in_any_case() {
+        let base = fresh("rules-fold-directory");
+        fs::create_dir_all(base.join("Secrets")).unwrap();
+        fs::write(base.join("Secrets/key.pem"), "").unwrap();
+        assert_eq!(
+            named_by(List::DenyRead, "SECR?TS/*.pem", &base),
+            vec![PathBuf::from("Secrets/key.pem")]
+        );
+    }
+
+    /// APFS opens `Re\u{301}sume\u{301}.txt` as `R\u{e9}sum\u{e9}.txt` and lists it as it was made. A glob
+    /// typed in either form meets the file made in the other.
+    #[test]
+    fn a_deny_glob_meets_a_name_in_either_normalisation_form() {
+        let nfd = "Re\u{301}sume\u{301}.txt";
+        let nfc = "R\u{e9}sum\u{e9}.txt";
+        for (made, typed) in [(nfd, "R\u{e9}sum\u{e9}*"), (nfc, "Re\u{301}sume\u{301}*")] {
+            let base = fresh("rules-fold-form");
+            fs::write(base.join(made), "").unwrap();
+            fs::write(base.join("Resume.txt"), "").unwrap();
+            assert_eq!(
+                named_by(List::DenyRead, typed, &base),
+                vec![PathBuf::from(made)],
+                "{typed:?} over {made:?}"
+            );
+        }
+    }
+
+    /// A `?` is one letter as a person reads it, so it meets an accented letter stored as the letter
+    /// and its mark. Taking the letter alone would leave the mark to match the next character of the
+    /// pattern and hold back nothing over the decomposed file.
+    #[test]
+    fn a_question_mark_in_a_deny_glob_meets_a_letter_with_its_marks() {
+        let nfd = "Re\u{301}sume\u{301}.txt";
+        let nfc = "R\u{e9}sum\u{e9}.txt";
+        for made in [nfd, nfc] {
+            let base = fresh("rules-fold-question");
+            fs::write(base.join(made), "").unwrap();
+            fs::write(base.join("Rsum.txt"), "").unwrap();
+            assert_eq!(
+                named_by(List::DenyRead, "R?sum?.txt", &base),
+                vec![PathBuf::from(made)],
+                "{made:?}"
+            );
+        }
+    }
+
+    /// A `?` is one syllable whether a volume stores it as the syllable or as its jamo, and one
+    /// letter whatever its case fold is: the sharp s folds to two letters and is still one `?`.
+    #[test]
+    fn a_question_mark_in_a_deny_glob_meets_a_syllable_and_a_letter_that_folds_to_two() {
+        let composed = "\u{d55c}.txt";
+        let jamo = "\u{1112}\u{1161}\u{11ab}.txt";
+        for made in [composed, jamo] {
+            let base = fresh("rules-fold-hangul");
+            fs::write(base.join(made), "").unwrap();
+            fs::write(base.join("ab.txt"), "").unwrap();
+            assert_eq!(
+                named_by(List::DenyRead, "?.txt", &base),
+                vec![PathBuf::from(made)],
+                "{made:?}"
+            );
+        }
+        let base = fresh("rules-fold-sharp-s");
+        fs::write(base.join("cla\u{df}.md"), "").unwrap();
+        fs::write(base.join("clab.md"), "").unwrap();
+        fs::write(base.join("clabb.md"), "").unwrap();
+        assert_eq!(
+            named_by(List::DenyRead, "CLA?.MD", &base),
+            vec![PathBuf::from("clab.md"), PathBuf::from("cla\u{df}.md")]
+        );
+    }
+
+    /// The sharp s folds to `ss`, so a deny glob spelled with one meets a name spelled with the
+    /// other, in either direction and with a `*` or a `?` around it.
+    #[test]
+    fn a_deny_glob_meets_a_sharp_s_and_two_letters_either_way() {
+        let base = fresh("rules-fold-sharp-s-pair");
+        fs::write(base.join("STRASSE.PEM"), "").unwrap();
+        fs::write(base.join("stra\u{df}e.key"), "").unwrap();
+        fs::write(base.join("strase.pem"), "").unwrap();
+        assert_eq!(
+            named_by(List::DenyRead, "stra\u{df}e*", &base),
+            vec![
+                PathBuf::from("STRASSE.PEM"),
+                PathBuf::from("stra\u{df}e.key")
+            ]
+        );
+        assert_eq!(
+            named_by(List::DenyRead, "strasse*", &base),
+            vec![
+                PathBuf::from("STRASSE.PEM"),
+                PathBuf::from("stra\u{df}e.key")
+            ]
+        );
+        assert!(matches_folded("*stra\u{df}e.pem", "STRASSE.PEM"));
+        assert!(matches_folded("STRA\u{df}E.*", "strasse.pem"));
+        assert!(!matches_folded("stra\u{df}e.pem", "strase.pem"));
+        assert!(!matches_folded("strass.pem", "stra\u{df}e.pem"));
+    }
+
+    /// A name met as written stays met whatever the fold does to it: a `?` that took the combining
+    /// mark of `e` and U+0301 alone still does, though the fold reads the two as one letter.
+    #[test]
+    fn a_deny_glob_still_meets_every_name_it_met_as_written() {
+        let base = fresh("rules-fold-superset");
+        fs::write(base.join("cla\u{df}.md"), "").unwrap();
+        fs::write(base.join("e\u{301}.txt"), "").unwrap();
+        assert_eq!(
+            named_by(List::DenyRead, "cla?.md", &base),
+            vec![PathBuf::from("cla\u{df}.md")]
+        );
+        assert_eq!(
+            named_by(List::DenyRead, "e?.txt", &base),
+            vec![PathBuf::from("e\u{301}.txt")]
+        );
+    }
+
+    /// An allowance adds reach, so a name that differs only in case or form is not one the entry
+    /// spelled. A glob in `allowRead` meets names exactly.
+    #[test]
+    fn an_allow_glob_meets_names_exactly() {
+        let base = fresh("rules-fold-allow");
+        fs::write(base.join("SERVER.PEM"), "").unwrap();
+        fs::write(base.join("lower.pem"), "").unwrap();
+        fs::write(base.join("Re\u{301}sume\u{301}.txt"), "").unwrap();
+        assert_eq!(
+            named_by(List::AllowRead, "*.pem", &base),
+            vec![PathBuf::from("lower.pem")]
+        );
+        assert!(named_by(List::AllowRead, "R\u{e9}sum\u{e9}*", &base).is_empty());
     }
 
     /// What a pattern matches is judged where it leads, and the directory it is read from is a
