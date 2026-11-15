@@ -222,8 +222,9 @@ server or asks about it, and stops it in this session. A `*` in the name stands 
 characters, so `/mcp remove brave-tabs*` does that for `brave-tabs-manage` and `brave-tabs-read`,
 and `/mcp disable brave-*` stops every server whose name starts with `brave-`. A pattern that fits
 no server changes nothing and says so. The list `/mcp` prints, which is also what a
-click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the
-command waits for the turn to end.
+click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the bare
+word and `list` are carried out as you type them and answer under the turn. `reconnect`, `disable` and
+`remove` wait for the turn to end.
 
 The info panel lists a server only while its tools are offered to the model. If you answer no when
 you are asked whether to offer a server's tools, the server keeps running for the session, is left

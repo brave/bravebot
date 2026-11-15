@@ -916,7 +916,8 @@ off. `reconnect` starts every requested server that is not running and was not t
 `reconnect weather` starts that one, including one turned off. A start takes the road a session takes
 as it opens, so a server whose declaration changed, or that nobody approved, is put to you again.
 `disable weather` stops the server and drops its grant. It writes nothing, so the next session starts
-the server as before. Typed while a turn runs, it waits for the turn to end. See
+the server as before. Typed while a turn runs, the bare word and `list` are carried out as you type
+them, and every other form waits for the turn to end. See
 [starting or stopping one during a session](../customize/mcp-servers.md#starting-or-stopping-one-during-a-session).
 
 ## `/caffeinate`
@@ -1650,7 +1651,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so

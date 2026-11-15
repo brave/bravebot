@@ -394,8 +394,8 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history` | carried out as it is typed |
-| everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>` and every other form of `/schedule` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
 box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
@@ -405,7 +405,13 @@ and the loop would start after it, so two lines of one command are carried out i
 were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
 A `/schedule` that only reads (`list`, `pending`, `history` and the bare word) waits behind a waiting
 `/schedule` that writes, as `/loop stop` waits behind `/loop 5m ...`: a `list` typed after a waiting
-`add` would otherwise answer without the entry the person typed first.
+`add` would otherwise answer without the entry the person typed first. A `/mcp` that only lists (the
+bare word and `list`) waits behind a waiting `/mcp` in the same way, since the waiting line is one that
+starts, turns off or removes a server and the list would otherwise answer without its result. Which
+form a `/mcp` is depends on the words the person typed after it and on nothing a server sent: the
+bare word and `list` alone are the list, so `/mcp listing` and `/mcp list weather` wait. Where this
+section names a waiting `/mcp` as a line that holds another back or leaves it alone, it is one of the
+forms that wait.
 A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
@@ -482,7 +488,8 @@ A command that waits is taken off the box and joins the lines waiting for the tu
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
 waiting. It says why it waits, in a line held under the turn as a command's answer is: it acts on
 what the turn holds or starts a turn of its own, or it waits behind a line typed before it so that it lands where
-it was typed. A command that waits behind a line
+it was typed. The line names the command, and for `/mcp` also the first word typed after it
+(`/mcp reconnect`), because only some forms of `/mcp` wait and the line says which one does. A command that waits behind a line
 names the first line waiting that holds it back: a command as it was typed, such as `/clear`, and
 `the prompt before it` or `the shell line before it` where that line is not a command. Its mark
 under the box says the same in place of `carried out after this`, as `after /clear`, where the
@@ -629,6 +636,13 @@ does not read:
   turn stops it, and `/clear` drops it with the rows it clears. The exchange the turn publishes, and the one a question is asked over, hold the messages the
   conversation stores and copy none of them; the quarantine is not shared.
 
+- **`/mcp` and `/mcp list`.** They say which servers the session runs with how their tools stand and
+  which requested servers are not running, as `/status` reads the same facts
+  ([SERVERS-19](mcp-servers.md#SERVERS-19)). They read the session and the settings, and start,
+  stop and ask nothing, so the turn does not hold what they read. `reconnect` puts questions to the
+  person and takes the terminal, and `disable` and `remove` change the tools the turn offers, so
+  those and any other word after `/mcp` wait. The line says so under the turn, naming `/mcp`, as for
+  every command that waits for the turn to end.
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about
@@ -662,6 +676,9 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
 `verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
 `verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
+`verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 `verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
 `verified-by: bravebot_tui::status::a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs`
 `verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`

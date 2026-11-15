@@ -454,6 +454,8 @@ pub(super) fn run_turn_animated(
     exposed: bravebot_core::credentials::Exposed,
     permissions: &Permissions,
     run: &RunSettings,
+    // What `/mcp` typed during the turn reads of the servers the session requests.
+    settings: &bravebot_config::Settings,
     // The session's record. Its id travels with the task because a run prompt may be answered with
     // the key whose grant outlives the session, and the record of that says which session pressed
     // it so that `/status` can tell a person which answers they are still carrying. The record
@@ -708,6 +710,7 @@ pub(super) fn run_turn_animated(
         workspace,
         scratch,
         config: &mut *config,
+        settings,
     };
 
     let replying = Replying {

@@ -2204,9 +2204,12 @@ cannot know the session is incognito. The command line stays the one writer of a
 the settings files that request one ([layering](layering.md)).
 
 An alias the settings do not request is not started and not turned off by being named. Nothing a
-server sent decides what `/mcp` does: the person names the alias. Typed during a turn, `/mcp` waits
-for the turn to end, as the other commands that touch the network or the terminal do
-([CMD-8](commands.md#CMD-8)).
+server sent decides what `/mcp` does: the person names the alias. Typed during a turn, the bare word
+and `list` are carried out as they are typed, since they only read the servers the session holds, and
+answer under the turn as `/status` does. Every other form waits for the turn to end, as the other
+commands that touch the network or the terminal do: `reconnect` puts questions to the person and
+takes the terminal, and `disable` and `remove` change the tools the turn offers. The words the person
+typed decide which form it is, and nothing a server sent does ([CMD-8](commands.md#CMD-8)).
 
 **Why.** A server that failed its handshake or timed out is otherwise absent until the session
 ends, and a person who has fixed its install or sign-in would have to lose the conversation to try
@@ -2235,7 +2238,9 @@ callable that the person turned off.
 `verified-by: bravebot_config::mcp::a_pattern_names_the_aliases_whose_spelling_fits_around_its_stars`
 `verified-by: bravebot_config::mcp::a_pattern_has_a_star_and_only_the_characters_of_an_alias`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
-`verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 
 <a id="SERVERS-20"></a>
 ### SERVERS-20: `/status` lists what the confinement of each started local server grants

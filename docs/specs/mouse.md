@@ -859,10 +859,10 @@ section ([MOUSE-11](#MOUSE-11), [MOUSE-12](#MOUSE-12), [MOUSE-13](#MOUSE-13), [M
 box as it was. At the plain prompt that is what Enter does there. While a
 turn runs it is carried out at once where the table says the command runs mid-turn and no line
 waiting ahead of it could change what it acts on ([CMD-8](commands.md#CMD-8)): `/model` and
-`/effort` ask for their picker as a mode of the session, `/context` is said as a command's
-answer is, so what the turn did is not counted as what it said, and `/diff` draws the files state or
-says why it cannot in the same way. Otherwise it waits in the queue
-with the note a typed line gets, as `/mcp` does, which waits for the turn to end. Where the session
+`/effort` ask for their picker as a mode of the session, `/context` and a bare `/mcp` are said as a
+command's answer is, so what the turn did is not counted as what it said, and `/diff` draws the
+files state or says why it cannot in the same way. Otherwise it waits in the queue
+with the note a typed line gets, as `/model` does behind a waiting prompt. Where the session
 is working and no turn is running, as under a summary or an aside, every command waits, and so it does
 while a command the person typed is running, which reads no line typed after it and has nothing to
 carry a click out with. It waits in the queue with a note that says it waits for the command to end,

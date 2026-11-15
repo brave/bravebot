@@ -262,6 +262,8 @@ struct Beside<'a> {
     config: &'a mut Config,
     /// The managed settings, read once before the turn, which `/sandbox` holds a mode to (CMD-8).
     managed: &'a bravebot_config::Managed,
+    /// The settings the session was started with, which say the servers `/mcp` lists as requested.
+    settings: &'a bravebot_config::Settings,
 }
 
 /// A press during a turn that is not one of the keys that only stop it.
@@ -321,6 +323,13 @@ fn carry_out_while_working(
             );
             session.report(report);
         }),
+        // Only the forms that list reach here (CMD-8): the servers are read as the session holds
+        // them, which the turn does not change, and none is started, stopped or asked about.
+        Action::Mcp(argument) if crate::mcp_command::only_lists(&argument) => {
+            session.answer_while_working(|session| {
+                crate::mcp_command::list(session, beside.settings);
+            });
+        }
         Action::SetTheme(name) => {
             session.answer_while_working(|session| set_theme(session, &name));
         }
@@ -9064,10 +9073,11 @@ mod tests {
         );
     }
 
-    /// MOUSE-28: the command a click on the panel's MCP row queued is no prompt anybody typed, so taking
-    /// the prompts back, with the key or with a click, leaves it waiting and does not put it in the
-    /// box, where Enter would send `/mcp` to the planner as words. The regression it rejects is the
-    /// line coming back with the prompts as one more row of the box.
+    /// MOUSE-28: the command a click on the panel's model row queued behind a waiting prompt is no
+    /// prompt anybody typed, so taking the prompts back, with the key or with a click, leaves it
+    /// waiting and does not put it in the box, where Enter would send `/model` to the planner as
+    /// words. The regression it rejects is the line coming back with the prompts as one more row of
+    /// the box.
     #[test]
     fn a_click_queued_command_stays_waiting_when_the_prompts_come_back() {
         for by_click in [false, true] {
@@ -9077,9 +9087,9 @@ mod tests {
             }
             handle_key_while_working(&mut session, key(KeyCode::Enter));
             let buffer = drawn_at(&mut session, 120, 30);
-            let (row, column) = find_cell(&buffer, "notes-server");
+            let (row, column) = find_cell(&buffer, "claude-sonnet");
             click(&mut session, row, column + 1);
-            assert_eq!(waiting(&session), ["second question", "/mcp"]);
+            assert_eq!(waiting(&session), ["second question", "/model"]);
             let buffer = drawn_at(&mut session, 120, 30);
 
             match by_click {
@@ -9093,7 +9103,7 @@ mod tests {
             }
 
             assert_eq!(session.input(), "second question", "by click: {by_click}");
-            assert_eq!(waiting(&session), ["/mcp"], "by click: {by_click}");
+            assert_eq!(waiting(&session), ["/model"], "by click: {by_click}");
         }
     }
 
@@ -9144,17 +9154,21 @@ mod tests {
     #[test]
     fn a_click_on_a_command_a_click_queued_removes_it() {
         let (mut session, _) = panel_of_command_rows(true);
+        for c in "second question".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
         let buffer = drawn_at(&mut session, 120, 30);
-        let (row, column) = find_cell(&buffer, "notes-server");
+        let (row, column) = find_cell(&buffer, "claude-sonnet");
         click(&mut session, row, column + 1);
-        assert_eq!(waiting(&session), ["/mcp"]);
+        assert_eq!(waiting(&session), ["second question", "/model"]);
 
         // The row above its mark, since the note the click made also names the command.
         let buffer = drawn_at(&mut session, 120, 30);
-        let (mark, column) = find_cell(&buffer, "carried out after this");
+        let (mark, column) = find_cell(&buffer, "after the prompt before it");
         assert_eq!(click(&mut session, mark - 1, column), Action::Redraw);
 
-        assert!(waiting(&session).is_empty(), "{:?}", waiting(&session));
+        assert_eq!(waiting(&session), ["second question"]);
         assert!(session.input().is_empty(), "{:?}", session.input());
     }
 
@@ -9205,14 +9219,14 @@ mod tests {
             handle_key_while_working(&mut session, key(KeyCode::Enter));
         }
         let buffer = drawn_at(&mut session, 120, 30);
-        let (row, column) = find_cell(&buffer, "notes-server");
+        let (row, column) = find_cell(&buffer, "claude-sonnet");
         click(&mut session, row, column + 1);
         for c in "half typed".chars() {
             handle_key_while_working(&mut session, key(KeyCode::Char(c)));
         }
         assert_eq!(
             waiting(&session),
-            ["second question", "third question", "/mcp"]
+            ["second question", "third question", "/model"]
         );
         let reaching = session.interjections();
         let buffer = drawn_at(&mut session, 120, 30);
@@ -9803,6 +9817,7 @@ mod tests {
         let mut config = a_config_needing_no_sign_in();
         act(&mut Beside {
             managed: &managed,
+            settings: &bravebot_config::Settings::default(),
             stored: &mut stored,
             root,
             home: None,
@@ -9969,15 +9984,24 @@ mod tests {
         let (row, column) = at("notes-server");
         let remembered = session.history.len();
         beside_a_turn(|beside| clicked_during_a_turn(&mut session, row, column + 1, beside));
-        assert_eq!(waiting_prompts(&session), vec!["/mcp"]);
+        assert!(session.queued.is_empty(), "/mcp waited");
         assert_eq!(
             said_under_the_turn(&session),
-            vec![t!(command_waits_for_the_turn, command = "/mcp").to_string()]
+            vec![t!(mcp_command_none).to_string()],
+            "the servers were not listed under the turn"
         );
         assert_eq!(
             session.history.len(),
             remembered,
             "a click was remembered as a line somebody typed"
+        );
+        // Behind a waiting `/mcp` that starts a server the click waits too, as the typed line does.
+        let (mut behind, _) = panel_of_command_rows(true);
+        wait_as(&mut behind, "/mcp reconnect weather");
+        beside_a_turn(|beside| clicked_during_a_turn(&mut behind, row, column + 1, beside));
+        assert_eq!(
+            waiting_prompts(&behind),
+            vec!["/mcp reconnect weather", "/mcp"]
         );
         let (mut files, _) = panel_of_command_rows(true);
         let (row, column) = at(&rows[5].0);
@@ -14443,6 +14467,7 @@ mod tests {
         );
         press(&mut Beside {
             managed: &bravebot_config::Managed::default(),
+            settings: &bravebot_config::Settings::default(),
             stored: &mut stored,
             root,
             home: None,
@@ -26147,7 +26172,9 @@ mod tests {
 
     /// The words that skip the queue, and no others. Every other row acts on the conversation,
     /// the workspace, the terminal or the network, all of which the turn holds, so a row moved off
-    /// `Waits` would carry out mid-turn something the turn is still using.
+    /// `Waits` would carry out mid-turn something the turn is still using. `/mcp` is among them for
+    /// its forms that only list, which `the_mcp_command_lists_beside_a_turn_and_waits_where_it_would_change_a_server`
+    /// separates from the ones that wait.
     #[test]
     fn only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue() {
         let mut skipping: Vec<&str> = commands()
@@ -26178,6 +26205,7 @@ mod tests {
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
                 LSP_COMMAND,
+                MCP_COMMAND,
                 MODEL_COMMAND,
                 NOTE_COMMAND,
                 OPEN_COMMAND,
@@ -26650,6 +26678,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -26720,6 +26749,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -26858,6 +26888,7 @@ mod tests {
             &Cancel::new(),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -27212,6 +27243,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root: &root,
                 home: None,
@@ -27270,6 +27302,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root: &root,
                 home: None,
@@ -27707,6 +27740,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -27903,6 +27937,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -27952,6 +27987,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -28090,6 +28126,7 @@ mod tests {
             ctrl_enter(),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -28128,6 +28165,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -28202,6 +28240,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root: &root,
                 home: Some(&home),
@@ -28921,27 +28960,192 @@ mod tests {
         }
     }
 
-    /// A start puts questions to the person and takes the terminal, so typed mid-turn `/mcp` waits
-    /// behind the turn instead of running beside it (SERVERS-19).
-    #[test]
-    fn the_mcp_command_waits_for_the_turn_in_flight() {
-        let mut session = a_turn_running_on("first");
+    /// Settings for a directory whose checkout requests `aliases`, as `/mcp` reads them.
+    fn settings_requesting_servers(name: &str, aliases: &[&str]) -> bravebot_config::Settings {
+        let directory = tempfile::Builder::new()
+            .prefix(name)
+            .tempdir()
+            .expect("directory")
+            .keep();
+        std::fs::create_dir_all(directory.join(".bravebot")).expect("settings directory");
+        std::fs::write(
+            directory.join(".bravebot/settings.json"),
+            serde_json::json!({ "mcp": { "request": aliases } }).to_string(),
+        )
+        .expect("settings");
+        bravebot_config::Settings::layered(None, Some(&directory), None)
+    }
 
-        nothing_beside(|beside| {
-            typed_during_a_turn(
-                &mut session,
-                "/mcp reconnect weather",
-                key(KeyCode::Enter),
-                beside,
-            )
-        });
-
-        let said = said_under_the_turn(&session);
-        assert!(
-            said.len() == 1 && said[0].contains("waits for the turn to end"),
-            "/mcp was carried out mid-turn: {said:?}"
+    /// `line` typed and sent during a turn, carried out beside settings that request `weather` and
+    /// `docs`, with `docs` turned off for the session.
+    fn mcp_typed_during_a_turn(session: &mut Session, line: &str) {
+        let settings = settings_requesting_servers("bravebot-mcp-mid-turn", &["weather", "docs"]);
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
         );
-        assert_eq!(waiting_prompts(&session), vec!["/mcp reconnect weather"]);
+        typed_during_a_turn(
+            session,
+            line,
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &bravebot_config::Managed::default(),
+                settings: &settings,
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+    }
+
+    /// What `/mcp` says for the settings of `mcp_typed_during_a_turn` while `docs` is turned off.
+    fn the_servers_listed() -> Vec<String> {
+        vec![
+            t!(mcp_command_not_running).to_string(),
+            format!("  {}", t!(mcp_command_not_connected, alias = "weather")),
+            format!("  {}", t!(mcp_command_off, alias = "docs")),
+            t!(mcp_command_remove_hint).to_string(),
+        ]
+    }
+
+    /// `/mcp` and `/mcp list` only read the servers the session holds, so typed mid-turn they are
+    /// carried out as they are typed and say their answer under the turn, as `/status` does, and
+    /// neither waits in the queue nor is remembered a second time (CMD-8, SERVERS-19). The
+    /// regression it rejects is a route that leaves the list waiting for the turn, one that answers
+    /// the bare word and queues `list`, and one that carries the line out and queues it as well.
+    #[test]
+    fn the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed() {
+        for line in ["/mcp", "/mcp list", "/mcp  list "] {
+            let mut session = a_turn_running_on("first");
+            session.servers.disabled.push("docs".to_string());
+            let remembered = session.history.len();
+
+            mcp_typed_during_a_turn(&mut session, line);
+
+            assert_eq!(
+                said_under_the_turn(&session),
+                the_servers_listed(),
+                "{line} did not answer under the turn"
+            );
+            assert!(session.queued.is_empty(), "{line} waited");
+            assert_eq!(session.input(), "", "{line} was left in the box");
+            assert_eq!(
+                session.history.len(),
+                remembered + 1,
+                "{line} was not remembered once"
+            );
+        }
+    }
+
+    /// A start puts questions to the person and takes the terminal, and turning a server off or
+    /// removing it changes the tools the running turn offers, so those forms wait behind the turn
+    /// with the mark that says so, and so does any other word after `/mcp`: only `list` is the list
+    /// (SERVERS-19), and a capital letter makes it another word. The mark names the form that waits,
+    /// the command word and the first word typed after it. The regression it rejects is the whole of
+    /// `/mcp` running beside the turn, a word that is matched by its start, which would carry out
+    /// `/mcp listing` and `/mcp list-all`, one that is matched without regard to case, and a mark
+    /// that names only `/mcp`, which does not say which form waits.
+    #[test]
+    fn the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight() {
+        for (line, form) in [
+            ("/mcp reconnect", "/mcp reconnect"),
+            ("/mcp reconnect weather", "/mcp reconnect"),
+            ("/mcp disable weather", "/mcp disable"),
+            ("/mcp remove weather", "/mcp remove"),
+            ("/mcp disable", "/mcp disable"),
+            ("/mcp list weather", "/mcp list"),
+            ("/mcp listing", "/mcp listing"),
+            ("/mcp list-all", "/mcp list-all"),
+            ("/mcp restart weather", "/mcp restart"),
+            ("/mcp LIST", "/mcp LIST"),
+            ("/mcp List", "/mcp List"),
+            ("/mcp  reconnect  weather", "/mcp reconnect"),
+        ] {
+            let mut session = a_turn_running_on("first");
+
+            mcp_typed_during_a_turn(&mut session, line);
+
+            let said = said_under_the_turn(&session);
+            assert_eq!(
+                said,
+                vec![t!(command_waits_for_the_turn, command = form).to_string()],
+                "{line} was carried out mid-turn or waited without a mark naming {form}"
+            );
+            assert_eq!(waiting_prompts(&session), vec![line]);
+        }
+    }
+
+    /// A `/mcp list` typed beside a turn names the server the session runs and how its tools
+    /// stand, as well as the servers requested and not running, since the turn and the list read
+    /// the same session (CMD-8, SERVERS-19). The regression it rejects is a list that reads only
+    /// the settings and leaves out what the session holds.
+    #[test]
+    fn a_mcp_list_typed_beside_a_turn_names_the_server_the_session_runs() {
+        let mut session = a_turn_running_on("first");
+        session.servers = crate::mcp_command::tests::holding_a_list_answered(true).servers;
+        session.servers.disabled.push("docs".to_string());
+
+        mcp_typed_during_a_turn(&mut session, "/mcp list");
+
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![
+                t!(mcp_command_running).to_string(),
+                format!(
+                    "  {}",
+                    t!(status_mcp_servers_tools, alias = "weather", count = 1)
+                ),
+                t!(mcp_command_not_running).to_string(),
+                format!("  {}", t!(mcp_command_off, alias = "docs")),
+                t!(mcp_command_remove_hint).to_string(),
+            ]
+        );
+        assert!(session.queued.is_empty());
+    }
+
+    /// A list typed behind a waiting `/mcp` that starts, turns off or removes a server waits behind
+    /// it, so it shows what that line did and not the servers from before it; typed behind a
+    /// waiting prompt it is carried out as typed, as `/cost` is (CMD-8). The regression it rejects
+    /// is a list that goes ahead of a waiting `/mcp reconnect`, and one that waits behind every
+    /// prompt.
+    #[test]
+    fn a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt() {
+        let mut session = a_turn_running_on("first");
+        session.servers.disabled.push("docs".to_string());
+        mcp_typed_during_a_turn(&mut session, "/mcp disable weather");
+
+        mcp_typed_during_a_turn(&mut session, "/mcp");
+
+        assert_eq!(
+            waiting_prompts(&session),
+            vec!["/mcp disable weather", "/mcp"]
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![
+                t!(command_waits_for_the_turn, command = "/mcp disable").to_string(),
+                t!(
+                    command_waits_behind,
+                    command = "/mcp",
+                    line = "/mcp disable weather"
+                )
+                .to_string(),
+            ]
+        );
+
+        let mut session = a_turn_running_on("first");
+        session.servers.disabled.push("docs".to_string());
+        type_while_working(&mut session, "second question");
+
+        mcp_typed_during_a_turn(&mut session, "/mcp");
+
+        assert_eq!(waiting_prompts(&session), vec!["second question"]);
+        assert_eq!(said_under_the_turn(&session), the_servers_listed());
     }
 
     /// `/sandbox` carries its word whole to the loop, bare for the report, and a longer word or a
@@ -29040,6 +29244,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &managed,
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -29417,6 +29622,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored,
                 root: std::path::Path::new("/work"),
                 home: None,
@@ -29462,7 +29668,7 @@ mod tests {
             "/undo",
             "/rewind",
             "/hunks",
-            "/mcp",
+            "/mcp reconnect weather",
             "/rename deploy watch",
             "/note a thought",
             "/style off",
@@ -29577,7 +29783,7 @@ mod tests {
             "/branch",
             "/add-dir ../other",
             "/cd crates/tui",
-            "/mcp",
+            "/mcp reconnect weather",
             "/rename deploy watch",
             "/note a thought",
             "/style off",
@@ -29739,7 +29945,7 @@ mod tests {
             "/undo",
             "/rewind",
             "/hunks",
-            "/mcp",
+            "/mcp reconnect weather",
             "/after 5m check the deploy",
             "/rename deploy watch",
             "/note a thought",
@@ -29841,6 +30047,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root: &root,
                 home: Some(&home),
@@ -29930,7 +30137,7 @@ mod tests {
             BACKGROUND_COMMAND,
             EXIT_COMMAND,
             "/cd crates/tui",
-            "/mcp",
+            "/mcp reconnect weather",
             "/undo",
             "/rewind",
             "/hunks",
@@ -29995,7 +30202,7 @@ mod tests {
             "/add-dir ../other",
             "/reach",
             "/memory",
-            "/mcp",
+            "/mcp reconnect weather",
             "/style off",
             FORGET_TRUST_COMMAND,
             "/issue https://github.com/brave/bravebot/issues/2688",
@@ -30116,6 +30323,7 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
+                settings: &bravebot_config::Settings::default(),
                 stored: &mut stored,
                 root,
                 home: None,
