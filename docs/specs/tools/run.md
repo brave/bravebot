@@ -1291,20 +1291,29 @@ where its output is quarantined one `read_output` call per look as well, and a j
 when the call is made never lets the wait last at all. A caller that only needs the result of such a
 job has no other way to ask for it in one call.
 
-**Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
+**Between one second and the cache bound, and a value outside that is refused.** The bound is ten
+minutes at most, and is held under the prompt cache lifetime in force: 270 seconds where the settings
+chose `5m` or nothing, and 600 where they chose `1h` ([BACKEND-27](../backends.md#BACKEND-27)). The
+request after a wait that outlasts the lifetime finds the cached conversation gone, writes all of it
+again and reads none, which is the dearest request a session makes, so a wait longer than the
+lifetime is not offered. The 30 seconds under the lifetime leave room for the request to be sent.
+The bound is set from the person's `promptCacheTtl` by the caller that read the settings and never
+from what a job printed. A planner that wants a longer window calls again. [RUN-11](#RUN-11)'s
 deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
 deadline was shortened still ends, and the answer says how long it took, so nothing is hidden. A wait
 that was shortened comes back with silence, and silence carries no length: a caller that asked about
-ten minutes and was quietly given one reads the same nothing either way and reports it as ten
-minutes of nothing.
+five minutes and was quietly given one reads the same nothing either way and reports it as five
+minutes of nothing. The refusal names the bound in force and says why it is there, so a planner told
+'between 1 and 270' also learns the next call is the way to keep watching.
 
-**The bound is the wait's own, not the deadline's.** The two numbers happen to match today and are
-still separate, because they answer separate questions. A deadline bounds how long a pipeline may
+**The bound is the wait's own, not the deadline's.** A deadline bounds how long a pipeline may
 run; a wait bounds how long one look may sit watching one. Deciding that a build may take longer is
 not deciding that a single look may sit there longer, and a wait bounded by whatever the deadline
-bounds today would move whenever that decision was made. Both of the wait's numbers are quoted to the
+bounds would move whenever that decision was made. Both of the wait's numbers are quoted to the
 planner, in the tool's description and in the refusal, so they are pinned to what a caller is told
-rather than to each other.
+rather than to each other. A foreground `run` deadline of five minutes or more has the same cost
+after it, so the description of `deadline_seconds` says so and points at `background: true` with
+shorter waits. The deadline itself is not changed by the lifetime.
 
 **The window is named, to the planner and not only on a screen.** A wait that ends early because
 output arrived is otherwise indistinguishable from one that sat out its bound, so the answer says how
@@ -1362,7 +1371,7 @@ against itself. A character the pipe has only half delivered is held back until 
 arrives, rather than handed over as a replacement character that the real one would then never
 replace.
 
-**The token is checked every pass, and no pass blocks.** A bound running to ten minutes and a person
+**The token is checked every pass, and no pass blocks.** A bound of several minutes and a person
 who has changed their mind are the whole reason: cancelling should not mean sitting through the rest
 of somebody else's `tail -f`. Checking often is only worth as much as the longest pass, so nothing
 inside a pass waits on anything. In particular a wait asks only whether the steps have exited, and
@@ -1397,6 +1406,8 @@ the window.
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
+`verified-by: bravebot_agent::tools::the_longest_wait_follows_the_cache_lifetime_chosen`
+`verified-by: bravebot_agent::tools::the_descriptions_quote_the_wait_in_force_and_its_cache_cost`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
 `verified-by: bravebot_agent::tools::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
 `verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`

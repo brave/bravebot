@@ -2235,7 +2235,7 @@ impl RunSettings {
             attribution: settings.attribution().clone(),
             output_cap: settings.run_output_cap(),
             download_cap: settings.download_max_bytes(),
-            deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
+            deadlines: bravebot_agent::exec::Deadlines::from_settings(settings),
         }
     }
 

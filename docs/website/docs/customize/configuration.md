@@ -766,6 +766,10 @@ A model that does not accept a lifetime refuses the request on it. That request 
 lifetime removed and the cache breakpoints kept, and the model is not sent one again in that process.
 A model that does not accept breakpoints at all is handled as before.
 
+The lifetime also bounds one `job_output` wait. The request after a longer wait finds the cache gone, so
+the longest wait the agent may ask for is 30 seconds under the lifetime: 270 seconds where the key is
+absent or `5m`, and 10 minutes with `1h`.
+
 `/status` shows the lifetime the setting asks for under the cache figures of the last turn. It is the
 setting and not a measurement, so it reads the same after a model has refused the lifetime.
 

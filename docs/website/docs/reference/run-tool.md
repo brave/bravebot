@@ -704,7 +704,10 @@ is not a whole number of seconds is refused before anything runs. It has no effe
 what a line with no deadline of its own gets and the most one may ask for; see
 [configuration](../customize/configuration.md#rundefaultseconds-and-runmaxseconds). Raise the first
 where your build takes longer than five minutes, so a line the agent did not think to put a deadline
-on is not stopped partway through. The agent is told whichever figures are in force, so a ceiling you
+on is not stopped partway through. A line that runs longer than your prompt cache lifetime (five
+minutes unless `promptCacheTtl` says `1h`) makes the next request write the whole conversation to the
+cache again, and the agent is told so, so it starts such a command in the background and watches it in
+shorter waits. The agent is told whichever figures are in force, so a ceiling you
 raise is one it knows it may ask for.
 
 When the deadline runs out the steps are stopped, and **what they printed before that comes back exactly

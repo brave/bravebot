@@ -520,8 +520,8 @@ impl Held<'_> {
             .with_permissions(self.answers.rules.permissions.clone())
             .with_permission_mode(permission_mode.clone())
             .with_auto_vetting(self.session.auto_vetting())
-            .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-                self.settings.run_deadlines(),
+            .with_deadlines(bravebot_agent::exec::Deadlines::from_settings(
+                self.settings,
             ));
         let mut trail = Trail::new();
         let mut asking = crate::confirm::TerminalConfirmer::new(terminal);

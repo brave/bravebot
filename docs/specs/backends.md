@@ -1701,6 +1701,14 @@ file and from the file `--settings` names. A project or local layer may state `5
 request in it carry the dearer lifetime. The value comes from the settings and
 never from message content, so no branch depends on an untrusted byte.
 
+**The same setting bounds one `job_output` wait.** A request sent after the cached prefix expired
+writes the whole conversation again and reads none of it, so the longest wait the tool accepts is 30
+seconds under the lifetime in force: 270 seconds where the setting is `5m` or absent, 600 where it
+is `1h` ([RUN-17](tools/run.md#RUN-17)). Absent is treated as `5m`, whichever service answers,
+including the Brave endpoint and `api.openai.com`, which cache without being asked and whose
+lifetime is not stated here: the shorter bound is the one that cannot cost a rewrite where the
+lifetime is five minutes, and costs only an extra call where it is longer.
+
 **A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
 a lifetime on it refuses the request in the same way a model without caching does. A refusal of a
 request carrying a lifetime is therefore sent once more with the lifetime removed and the breakpoints
@@ -1996,7 +2004,8 @@ before it on the panel.
 setting and not a reading: no reply says how long a service kept a prefix, and a model that refuses
 the field is sent the request without it (BACKEND-27, BACKEND-32). The line is drawn from the setting
 whichever service answered ([Known costs](#known-costs)). It sits there because a read of
-zero after a pause means a different thing under five minutes than under an hour.
+zero after a pause means a different thing under five minutes than under an hour. The same setting
+bounds the longest `job_output` wait (BACKEND-27).
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
@@ -5165,7 +5174,10 @@ cancel kills it rather than asking it to stop.
 - **An ephemeral cache entry expires on inactivity, and nothing here tracks it.** The lifetime is
   the provider's default of a few minutes unless the `promptCacheTtl` setting chooses one (BACKEND-27,
   BACKEND-32), and the longer one is charged at a higher write rate, which is why nothing is sent until
-  a person chooses. A person who thinks between turns misses more often than the token arithmetic
+  a person chooses. A wait the tool offers is bounded under the lifetime in force (BACKEND-27), so
+  that cost is not paid by a `job_output` wait, and a `run` deadline of five minutes or more is
+  not bounded and its description names the cost. A person who thinks between turns misses more
+  often than the token arithmetic
   suggests, and a miss looks identical to a service that reports nothing: the reply carries a zero
   read either way.
   Neither figure says when the last request was, so nothing can distinguish a prefix that expired

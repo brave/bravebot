@@ -2611,18 +2611,28 @@ fn with_a_running_job(name: &str, body: impl FnOnce(&mut Jobs)) {
 #[cfg(unix)]
 #[test]
 fn a_bounded_wait_on_a_running_job_is_waited_on() {
+    let five_minutes = crate::exec::Deadlines::BUILT_IN;
+    let an_hour = five_minutes.waiting_under(Some(bravebot_config::CacheTtl::OneHour));
     with_a_running_job("running", |jobs| {
         let mut sink = RecordingSink::new();
         let mut policy = policy(&mut sink);
-        for arguments in [
-            json!({"job": "job:1", "wait_seconds": 1}),
-            json!({"job": "job:1", "wait_seconds": 600, "until_exit": true}),
-            json!({"job": "job:1", "wait_seconds": 5, "until_exit": false, "read": true}),
+        for (arguments, held) in [
+            (json!({"job": "job:1", "wait_seconds": 1}), five_minutes),
+            (json!({"job": "job:1", "wait_seconds": 270}), five_minutes),
+            (
+                json!({"job": "job:1", "wait_seconds": 600, "until_exit": true}),
+                an_hour,
+            ),
+            (
+                json!({"job": "job:1", "wait_seconds": 5, "until_exit": false, "read": true}),
+                five_minutes,
+            ),
         ] {
             assert!(
                 jobs.is_waited_on_while_running(
                     &mut policy,
-                    &a_wait_call("job_output", arguments.clone())
+                    &a_wait_call("job_output", arguments.clone()),
+                    held
                 ),
                 "{arguments}"
             );
@@ -2632,7 +2642,8 @@ fn a_bounded_wait_on_a_running_job_is_waited_on() {
             &a_wait_call(
                 "functions.job_output",
                 json!({"job": "job:1", "wait_seconds": 1})
-            )
+            ),
+            five_minutes
         ));
     });
 }
@@ -2651,6 +2662,8 @@ fn a_look_a_kill_or_a_refused_wait_is_not_waited_on() {
             json!({"job": "job:1", "wait_seconds": 5, "read": "yes"}),
             json!({"job": "job:1", "wait_seconds": 5, "kill": true}),
             json!({"job": "job:1", "wait_seconds": 0}),
+            json!({"job": "job:1", "wait_seconds": 271}),
+            json!({"job": "job:1", "wait_seconds": 600}),
             json!({"job": "job:1", "wait_seconds": 601}),
             json!({"job": "job:1", "wait_seconds": "5"}),
             json!({"job": "job:1", "until_exit": true}),
@@ -2661,7 +2674,8 @@ fn a_look_a_kill_or_a_refused_wait_is_not_waited_on() {
             assert!(
                 !jobs.is_waited_on_while_running(
                     &mut policy,
-                    &a_wait_call("job_output", arguments.clone())
+                    &a_wait_call("job_output", arguments.clone()),
+                    crate::exec::Deadlines::BUILT_IN
                 ),
                 "{arguments}"
             );
@@ -2669,12 +2683,17 @@ fn a_look_a_kill_or_a_refused_wait_is_not_waited_on() {
         for tool in ["read_file", "run", "read_output"] {
             assert!(!jobs.is_waited_on_while_running(
                 &mut policy,
-                &a_wait_call(tool, json!({"job": "job:1", "wait_seconds": 5}))
+                &a_wait_call(tool, json!({"job": "job:1", "wait_seconds": 5})),
+                crate::exec::Deadlines::BUILT_IN
             ));
         }
         let mut not_json = a_wait_call("job_output", json!({}));
         not_json.function.arguments = Some("job:1 wait_seconds 5".to_string());
-        assert!(!jobs.is_waited_on_while_running(&mut policy, &not_json));
+        assert!(!jobs.is_waited_on_while_running(
+            &mut policy,
+            &not_json,
+            crate::exec::Deadlines::BUILT_IN
+        ));
     });
 }
 
@@ -2692,7 +2711,8 @@ fn a_wait_on_a_job_that_has_ended_is_not_waited_on() {
     let mut policy = policy(&mut sink);
     assert!(!jobs.is_waited_on_while_running(
         &mut policy,
-        &a_wait_call("job_output", json!({"job": "job:1", "wait_seconds": 5}))
+        &a_wait_call("job_output", json!({"job": "job:1", "wait_seconds": 5})),
+        crate::exec::Deadlines::BUILT_IN
     ));
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -2708,7 +2728,8 @@ fn a_wait_is_not_waited_on_once_the_context_has_met_something_untrusted() {
         let mut policy = policy(&mut sink).resuming(Integrity::Untrusted);
         assert!(!jobs.is_waited_on_while_running(
             &mut policy,
-            &a_wait_call("job_output", json!({"job": "job:1", "wait_seconds": 5}))
+            &a_wait_call("job_output", json!({"job": "job:1", "wait_seconds": 5})),
+            crate::exec::Deadlines::BUILT_IN
         ));
     });
 }

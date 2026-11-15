@@ -761,9 +761,14 @@ often it is repeated. A call with no `wait_seconds`, a call that kills the job, 
 on a job that has ended are refused at the third. The refusal says that the end of a background
 job arrives in a message of its own and that a shell loop that sleeps is not a way to wait.
 
-Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
+Between 1 second and the longest the prompt cache allows, and **a value outside that is refused
+rather than quietly shortened**.
+The longest is 270 seconds with `promptCacheTtl` unset or `5m`, and 10 minutes with `1h` (see
+[`promptCacheTtl`](../customize/configuration.md#promptcachettl)): a wait that outlasts the cache
+lifetime makes the next request write the whole conversation to the cache again, so call again to
+keep watching.
 A wait that was silently cut short would come back with silence, and silence carries no length: a
-caller that asked for ten minutes and got one would report the same nothing as ten minutes of nothing.
+caller that asked for five minutes and got one would report the same nothing as five minutes of nothing.
 [A deadline](run-tool.md#a-line-has-a-deadline) is clamped instead, because a run that ends says how long it took.
 
 The answer says how many seconds were spent watching and that nothing is watching now, so a wait that

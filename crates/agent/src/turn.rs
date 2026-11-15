@@ -4177,7 +4177,10 @@ where
             // A bounded wait on a job that is still running is a different call from the ones
             // around it and is never held (TURN-9). It is decided from the planner's own name and
             // arguments and from whether the job's process is running, never from what it printed.
-            let refused = if state.jobs.is_waited_on_while_running(policy, call) {
+            let refused = if state
+                .jobs
+                .is_waited_on_while_running(policy, call, task.deadlines)
+            {
                 state.repeats.passed_without_counting();
                 None
             } else if state.repeats.is_held(call) {

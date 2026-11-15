@@ -540,7 +540,8 @@ asked for together and answering some while abandoning others leaves calls unans
 the middle of one is what the keys in INPUT-4 are for.
 
 **A `job_output` wait ends for a line.** A wait the planner asked for in `job_output` is a call that
-can last ten minutes, so the boundary after it can be that far off. The wait comes back within one
+can last as long as the prompt cache lifetime allows, so the boundary after it can be that far off.
+The wait comes back within one
 tick of a line arriving that the turn may take, with the job still running and the turn not stopped,
 and the call is answered as any wait is, so the round is whole and the line is taken at its boundary
 ([RUN-17](tools/run.md#RUN-17)). The call is not abandoned. A line that is a command, or is held

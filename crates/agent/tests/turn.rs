@@ -67095,7 +67095,7 @@ fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_pr
 /// answer says how long the wait lasted and that the job is still running, and the planner's next
 /// request holds the line.
 ///
-/// The job sleeps for thirty seconds and the wait is allowed six hundred. Rejects a wait that
+/// The job sleeps for thirty seconds and the wait is allowed two hundred and seventy. Rejects a wait that
 /// ignores the queue (the next request would arrive after thirty seconds or never, and the elapsed
 /// time below would show it), a wait that kills the job or stops the turn (the answer would not say
 /// it is still running), and a turn that ends the wait but does not take the line at the boundary
@@ -67117,7 +67117,7 @@ fn a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_
         tool_request("run", r#"{"command":"./quiet","background":true}"#),
         tool_request(
             "job_output",
-            r#"{"job":"job:1","wait_seconds":600,"until_exit":true}"#,
+            r#"{"job":"job:1","wait_seconds":270,"until_exit":true}"#,
         ),
         reply_with("done"),
     ]);

@@ -1558,7 +1558,7 @@ impl Bridge {
         let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
-        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let auto_vetting = open.auto_vetting;
         let front_end = self.front_end;
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
@@ -1811,7 +1811,7 @@ impl Bridge {
         let attribution = settings.attribution().clone();
         let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
-        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
             open.sandbox,
             &settings,

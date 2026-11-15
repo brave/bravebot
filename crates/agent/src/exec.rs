@@ -116,6 +116,12 @@ pub struct Deadlines {
     pub default: Duration,
     /// The most a call may name for itself.
     pub ceiling: Duration,
+    /// The most one `job_output` call may wait, which is the prompt cache lifetime in force less
+    /// [`WAIT_CACHE_MARGIN`], and at most [`WAIT_CEILING`]. A wait that outlasts the lifetime makes
+    /// the next request write the whole prefix again, so the bound is held under it. Set by
+    /// [`Deadlines::waiting_under`] from the person's `promptCacheTtl` and never from anything a
+    /// job printed.
+    pub wait_ceiling: Duration,
 }
 
 impl Deadlines {
@@ -123,6 +129,7 @@ impl Deadlines {
     pub const BUILT_IN: Self = Self {
         default: LIMIT,
         ceiling: CEILING,
+        wait_ceiling: CACHE_LIFETIME_DEFAULT.saturating_sub(WAIT_CACHE_MARGIN),
     };
 
     /// The figures in force, given what a settings file named of each.
@@ -153,6 +160,31 @@ impl Deadlines {
         Self {
             default: default.unwrap_or(LIMIT).clamp(FLOOR, ceiling),
             ceiling,
+            wait_ceiling: Self::BUILT_IN.wait_ceiling,
+        }
+    }
+
+    /// The figures in force for the settings a caller read: [`Deadlines::resolve`] of the `run`
+    /// block, with the longest wait held under the `promptCacheTtl` they chose. One call for every
+    /// caller that reads a settings file, so none of them takes either setting apart.
+    pub fn from_settings(settings: &bravebot_config::Settings) -> Self {
+        Self::resolve(settings.run_deadlines()).waiting_under(settings.prompt_cache_ttl())
+    }
+
+    /// These figures with the longest single `job_output` wait held under the cache lifetime the
+    /// settings chose.
+    ///
+    /// `None` is a setting nobody wrote, and the provider keeps a prefix for five minutes then, so
+    /// it is held as `5m` is. `1h` allows the longer wait, up to [`WAIT_CEILING`]. A backend that
+    /// ignores the setting and keeps a prefix for less than the figure it names is not known here.
+    pub fn waiting_under(self, lifetime: Option<bravebot_config::CacheTtl>) -> Self {
+        let lifetime = match lifetime {
+            None | Some(bravebot_config::CacheTtl::FiveMinutes) => CACHE_LIFETIME_DEFAULT,
+            Some(bravebot_config::CacheTtl::OneHour) => Duration::from_secs(3600),
+        };
+        Self {
+            wait_ceiling: WAIT_CEILING.min(lifetime.saturating_sub(WAIT_CACHE_MARGIN)),
+            ..self
         }
     }
 
@@ -183,6 +215,13 @@ impl Deadlines {
 pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
 /// See [`WAIT_FLOOR`].
 pub const WAIT_CEILING: Duration = Duration::from_secs(600);
+
+/// How long a provider keeps a cached prompt prefix when no lifetime was chosen.
+const CACHE_LIFETIME_DEFAULT: Duration = Duration::from_secs(300);
+
+/// How much shorter than the cache lifetime one `job_output` wait is held, so that the request
+/// after it arrives while the prefix is still cached.
+pub const WAIT_CACHE_MARGIN: Duration = Duration::from_secs(30);
 
 /// A worked-out value of an assignment, which may be a secret.
 ///

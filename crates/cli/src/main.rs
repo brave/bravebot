@@ -2225,9 +2225,7 @@ fn task_from_the_settings(
         .with_download_cap(settings.download_max_bytes())
         // And how long one may take, resolved here because this is where the settings were read
         // (RUN-23).
-        .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-            settings.run_deadlines(),
-        ))
+        .with_deadlines(bravebot_agent::exec::Deadlines::from_settings(settings))
         .with_confined_runs(true)
         .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out

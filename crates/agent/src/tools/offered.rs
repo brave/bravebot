@@ -445,7 +445,9 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          tell you about anything that happens after the turn ends, and the account of the job's \
          start says whether it is killed then or kept. Repeated waits on a job that is still \
          running are not held. The same job_output call without wait_seconds, or on a job that \
-         has ended, is held at the third in a row."
+         has ended, is held at the third in a row. A wait longer than the prompt cache lifetime \
+         makes the next request write the whole conversation to the cache again, so wait_seconds \
+         is bounded under that lifetime: call again to keep watching."
     )
 }
 
@@ -1874,7 +1876,10 @@ fn table(
                              seconds, so anything outside that becomes the nearest of the two. A \
                              command that outlasts its deadline is stopped and what it printed \
                              comes back. Has no effect with background: true, which is not waited \
-                             for at all.",
+                             for at all. A deadline longer than the prompt cache lifetime makes the \
+                             next request write the whole conversation to the cache again, so a \
+                             command expected to take that long is better started with background: \
+                             true and watched with job_output in shorter waits.",
                             crate::exec::FLOOR.as_secs()
                         )
                     },
@@ -1908,18 +1913,23 @@ fn table(
                     },
                     "wait_seconds": {
                         "type": "integer",
-                        "description": "Wait up to this many seconds instead of answering at \
-                                        once. Returns as soon as the job prints something you \
+                        "description": format!("Wait up to this many seconds instead of answering \
+                                        at once. Returns as soon as the job prints something you \
                                         have not been shown, the job ends or the user types \
-                                        a line, and at the bound if it stays silent, so a \
-                                        long wait costs nothing when the \
-                                        thing you are waiting for happens early. Between 1 and \
-                                        600. A value outside that is refused rather than \
+                                        a line, and at the bound if it stays silent. A wait \
+                                        longer than the prompt cache lifetime makes the next \
+                                        request write the whole conversation to the cache again \
+                                        and read none of it, so the bound is held under that \
+                                        lifetime: to watch longer, call again. Between {} and \
+                                        {}. A value outside that is refused rather than \
                                         adjusted, so the wait you get is the wait you asked for. \
                                         Omit it to look and answer straight away. With \
                                         until_exit it returns only when the job ends, the user \
                                         types a line or the bound is reached. The same wait \
-                                        repeated while the job is running is not held."
+                                        repeated while the job is running is not held.",
+                            crate::exec::WAIT_FLOOR.as_secs(),
+                            deadlines.wait_ceiling.as_secs().max(crate::exec::WAIT_FLOOR.as_secs())
+                        )
                     },
                     "until_exit": {
                         "type": "boolean",

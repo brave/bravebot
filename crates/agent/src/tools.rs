@@ -1395,6 +1395,7 @@ impl Jobs {
         &mut self,
         policy: &mut Policy<'_, S>,
         call: &ToolCall,
+        deadlines: crate::exec::Deadlines,
     ) -> bool {
         if strip_namespace(&call.function.name) != "job_output" {
             return false;
@@ -1412,7 +1413,7 @@ impl Jobs {
         if read_asked_of(&arguments).is_err() {
             return false;
         }
-        let Ok(Some(wait)) = wait_from(&arguments) else {
+        let Ok(Some(wait)) = wait_from(&arguments, deadlines) else {
             return false;
         };
         if until_exit_from(&arguments, Some(wait), kill).is_err() {
@@ -4052,20 +4053,29 @@ fn deadline_from(
 /// deadline. A deadline cut short still ends the run it was given for and the answer says how long
 /// that took, so the caller can see what it got. A wait cut short hands back the silence of a
 /// window nobody asked about, and silence is read as an answer.
-fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static str> {
-    let bounds =
-        crate::exec::WAIT_FLOOR.as_secs() as i64..=crate::exec::WAIT_CEILING.as_secs() as i64;
+fn wait_from(
+    arguments: &Value,
+    deadlines: crate::exec::Deadlines,
+) -> Result<Option<std::time::Duration>, String> {
+    let longest = deadlines
+        .wait_ceiling
+        .as_secs()
+        .max(crate::exec::WAIT_FLOOR.as_secs());
+    let bounds = crate::exec::WAIT_FLOOR.as_secs() as i64..=longest as i64;
     match arguments.get("wait_seconds") {
         Some(value) if !value.is_null() => match value.as_i64() {
             Some(seconds) if bounds.contains(&seconds) => {
                 Ok(Some(std::time::Duration::from_secs(seconds as u64)))
             }
-            Some(_) => Err(
-                "error: 'wait_seconds' must be between 1 and 600, and a value outside \
-                            that is refused rather than adjusted: a wait quietly shortened hands \
-                            back silence about a window nobody watched.",
-            ),
-            None => Err("error: 'wait_seconds' must be a whole number of seconds"),
+            Some(_) => Err(format!(
+                "error: 'wait_seconds' must be between {} and {longest}, and a value outside \
+                 that is refused rather than adjusted: a wait quietly shortened hands back \
+                 silence about a window nobody watched. The longest wait is held under the \
+                 prompt cache lifetime, because the request after a longer wait writes the \
+                 whole conversation to the cache again. To keep watching, make another call.",
+                crate::exec::WAIT_FLOOR.as_secs()
+            )),
+            None => Err("error: 'wait_seconds' must be a whole number of seconds".to_string()),
         },
         _ => Ok(None),
     }
@@ -13355,8 +13365,10 @@ fn job_output<S: Sink, R: Reporter>(
         Err(refusal) => return *refusal,
     };
 
-    let (wait, until_exit) = match wait_from(arguments).and_then(|wait| {
-        until_exit_from(arguments, wait, kill).map(|until_exit| (wait, until_exit))
+    let (wait, until_exit) = match wait_from(arguments, tools.deadlines).and_then(|wait| {
+        until_exit_from(arguments, wait, kill)
+            .map(|until_exit| (wait, until_exit))
+            .map_err(String::from)
     }) {
         Ok(asked) => asked,
         Err(refusal) => return Produced::problem(refusal),
@@ -18831,7 +18843,9 @@ mod tests {
              ends, and the account of the job's start says whether it is killed then or kept. \
              Repeated waits on a job that is still running are not held. The same job_output \
              call without wait_seconds, or on a job that has ended, is held at the third in a \
-             row."
+             row. A wait longer than the prompt cache lifetime makes the next request write the \
+             whole conversation to the cache again, so wait_seconds is bounded under that \
+             lifetime: call again to keep watching."
         );
         let run = description_of(&everything, "run");
         assert!(
@@ -21069,40 +21083,159 @@ mod tests {
     fn a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened() {
         use std::time::Duration;
 
+        let held = Deadlines::BUILT_IN;
+
         // Nothing asked for is no wait, which is what every call before this one did.
-        assert_eq!(wait_from(&json!({})).unwrap(), None);
-        assert_eq!(wait_from(&json!({"wait_seconds": null})).unwrap(), None);
+        assert_eq!(wait_from(&json!({}), held).unwrap(), None);
+        assert_eq!(
+            wait_from(&json!({"wait_seconds": null}), held).unwrap(),
+            None
+        );
 
         assert_eq!(
-            wait_from(&json!({"wait_seconds": 30})).unwrap(),
+            wait_from(&json!({"wait_seconds": 30}), held).unwrap(),
             Some(Duration::from_secs(30))
         );
         // Both ends are inside, and written out as seconds rather than as the constants they come
         // from: the numbers here are the ones the description and the refusal quote to the planner,
         // so a test that reads them from the same constants would agree with itself while every
-        // sentence the planner sees had gone wrong.
+        // sentence the planner sees had gone wrong. The upper end is under the five minutes a
+        // provider keeps a prefix when nobody chose a lifetime.
         assert_eq!(
-            wait_from(&json!({"wait_seconds": 1})).unwrap(),
+            wait_from(&json!({"wait_seconds": 1}), held).unwrap(),
             Some(Duration::from_secs(1))
         );
         assert_eq!(
-            wait_from(&json!({"wait_seconds": 600})).unwrap(),
-            Some(Duration::from_secs(600))
+            wait_from(&json!({"wait_seconds": 270}), held).unwrap(),
+            Some(Duration::from_secs(270))
         );
 
-        for outside in [0, -1, 601, 86_400] {
-            let refusal = wait_from(&json!({"wait_seconds": outside}))
+        for outside in [0, -1, 271, 300, 600, 601, 86_400] {
+            let refusal = wait_from(&json!({"wait_seconds": outside}), held)
                 .expect_err("a wait outside the bounds is refused");
             assert!(
-                refusal.contains("between 1 and 600"),
+                refusal.contains("between 1 and 270"),
                 "the refusal does not say what is allowed: {refusal}"
+            );
+            assert!(
+                refusal.contains("prompt cache"),
+                "the refusal does not say why the bound is there: {refusal}"
             );
         }
 
-        assert!(wait_from(&json!({"wait_seconds": "a while"})).is_err());
-        assert!(wait_from(&json!({"wait_seconds": 12.5})).is_err());
-        assert!(wait_from(&json!({"wait_seconds": true})).is_err());
-        assert!(wait_from(&json!({"wait_seconds": [30]})).is_err());
+        assert!(wait_from(&json!({"wait_seconds": "a while"}), held).is_err());
+        assert!(wait_from(&json!({"wait_seconds": 12.5}), held).is_err());
+        assert!(wait_from(&json!({"wait_seconds": true}), held).is_err());
+        assert!(wait_from(&json!({"wait_seconds": [30]}), held).is_err());
+    }
+
+    /// The longest wait follows the cache lifetime the person chose, and nothing else. Unset and
+    /// `5m` are held under five minutes, since the provider drops the prefix then; `1h` keeps the
+    /// built-in ten minutes, which is under an hour.
+    /// Rejects: a bound that stays at 600 whatever the setting says (the unset and `5m` rows), and
+    /// one that ignores a chosen `1h` and holds every wait to 270 (the `1h` row).
+    #[test]
+    fn the_longest_wait_follows_the_cache_lifetime_chosen() {
+        use bravebot_config::CacheTtl;
+        use std::time::Duration;
+
+        for (lifetime, longest) in [
+            (None, 270),
+            (Some(CacheTtl::FiveMinutes), 270),
+            (Some(CacheTtl::OneHour), 600),
+        ] {
+            let held = Deadlines::BUILT_IN.waiting_under(lifetime);
+            assert_eq!(
+                held.wait_ceiling,
+                Duration::from_secs(longest),
+                "{lifetime:?}"
+            );
+            assert_eq!(
+                wait_from(&json!({"wait_seconds": longest}), held).unwrap(),
+                Some(Duration::from_secs(longest)),
+                "{lifetime:?}"
+            );
+            assert!(
+                wait_from(&json!({"wait_seconds": longest + 1}), held).is_err(),
+                "{lifetime:?}"
+            );
+        }
+
+        // Under five minutes where that is the lifetime, and under an hour where it is that.
+        assert!(Deadlines::BUILT_IN.wait_ceiling < Duration::from_secs(300));
+        assert!(
+            Deadlines::BUILT_IN
+                .waiting_under(Some(CacheTtl::OneHour))
+                .wait_ceiling
+                > Duration::from_secs(270)
+        );
+        assert!(
+            Deadlines::BUILT_IN
+                .waiting_under(Some(CacheTtl::OneHour))
+                .wait_ceiling
+                < Duration::from_secs(3600)
+        );
+
+        // Resolved from the settings the caller read, the way the run block is, and only the
+        // lifetime moves the wait: a raised run ceiling leaves it where it was.
+        let from_file =
+            |text: &str| Deadlines::from_settings(&bravebot_config::Settings::parse(text));
+        assert_eq!(from_file("{}"), Deadlines::BUILT_IN);
+        assert_eq!(
+            from_file(r#"{"promptCacheTtl": "1h"}"#).wait_ceiling,
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            from_file(r#"{"run": {"maxSeconds": 1800}}"#).wait_ceiling,
+            Duration::from_secs(270)
+        );
+    }
+
+    /// The description quotes the bound in force and the cache cost of a longer wait, and says the same
+    /// of a foreground deadline, for each cache lifetime.
+    /// Rejects: a description that still says a long wait is free, one that quotes 270 under `1h`
+    /// (or 600 under `5m`), and one that leaves the cache cost out of `run`'s `deadline_seconds`.
+    #[test]
+    fn the_descriptions_quote_the_wait_in_force_and_its_cache_cost() {
+        use bravebot_config::CacheTtl;
+
+        for (lifetime, longest) in [
+            (None, "Between 1 and 270."),
+            (Some(CacheTtl::FiveMinutes), "Between 1 and 270."),
+            (Some(CacheTtl::OneHour), "Between 1 and 600."),
+        ] {
+            let offered = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN.waiting_under(lifetime),
+                Running::Offered,
+            );
+            let job_output = offered
+                .iter()
+                .find(|t| t.function.name == "job_output")
+                .expect("job_output is offered");
+            let said = job_output.function.parameters.to_string();
+            assert!(said.contains(longest), "{lifetime:?}: {said}");
+            assert!(
+                said.contains("prompt cache lifetime"),
+                "{lifetime:?}: wait_seconds does not give the cache cost: {said}"
+            );
+            assert!(
+                job_output.function.description.contains("prompt cache"),
+                "{lifetime:?}: the job_output description does not give the cache cost"
+            );
+            let run = offered
+                .iter()
+                .find(|t| t.function.name == "run")
+                .expect("run is offered");
+            assert!(
+                run.function
+                    .parameters
+                    .to_string()
+                    .contains("prompt cache lifetime"),
+                "{lifetime:?}: deadline_seconds does not give the cache cost"
+            );
+        }
     }
 
     /// Without a way to wait, watching a job costs one whole turn per look: the planner calls, is
@@ -21124,12 +21257,12 @@ mod tests {
         let wait = &tool.function.parameters["properties"]["wait_seconds"];
         assert_eq!(wait["type"], "integer", "wait_seconds is not offered");
         let said = wait["description"].as_str().expect("it is described");
-        // Built from the constants rather than written out, so raising either bound fails here
-        // instead of leaving the planner told a number that is no longer the one enforced.
+        // Built from the figures in force rather than written out, so changing the bound fails
+        // here instead of leaving the planner told a number that is no longer the one enforced.
         let bounds = format!(
             "Between {} and {}",
             crate::exec::WAIT_FLOOR.as_secs(),
-            crate::exec::WAIT_CEILING.as_secs()
+            Deadlines::BUILT_IN.wait_ceiling.as_secs()
         );
         for stated in [bounds.as_str(), "refused rather than adjusted"] {
             assert!(
@@ -21137,18 +21270,23 @@ mod tests {
                 "wait_seconds no longer says '{stated}': {said}"
             );
         }
-        let refusal = wait_from(&json!({"wait_seconds": 0})).expect_err("zero is refused");
+        let refusal = wait_from(&json!({"wait_seconds": 0}), Deadlines::BUILT_IN)
+            .expect_err("zero is refused");
         assert!(
             refusal.contains(&format!(
                 "between {} and {}",
                 crate::exec::WAIT_FLOOR.as_secs(),
-                crate::exec::WAIT_CEILING.as_secs()
+                Deadlines::BUILT_IN.wait_ceiling.as_secs()
             )),
             "the refusal quotes bounds that are not the ones enforced: {refusal}"
         );
         assert!(
             said.contains("as soon as"),
-            "wait_seconds does not say a long wait is free when the thing happens early: {said}"
+            "wait_seconds does not say the wait ends when the thing happens early: {said}"
+        );
+        assert!(
+            !said.contains("costs nothing"),
+            "wait_seconds still says a long wait is free: {said}"
         );
         assert!(
             said.contains("the user types a line"),
