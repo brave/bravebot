@@ -91472,16 +91472,9 @@ mod repeated_call {
     use super::*;
     use bravebot_core::ask::Answer;
 
-    fn refuse() -> Vec<Answer> {
-        vec![Answer::Chosen(vec![0])]
-    }
-
+    /// An answer that would let the call through, were anyone asked.
     fn run_it() -> Vec<Answer> {
         vec![Answer::Chosen(vec![1])]
-    }
-
-    fn stop() -> Vec<Answer> {
-        vec![Answer::Chosen(vec![2])]
     }
 
     fn read(file: &str) -> String {
@@ -91573,11 +91566,12 @@ mod repeated_call {
             .count()
     }
 
-    /// The third identical call is not run: its place in the conversation holds the driver's
-    /// refusal and not the file, and the person was asked with the tool named. A check that
-    /// counted four, or ran the call before asking, leaves the file in the third result.
+    /// The third identical call is not run and nobody is asked: its place in the conversation
+    /// holds the driver's refusal and not the file, even though the confirmer is holding an answer
+    /// that would let it through. A check that still put the question, or counted four, leaves the
+    /// file in the third result.
     #[test]
-    fn a_third_identical_call_is_not_run_and_the_person_is_asked() {
+    fn a_third_identical_call_is_refused_and_nobody_is_asked() {
         let ran = run(
             "repeat-third",
             vec![
@@ -91586,24 +91580,27 @@ mod repeated_call {
                 read("a.txt"),
                 reply_with("done"),
             ],
-            vec![refuse()],
+            vec![run_it()],
             None,
         );
         assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
-        assert_eq!(ran.asked.len(), 1);
-        let question = &ran.asked[0].prompts[0].question;
         assert!(
-            question.contains("read_file") && question.contains("3 times"),
-            "{question}"
+            ran.asked.is_empty(),
+            "a repeated call was put to the person: {:?}",
+            ran.asked
         );
         assert_eq!(calls_run(&ran), 2, "the third call was run");
         let told = tool_results(ran.requests.last().unwrap());
         assert!(told.contains("repetition limit reached"), "{told}");
-        assert_eq!(ran.requests.len(), 4);
+        assert!(
+            told.contains("read_file") && told.contains("3 times"),
+            "{told}"
+        );
+        assert_eq!(ran.requests.len(), 4, "the turn did not go on to the reply");
     }
 
     /// Two identical calls are not enough, and a different argument between them starts the count
-    /// again: the same file read three times with another file read in the middle asks nothing.
+    /// again: the same file read three times with another file read in the middle holds nothing.
     #[test]
     fn a_differing_argument_starts_the_count_again() {
         let ran = run(
@@ -91620,74 +91617,19 @@ mod repeated_call {
             None,
         );
         assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
-        assert!(
-            ran.asked.is_empty(),
-            "asked about calls that were not three in a row"
-        );
         assert_eq!(calls_run(&ran), 5);
         assert!(ran.trail.is_empty());
     }
 
-    /// A yes runs that call and covers only it: the count starts again, so a sixth identical call
-    /// is the next one asked about and the fourth and fifth are not.
+    /// Each further identical call is refused in the same way, and the count the planner is told
+    /// goes up. A refusal that started the count again lets the fifth call through.
     #[test]
-    fn a_yes_runs_the_call_once_and_the_count_starts_again() {
+    fn every_further_identical_call_is_refused_too() {
         let ran = run(
-            "repeat-yes",
+            "repeat-further",
             vec![
                 read("a.txt"),
                 read("a.txt"),
-                read("a.txt"),
-                read("a.txt"),
-                read("a.txt"),
-                read("a.txt"),
-                reply_with("done"),
-            ],
-            vec![run_it()],
-            None,
-        );
-        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
-        assert_eq!(ran.asked.len(), 2, "asked about the fourth or fifth call");
-        assert_eq!(calls_run(&ran), 5, "the sixth call was run");
-    }
-
-    /// A stop ends the turn at the held call, with no request after it.
-    #[test]
-    fn a_stop_at_the_question_ends_the_turn() {
-        let ran = run(
-            "repeat-stop",
-            vec![
-                read("a.txt"),
-                read("a.txt"),
-                read("a.txt"),
-                reply_with("done"),
-            ],
-            vec![stop()],
-            None,
-        );
-        assert!(
-            matches!(
-                ran.ended,
-                Err(bravebot_agent::TurnError::Cancelled { attempts: Some(0) })
-            ),
-            "{:?}",
-            ran.ended.err()
-        );
-        assert_eq!(ran.requests.len(), 3, "a request went out after the stop");
-        assert!(
-            ran.trail.iter().any(|line| line.contains("chose to stop")),
-            "{:?}",
-            ran.trail
-        );
-    }
-
-    /// Where nobody answers, the call is dropped and the planner told, as a bounded turn drops
-    /// calls after its bound. The turn is not ended.
-    #[test]
-    fn where_nobody_can_be_asked_the_call_is_dropped_and_the_planner_told() {
-        let ran = run(
-            "repeat-nobody",
-            vec![
                 read("a.txt"),
                 read("a.txt"),
                 read("a.txt"),
@@ -91697,21 +91639,16 @@ mod repeated_call {
             None,
         );
         assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
-        assert_eq!(calls_run(&ran), 2);
-        assert!(tool_results(ran.requests.last().unwrap()).contains("repetition limit reached"));
-        assert!(
-            ran.trail
-                .iter()
-                .any(|line| line.contains("nobody could be asked")),
-            "{:?}",
-            ran.trail
-        );
+        assert_eq!(calls_run(&ran), 2, "a held call was run");
+        let told = tool_results(ran.requests.last().unwrap());
+        assert!(told.contains("5 times"), "{told}");
+        assert_eq!(ran.trail.len(), 3, "{:?}", ran.trail);
     }
 
-    /// The question is the person's in every permission mode: bypass asks about nothing else and
-    /// still puts this one.
+    /// No permission mode lets a held call through or puts a question about it: bypass asks about
+    /// nothing else, and still refuses this one.
     #[test]
-    fn no_permission_mode_answers_the_repeated_call_question() {
+    fn no_permission_mode_runs_or_asks_about_a_repeated_call() {
         for mode in [
             bravebot_agent::PermissionMode::Ask,
             bravebot_agent::PermissionMode::AcceptEdits,
@@ -91726,18 +91663,19 @@ mod repeated_call {
                     read("a.txt"),
                     reply_with("done"),
                 ],
-                vec![stop()],
+                vec![run_it()],
                 Some(mode),
             );
-            assert_eq!(ran.asked.len(), 1, "{mode:?} did not reach the person");
-            assert_eq!(ran.requests.len(), 3, "{mode:?}");
+            assert!(ran.ended.is_ok(), "{mode:?}: {:?}", ran.ended.err());
+            assert!(ran.asked.is_empty(), "{mode:?} asked the person");
+            assert_eq!(calls_run(&ran), 2, "{mode:?} ran the held call");
         }
     }
 
-    /// The trail says that a call was held and what came of it, by count. Neither the file the
-    /// planner named nor anything the file held is in the line.
+    /// The trail says that a call was held, by count. Neither the file the planner named nor
+    /// anything the file held is in the line.
     #[test]
-    fn the_trail_records_the_count_and_the_answer_and_nothing_the_call_carried() {
+    fn the_trail_records_the_count_and_nothing_the_call_carried() {
         let ran = run(
             "repeat-trail",
             vec![
@@ -91746,7 +91684,7 @@ mod repeated_call {
                 read("a.txt"),
                 reply_with("done"),
             ],
-            vec![refuse()],
+            vec![],
             None,
         );
         assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
@@ -91759,29 +91697,6 @@ mod repeated_call {
             !line.contains("a.txt") && !line.contains("SENTINEL"),
             "{line}"
         );
-    }
-
-    /// Every question has a key of its own: an interface remembers an answer by key.
-    #[test]
-    fn two_held_calls_are_two_questions() {
-        let ran = run(
-            "repeat-keys",
-            vec![
-                read("a.txt"),
-                read("a.txt"),
-                read("a.txt"),
-                read("a.txt"),
-                reply_with("done"),
-            ],
-            vec![refuse(), refuse()],
-            None,
-        );
-        assert_eq!(
-            ran.asked.len(),
-            2,
-            "a call refused once is held again when repeated"
-        );
-        assert_ne!(ran.asked[0].prompts[0].key, ran.asked[1].prompts[0].key);
     }
 
     /// A delegate's repeated call is refused without a question: the confirmer it is lent belongs
@@ -91812,7 +91727,7 @@ mod repeated_call {
             ),
         ]);
         let config = config_for(&endpoint);
-        let mut confirmer = Replies::new(vec![refuse(), refuse()]);
+        let mut confirmer = Replies::new(vec![run_it(), run_it()]);
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
         let mut sink = RecordingSink::new();
         let ended = turn::resume(

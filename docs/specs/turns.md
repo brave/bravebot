@@ -29,7 +29,7 @@ How long a turn may go on, what happens when it does not stop, and what is said 
 without producing anything or ends without checking anything. What completed requests cost survives
 a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
 into its output ceiling. What a session does when it has spent as many tokens as the person said
-it may. What a turn does when the planner asks for the same call three times running. How the reads of one
+it may. What a turn does when the planner asks for the same call three times running, which is to refuse it. How the reads of one
 round are run when the planner asks for several together. What the note under a finished turn says
 about refusals. What a turn that answers with tasks still open in the planner's list does about
 them. What the planner is told when a turn ends in a failure. What a limit a person gave a run does to it.
@@ -499,14 +499,13 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_config::settings::the_nearest_layer_names_the_session_limit`
 
 <a id="TURN-9"></a>
-### TURN-9: the same call three times running is held and asked about
+### TURN-9: the same call three times running is not run
 
 When the planner asks for a call whose tool name and arguments equal those of the two calls
-before it, with no different call between them, the driver does not run it. The person is asked
-one question with three answers: do not run it and tell the planner to try another approach, run
-it this once, or stop the turn. A refusal is answered to the planner in place of a result, as the
-driver's own error that names the tool and the count. Each further identical call is held in the
-same way.
+before it, with no different call between them, the driver does not run it. The planner is
+answered in place of a result with the driver's own error that names the tool and the count, and
+nobody is asked. Each further identical call is refused in the same way, with the count it has
+reached.
 
 **Arguments only.** The comparison reads the tool name and the arguments the planner wrote, with
 the keys of a JSON object in sorted order, so the same object written in another key order is the
@@ -514,33 +513,31 @@ same call. It never reads a result. A result can carry untrusted bytes, which th
 branch on, and the planner's own call is built from a context holding none ([LABEL-8](labels.md#LABEL-8)).
 
 **What it costs.** A call whose result changes between identical calls, such as polling
-`read_output` or running a test again without an edit between, is held at the third. A different
-call between two identical ones starts the count again, so a write between two runs does.
+`read_output` or running a test again without an edit between, is refused at the third. A different
+call between two identical ones starts the count again, so a write between two runs does, and so
+does any other call the planner makes before the repeat.
 
-**A yes covers one call.** It runs that call and starts the count again, so the next held call is
-the third after it. The question carries a key of its own on every ask, because an interface may
-remember an answer by key.
+**Nobody is asked, in any mode or interface.** A person who started a long task and left would
+come back to a turn waiting on a question about a call the planner can make differently. No
+permission mode, no rule and no answer lets a held call run, bypassing included, and a delegate, a
+one-shot run, a manifest run and a closed channel are refused in the same way as a session with a
+person at it. A note under the turn names the tool and the count.
 
-**No rule and no mode answers it.** Every permission mode passes the question on, bypassing
-included, for the reason [TURN-8](#TURN-8) gives. Where nobody can be asked, which is a one-shot
-run, a manifest run, a closed channel or a delegate, the call is dropped and the planner told
-([PROMPT-9](prompting.md#PROMPT-9)). The first row is the refusal, so a bare Enter is the safe
-answer, and an answer that is none of the three is a refusal.
+**The turn goes on.** The refusal does not end the turn. A planner that keeps repeating the call
+is bound only by the limits that bound any turn ([TURN-1](#TURN-1), [TURN-8](#TURN-8)).
 
 **Not a safety property,** for the reason [TURN-1](#TURN-1) gives. A call that differs by one
 argument each round is not caught, such as the glob after glob that clause describes.
 
-**Recorded.** The trail gets a line with the round, the count and the answer, which carries no
-call and no result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
+**Recorded.** The trail gets a line with the round and the count, which carries no call and no
+result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
 
-`verified-by: bravebot_agent::turn::a_third_identical_call_is_not_run_and_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_third_identical_call_is_refused_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_differing_argument_starts_the_count_again`
-`verified-by: bravebot_agent::turn::a_yes_runs_the_call_once_and_the_count_starts_again`
-`verified-by: bravebot_agent::turn::a_stop_at_the_question_ends_the_turn`
-`verified-by: bravebot_agent::turn::where_nobody_can_be_asked_the_call_is_dropped_and_the_planner_told`
-`verified-by: bravebot_agent::turn::no_permission_mode_answers_the_repeated_call_question`
-`verified-by: bravebot_agent::turn::the_trail_records_the_count_and_the_answer_and_nothing_the_call_carried`
-`verified-by: bravebot_agent::turn::two_held_calls_are_two_questions`
+`verified-by: bravebot_agent::turn::every_further_identical_call_is_refused_too`
+`verified-by: bravebot_agent::turn::no_permission_mode_runs_or_asks_about_a_repeated_call`
+`verified-by: bravebot_agent::turn::the_trail_records_the_count_and_nothing_the_call_carried`
+`verified-by: bravebot_agent::turn::a_delegates_repeated_call_is_refused_and_the_person_is_not_asked`
 `verified-by: bravebot_agent::repeated_call::the_same_arguments_in_another_key_order_are_the_same_call`
 
 <a id="TURN-10"></a>
@@ -562,7 +559,8 @@ taken and not while it reads.
 **What joins a run.** A call joins when it is a `list_files` or `search` that this run offers, its
 arguments are JSON, the person has declared no hook for a finished call of that tool, and it would
 not be held as a third identical repeat ([TURN-9](#TURN-9)). One such call is not a run. A hook is
-left out because it can change the files the next read looks at, and a held call asks a question.
+left out because it can change the files the next read looks at, and a held call is refused and not
+read.
 
 **Each read decides as the turn would.** A read runs under a branch of the turn's policy, which
 holds the same rules, capabilities and context, shares the one file authority, and records into a

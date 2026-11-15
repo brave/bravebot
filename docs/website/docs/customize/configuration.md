@@ -920,8 +920,8 @@ question waiting. Only your own file and the file `--settings` names set it: a
 `.bravebot/settings.json` that arrived with a checkout is ignored and named by `bravebot doctor`,
 since a question closed on a clock is one you were not asked.
 
-It closes the agent's questions in the terminal interface only. A plan to approve, a spend limit and
-a repeated call always wait for you, and so do questions in a session started with `--plain`, in a
+It closes the agent's questions in the terminal interface only. A plan to approve and a spend limit
+always wait for you, and so do questions in a session started with `--plain`, in a
 background session, and in the desktop app.
 
 ### `notificationMethod` and `notificationCondition`

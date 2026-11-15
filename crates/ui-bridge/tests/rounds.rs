@@ -64,7 +64,7 @@ impl Drop for Scratch {
 /// A model service that asks for a listing until it has been given [`ROUNDS`] of them.
 ///
 /// The listing alternates between two spellings of the directory, because the same call three
-/// times in a row is held and put to a person (TURN-9).
+/// times in a row is held and not run (TURN-9).
 ///
 /// The planner is what keeps a turn going, so a turn that runs long needs one that keeps asking.
 /// How many it has already been given is read off the conversation the request carries, so the

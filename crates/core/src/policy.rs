@@ -518,19 +518,6 @@ pub enum McpStanding {
     AskedEveryCall,
 }
 
-/// What a turn did about a call the planner made for the third time running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AfterRepeatedCall {
-    /// The person let this one call through.
-    LetThrough,
-    /// The person chose that the call is not run.
-    Refused,
-    /// The person chose to stop the turn.
-    Stopped,
-    /// Nobody could be asked, so the call was not run.
-    Unanswered,
-}
-
 /// Where the words of an output style came from (INSTR-12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleOrigin {
@@ -3825,20 +3812,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// Record a call held for being the same as the ones before it, and what came of it (TURN-9).
+    /// Record a call held for being the same as the ones before it (TURN-9). It was not run.
     ///
     /// The round and the count only. The call's name and arguments are the planner's own and stay
     /// out of the line, so it carries no content (TRACE-2).
-    pub fn record_repeated_call(&mut self, round: usize, count: usize, then: AfterRepeatedCall) {
-        let then = match then {
-            AfterRepeatedCall::LetThrough => "the person let it through once",
-            AfterRepeatedCall::Refused => "the person chose that it is not run",
-            AfterRepeatedCall::Stopped => "the person chose to stop and the turn ended",
-            AfterRepeatedCall::Unanswered => "nobody could be asked, so it was not run",
-        };
+    pub fn record_repeated_call(&mut self, round: usize, count: usize) {
         self.allow(
             "repeated_call",
-            format!("round {round}: the same call made {count} times in a row; {then}"),
+            format!(
+                "round {round}: the same call made {count} times in a row; it was not run and the \
+                 planner was told"
+            ),
         );
     }
 

@@ -2219,7 +2219,7 @@ fn tell_of_kept_jobs(
 ///
 /// A call joins the run when it is a read that asks no one anything and the person has no hook for
 /// its finishing, which could change a file the next read is about to look at. A call that would
-/// be held as a third repeat ends the run, because holding it asks a question. Held-ness is taken
+/// be held as a third repeat ends the run, because a held call is refused and not read. Held-ness is taken
 /// from a copy of the count advanced over the run, as the loop will advance the real one.
 fn reads_that_run_together(
     calls: &[ToolCall],
@@ -4167,32 +4167,21 @@ where
             let ran_at = Instant::now();
             let wait_mark = policy.file_authority().wait_mark();
             let refused = if state.repeats.is_held(call) {
-                match crate::repeated_call::hold(
+                crate::repeated_call::hold(
                     call,
                     state.repeats.count(),
                     state.steps,
-                    task.delegate.is_none(),
                     policy,
-                    &mut asking,
                     reporter,
-                ) {
-                    crate::repeated_call::Held::Run => {
-                        state.repeats.clear();
-                        None
-                    }
-                    crate::repeated_call::Held::Refuse => Some(tools::refused_without_running(
-                        policy,
-                        reporter,
-                        state.mcp.as_ref().map(|(offer, _)| offer),
-                        &*conversation.quarantine(),
-                        call,
-                        crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
-                    )),
-                    crate::repeated_call::Held::Stop => {
-                        attach_vetted_pictures(policy, conversation, &mut attached);
-                        return Err(TurnError::Cancelled { attempts: Some(0) });
-                    }
-                }
+                );
+                Some(tools::refused_without_running(
+                    policy,
+                    reporter,
+                    state.mcp.as_ref().map(|(offer, _)| offer),
+                    &*conversation.quarantine(),
+                    call,
+                    crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
+                ))
             } else {
                 None
             };
@@ -10352,7 +10341,7 @@ mod tests {
             );
             assert_eq!(run(&["search", "search", "search"], &hooked), 3);
 
-            // The same call three times running is held at the third, which asks the person.
+            // The same call three times running is held at the third, which is refused and not read.
             let same = |count: usize| -> Vec<ToolCall> {
                 (0..count)
                     .map(|_| {

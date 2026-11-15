@@ -1116,13 +1116,7 @@ spend-limit-stopped = stopped at the session limit: { $spent } { $unit } spent a
 # What a run says when a limit its person gave it ended it, before the round or request it would have made.
 run-limit-rounds = stopped at the limit on rounds of tool calls ({ $most }): the planner asked for another and it was not run
 run-limit-tokens = stopped at the limit on tokens ({ $most }): { $spent } were spent and the next request was not sent
-repeated-call-header = Repeated call
-repeated-call-reached = The planner has made the same { $tool } call { $count } times in a row. It was not run. Run it again, or choose another way forward.
-repeated-call-refuse = Do not run it, and tell the planner to try another approach
-repeated-call-run-it = Run it this once
-repeated-call-stop = Stop the turn
 repeated-call-refused = { $tool } was not run: the same call { $count } times in a row
-repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
 # The same where the failure was the ChatGPT account's, which is said in its own sentence.

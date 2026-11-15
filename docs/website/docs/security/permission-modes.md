@@ -219,17 +219,16 @@ wrote down would take protection away at the moment you were relying on a mode t
 Neither asks for consent: the first asks for information, and the second is you speaking. An answer
 invented on your behalf is reported to the planner as your own words.
 
-**The same call three times running is held and asked about**, in every mode, bypassing included. When
-the planner asks for a call whose tool and arguments equal those of the two calls before it, with no
-different call between them, it does not run. You are asked whether to refuse it and tell the planner
-to try another approach (the default, so a bare Enter is safe), run it this once, or stop the turn.
-A yes covers that one call and starts the count again. Only the tool name and the arguments are
-compared, never a result, so polling the same `read_output` or running the same test again with no
-edit between is held at the third call, and a different call between two identical ones starts the
-count again. A call that differs by one argument each time is not caught. Where nobody can be asked (a
-one-shot run, a planned run or a delegate) the call is dropped and the planner is told. The trail
-records the round, the count and your answer, and nothing of the call. There is no setting for the
-number.
+**The same call three times running is refused**, in every mode, bypassing included. When the
+planner asks for a call whose tool and arguments equal those of the two calls before it, with no
+different call between them, it does not run, and nobody is asked: a task you started and left does
+not wait for you to come back to it. The planner is told the call was not run and to try another
+approach, and a note under the turn names the tool and the count. Each further identical call is
+refused in the same way. Only the tool name and the arguments are compared, never a result, so
+polling the same `read_output` or running the same test again with no edit between is refused at the
+third call, and a different call between two identical ones starts the count again. A call that
+differs by one argument each time is not caught. The trail records the round and the count, and
+nothing of the call. There is no setting for the number.
 
 ## In the desktop application
 

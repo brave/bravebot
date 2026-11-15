@@ -615,8 +615,8 @@ impl Session {
     /// How long `asking` waits with no key pressed before it is closed, where it may be at all.
     ///
     /// Only what the driver marked as the planner's own question is closed on a clock, and the
-    /// time is the person's setting: a plan, a spend limit and a repeated call wait for the person
-    /// whatever the settings say, and nothing a question says is read here.
+    /// time is the person's setting: a plan and a spend limit wait for the person whatever
+    /// the settings say, and nothing a question says is read here.
     pub fn ask_idle_for(&self, asking: &bravebot_core::ask::Asking) -> Option<Duration> {
         self.ask_idle.filter(|_| asking.closes_when_idle)
     }
