@@ -175,10 +175,11 @@ reach again at each look, from the live mode, the person's rules and the trust m
 looking while the mode is bypass and ends as out of reach at the first look after it is not.
 
 **A reference to a file.** A listing or a search makes a reference to each file it found, and the
-file is opened when a tool is given the reference: `vet_content`, `spawn_processor`, `read_output`,
-`run`'s `stdin_ref`, `write_file`'s `contents_ref` and a manifest step. Opening resolves the path the
+file is opened when a tool is given the reference: `vet_content`, `spawn_processor`,
+`run`'s `stdin_ref`, `write_file`'s `contents_ref` and a manifest step. `read_output` does not open
+one ([OUTPUT-2](read-output.md#OUTPUT-2)). Opening resolves the path the
 reference was made from, so it follows the same rule as a call of `read_file` for that path. While the
-mode is bypass, a call of `vet_content`, `spawn_processor` or `read_output` holds the reach for the
+mode is bypass, a call of `vet_content` or `spawn_processor` holds the reach for the
 tools that open a reference (`TOOLS_READING_A_REFERENCE`), and the opening of any reference is judged
 as a read, including one a call of `write_file` or `run` makes, so a path only `denyWrite` covers is
 still read. Every refusal above holds. Where the call holds no reach, which is every mode but bypass

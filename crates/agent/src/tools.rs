@@ -10150,11 +10150,8 @@ pub(crate) const TOOLS_NAMING_A_PATH: &[(&str, &str, bool)] = &[
 /// opening it resolves that path through the workspace, so the call is given the reach a call of
 /// `read_file` is given, judged as a read. A tool that is also in [`TOOLS_NAMING_A_PATH`] is read
 /// from there, and [`materialise`] judges the opening of a reference as a read in either case.
-pub(crate) const TOOLS_READING_A_REFERENCE: &[(&str, &str)] = &[
-    ("vet_content", "ref"),
-    ("spawn_processor", "reads"),
-    ("read_output", "ref"),
-];
+pub(crate) const TOOLS_READING_A_REFERENCE: &[(&str, &str)] =
+    &[("vet_content", "ref"), ("spawn_processor", "reads")];
 
 /// The tools that take a path, or a directory, and are given no reach by the mode, each with why.
 #[cfg(test)]
@@ -17787,6 +17784,16 @@ mod tests {
                     "{tool} reaches outside bypass"
                 );
             }
+        }
+        // OUTPUT-2: `read_output` refuses a reference to a file and opens none, so it is given no
+        // reach under bypass, whatever the workspace.
+        for trusted in [true, false] {
+            assert!(
+                facts(crate::PermissionMode::Bypass)
+                    .reach_for("read_output", &workspace, || trusted)
+                    .is_none(),
+                "read_output is given a reach under bypass (trusted: {trusted})"
+            );
         }
     }
 

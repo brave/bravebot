@@ -210,7 +210,7 @@ asked for is opened and vouched for without being put either, and so is a direct
 reachable to the file tools, to `run`'s `directory` and to a redirection with no call and no
 directory opened, wherever the account can reach it and outside the refusals a granted request
 has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). The file a reference to a listed or searched
-file stands for is opened under the same reach, so `vet_content`, `spawn_processor` and `read_output`
+file stands for is opened under the same reach, so `vet_content` and `spawn_processor`
 are given the file where a call of `read_file` for its path would be. So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)), except a call to a server

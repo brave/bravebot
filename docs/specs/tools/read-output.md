@@ -114,6 +114,7 @@ are given the reach a call of `read_file` for the path has
 `verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
 `verified-by: bravebot_agent::tools::tests::arguments::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
 `verified-by: bravebot_agent::turn::under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing`
+`verified-by: bravebot_agent::tools::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer
