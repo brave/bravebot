@@ -375,7 +375,7 @@ A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/set
 It outranks the `model` key in that file, is outranked by one in the file `--settings` named
 ([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act),
 and a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json` cannot name a model at
-all. A key spelled blank, or as something other than a string, names nothing and does not outrank a
+all, by the `model` key or by `env.BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)). A key spelled blank, or as something other than a string, names nothing and does not outrank a
 pick. It still displaces the key a lower file named, so with nothing recorded the exported variable
 or the build answers. Above all of it are `--model` and a model picked in the session that is
 running. The `/model` picker, at rest and during a turn, opens on the model in force and marks it as
@@ -385,8 +385,8 @@ settles on. The same model in force is the one the roster is read for the window
 level is read, and the one the sign-in a session makes and the refusal of a level a turn learned are asked
 about, so none of them is read for the pick alone.
 
-**Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
-lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
+**Why.** A build made with a default model bakes it in, so this value ranked like the rest of the file would
+lose on every binary made that way: the key would parse, `doctor` would report it, and nothing
 would change outside a source build.
 
 The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
@@ -407,6 +407,8 @@ and the pick is the later of the two.
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
+`verified-by: bravebot_config::settings::a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do`
+`verified-by: bravebot_config::lib::a_checkouts_default_model_does_not_reach_the_configuration`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_named_file_spelling_the_model_blank_displaces_the_home_key_and_names_nothing`
@@ -1326,21 +1328,138 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
-| `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
+| `env`, `keybindings`, `search`, `tui` | per name, one level down; the value under a name is replaced whole |
+| the eighteen `env` names: those of the network, Google, Bedrock and endpoint sets, and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
+| `run.scrubEnv` | home layer, and the file `--settings` names, whose entries are kept together; a project or local layer's list is ignored and reported by `doctor`, and the rest of that layer's `run` block is read as before |
+| every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
 | `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
-| anything else | the closest layer that set it wins |
+| `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
+| `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
+| `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
+| `suggestions` | the same as `limit`, with the default bound: a project or local layer may leave it off and may not turn it on, over the person's `false` or over nothing |
+| `awaySummaryEnabled` | the same as `updateCheck`: a project or local layer may turn the automatic recap off and may not turn it on over the person's `false` |
+| `tui.mouse`, `tui.contextMenu` | the same as `updateCheck`, each key apart: a project or local layer may turn mouse capture or the right-click menu off and may not turn it back on over the person's `false` |
+| `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
+| `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
+| anything else | the closest layer that set it wins, in either direction. The keys that are in neither table are the ones whose value changes no destination, spend, program environment, request that sends the conversation, or terminal input the person turned off, for example `effort` ([BACKEND-43](#BACKEND-43)), `editorMode`, `terminalTitle`, `notificationMethod`, `maxRunningDelegates` ([DELEGATE-7](delegation.md#DELEGATE-7)), `awaySummaryIdleSeconds`, `tui.wheelRows` ([SCROLL-3](scroller.md#SCROLL-3)), `search.maxFiles`, `search.maxSeconds` ([SEARCH-9](tools/search.md#SEARCH-9)), `run.maxOutput` ([RUN-21](tools/run.md#RUN-21)), `run.defaultSeconds`, `run.maxSeconds` ([RUN-23](tools/run.md#RUN-23)) and `download.maxBytes` ([DOWNLOAD-4](tools/download-url.md#DOWNLOAD-4)). A key moves into a table when it is found to decide one of those, and the table row and this one change together |
 
-The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
+The keys of the rows above that a layer may not name are read from one table, so `doctor` and
 the desktop settings view each name every file that carried one, and a key added to the table is
-reported by both without an edit to either.
+reported by both without an edit to either. A key inside a block is written `block.name`, and only
+that name is removed from the layer: `run.scrubEnv` is dropped from a checkout's `run` block and the
+block's other names stay.
 
-A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
-a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
-block or list stays in force.
+`run.scrubEnv` is in the table because a name in it is not only a restriction. A program is started
+without every variable the list names, and a variable can hold a restriction: the person's
+`npm_config_ignore_scripts` keeps a package's install scripts from running and `PYTHONSAFEPATH` keeps
+the working directory off the module path. A checkout naming either, or a pattern holding it
+([RUN-28](tools/run.md#RUN-28)), would start every program without it. The decision is by which layer
+the file is, so nothing a file says is read to make it. The list the person's files state is
+withheld as before, and the planner is told of those names without being given them
+([RUN-12](tools/run.md#RUN-12)).
+
+The keys a project or local layer may only narrow are read from a second table (`NARROW_ONLY`), kept
+beside the first and reported through the same accessor, so `doctor` and the desktop settings view
+name a file whose value was not obeyed in the same way, and a key added to either table is reported
+by both without an edit to either. A key in it is settled once every layer has been read, and not
+by the closest layer winning. The layers entitled to the key (the home layer and the file
+`--settings` names, the later of the two winning) state the value in force. A project or local layer
+is then obeyed for it only where it takes nothing from that value: where the entitled layers state
+nothing, it is held to the key's default where the key has one and states the value where it has
+none; where they state one, it may state a value that is no wider, and what
+no wider means is a rule of the key's kind. The two checkout files are held to this in turn, project
+then local, each against the value the one before left, so the local file cannot raise what the
+project file lowered. A value that is not obeyed is dropped, the file is recorded under the key, and
+the value is not read anywhere. Only the home layer or the file `--settings` names can remove,
+raise or replace a value in the table.
+
+For `limit`, a layer states a value when it holds a whole number of tokens above zero or a count
+string such as `"200k"` or `"50 credits"`. `null`, zero, a string that is no figure and any other
+type state nothing, which is how the person's own file says they want no limit. A checkout's value
+is no wider when it is in the same unit as the value in force and no larger. A figure in the other
+unit is not narrower than a figure in this one, since tokens and credits count different things, so
+it is not obeyed. A checkout's `null`, zero or non-figure over a limit in force is a removal and is
+not obeyed. Where the person's own files state no limit, a checkout may state one, and a checkout
+value that states nothing leaves no limit and is not reported, because it removed nothing.
+[TURN-8](turns.md#TURN-8) is why `limit` is in the table, and `askIdleSeconds` is kept to the person's
+files for the reason [ASK-9](tools/ask-user.md#ASK-9) gives, which is that the person's own clock is
+not a repository's to set.
+
+For `updateCheck`, a layer states a value when it holds a boolean; a string, a number and `null`
+state nothing. `false` is the narrower value, so a checkout's `false` is obeyed whatever the person
+stated, and its `true` is obeyed only where the person's own files do not state `false`. The check is
+on where nothing is stated, so a checkout's `true` over nothing or over the person's `true` changes
+nothing and is not reported. A checkout's `true` over the person's `false` is not obeyed and is
+reported. The startup check for a newer release is why the key is in the table.
+
+`deepLinks` is read the same way as `updateCheck`: only a boolean states it, `false` is the narrower
+value, and a checkout's `true` over the person's `false` is not obeyed and is reported. A link is
+refused where the merged value is `false`, so a checkout that wrote `false` refuses links for whoever
+runs `--handle-uri` there, and a checkout cannot open one the person refused
+([LINK-6](deep-links.md#LINK-6)).
+
+`suggestions` is off where nothing is stated, so the table holds a checkout to `false` where the
+person's own files state nothing, as it holds it to the person's value where they state one. Only a
+boolean states it. A checkout's `false` is obeyed whatever the person stated. Its `true` is obeyed
+only where the person's own files state `true`, which changes nothing, and is otherwise not obeyed
+and is reported, so a checkout cannot start a request after each turn that the person did not ask
+for ([INPUT-43](terminal-input.md#INPUT-43)). A value that is not a boolean states nothing, is
+absence, and is not reported.
+
+`awaySummaryEnabled` is read the same way as `updateCheck`: only a boolean states it, `false` is the
+narrower value, and a checkout's `true` over the person's `false` is not obeyed and is reported. The
+recap is on where nothing is stated, so a checkout's `true` over nothing or over the person's `true`
+changes nothing and is not reported. A checkout's `false` is obeyed whatever the person stated. A
+checkout therefore cannot cause a request that sends the conversation for a summary the person
+turned off ([CMD-20](commands.md#CMD-20)). `awaySummaryIdleSeconds` is not in the table: the closest
+layer that names a whole count decides it, because it only moves the time at which the recap is made
+when the recap is on.
+
+For `deferMcpToolsAbove`, a layer states a value when it holds a whole number above zero or a count
+string such as `"20k"`. `null`, zero, a negative or fractional number, a boolean and a string that
+is no figure state nothing, which is how a layer says every tool is offered in full. A checkout's
+value is no wider when it is no larger than the value in force, since a larger size sends more of
+every tool definition on every request. A checkout's larger value, and a value that states nothing
+over one in force, are not obeyed and are reported, so a checkout cannot turn the person's
+deferral into every tool in full ([SERVERS-16](mcp-servers.md#SERVERS-16)). Where the person's own
+files state no size, a checkout may state one, because the key has no default bound, and a checkout
+value that states nothing there leaves no size and is not reported. The two checkout files are held
+to this in turn, so the local file cannot raise what the project file lowered.
+
+For `promptCacheTtl`, a layer states a value when it holds the string `5m` or `1h`, ignoring
+surrounding space and spelled in lower case. Any other string, a number, a boolean and `null` state
+nothing. `5m` is the narrower value, since the longer lifetime is charged at a higher write rate
+([BACKEND-27](#BACKEND-27)). The key has a default bound, which is no lifetime, so where the
+person's own files state nothing a checkout's `5m` is obeyed and its `1h` is not. Where they state
+`5m`, a checkout's `1h` is not obeyed, and where they state `1h` a checkout's `5m` is obeyed. A
+checkout's `1h` over the person's `1h` changes nothing and is not reported. A checkout value that
+states no lifetime over one in force is a removal and is not obeyed, and one where none is in force
+removes nothing and is not reported. The file `--settings` names is the person's own act and may
+state either, inside the workspace or outside it ([PERM-14](permissions.md#PERM-14)). The two
+checkout files are held to this in turn.
+
+`tui.mouse` and `tui.contextMenu` are read the same way as `updateCheck`: only a boolean states
+either, `false` is the narrower value, and a checkout's `true` over the person's `false` is not
+obeyed and is reported with the key spelled as written in the file (`tui.mouse`). Capture and the
+menu are on where nothing is stated, so a checkout's `true` over nothing or over the person's `true`
+changes nothing and is not reported. A checkout's `false` is obeyed whatever the person stated. The
+`tui` block combines per name, so a checkout naming one key of it leaves the person's other names in
+force, and a checkout's `tui` does not take the person's `tui.mouse` with it. The two keys are settled
+one at a time: a checkout turning one off changes nothing about the other. A checkout therefore
+cannot start the terminal reporting the mouse, or open a menu over a click, that the person turned
+off ([MOUSE-4](mouse.md#MOUSE-4), [MOUSE-52](mouse.md#MOUSE-52)). Where the person's own files and the
+file `--settings` names both state a value, the later of the two decides it, as for `limit`. A
+nested key is written as `block.name` in the table and in a report.
+
+Which of these layers are read does not depend on the answer to the directory trust question at
+startup. That answer decides the trust map ([TRUST-7](trust-map.md#TRUST-7)), so a checkout's files
+are read whichever way it is answered, and what they may set is decided by the rows above.
+
+A layer that spells `permissions`, `run` or `tui` as something other than an object, or `run.scrubEnv`
+or a list under `permissions` as something other than an array, sets nothing there: the weaker
+layers' block or list stays in force.
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
 layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
@@ -1371,9 +1490,9 @@ answering for one must not answer for the other by omission. The chords under `k
 same case: a file moving one action's key is no statement about the other six, and a checkout
 widening a search's walk for its own size is none about how long a read may take.
 
-The lists are the exception because an entry in one only ever narrows what is possible: a name under
-`scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
-that was otherwise allowed. Overriding either would let a layer hand back what a weaker one withheld,
+The lists under `permissions` and `mcp.request` are the exception because an entry in one only ever
+narrows what is possible: a rule under `permissions` refuses something that was otherwise allowed.
+Overriding either would let a layer hand back what a weaker one withheld,
 and a permission removed by a file somebody did not open is the one outcome worth ruling out. A value
 of another shape names no entry, so letting it replace a list would remove every entry under it and
 add none. A model is one choice rather than a list, so it resolves like any other single value, and
@@ -1405,7 +1524,8 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_overrides_a_name_the_global_one_set`
 `verified-by: bravebot_config::settings::a_name_only_the_global_layer_set_survives_a_project_layer`
 `verified-by: bravebot_config::settings::the_local_layer_beats_the_one_a_checkout_carries`
-`verified-by: bravebot_config::settings::every_layer_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
 `verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_rules_takes_no_rule_away`
 `verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_names_takes_no_name_away`
@@ -1432,13 +1552,46 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_that_is_a_device_is_skipped`
 `verified-by: bravebot_config::settings::a_read_stops_one_byte_past_the_bound`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
-`verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
 `verified-by: bravebot_cli::doctor::a_checkout_naming_any_home_only_key_is_reported_with_the_key_and_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_naming_any_home_only_key_is_listed_as_ignored`
+`verified-by: bravebot_cli::doctor::a_checkout_limit_that_widens_the_persons_is_reported_with_the_file`
+`verified-by: bravebot_cli::doctor::every_narrow_only_key_is_said_with_its_file_and_not_as_home_only`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_limit_that_widens_the_persons_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::the_narrow_only_table_keys_are_unique_and_not_home_only`
+`verified-by: bravebot_config::settings::every_narrow_only_key_keeps_the_persons_value_against_a_wider_one`
+`verified-by: bravebot_config::settings::a_key_in_neither_table_is_decided_by_the_closest_layer_in_either_direction`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_update_check_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_deep_links_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_deep_links_that_accepts_them_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_deep_links_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_away_recap_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_tui_key_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_tui_key_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_away_recap_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
+`verified-by: bravebot_cli::doctor::a_checkout_deferral_threshold_that_raises_the_persons_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored`
+`verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
+`verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
+`verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
+`verified-by: bravebot_config::settings::the_cache_lifetime_words_of_the_table_are_the_lifetimes_the_setting_reads`
+`verified-by: bravebot_cli::doctor::a_checkout_asking_for_the_long_cache_lifetime_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_asking_for_the_long_cache_lifetime_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
@@ -1542,7 +1695,10 @@ asking a service which refuses costs one round trip while not asking costs every
 settings puts a `ttl` of that word on each breakpoint, the prompt's and the conversation's alike.
 Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
 has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
-is why the default is no lifetime rather than the longest. The value comes from the settings and
+is why the default is no lifetime rather than the longest. The setting is read from the person's own
+file and from the file `--settings` names. A project or local layer may state `5m` and may not state
+`1h`, which is dropped and reported ([BACKEND-24](#BACKEND-24)), so a repository cannot make every
+request in it carry the dearer lifetime. The value comes from the settings and
 never from message content, so no branch depends on an untrusted byte.
 
 **A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
@@ -1573,6 +1729,8 @@ for one that does not.
 `verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
+`verified-by: bravebot_config::lib::a_checkouts_long_cache_lifetime_reaches_no_account`
+`verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
@@ -2031,7 +2189,7 @@ something reads:
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to, in place of the one compiled in |
-| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one, read from the person's own layers alone |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
 | `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
@@ -2053,15 +2211,20 @@ something reads:
 The last six rows are the network names. Three more rows are the Google names, and six are the
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
 `ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
-`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set, and `BRAVEBOT_DEFAULT_MODEL` is a fifth of one
+name. All five come from the person's own layers
 alone, the user's settings file and the file the command line named, wherever it sits
 ([PERM-14](permissions.md#PERM-14)).
 The project and local files arrive with a clone, and a proxy or an authority they chose would decide
 where conversation content is sent and who may read it, a Google key or project, or an AWS account,
-region, profile or tier model, they chose would decide which account receives it, and an endpoint
+region, profile or tier model, they chose would decide which account receives it, an endpoint
 they chose would decide which host receives the conversation and which host the premium key is
-presented to. So one of these seventeen names in either file is reported by `doctor` with the file
+presented to, and a default model they chose would decide which of the person's configured services
+receives it, a `provider` entry's gateway or Brave's. So one of these eighteen names in either file is reported by `doctor` with the file
 that wrote it and decides nothing, and it does not displace what a layer entitled to state it said.
+That holds for the `model` key too ([BACKEND-11](#BACKEND-11)), so a checkout names a model by no
+spelling. `doctor` reports the default model's ignored file with the model, and the network names
+with the network.
 The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six Bedrock names and the two
 endpoints, so every pinnable name is read from the person's layers alone. A build that carries an
 endpoint outranks the file, as for every name ([BACKEND-35](#BACKEND-35)), and a source build
@@ -2112,6 +2275,9 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::settings::an_env_block_is_read`
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do`
+`verified-by: bravebot_config::lib::a_checkouts_default_model_does_not_reach_the_configuration`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_default_model_that_decides_nothing`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
 `verified-by: bravebot_config::settings::a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::a_named_file_states_the_network_wherever_it_sits`
@@ -2984,8 +3150,8 @@ that wants its own level for one run says so with `--effort`, the way [CLI-9](cl
 say `--model`.
 
 [BACKEND-11](#BACKEND-11)'s other half does not transfer: the `model` key sits above the baked-in
-default because every release bakes a model in, and a key ranked below it would change nothing on
-any binary anybody was given. Nothing bakes in a level, so there is no such rung here.
+default because a build made with a default model bakes it in, and a key ranked below it would change
+nothing on any binary made that way. Nothing bakes in a level, so there is no such rung here.
 
 **One rule reads both words.** Both come out of a file somebody may have edited by hand, so a
 settings file naming nonsense is read the way a hand-edited record naming nonsense is, rather than
@@ -4896,7 +5062,7 @@ cancel kills it rather than asking it to stop.
   because the credential value comes from the person's own environment under names the layer would
   choose, and a file nobody read must not pick either. The `env` names that choose the account a
   request goes to are refused from them too: the six network names, the three Google names, the
-  six Bedrock names and the two endpoints ([BACKEND-33](#BACKEND-33)). A team that shares a
+  six Bedrock names, the two endpoints and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)). A team that shares a
   development endpoint states it in each person's own file, the environment or the build, and not in
   `.bravebot/settings.json`. For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no

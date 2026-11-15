@@ -51,6 +51,11 @@ export interface Interjection {
 /** What the app is doing, which decides most of what the interface offers. */
 export interface Live {
   model: string | null
+  /**
+   * Whether `model` is one the person picked, which is the only kind kept for a reopened
+   * conversation. A default the backend reported is not (BACKEND-33).
+   */
+  modelPicked?: boolean
   handle: string
   /**
    * The record's own id, or `null` for a session made in this window and not yet listed.

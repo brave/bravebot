@@ -32,7 +32,7 @@ import { About, type AboutInfo } from './components/About'
 import { BugReport } from './components/BugReport'
 import { UpdateBanner } from './components/UpdateBanner'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
-import { conversationModel, rememberModel } from './models'
+import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkedSessions } from '../shared/forks'
@@ -141,8 +141,10 @@ export function App(): React.JSX.Element {
     if (current) setConversation(liveKey(current), { draft: text })
   }, [])
   useEffect(() => {
-    if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
-  }, [live?.summary.id, live?.summary.directory, live?.model])
+    // Only a pick: a default the backend supplied is not the person's choice, and storing it
+    // would keep requesting that model after the settings that named it stopped applying.
+    if (live?.summary.id) rememberPickedModel(live.summary.directory, live.summary.id, live)
+  }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
   const { answerTrust, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
@@ -281,9 +283,10 @@ export function App(): React.JSX.Element {
         id: summary.id,
       })
       if (bot) setConversation(conversationKey(summary.directory, summary.id), { botSlug: bot.slug })
+      const picked = bot ? null : pickedModel(summary.directory, summary.id)
       setLive(newLive({
         handle: opened.session,
-        model: bot?.model ?? conversationModel(summary.directory, summary.id, opened.model),
+        ...reopenedModel(bot?.model, picked, opened.model),
         summary: {
           id: summary.id,
           title: opened.record.title,
@@ -435,7 +438,7 @@ export function App(): React.JSX.Element {
         if (!saved) throw new Error('Could not save the bot’s model.')
         await readBots()
       }
-      setLive((old) => old?.handle === current.handle && !old.running ? { ...old, model } : old)
+      setLive((old) => old?.handle === current.handle && !old.running ? pickModel(old, model) : old)
     } catch (error) { setProblem(String(error)) }
   }, [readBots])
 
@@ -712,6 +715,7 @@ export function App(): React.JSX.Element {
         setLive(newLive({
           handle: forked.session,
           model: live.model,
+          modelPicked: live.modelPicked,
           summary: {
             id: forked.id,
             // What a fork is called is decided by the agent from the history it kept, and it

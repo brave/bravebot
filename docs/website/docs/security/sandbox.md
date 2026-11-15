@@ -36,7 +36,13 @@ backend runs to resolve a credential is withheld bravebot's own credentials and 
 a name here answers what the commands *you* ask for may see, and `AWS_PROFILE` in it would stop that
 CLI resolving the credential it is being run for.
 
-**Names only.** A list of names can only ever take something away; a list of values here would put a
+**Only your own file is read for it.** A name here is not only a restriction. A program started
+without `npm_config_ignore_scripts` or `PYTHONSAFEPATH` runs what your value of it kept from
+running, so a project's or a local settings file's `run.scrubEnv`, patterns included, is not read,
+and `bravebot doctor` names the file. Your `~/.bravebot/settings.json` and the file `--settings`
+names are read together.
+
+**Names only.** A list of names withholds variables and cannot supply a value; a list of values here would put a
 credential in front of every command the agent starts. The list is read when the process starts, so
 editing it describes your next session.
 

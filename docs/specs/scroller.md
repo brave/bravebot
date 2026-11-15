@@ -140,7 +140,8 @@ by one figure and a scroller by another would be two movements under one gesture
 
 The count is read once when the session opens, from the settings files as any other key of its kind
 is read: the home layer, a checkout's `.bravebot/settings.json` and `settings.local.json`, and a
-file the command line named, the later overriding the earlier. A checkout therefore names it, which
+file the command line named, the later overriding the earlier. The `tui` block combines per name, so a
+checkout naming another key of it leaves this one in force. A checkout therefore names it, which
 is the layering every key that configures how the interface behaves gets, and the cost of it is the
 one written down under Known costs in [backends.md](backends.md). It is not one of the four names
 read from the home layer alone, because it decides no effect: the figure moves a view on this
@@ -217,6 +218,7 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::tests::scroller::a_count_on_n_walks_that_many_matches_and_wraps`
 `verified-by: bravebot_tui::app::tests::scroller::a_key_that_takes_no_count_drops_it`
 `verified-by: bravebot_tui::app::tests::scroller::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
 `verified-by: bravebot_tui::render::the_footer_draws_a_count_waiting_for_its_key`
 
 

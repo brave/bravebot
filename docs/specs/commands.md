@@ -1263,9 +1263,12 @@ had at least three turns, the interface does what `/recap` does (CMD-16), once, 
 behind it. It does not do it again until another turn has completed, and a recap the person asked
 for counts as one. A terminal that reports no focus changes is taken to be in front of the person,
 so it never recaps by itself. An `awaySummaryEnabled` setting of `false` turns it off, and any other
-value, or none, leaves it on. `awaySummaryIdleSeconds` is a whole positive count: zero, or anything
-that is not a whole count, leaves the five minutes in force. It is the terminal interface's alone: a
-`-p` run and the desktop app have no such view and never make one.
+value, or none, leaves it on. A `false` in the person's own settings file or the file `--settings`
+names stands whatever a checkout's `.bravebot/settings.json` or `settings.local.json` says: a
+checkout may turn the recap off and may not turn it on, and `doctor` names a file whose `true` was
+not obeyed ([BACKEND-24](backends.md#BACKEND-24)). `awaySummaryIdleSeconds` is a whole positive
+count: zero, or anything that is not a whole count, leaves the five minutes in force. It is the
+terminal interface's alone: a `-p` run and the desktop app have no such view and never make one.
 
 Nothing from the conversation reaches the decision. It reads the clock, the focus reports, a count of
 turns and the settings, all of which the interface holds itself.
@@ -1285,6 +1288,8 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
 `verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_long_before_the_away_recap`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
+`verified-by: bravebot_tui::app::a_checkouts_away_recap_does_not_turn_the_recap_on`
 
 <a id="CMD-21"></a>
 ### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one

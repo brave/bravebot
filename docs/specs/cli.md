@@ -508,8 +508,8 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 
 `--model <name>` names the model for one run and outranks everything else. Where no flag names
 one, the model is the one a session opening in the same directory would ask for, in the order
-[BACKEND-11](backends.md#BACKEND-11) gives: a `model` key in a checkout's settings or the file
-`--settings` named, then the choice `/model` recorded, then the key in the person's own settings,
+[BACKEND-11](backends.md#BACKEND-11) gives: a `model` key in the file
+`--settings` named (a checkout's own settings files cannot name a model, [BACKEND-33](backends.md#BACKEND-33)), then the choice `/model` recorded, then the key in the person's own settings,
 then an exported `BRAVEBOT_DEFAULT_MODEL`, then the default the build was made with. A name is
 resolved against the configuration wherever it was written: `opus`, `sonnet` and `haiku` name the
 tier's own model and the older spelling of the routing entry names the current one, so the flag and

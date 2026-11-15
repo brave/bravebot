@@ -179,6 +179,9 @@ impl Entitled {
 /// [`Settings::from_map`]. The layer is recorded under the key in `Settings::not_obeyed`.
 /// [`Settings::not_obeyed_all`] answers for every row, which is what `doctor` and the desktop
 /// settings view read, so a row added here is reported by both.
+///
+/// A key inside a block is written `block.name`, as it is in [`NARROW_ONLY`]: only that name is
+/// removed, and whatever else the layer's block holds stays and merges as it always did.
 const HOME_ONLY: &[(&str, Entitled)] = &[
     // The key picking which of the providers answers.
     ("model", Entitled::OwnOrNamed),
@@ -232,7 +235,244 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // A question closed on a clock is one the person was not asked, so a clock that closes the
     // person's questions is theirs to set and not the checkout's.
     ("askIdleSeconds", Entitled::OwnOrNamed),
+    // A name here is a variable no program the agent runs is handed, and a variable can restrict
+    // as well as grant: `npm_config_ignore_scripts` set by the person is what keeps a package's
+    // install scripts from running, and a checkout listing it, or a pattern holding it, runs them
+    // (BACKEND-24, RUN-12). So the list is the person's alone, and a checkout's entries are not read.
+    ("run.scrubEnv", Entitled::OwnOrNamed),
 ];
+
+/// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
+///
+/// A new kind is a variant and one arm in each of the three methods. A boolean whose `true` is the
+/// narrower answer, or a count in a unit of its own, is a kind of its own and is added there.
+#[derive(Clone, Copy)]
+enum Narrows {
+    /// The session spend limit: a count of one unit ([`crate::limit::Limit`]). A figure is
+    /// narrower when it is in the same unit and no larger.
+    Limit,
+    /// A switch that is on unless stated otherwise, and whose `false` is the narrower answer: it
+    /// turns something off. Only a boolean states it ([`flag`]), so a quoted `"false"` states
+    /// nothing. `true` is no wider than `true` and `false` is no wider than either.
+    Off,
+    /// A switch that is off unless stated otherwise, and whose `false` is the narrower answer: it
+    /// leaves something off. Only a boolean states it ([`flag`]). Where the person stated nothing a
+    /// checkout is held to the default, so its `true` is not obeyed and its `false` is.
+    OffByDefault,
+    /// A bare count with no unit, where a lower figure is the narrower one. A whole number above
+    /// zero or a count string such as `"20k"` states it ([`count_stated`]). A figure is narrower
+    /// when it is no larger. Where the person stated nothing there is no bound, so a checkout's
+    /// figure is a bound added.
+    Count,
+    /// One word out of a short list, narrowest first, where a word further down the list takes
+    /// more of something from the person than one above it. A string that is one of the words,
+    /// ignoring surrounding space, states it ([`word_rank`]); any other string and any other type
+    /// state nothing. Where the person stated nothing a checkout is held to the first word, so
+    /// only the narrowest is obeyed.
+    Word(&'static [&'static str]),
+}
+
+impl Narrows {
+    /// Whether a value states something this kind can compare.
+    ///
+    /// `null`, zero, a string that is no figure and any other shape state nothing: they are what
+    /// removes the bound when a layer that is not the person's writes one.
+    fn usable(self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Limit => limit_stated(Some(value)).is_some(),
+            Self::Off | Self::OffByDefault => value.is_boolean(),
+            Self::Count => count_stated(value).is_some(),
+            Self::Word(words) => word_rank(words, value).is_some(),
+        }
+    }
+
+    /// What a checkout is held to where the person stated nothing usable, or `None` where there is
+    /// no bound and any usable value is a bound added.
+    ///
+    /// A key that has a default in force when nothing is stated returns it here, as the value the
+    /// file would have stated, so a checkout cannot go past what a person who wrote nothing gets.
+    /// A usable value it states is compared with this by [`Narrows::at_most`] as it would be with
+    /// the person's own.
+    fn unstated(self) -> Option<serde_json::Value> {
+        match self {
+            // There is no default limit: a person who stated none has a session nothing bounds.
+            Self::Limit => None,
+            // On where nothing is stated, and no value is wider than that, so a checkout's `true`
+            // is what a person who wrote nothing already has and its `false` turns the switch off.
+            Self::Off => None,
+            // Off where nothing is stated, and `true` is wider than that, so a checkout cannot turn
+            // on what a person who wrote nothing has off.
+            Self::OffByDefault => Some(serde_json::Value::Bool(false)),
+            // No threshold is in force where nothing is stated, which offers every tool in full,
+            // so any figure a checkout states is a bound added.
+            Self::Count => None,
+            // The narrowest word is what a checkout may state over a person who stated nothing,
+            // and a wider one would choose for them what only they choose.
+            Self::Word(words) => words.first().map(|word| serde_json::Value::from(*word)),
+        }
+    }
+
+    /// Whether `offered` takes nothing from what `held` states: it asks for no more than `held`
+    /// does, in the same terms. Both are usable ([`Narrows::usable`]).
+    fn at_most(self, held: &serde_json::Value, offered: &serde_json::Value) -> bool {
+        match self {
+            Self::Limit => match (limit_stated(Some(held)), limit_stated(Some(offered))) {
+                (Some(held), Some(offered)) => {
+                    held.unit == offered.unit && offered.figure <= held.figure
+                }
+                _ => false,
+            },
+            Self::Off | Self::OffByDefault => match (held.as_bool(), offered.as_bool()) {
+                (Some(held), Some(offered)) => !offered || held,
+                _ => false,
+            },
+            Self::Count => match (count_stated(held), count_stated(offered)) {
+                (Some(held), Some(offered)) => offered <= held,
+                _ => false,
+            },
+            Self::Word(words) => match (word_rank(words, held), word_rank(words, offered)) {
+                (Some(held), Some(offered)) => offered <= held,
+                _ => false,
+            },
+        }
+    }
+}
+
+/// The cache lifetimes `promptCacheTtl` may state, shortest first, spelled as
+/// [`crate::CacheTtl::wire`] spells them. A test holds the two to be the same list.
+const CACHE_TTL_WORDS: &[&str] = &["5m", "1h"];
+
+/// The keys a checkout's settings file may state only to narrow what the person stated.
+///
+/// The home layer and the layers `entitled` names decide the key as they always did. A layer that
+/// is not entitled is obeyed for it only where its value is usable and is no wider than what the
+/// layers above it have settled on: where nothing is stated it states the value, and where the
+/// person stated one it may state a narrower one in the same terms ([`Narrows::at_most`]), and
+/// where the key has a default ([`Narrows::unstated`]) it is held to that. A value
+/// that does anything else is dropped, the file is recorded in `Settings::not_obeyed` under the key,
+/// and [`Settings::not_obeyed_all`] answers for it as it does for [`HOME_ONLY`], so `doctor` and the
+/// desktop settings view report it.
+///
+/// Settled in [`Settings::layered`] before the merge, which keeps whichever layer spoke last and so
+/// cannot be left to say which of two values is the narrower. To add a key: one row here, a
+/// [`Narrows`] kind if none fits (with its default bound in [`Narrows::unstated`] where the key has
+/// one), a row in the test table `NARROW_ONLY_EXPECTED`, and its `doctor-settings-<key>-ignored`
+/// message, which the general `doctor-settings-narrowed-ignored` stands in for until one is written.
+const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
+    // Where a question about the person's spend is put is decided by this figure (TURN-8), so a
+    // checkout cannot remove it, raise it or count in another unit.
+    ("limit", Narrows::Limit, Entitled::OwnOrNamed),
+    // A checkout may turn the startup check off for whoever runs it there, and may not turn it back
+    // on over a person who turned it off.
+    ("updateCheck", Narrows::Off, Entitled::OwnOrNamed),
+    // A checkout may refuse `bravebot://` links for whoever runs it there, and may not accept them
+    // over a person who refused them, since the link the operating system hands over is the one
+    // the person's own `false` was written against (LINK-6).
+    ("deepLinks", Narrows::Off, Entitled::OwnOrNamed),
+    // A request after every turn is a spend nobody asked for, so a checkout may leave suggestions
+    // off for whoever runs it there and may not turn them on, over the person's `false` or over
+    // the default (INPUT-43).
+    ("suggestions", Narrows::OffByDefault, Entitled::OwnOrNamed),
+    // A recap request sends the conversation for a summary nobody asked for where the person
+    // turned the automatic one off, so a checkout may turn it off for whoever runs it there and
+    // may not turn it on over the person's `false` (CMD-20). It is on where nothing is stated, so
+    // a checkout's `true` over nothing is what the person already has.
+    ("awaySummaryEnabled", Narrows::Off, Entitled::OwnOrNamed),
+    // A higher threshold sends every tool definition of every approved server in full on every
+    // request, so a checkout may lower the figure or state one where the person stated none and may
+    // not raise it, remove it or state something that reads as no threshold (SERVERS-16).
+    ("deferMcpToolsAbove", Narrows::Count, Entitled::OwnOrNamed),
+    // The longer lifetime is charged at a higher write rate (BACKEND-27), so a checkout may ask for
+    // the shorter one and may not ask for the longer one, over the person's `5m` or over nothing.
+    (
+        "promptCacheTtl",
+        Narrows::Word(CACHE_TTL_WORDS),
+        Entitled::OwnOrNamed,
+    ),
+    // A checkout may turn mouse capture off for whoever runs it there, which hands the wheel and
+    // the drag back to the terminal, and may not turn it back on over a person who turned it off
+    // (MOUSE-4). Capture is on where nothing is stated, so a `true` over nothing changes nothing.
+    // A key inside a block is written `block.name`: the other names in the block are not part of
+    // the row and merge per name.
+    ("tui.mouse", Narrows::Off, Entitled::OwnOrNamed),
+    // The same shape as `tui.mouse` for the menu a right click opens (MOUSE-52).
+    ("tui.contextMenu", Narrows::Off, Entitled::OwnOrNamed),
+];
+
+/// What the layers said about one key of [`NARROW_ONLY`], held until every layer is read.
+///
+/// The named file is read after the checkout's two, so which layer is entitled cannot be known
+/// until all are, and a value cannot be compared with what the person said before then.
+#[derive(Default)]
+struct Narrowed {
+    /// What the last layer entitled to the key wrote, usable or not.
+    standing: Option<serde_json::Value>,
+    /// What each layer not entitled wrote, weakest layer first.
+    offered: Vec<(PathBuf, serde_json::Value)>,
+}
+
+impl Narrowed {
+    /// Put the value in force under `key` in `document`, and answer for the files that wrote one
+    /// that was not obeyed, weakest first.
+    ///
+    /// An offered value is compared with the one in force when its turn comes, so two checkout
+    /// files each narrow what the one before left, and a figure in the other unit than the one in
+    /// force is refused whichever file wrote it.
+    fn settle(self, kind: Narrows, document: &mut Document, key: &str) -> Vec<PathBuf> {
+        self.settle_against(kind, kind.unstated().as_ref(), document, key)
+    }
+
+    /// [`Narrowed::settle`] with the bound for a person who stated nothing given, so that the
+    /// comparison against it is the same code whichever kind supplies it.
+    ///
+    /// A value that is no wider than `unstated` is obeyed where nothing is held, and a usable one
+    /// that is wider is refused and reported. Once a value is held it replaces `unstated` as the
+    /// bound.
+    fn settle_against(
+        self,
+        kind: Narrows,
+        unstated: Option<&serde_json::Value>,
+        document: &mut Document,
+        key: &str,
+    ) -> Vec<PathBuf> {
+        let Self { standing, offered } = self;
+        let mut held = match standing {
+            Some(value) if kind.usable(&value) => Some(value),
+            // The person's own file stating nothing usable states that there is nothing to keep.
+            Some(value) => {
+                document.displaced.push(value);
+                None
+            }
+            None => None,
+        };
+        let mut refused = Vec::new();
+        for (path, value) in offered {
+            let usable = kind.usable(&value);
+            let obeyed = usable
+                && held
+                    .as_ref()
+                    .or(unstated)
+                    .is_none_or(|bound| kind.at_most(bound, &value));
+            if obeyed {
+                if let Some(wider) = held.replace(value) {
+                    document.displaced.push(wider);
+                }
+                continue;
+            }
+            document.displaced.push(value);
+            // A value that states nothing where nothing is in force removes nothing, and over a
+            // default it leaves the default, so there is nothing to report; the same value over a
+            // stated one is the removal this table is for.
+            if usable || held.is_some() {
+                refused.push(path);
+            }
+        }
+        if let Some(value) = held {
+            document.put_key(key, value);
+        }
+        refused
+    }
+}
 
 /// The number of days a record is kept when no `retentionDays` is stated.
 ///
@@ -945,6 +1185,9 @@ struct LayerFacts {
     /// records are kept for, so the merge must never see it. Each is removed from the layer's
     /// own root before it reaches the merge, and the file is kept under the key.
     not_obeyed: BTreeMap<&'static str, Vec<PathBuf>>,
+    /// What each layer said about a key of [`NARROW_ONLY`], one entry per row of the table, settled
+    /// by [`LayerFacts::settle_narrowed`] once all are read.
+    narrowed: Vec<Narrowed>,
     /// Settled per layer for the reason `model` is: how long the person's own records are kept is
     /// theirs to state, and the merge keeps whichever file spoke last.
     retention_unreadable: Vec<PathBuf>,
@@ -1009,6 +1252,43 @@ impl LayerFacts {
                     .entry(*key)
                     .or_default()
                     .push(path.to_path_buf());
+            }
+        }
+    }
+
+    /// Taken out of the layer for the reason [`LayerFacts::home_only`] removes a key, and held
+    /// rather than dropped: which of the values a key was written with is in force is known only
+    /// once every layer is read.
+    fn narrow_only(
+        &mut self,
+        root: &mut Document,
+        merged: &mut Document,
+        path: &Path,
+        own: bool,
+        named_here: bool,
+    ) {
+        for ((key, _, entitled), held) in NARROW_ONLY.iter().zip(self.narrowed.iter_mut()) {
+            let Some(value) = root.take_key(key) else {
+                continue;
+            };
+            if entitled.admits(own, named_here) {
+                if let Some(replaced) = held.standing.replace(value) {
+                    merged.displaced.push(replaced);
+                }
+            } else {
+                held.offered.push((path.to_path_buf(), value));
+            }
+        }
+    }
+
+    /// Put into the merged root as the one value in force, so [`Settings::from_map`] reads it as
+    /// it reads a key nothing layered. A file whose value was not obeyed is reported with the
+    /// files that named a key of [`HOME_ONLY`].
+    fn settle_narrowed(&mut self, merged: &mut Document) {
+        for ((key, kind, _), held) in NARROW_ONLY.iter().zip(std::mem::take(&mut self.narrowed)) {
+            let refused = held.settle(*kind, merged, key);
+            if !refused.is_empty() {
+                self.not_obeyed.entry(*key).or_default().extend(refused);
             }
         }
     }
@@ -1499,7 +1779,10 @@ impl Settings {
 
         let mut merged = Document::default();
         let mut found = Vec::new();
-        let mut facts = LayerFacts::default();
+        let mut facts = LayerFacts {
+            narrowed: NARROW_ONLY.iter().map(|_| Narrowed::default()).collect(),
+            ..LayerFacts::default()
+        };
         let named_path = named.map(Path::to_path_buf);
         // Where a `/x` rule in a checkout's file starts, and what a start inside the workspace is
         // spelled relative to (PERM-3).
@@ -1524,6 +1807,7 @@ impl Settings {
             // repository answer for whoever cloned it.
             let granting = own || named_here;
             facts.home_only(&mut root, &path, own, named_here);
+            facts.narrow_only(&mut root, &mut merged, &path, own, named_here);
             facts.retention(&root, &path, own);
             facts.vetting_and_narrowing(&root, &path, own);
             facts.last_speaker(&root, &path, own);
@@ -1543,6 +1827,8 @@ impl Settings {
             facts.deny_and_ask_rules(&mut root, &path, own, &anchor);
             merge(&mut merged, root.take());
         }
+
+        facts.settle_narrowed(&mut merged);
 
         let mut settings = Self::from_map(&merged);
         settings.layers = found;
@@ -1609,21 +1895,8 @@ impl Settings {
         settings.prompt_cache_ttl =
             word(root, "promptCacheTtl").and_then(|word| crate::CacheTtl::parse(&word));
         settings.editor_mode = word(root, "editorMode");
-        settings.limit = match root.get("limit") {
-            Some(serde_json::Value::Number(count)) => count
-                .as_u64()
-                .filter(|tokens| *tokens > 0)
-                .map(crate::limit::Limit::tokens),
-            Some(serde_json::Value::String(text)) => {
-                crate::limit::parse(text, crate::limit::Unit::Tokens)
-            }
-            _ => None,
-        };
-        settings.defer_mcp_tools_above = match root.get("deferMcpToolsAbove") {
-            Some(serde_json::Value::Number(count)) => count.as_u64().filter(|tokens| *tokens > 0),
-            Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
-            _ => None,
-        };
+        settings.limit = limit_stated(root.get("limit"));
+        settings.defer_mcp_tools_above = root.get("deferMcpToolsAbove").and_then(count_stated);
         settings.terminal_title = flag(root, "terminalTitle");
         settings.suggestions = flag(root, "suggestions");
         settings.update_check = flag(root, "updateCheck");
@@ -1838,7 +2111,9 @@ impl Settings {
     /// only, if they name one.
     ///
     /// A number, or a size written as `"limit"` is (`"20k"`). Anything else is absence, which
-    /// leaves every tool offered in full. It only ever offers less, so any layer may state it.
+    /// leaves every tool offered in full. A project or local layer's figure is obeyed only where it
+    /// is no higher than the one the person's own files state, since a higher one sends more of
+    /// every definition on every request ([`NARROW_ONLY`]).
     pub fn defer_mcp_tools_above(&self) -> Option<u64> {
         self.defer_mcp_tools_above
     }
@@ -1855,7 +2130,9 @@ impl Settings {
     /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-43).
     ///
     /// A boolean and nothing else, and the key exists to turn a request on, so only a real `true`
-    /// does it: a quoted `"true"` is absence and nothing is asked. The opposite of
+    /// does it: a quoted `"true"` is absence and nothing is asked. A project or local layer's
+    /// `true` is not read where the person's own files do not state `true` ([`NARROW_ONLY`]). The
+    /// opposite of
     /// [`Settings::terminal_title`], and for the opposite reason: a suggestion is a request that
     /// spends, so a value read loosely could spend for somebody who wrote something else.
     pub fn suggestions(&self) -> Option<bool> {
@@ -2452,16 +2729,24 @@ impl Settings {
         HOME_ONLY.iter().map(|(key, _)| *key)
     }
 
-    /// Each file that named a key of [`HOME_ONLY`] from a layer not entitled to it, with the key,
-    /// in the order of the table and weakest layer first within a key.
+    /// The keys of [`NARROW_ONLY`], in the order of the table.
+    pub fn narrow_only_keys() -> impl Iterator<Item = &'static str> {
+        NARROW_ONLY.iter().map(|(key, _, _)| *key)
+    }
+
+    /// Each file that named a key of [`HOME_ONLY`] from a layer not entitled to it, and each file
+    /// whose value for a key of [`NARROW_ONLY`] was wider than the person's or stated nothing, with
+    /// the key, in the order of the tables and weakest layer first within a key.
     ///
     /// Carries key names and paths only, never a value a file stated.
     pub fn not_obeyed_all(&self) -> impl Iterator<Item = (&'static str, &Path)> {
-        Self::home_only_keys().flat_map(|key| self.not_obeyed(key).map(move |path| (key, path)))
+        Self::home_only_keys()
+            .chain(Self::narrow_only_keys())
+            .flat_map(|key| self.not_obeyed(key).map(move |path| (key, path)))
     }
 
-    /// The files that named `key`, a key of [`HOME_ONLY`], from a layer not entitled to it,
-    /// weakest first.
+    /// The files that named `key`, a key of [`HOME_ONLY`] or [`NARROW_ONLY`], from a layer not
+    /// entitled to it or with a value it was not entitled to state, weakest first.
     fn not_obeyed(&self, key: &str) -> impl Iterator<Item = &Path> {
         self.not_obeyed
             .get(key)
@@ -2592,11 +2877,14 @@ impl Settings {
             .map(|(name, path)| (name.as_str(), path.as_path()))
     }
 
-    /// Variables this file says to keep from a program the agent runs, beyond the built-in set.
+    /// Variables the person's own file and the file `--settings` names say to keep from a program
+    /// the agent runs, beyond the built-in set.
     ///
-    /// Names only, which is the whole reason this may live in a file at all: naming a variable
-    /// takes something away from a subprocess and can grant nothing. A value here could put a
-    /// credential in front of every command instead, which is what the `env` block declines to do.
+    /// Names only: a value here could put a credential in front of every command, which is what the
+    /// `env` block declines to do. A project or local layer's list is not read ([`HOME_ONLY`]),
+    /// because withholding a variable can also grant: a program started without
+    /// `npm_config_ignore_scripts` or `PYTHONSAFEPATH` runs what the person's setting had kept it
+    /// from running (BACKEND-24, RUN-12).
     pub fn scrubbed(&self) -> impl Iterator<Item = &str> {
         self.scrub.iter().map(String::as_str)
     }
@@ -2905,11 +3193,53 @@ impl Document {
     /// What came out is kept with the rest of what was displaced rather than handed back, so that
     /// a token in it is cleared where every other dropped value is ([CRED-23]). The caller gets a
     /// presence answer, which is all deciding whether the layer was entitled to the key needs.
+    ///
+    /// A key written `block.name` is the name inside the block ([`Document::take_key`]), so the rest
+    /// of the block stays.
     fn remove(&mut self, key: &str) -> bool {
-        self.root.remove(key).is_some_and(|value| {
+        self.take_key(key).is_some_and(|value| {
             self.displaced.push(value);
             true
         })
+    }
+
+    /// The value of a key of [`NARROW_ONLY`] out of this document, handed to the caller to hold.
+    ///
+    /// A key written `block.name` is the name inside the block, which stays in the document with
+    /// whatever else it holds, so a layer's other names under the block still reach the merge. A
+    /// block that is not an object holds no name.
+    fn take_key(&mut self, key: &str) -> Option<serde_json::Value> {
+        match key.split_once('.') {
+            None => self.root.remove(key),
+            Some((block, name)) => match self.root.get_mut(block) {
+                Some(serde_json::Value::Object(inside)) => inside.remove(name),
+                _ => None,
+            },
+        }
+    }
+
+    /// Put the value in force for a key of [`NARROW_ONLY`] into this document, where
+    /// [`Document::take_key`] takes it from.
+    ///
+    /// A block that is not an object states nothing a name could be read from, so it is replaced
+    /// by one holding the name, and what it was is kept with what the merge displaced.
+    fn put_key(&mut self, key: &str, value: serde_json::Value) {
+        let Some((block, name)) = key.split_once('.') else {
+            self.root.insert(key.to_string(), value);
+            return;
+        };
+        let entry = self
+            .root
+            .entry(block.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !entry.is_object() {
+            let replaced =
+                std::mem::replace(entry, serde_json::Value::Object(serde_json::Map::new()));
+            self.displaced.push(replaced);
+        }
+        if let serde_json::Value::Object(inside) = entry {
+            inside.insert(name.to_string(), value);
+        }
     }
 }
 
@@ -2981,6 +3311,49 @@ fn retrieval_stated(root: &serde_json::Map<String, serde_json::Value>) -> Option
 /// A real boolean and nothing else: `"true"`, `1` and `null` are absence, with no coercion.
 pub(crate) fn flag(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
     root.get(key).and_then(serde_json::Value::as_bool)
+}
+
+/// The count a value states, or `None` where it states none.
+///
+/// A whole number above zero, or a string that is a count with an optional `k` or `m`
+/// ([`crate::limit::parse_count`]). Zero, a negative or fractional number, `null`, a boolean and a
+/// string that is no figure state nothing. The one reading for the merged root
+/// ([`Settings::from_map`]) and for the settlement of [`NARROW_ONLY`].
+fn count_stated(value: &serde_json::Value) -> Option<u64> {
+    match value {
+        serde_json::Value::Number(count) => count.as_u64().filter(|tokens| *tokens > 0),
+        serde_json::Value::String(text) => crate::limit::parse_count(text),
+        _ => None,
+    }
+}
+
+/// The place of the word `value` states in `words`, or `None` where it states none.
+///
+/// A string only, trimmed as [`word`] trims it, and one of `words` spelled exactly. The one reading
+/// the settlement of [`NARROW_ONLY`] uses for a [`Narrows::Word`] key, which is the one
+/// [`crate::CacheTtl::parse`] applies to the merged root.
+fn word_rank(words: &[&str], value: &serde_json::Value) -> Option<usize> {
+    let text = value.as_str()?.trim();
+    words.iter().position(|word| *word == text)
+}
+
+/// The spend limit a `limit` value states, or `None` where it states none.
+///
+/// A whole number above zero is a count of tokens, and a string is a count with an optional unit.
+/// Zero, a negative or fractional number, `null`, a boolean and a string that is no figure state
+/// nothing. The one reading for the merged root ([`Settings::from_map`]) and for the settlement of
+/// [`NARROW_ONLY`], so what a layer is held to is what a session would have read.
+fn limit_stated(value: Option<&serde_json::Value>) -> Option<crate::limit::Limit> {
+    match value {
+        Some(serde_json::Value::Number(count)) => count
+            .as_u64()
+            .filter(|tokens| *tokens > 0)
+            .map(crate::limit::Limit::tokens),
+        Some(serde_json::Value::String(text)) => {
+            crate::limit::parse(text, crate::limit::Unit::Tokens)
+        }
+        _ => None,
+    }
 }
 
 /// A whole number above zero, where the value is one.
@@ -3224,17 +3597,22 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>, granting: bool
 
 /// Lay one settings root over another, a name at a time.
 ///
-/// One level deep, which is Claude Code's rule rather than a general merge: `env`, `provider` and
-/// `attribution` combine per name, and a value inside one of those names is replaced whole. So a
-/// project file may restate an inherited `env` name or move a keybinding, and cannot reach inside
-/// an inherited entry to change part of it while keeping the rest. A deeper merge would make what a
-/// request carries the product of two files, and no single place to read would say where it came
-/// from. (`provider` is merged here too, but a layer other than the home one has already had its
-/// block removed before the merge sees it; this arm only answers for the home layer's own file.)
+/// One level deep, which is Claude Code's rule rather than a general merge: `env`, `provider`,
+/// `attribution` and `tui` combine per name, and a value inside one of those names is replaced
+/// whole. So a project file may restate an inherited `env` name or move a keybinding, and cannot
+/// reach inside an inherited entry to change part of it while keeping the rest. A deeper merge
+/// would make what a request carries the product of two files, and no single place to read would
+/// say where it came from. (`provider` is merged here too, but a layer other than the home one
+/// has already had its block removed before the merge sees it; this arm only answers for the home
+/// layer's own file.)
 ///
-/// `run.scrubEnv` unions instead, since a name there only ever takes a variable away from a
-/// subprocess. Overriding would let a layer hand back something a weaker one withheld, which is a
-/// direction this list is not for.
+/// Within `tui` the settle of [`NARROW_ONLY`] has already taken `mouse` and `contextMenu` out of
+/// every layer, so the other names merge here and those two are put back as the one value in force.
+///
+/// `run.scrubEnv` unions across the layers that reach this function, which are the person's own file
+/// and the file `--settings` names: a project or local layer's list was removed before the merge
+/// ([`HOME_ONLY`]). Overriding would let the named file hand back a name the person's own file
+/// withheld.
 fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Value>) {
     let Document {
         root: base,
@@ -3255,6 +3633,7 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "keybindings"
                     || key == "sessionsKeys"
                     || key == "search"
+                    || key == "tui"
                     || key == "download" =>
             {
                 for (name, value) in above {
@@ -3276,8 +3655,10 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
             {
                 merge_permissions(displaced, under, above);
             }
-            // Either block spelled as anything but an object holds no list, so it removes none.
-            (Some(serde_json::Value::Object(_)), value) if key == "run" || key == "permissions" => {
+            // Any of these blocks spelled as anything but an object holds no name, so it removes none.
+            (Some(serde_json::Value::Object(_)), value)
+                if key == "run" || key == "permissions" || key == "tui" =>
+            {
                 displaced.push(value);
             }
             (_, value) => {
@@ -3345,6 +3726,8 @@ fn merge_permissions(
 }
 
 /// The `run` block, where `scrubEnv` unions and every other name overrides.
+///
+/// A checkout's `scrubEnv` is not among what arrives: the layer loop took it out ([`HOME_ONLY`]).
 fn merge_run(
     displaced: &mut Vec<serde_json::Value>,
     under: &mut serde_json::Map<String, serde_json::Value>,
@@ -4914,7 +5297,8 @@ mod tests {
     }
 
     /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key
-    /// leaves the wheel and the drag working, and the nearest layer that named it wins.
+    /// leaves the wheel and the drag working. A checkout's `false` turns it off over a person who
+    /// stated `true` or nothing.
     #[test]
     fn only_a_boolean_turns_mouse_capture_off() {
         let settings = Settings::parse(r#"{"tui": {"mouse": false}}"#);
@@ -4951,7 +5335,8 @@ mod tests {
     }
 
     /// MOUSE-52: only a real `false` turns the context menu off, so a quoted `"false"` or a misplaced
-    /// key leaves the right click opening it, and the nearest layer that named it wins.
+    /// key leaves the right click opening it. A checkout's `false` turns it off over a person who
+    /// stated `true` or nothing.
     #[test]
     fn only_a_boolean_turns_the_context_menu_off() {
         let settings = Settings::parse(r#"{"tui": {"contextMenu": false}}"#);
@@ -6226,18 +6611,82 @@ mod tests {
         assert_eq!(settings.get("DEPLOY_TARGET"), Some("personal"));
     }
 
-    /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
-    /// override would let a project file hand back a secret the person's own file withheld.
+    /// A variable named here is one no program the agent runs is handed, and that can restrict as
+    /// well as grant: `npm_config_ignore_scripts` or `PYTHONSAFEPATH` in the person's environment
+    /// keeps a package's scripts or a stray module from running, and a checkout listing it or a
+    /// pattern holding it would run them (BACKEND-24, RUN-12). So only the person's own file and the
+    /// file `--settings` names are read, a project or local layer's list is dropped, exact names and
+    /// patterns alike, and `doctor` names the files.
     #[test]
-    fn every_layer_adds_to_the_names_kept_from_a_program() {
-        let settings = Layers::new("scrub-union")
+    fn a_checkout_adds_nothing_to_the_names_kept_from_a_program() {
+        let layers = Layers::new("scrub-checkout")
+            .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"]}}"#)
+            .project(r#"{"run": {"scrubEnv": ["npm_config_*", "npm_config_ignore_scripts"]}}"#)
+            .local(r#"{"run": {"scrubEnv": ["PYTHONSAFEPATH"]}}"#);
+        let settings = layers.read();
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["PERSONAL_TOKEN"]);
+
+        let environment = [
+            "npm_config_ignore_scripts".to_string(),
+            "PYTHONSAFEPATH".to_string(),
+            "PERSONAL_TOKEN".to_string(),
+        ];
+        let withheld = crate::scrub::names_against(&settings, &environment);
+        assert!(
+            withheld.contains(&"PERSONAL_TOKEN".to_string()),
+            "{withheld:?}"
+        );
+        for kept in ["npm_config_ignore_scripts", "PYTHONSAFEPATH"] {
+            assert!(
+                !withheld.iter().any(|name| name == kept),
+                "{kept} was withheld on a checkout's say: {withheld:?}"
+            );
+        }
+
+        let files: Vec<PathBuf> = settings
+            .not_obeyed_all()
+            .filter(|(key, _)| *key == "run.scrubEnv")
+            .map(|(_, path)| path.to_path_buf())
+            .collect();
+        assert_eq!(
+            files,
+            [
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ]
+        );
+    }
+
+    /// Only the one name goes: a checkout that also bounds how long a program runs keeps that bound,
+    /// since the sentence about the list says nothing about the rest of the block.
+    #[test]
+    fn a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped() {
+        let settings = Layers::new("scrub-checkout-block")
+            .project(r#"{"run": {"scrubEnv": ["NOT_ME"], "maxSeconds": 60, "network": "closed"}}"#)
+            .read();
+        assert_eq!(settings.scrubbed().count(), 0);
+        assert_eq!(
+            settings.run_deadlines().ceiling,
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(settings.not_obeyed("run.scrubEnv").count(), 1);
+        assert!(!settings.is_empty());
+    }
+
+    /// The file `--settings` names is the person's wherever it sits, the project file included, so
+    /// its list is read and the person's own entries stay beside it.
+    #[test]
+    fn the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program() {
+        let settings = Layers::new("scrub-named-project")
             .global(r#"{"run": {"scrubEnv": ["PERSONAL_TOKEN"]}}"#)
             .project(r#"{"run": {"scrubEnv": ["PROJECT_TOKEN"]}}"#)
             .local(r#"{"run": {"scrubEnv": ["MACHINE_TOKEN"]}}"#)
+            .naming_the_project_layer()
             .read();
         let mut named: Vec<&str> = settings.scrubbed().collect();
         named.sort_unstable();
-        assert_eq!(named, ["MACHINE_TOKEN", "PERSONAL_TOKEN", "PROJECT_TOKEN"]);
+        assert_eq!(named, ["PERSONAL_TOKEN", "PROJECT_TOKEN"]);
+        assert_eq!(settings.not_obeyed("run.scrubEnv").count(), 1);
     }
 
     /// A `provider` block names where a request is sent and which of the person's variables are read
@@ -7645,6 +8094,1337 @@ mod tests {
         assert_eq!(settings.limit(), Some(crate::limit::Limit::tokens(200_000)));
         assert_eq!(settings.unread_keys().count(), 0);
         assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"]);
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// TURN-8 puts a question at the person's figure, so a checkout's file cannot remove it
+    /// (`null`, `0`, a string that is no figure), raise it, or count in another unit, whichever of
+    /// the two checkout files says so. The file is named for `doctor` and the desktop settings
+    /// view, and the figure still shows among the names the person set.
+    #[test]
+    fn a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit() {
+        use crate::limit::Limit;
+        for (written, why) in [
+            (r#"{"limit": null}"#, "removes it"),
+            (r#"{"limit": 0}"#, "removes it"),
+            (r#"{"limit": "none"}"#, "removes it"),
+            (r#"{"limit": false}"#, "removes it"),
+            (r#"{"limit": "999999999999"}"#, "raises it"),
+            (r#"{"limit": "1 credits"}"#, "changes the unit"),
+        ] {
+            for local in [false, true] {
+                let layers = Layers::new(if local {
+                    "limit-local"
+                } else {
+                    "limit-project"
+                })
+                .global(r#"{"limit": "200k"}"#);
+                let layers = if local {
+                    layers.local(written)
+                } else {
+                    layers.project(written)
+                };
+                let settings = layers.read();
+                assert_eq!(
+                    settings.limit(),
+                    Some(Limit::tokens(200_000)),
+                    "{written} in the {} layer {why}",
+                    if local { "local" } else { "project" }
+                );
+                assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"], "{written}");
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{written} was not reported");
+                assert_eq!(reported[0].0, "limit");
+                assert!(
+                    reported[0].1.ends_with(if local {
+                        LOCAL_SETTINGS_FILE
+                    } else {
+                        SETTINGS_FILE
+                    }),
+                    "{written} was reported under {:?}",
+                    reported[0].1
+                );
+            }
+        }
+    }
+
+    /// The same refusal where the person's limit is in credits: a count of tokens is another unit,
+    /// and a lower figure in the person's own unit is the only thing a checkout may add.
+    #[test]
+    fn a_checkout_layer_cannot_move_a_credit_limit_into_tokens() {
+        use crate::limit::Limit;
+        let settings = Layers::new("limit-credits")
+            .global(r#"{"limit": "50 credits"}"#)
+            .project(r#"{"limit": "10 tokens"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::credits(50)));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+
+        let settings = Layers::new("limit-credits-lower")
+            .global(r#"{"limit": "50 credits"}"#)
+            .project(r#"{"limit": "20 credits"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::credits(20)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// A checkout may lower the person's figure in the person's unit, and a figure equal to it
+    /// changes nothing and takes nothing, so it is not reported.
+    #[test]
+    fn a_checkout_layer_may_lower_the_limit_in_the_same_unit() {
+        use crate::limit::Limit;
+        for (layers, expected) in [
+            (
+                Layers::new("limit-lower")
+                    .global(r#"{"limit": "200k"}"#)
+                    .project(r#"{"limit": "100k"}"#),
+                Limit::tokens(100_000),
+            ),
+            (
+                Layers::new("limit-equal")
+                    .global(r#"{"limit": "200k"}"#)
+                    .project(r#"{"limit": 200000}"#),
+                Limit::tokens(200_000),
+            ),
+            (
+                Layers::new("limit-lower-local")
+                    .global(r#"{"limit": 200000}"#)
+                    .local(r#"{"limit": "1k"}"#),
+                Limit::tokens(1_000),
+            ),
+        ] {
+            let settings = layers.read();
+            assert_eq!(settings.limit(), Some(expected));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+    }
+
+    /// The file `--settings` names is the person's, as the home file is, so it decides the limit in
+    /// either direction.
+    #[test]
+    fn the_named_settings_file_decides_the_limit_as_the_home_file_does() {
+        use crate::limit::Limit;
+        let settings = Layers::new("limit-named")
+            .global(r#"{"limit": "200k"}"#)
+            .named(r#"{"limit": "1m"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(1_000_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        // A checkout is held to what the entitled layers settled on, whichever order the files are
+        // read in, so it narrows the named file's figure as it narrows the home file's.
+        let settings = Layers::new("limit-named-over-project")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "100k"}"#)
+            .named(r#"{"limit": "300k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(100_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        let settings = Layers::new("limit-named-under-project")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "250k"}"#)
+            .named(r#"{"limit": "300k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(250_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        let settings = Layers::new("limit-named-null")
+            .global(r#"{"limit": "200k"}"#)
+            .named(r#"{"limit": null}"#)
+            .read();
+        assert_eq!(settings.limit(), None);
+    }
+
+    /// Where the person's own files state no limit there is nothing to remove, so a checkout may
+    /// state one. A value of theirs that is no figure (`null`, `0`) states none, which is how a
+    /// person says they want no limit, and a checkout then adds a bound rather than removing one.
+    #[test]
+    fn a_checkout_layer_may_state_a_limit_where_the_person_stated_none() {
+        use crate::limit::Limit;
+        for (name, home) in [
+            ("limit-unstated", None),
+            ("limit-null", Some(r#"{"limit": null}"#)),
+            ("limit-zero", Some(r#"{"limit": 0}"#)),
+        ] {
+            let mut layers = Layers::new(name);
+            if let Some(home) = home {
+                layers = layers.global(home);
+            }
+            let settings = layers.project(r#"{"limit": "100k"}"#).read();
+            assert_eq!(settings.limit(), Some(Limit::tokens(100_000)), "{name}");
+            assert_eq!(settings.not_obeyed_all().count(), 0, "{name}");
+        }
+        // Nothing stated and a value that states nothing: no limit, and nothing it removed.
+        let settings = Layers::new("limit-null-over-nothing")
+            .project(r#"{"limit": null}"#)
+            .read();
+        assert_eq!(settings.limit(), None);
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// The two checkout files narrow in turn, each held to what the one before left, so a local
+    /// file cannot raise what the project file lowered and a unit cannot be changed between them.
+    #[test]
+    fn the_checkout_layers_narrow_one_after_the_other() {
+        use crate::limit::Limit;
+        let settings = Layers::new("limit-chain")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "100k"}"#)
+            .local(r#"{"limit": "150k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(100_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+
+        let settings = Layers::new("limit-chain-lower")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": "100k"}"#)
+            .local(r#"{"limit": "50k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(50_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        let settings = Layers::new("limit-chain-unit")
+            .project(r#"{"limit": "100k"}"#)
+            .local(r#"{"limit": "10 credits"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(Limit::tokens(100_000)));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// A file that stated a limit the session did not obey is still a file that stated something,
+    /// and the key is one this build reads, so it is never among the keys nothing reads.
+    #[test]
+    fn a_refused_limit_is_not_an_unread_key() {
+        let settings = Layers::new("limit-unread")
+            .global(r#"{"limit": "200k"}"#)
+            .project(r#"{"limit": null}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// Every row of the table is a key that is read by one of the kinds, none is also a row of
+    /// [`HOME_ONLY`] (which would remove it before it was compared), and each is listed once.
+    #[test]
+    fn the_narrow_only_table_keys_are_unique_and_not_home_only() {
+        let keys: Vec<&str> = Settings::narrow_only_keys().collect();
+        assert!(!keys.is_empty());
+        let mut seen = keys.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), keys.len(), "a key is listed twice");
+        for key in &keys {
+            assert!(
+                Settings::home_only_keys().all(|home| home != *key),
+                "{key} is in both tables"
+            );
+        }
+    }
+
+    /// A usable value that is no wider than the bound for a person who stated nothing is obeyed and
+    /// a wider one is refused and reported, which is how a key with a default is held. A value that
+    /// states nothing over that bound removes nothing and is not reported.
+    #[test]
+    fn a_default_bound_holds_a_checkout_where_the_person_stated_nothing() {
+        use crate::limit::Limit;
+        // What the document holds for the key afterwards: the value that is in force, or nothing
+        // where the bound for a person who stated nothing stays in force.
+        for (offered, in_force, reported) in [
+            (serde_json::json!("100k"), Some(Limit::tokens(100_000)), 0),
+            (serde_json::json!("200k"), Some(Limit::tokens(200_000)), 0),
+            (serde_json::json!("999999999999"), None, 1),
+            (serde_json::json!("1 credits"), None, 1),
+            (serde_json::Value::Null, None, 0),
+        ] {
+            let held = Narrowed {
+                standing: None,
+                offered: vec![(PathBuf::from("/checkout/settings.json"), offered.clone())],
+            };
+            let mut document = Document::default();
+            let refused = held.settle_against(
+                Narrows::Limit,
+                Some(&serde_json::json!("200k")),
+                &mut document,
+                "limit",
+            );
+            assert_eq!(refused.len(), reported, "{offered}");
+            assert_eq!(
+                limit_stated(document.root.get("limit")),
+                in_force,
+                "{offered}"
+            );
+        }
+    }
+
+    /// What each row of [`NARROW_ONLY`] is checked with: the person's value, values a checkout
+    /// writes that take something from it, and one that narrows it. `read` shows what a session
+    /// would read for the key, so one test holds every row to the same four statements.
+    struct NarrowCase {
+        key: &'static str,
+        read: fn(&Settings) -> String,
+        person: &'static str,
+        wider: &'static [&'static str],
+        narrower: &'static str,
+    }
+
+    /// One row for each row of [`NARROW_ONLY`], which the test below holds to be so.
+    const NARROW_ONLY_EXPECTED: &[NarrowCase] = &[
+        NarrowCase {
+            key: "limit",
+            read: |settings| format!("{:?}", settings.limit()),
+            person: r#""200k""#,
+            wider: &["null", "0", r#""999999999999""#, r#""1 credits""#],
+            narrower: r#""100k""#,
+        },
+        // The one value wider than a person's `false` is `true`, and a person who wrote `true` is
+        // held to nothing wider, so the case holds the values that state no boolean over `true`.
+        // `true` over `false` is held by `a_checkout_may_turn_the_update_check_off_and_not_on`.
+        NarrowCase {
+            key: "updateCheck",
+            read: |settings| format!("{:?}", settings.update_check()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+        // The same shape as `updateCheck`: `true` over `false` is held by
+        // `a_checkout_may_turn_deep_links_off_and_not_on`.
+        NarrowCase {
+            key: "deepLinks",
+            read: |settings| format!("{:?}", settings.deep_links()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+        // The default is off, so `true` over a person who stated nothing is held too, by
+        // `a_checkout_may_turn_suggestions_off_and_not_on`.
+        NarrowCase {
+            key: "suggestions",
+            read: |settings| format!("{:?}", settings.suggestions()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+        // The same shape as `updateCheck`: `true` over `false` is held by
+        // `a_checkout_may_turn_the_away_recap_off_and_not_on`.
+        NarrowCase {
+            key: "awaySummaryEnabled",
+            read: |settings| format!("{:?}", settings.away_summary_enabled()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+        // A count: the person's `"20k"` is not raised by a larger number or string, and a value
+        // that reads as no threshold does not remove it. Lowering, stating where the person stated
+        // none, and the named file are held by
+        // `a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`.
+        NarrowCase {
+            key: "deferMcpToolsAbove",
+            read: |settings| format!("{:?}", settings.defer_mcp_tools_above()),
+            person: r#""20k""#,
+            wider: &[
+                "null",
+                "0",
+                "true",
+                "-5",
+                "1.5",
+                r#""banana""#,
+                "20001",
+                r#""21k""#,
+                "18446744073709551615",
+            ],
+            narrower: r#""10k""#,
+        },
+        // A word: the person's `"1h"` is not replaced by a word that states no lifetime, since that
+        // removes it. `5m` over `1h` narrows, and `1h` over `5m` or over nothing is held by
+        // `a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`.
+        NarrowCase {
+            key: "promptCacheTtl",
+            read: |settings| format!("{:?}", settings.prompt_cache_ttl()),
+            person: r#""1h""#,
+            wider: &[
+                "null", "0", "true", r#""2h""#, r#""1H""#, r#""""#, r#""60m""#,
+            ],
+            narrower: r#""5m""#,
+        },
+        // The same shape as `updateCheck`, inside the `tui` block: `true` over `false` is held by
+        // `a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`.
+        NarrowCase {
+            key: "tui.mouse",
+            read: |settings| format!("{:?}", settings.tui_mouse()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+        NarrowCase {
+            key: "tui.contextMenu",
+            read: |settings| format!("{:?}", settings.tui_context_menu()),
+            person: "true",
+            wider: &["null", "0", r#""false""#],
+            narrower: "false",
+        },
+    ];
+
+    /// Every row of [`NARROW_ONLY`] has a case, and each key keeps the person's value against a
+    /// wider one from the project and from the local layer (naming the file once), and takes a
+    /// narrower one without reporting it.
+    #[test]
+    fn every_narrow_only_key_keeps_the_persons_value_against_a_wider_one() {
+        let keys: Vec<&str> = Settings::narrow_only_keys().collect();
+        let cases: Vec<&str> = NARROW_ONLY_EXPECTED.iter().map(|case| case.key).collect();
+        assert_eq!(
+            keys, cases,
+            "the cases are not one for each row of the table"
+        );
+        for case in NARROW_ONLY_EXPECTED {
+            let key = case.key;
+            let object = |value: &str| match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": {value}}}}}"#),
+                None => format!(r#"{{"{key}": {value}}}"#),
+            };
+            let kept = (case.read)(
+                &Layers::new(&format!("narrow-{key}-person"))
+                    .global(&object(case.person))
+                    .read(),
+            );
+            for wider in case.wider {
+                for local in [false, true] {
+                    let layers =
+                        Layers::new(&format!("narrow-{key}-wider")).global(&object(case.person));
+                    let layers = if local {
+                        layers.local(&object(wider))
+                    } else {
+                        layers.project(&object(wider))
+                    };
+                    let settings = layers.read();
+                    assert_eq!((case.read)(&settings), kept, "{key}: {wider} local={local}");
+                    assert_eq!(
+                        settings.not_obeyed_all().count(),
+                        1,
+                        "{key}: {wider} local={local}"
+                    );
+                    assert_eq!(settings.names().filter(|name| *name == key).count(), 1);
+                }
+            }
+            let settings = Layers::new(&format!("narrow-{key}-narrower"))
+                .global(&object(case.person))
+                .project(&object(case.narrower))
+                .read();
+            assert_ne!(
+                (case.read)(&settings),
+                kept,
+                "{key}: narrower was not taken"
+            );
+            assert_eq!(settings.not_obeyed_all().count(), 0, "{key}");
+        }
+    }
+
+    /// BACKEND-24, "anything else": a key that is in neither table is decided by the closest layer,
+    /// whichever way it moves the value, and nothing is reported for it. Each case writes the
+    /// person's value in the home layer and the opposite direction in the project layer, so a key
+    /// that was moved into a table without its spec row being written fails here.
+    #[test]
+    fn a_key_in_neither_table_is_decided_by_the_closest_layer_in_either_direction() {
+        struct Case {
+            key: &'static str,
+            read: fn(&Settings) -> String,
+            person: &'static str,
+            checkout: &'static str,
+        }
+        let cases = [
+            Case {
+                key: "effort",
+                read: |settings| format!("{:?}", settings.effort()),
+                person: r#""low""#,
+                checkout: r#""max""#,
+            },
+            Case {
+                key: "editorMode",
+                read: |settings| format!("{:?}", settings.editor_mode()),
+                person: r#""emacs""#,
+                checkout: r#""vim""#,
+            },
+            Case {
+                key: "terminalTitle",
+                read: |settings| format!("{:?}", settings.terminal_title()),
+                person: "false",
+                checkout: "true",
+            },
+            Case {
+                key: "notificationMethod",
+                read: |settings| format!("{:?}", settings.notification_method()),
+                person: r#""off""#,
+                checkout: r#""osc9""#,
+            },
+            Case {
+                key: "maxRunningDelegates",
+                read: |settings| format!("{:?}", settings.max_running_delegates()),
+                person: "12",
+                checkout: "100",
+            },
+            Case {
+                key: "awaySummaryIdleSeconds",
+                read: |settings| format!("{:?}", settings.away_summary_idle_seconds()),
+                person: "90",
+                checkout: "600",
+            },
+            Case {
+                key: "tui.wheelRows",
+                read: |settings| format!("{:?}", settings.wheel_rows()),
+                person: "5",
+                checkout: "8",
+            },
+            Case {
+                key: "search.maxFiles",
+                read: |settings| format!("{:?}", settings.search().files),
+                person: "500000",
+                checkout: "900000",
+            },
+            Case {
+                key: "run.maxOutput",
+                read: |settings| format!("{:?}", settings.run_output_cap()),
+                person: "32768",
+                checkout: "65536",
+            },
+            Case {
+                key: "run.maxSeconds",
+                read: |settings| format!("{:?}", settings.run_deadlines().ceiling),
+                person: "900",
+                checkout: "1800",
+            },
+        ];
+        for case in cases {
+            let key = case.key;
+            assert!(
+                !Settings::home_only_keys().any(|listed| listed == key),
+                "{key} is in HOME_ONLY, so BACKEND-24's anything-else row no longer covers it"
+            );
+            assert!(
+                !Settings::narrow_only_keys().any(|listed| listed == key),
+                "{key} is in NARROW_ONLY, so BACKEND-24's anything-else row no longer covers it"
+            );
+            let object = |value: &str| match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": {value}}}}}"#),
+                None => format!(r#"{{"{key}": {value}}}"#),
+            };
+            let person_alone = Layers::new(&format!("anything-else-{key}-person"))
+                .global(&object(case.person))
+                .read();
+            for local in [false, true] {
+                let layers = Layers::new(&format!("anything-else-{key}-{local}"))
+                    .global(&object(case.person));
+                let settings = if local {
+                    layers.local(&object(case.checkout)).read()
+                } else {
+                    layers.project(&object(case.checkout)).read()
+                };
+                assert_ne!(
+                    (case.read)(&settings),
+                    (case.read)(&person_alone),
+                    "{key}: the checkout's value did not win, local={local}"
+                );
+                assert_eq!(
+                    settings.not_obeyed_all().count(),
+                    0,
+                    "{key}: a value the closest layer decides was reported, local={local}"
+                );
+            }
+        }
+    }
+
+    /// UPDATE-11, BACKEND-24: a project or local layer may turn the update check off and may not
+    /// turn it on over a person who turned it off, and the file that tried is reported. A
+    /// person who stated nothing, or `true`, is not held to `false`, and the file `--settings`
+    /// names is the person's own act in either direction.
+    #[test]
+    fn a_checkout_may_turn_the_update_check_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("update-check-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"updateCheck": true}"#;
+            let off = r#"{"updateCheck": false}"#;
+
+            // Over the person's `false`, `true` is not obeyed and the file is named.
+            let settings = with("on-over-off", Some(off), on);
+            assert_eq!(settings.update_check(), Some(false), "local={local}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, "updateCheck");
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert_eq!(settings.names().collect::<Vec<_>>(), ["updateCheck"]);
+            assert!(!settings.is_empty());
+
+            // A checkout's `false` turns the check off over `true` and over a person who wrote
+            // nothing, and neither is reported.
+            for global in [Some(on), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.update_check(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` or nothing changes nothing and is not reported.
+            for global in [Some(on), None] {
+                let settings = with("on", global, on);
+                assert_eq!(
+                    settings.update_check(),
+                    Some(true),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // A person's value that is not a boolean states nothing, so it does not hold a
+            // checkout to `false`, and a checkout's that is not one turns nothing off.
+            let settings = with("person-word", Some(r#"{"updateCheck": "false"}"#), on);
+            assert_eq!(settings.update_check(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with("checkout-word", None, r#"{"updateCheck": "false"}"#);
+            assert_eq!(settings.update_check(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("update-check-local-over-project")
+            .project(r#"{"updateCheck": false}"#)
+            .local(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The file the command line named is the person's own act: it turns the check on over the
+        // person's `false` and off over the person's `true`, and the named file wins over the home
+        // layer.
+        let settings = Layers::new("update-check-named-on")
+            .global(r#"{"updateCheck": false}"#)
+            .named(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        // A checkout's `false` then narrows what the person's layers settled on, the named file's
+        // `true` included, and a checkout's `true` over the person's own `false` is refused whichever
+        // layer holds it.
+        let settings = Layers::new("update-check-named-on-checkout-off")
+            .global(r#"{"updateCheck": false}"#)
+            .project(r#"{"updateCheck": false}"#)
+            .named(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("update-check-named-off-checkout-on")
+            .named(r#"{"updateCheck": false}"#)
+            .project(r#"{"updateCheck": true}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+        let settings = Layers::new("update-check-named-off")
+            .global(r#"{"updateCheck": true}"#)
+            .named(r#"{"updateCheck": false}"#)
+            .read();
+        assert_eq!(settings.update_check(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+    }
+
+    /// LINK-6, BACKEND-24: a project or local layer may refuse links and may not accept them over a
+    /// person who refused them, and the file that tried is reported. A person who stated nothing,
+    /// or `true`, is not held to `false`, and the file `--settings` names is the person's own act
+    /// in either direction.
+    #[test]
+    fn a_checkout_may_turn_deep_links_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("deep-links-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"deepLinks": true}"#;
+            let off = r#"{"deepLinks": false}"#;
+
+            // Over the person's `false`, `true` is not obeyed and the file is named.
+            let settings = with("on-over-off", Some(off), on);
+            assert_eq!(settings.deep_links(), Some(false), "local={local}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, "deepLinks");
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert_eq!(settings.names().collect::<Vec<_>>(), ["deepLinks"]);
+            assert!(!settings.is_empty());
+
+            // A checkout's `false` refuses links over `true` and over a person who wrote nothing,
+            // and neither is reported.
+            for global in [Some(on), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.deep_links(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` or nothing refuses nothing and is not reported.
+            for global in [Some(on), None] {
+                let settings = with("on", global, on);
+                assert_ne!(
+                    settings.deep_links(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // A person's value that is not a boolean states nothing, so it does not hold a
+            // checkout to `false`, and a checkout's that is not one refuses nothing.
+            let settings = with("person-word", Some(r#"{"deepLinks": "false"}"#), on);
+            assert_eq!(settings.deep_links(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with("checkout-word", None, r#"{"deepLinks": "false"}"#);
+            assert_eq!(settings.deep_links(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("deep-links-local-over-project")
+            .project(r#"{"deepLinks": false}"#)
+            .local(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The file the command line named is the person's own act: it accepts links over the
+        // person's `false`, and the person's layers it sits above are replaced by it.
+        let settings = Layers::new("deep-links-named-on")
+            .global(r#"{"deepLinks": false}"#)
+            .named(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        // A checkout's `false` then narrows what the person's layers settled on, and a checkout's
+        // `true` over the named file's `false` is refused.
+        let settings = Layers::new("deep-links-named-on-checkout-off")
+            .global(r#"{"deepLinks": false}"#)
+            .project(r#"{"deepLinks": false}"#)
+            .named(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("deep-links-named-off-checkout-on")
+            .named(r#"{"deepLinks": false}"#)
+            .project(r#"{"deepLinks": true}"#)
+            .read();
+        assert_eq!(settings.deep_links(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// CMD-20, BACKEND-24: a project or local layer may turn the automatic away recap off and may
+    /// not turn it on over a person who turned it off, and the file that tried is reported. A
+    /// person who stated nothing, or `true`, is not held to `false`, and the file `--settings`
+    /// names is the person's own act in either direction. The idle time stays a key the closest
+    /// layer decides.
+    #[test]
+    fn a_checkout_may_turn_the_away_recap_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("away-recap-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"awaySummaryEnabled": true}"#;
+            let off = r#"{"awaySummaryEnabled": false}"#;
+
+            // Over the person's `false`, `true` is not obeyed and the file is named.
+            let settings = with("on-over-off", Some(off), on);
+            assert_eq!(
+                settings.away_summary_enabled(),
+                Some(false),
+                "local={local}"
+            );
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, "awaySummaryEnabled");
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert_eq!(settings.names().collect::<Vec<_>>(), ["awaySummaryEnabled"]);
+            assert!(!settings.is_empty());
+
+            // A checkout's `false` turns the recap off over `true` and over a person who wrote
+            // nothing, and neither is reported.
+            for global in [Some(on), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.away_summary_enabled(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` or nothing turns off nothing and is not
+            // reported.
+            for global in [Some(on), None] {
+                let settings = with("on", global, on);
+                assert_eq!(
+                    settings.away_summary_enabled(),
+                    Some(true),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // A person's value that is not a boolean states nothing, so it does not hold a
+            // checkout to `false`, and a checkout's that is not one turns off nothing.
+            let settings = with(
+                "person-word",
+                Some(r#"{"awaySummaryEnabled": "false"}"#),
+                on,
+            );
+            assert_eq!(settings.away_summary_enabled(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with("checkout-word", None, r#"{"awaySummaryEnabled": "false"}"#);
+            assert_eq!(settings.away_summary_enabled(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("away-recap-local-over-project")
+            .project(r#"{"awaySummaryEnabled": false}"#)
+            .local(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The file the command line named is the person's own act: it turns the recap on over the
+        // person's `false`.
+        let settings = Layers::new("away-recap-named-on")
+            .global(r#"{"awaySummaryEnabled": false}"#)
+            .named(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        // A checkout's `false` then narrows what the person's layers settled on, and a checkout's
+        // `true` over the named file's `false` is refused.
+        let settings = Layers::new("away-recap-named-on-checkout-off")
+            .global(r#"{"awaySummaryEnabled": false}"#)
+            .project(r#"{"awaySummaryEnabled": false}"#)
+            .named(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("away-recap-named-off-checkout-on")
+            .named(r#"{"awaySummaryEnabled": false}"#)
+            .project(r#"{"awaySummaryEnabled": true}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+
+        // The idle time is not in the table: the closest layer that named one wins, with the
+        // recap turned off by the person and a checkout's `true` refused.
+        let settings = Layers::new("away-recap-idle-stays-nearest")
+            .global(r#"{"awaySummaryEnabled": false, "awaySummaryIdleSeconds": 90}"#)
+            .project(r#"{"awaySummaryEnabled": true, "awaySummaryIdleSeconds": 600}"#)
+            .read();
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert_eq!(settings.away_summary_idle_seconds(), Some(600));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// MOUSE-4, MOUSE-52, SCROLL-3: a checkout's `tui` block combines with the person's a name at a
+    /// time, so a checkout that names only the wheel leaves the person's `mouse` and `contextMenu`
+    /// in force, in the project file and in the local file, and still sets the wheel.
+    #[test]
+    fn a_checkouts_tui_block_does_not_replace_the_persons() {
+        let home = r#"{"tui": {"mouse": false, "contextMenu": false, "wheelRows": 5}}"#;
+        for local in [false, true] {
+            let layers = Layers::new(&format!("tui-block-{local}")).global(home);
+            let settings = if local {
+                layers.local(r#"{"tui": {"wheelRows": 3}}"#).read()
+            } else {
+                layers.project(r#"{"tui": {"wheelRows": 3}}"#).read()
+            };
+            assert_eq!(settings.tui_mouse(), Some(false), "local={local}");
+            assert_eq!(settings.tui_context_menu(), Some(false), "local={local}");
+            assert_eq!(settings.wheel_rows(), Some(3), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0, "local={local}");
+            assert_eq!(settings.unread_keys().count(), 0, "local={local}");
+            let mut names: Vec<_> = settings.names().collect();
+            names.sort_unstable();
+            assert_eq!(
+                names,
+                ["tui.contextMenu", "tui.mouse", "tui.wheelRows"],
+                "local={local}"
+            );
+        }
+
+        // A checkout's `tui` that is not an object holds no name and removes none.
+        let settings = Layers::new("tui-block-not-an-object")
+            .global(home)
+            .project(r#"{"tui": 5}"#)
+            .read();
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        assert_eq!(settings.wheel_rows(), Some(5));
+
+        // The wheel is a number and not a flag, so the nearest layer that named one still wins.
+        let settings = Layers::new("tui-block-wheel")
+            .global(home)
+            .project(r#"{"tui": {"wheelRows": 3}}"#)
+            .local(r#"{"tui": {"wheelRows": 4}}"#)
+            .read();
+        assert_eq!(settings.wheel_rows(), Some(4));
+    }
+
+    /// MOUSE-4, MOUSE-52, BACKEND-24: a project or local layer may turn mouse capture and the
+    /// right-click menu off and may not turn either on over a person who turned it off, and the file
+    /// that tried is reported. A person who stated nothing, or `true`, is not held to `false`, the
+    /// two keys are settled apart, and the file `--settings` names is the person's own act in either
+    /// direction. The other names in the block are not part of the row.
+    #[test]
+    fn a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on() {
+        type Read = fn(&Settings) -> Option<bool>;
+        let keys: [(&str, Read); 2] = [
+            ("mouse", Settings::tui_mouse),
+            ("contextMenu", Settings::tui_context_menu),
+        ];
+        for (key, read) in keys {
+            let name = format!("tui.{key}");
+            let block = |value: &str| format!(r#"{{"tui": {{"{key}": {value}}}}}"#);
+            for local in [false, true] {
+                let file = if local {
+                    LOCAL_SETTINGS_FILE
+                } else {
+                    SETTINGS_FILE
+                };
+                let with = |case: &str, global: Option<String>, written: String| {
+                    let layers = Layers::new(&format!("tui-{key}-{case}-{local}"));
+                    let layers = match &global {
+                        Some(text) => layers.global(text),
+                        None => layers,
+                    };
+                    if local {
+                        layers.local(&written).read()
+                    } else {
+                        layers.project(&written).read()
+                    }
+                };
+
+                // Over the person's `false`, `true` is not obeyed and the file is named, with
+                // the checkout's wheel figure still taken.
+                let settings = with(
+                    "on-over-off",
+                    Some(block("false")),
+                    format!(r#"{{"tui": {{"{key}": true, "wheelRows": 3}}}}"#),
+                );
+                assert_eq!(read(&settings), Some(false), "{key} local={local}");
+                assert_eq!(settings.wheel_rows(), Some(3), "{key} local={local}");
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{key} local={local}");
+                assert_eq!(reported[0].0, name);
+                assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+                assert_eq!(settings.unread_keys().count(), 0);
+                assert_eq!(settings.names().filter(|n| *n == name).count(), 1);
+
+                // A checkout's `false` turns it off over `true`, over nothing and over a person
+                // who wrote other keys, and none of them is reported.
+                for global in [
+                    Some(block("true")),
+                    None,
+                    Some(r#"{"tui": {"wheelRows": 5}}"#.to_string()),
+                ] {
+                    let settings = with("off", global.clone(), block("false"));
+                    assert_eq!(
+                        read(&settings),
+                        Some(false),
+                        "{key} {global:?} local={local}"
+                    );
+                    assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+                }
+
+                // `true` where the person wrote `true` or nothing changes nothing and is not
+                // reported.
+                for global in [Some(block("true")), None] {
+                    let settings = with("on", global.clone(), block("true"));
+                    assert_eq!(read(&settings), Some(true), "{key} {global:?}");
+                    assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+                }
+
+                // A value that is not a boolean states nothing: a checkout's is absence and is not
+                // reported, and a person's does not hold a checkout to `false`.
+                let settings = with("person-word", Some(block(r#""false""#)), block("true"));
+                assert_eq!(read(&settings), Some(true), "{key} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0);
+                let settings = with("checkout-word", None, block(r#""false""#));
+                assert_eq!(read(&settings), None, "{key} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0);
+
+                // The other key is not settled by this one: the person's `false` for it is not
+                // lifted or reported by a checkout stating this one.
+                let other = if key == "mouse" {
+                    "contextMenu"
+                } else {
+                    "mouse"
+                };
+                let settings = with(
+                    "other",
+                    Some(format!(r#"{{"tui": {{"{other}": false}}}}"#)),
+                    block("true"),
+                );
+                assert_eq!(read(&settings), Some(true), "{key} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0);
+            }
+
+            // The project file's `false` is not lifted by the local file's `true`, which is
+            // reported.
+            let settings = Layers::new(&format!("tui-{key}-local-over-project"))
+                .project(&block("false"))
+                .local(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "{key}");
+            assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+            // The file the command line named is the person's own act: it turns the key on over
+            // the person's `false` and off over the person's `true`.
+            let settings = Layers::new(&format!("tui-{key}-named-on"))
+                .global(&block("false"))
+                .named(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(true), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = Layers::new(&format!("tui-{key}-named-on-checkout-off"))
+                .global(&block("false"))
+                .project(&block("false"))
+                .named(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = Layers::new(&format!("tui-{key}-named-off-checkout-on"))
+                .named(&block("false"))
+                .project(&block("true"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 1);
+            let settings = Layers::new(&format!("tui-{key}-named-off"))
+                .global(&block("true"))
+                .named(&block("false"))
+                .read();
+            assert_eq!(read(&settings), Some(false), "{key}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+    }
+
+    /// INPUT-43, BACKEND-24: a project or local layer may leave suggestions off and may not turn
+    /// them on, over the person's `false` or over the default, and the file that tried is
+    /// reported. The person's own file and the file `--settings` names decide the key as they
+    /// would any other.
+    #[test]
+    fn a_checkout_may_turn_suggestions_off_and_not_on() {
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("suggestions-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let on = r#"{"suggestions": true}"#;
+            let off = r#"{"suggestions": false}"#;
+
+            // Over the person's `false`, and over what a person who wrote nothing has, `true` is
+            // not obeyed and the file is named.
+            for global in [Some(off), None, Some(r#"{"model": "m"}"#)] {
+                let settings = with("on", global, on);
+                assert_ne!(
+                    settings.suggestions(),
+                    Some(true),
+                    "{global:?} local={local}"
+                );
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{global:?} local={local}");
+                assert_eq!(reported[0].0, "suggestions");
+                assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+                // Named where a value is in force, and not where the file's `true` left nothing,
+                // which is still not an empty settings because the file is reported.
+                assert_eq!(
+                    settings
+                        .names()
+                        .filter(|name| *name == "suggestions")
+                        .count(),
+                    usize::from(settings.suggestions().is_some())
+                );
+                assert!(!settings.is_empty());
+            }
+            assert_eq!(
+                with("on-over-off", Some(off), on).suggestions(),
+                Some(false),
+                "local={local}"
+            );
+
+            // A checkout's `false` leaves them off over `true` and over nothing, and neither is
+            // reported.
+            for global in [Some(on), None] {
+                let settings = with("off", global, off);
+                assert_eq!(
+                    settings.suggestions(),
+                    Some(false),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // `true` where the person wrote `true` changes nothing and is not reported.
+            let settings = with("on-over-on", Some(on), on);
+            assert_eq!(settings.suggestions(), Some(true), "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // A value that is not a boolean states nothing: a checkout's is absence and is not
+            // reported, and a person's does not hold a checkout to `true`.
+            for word in [r#""true""#, "1", "null"] {
+                let settings = with(
+                    "checkout-word",
+                    None,
+                    &format!(r#"{{"suggestions": {word}}}"#),
+                );
+                assert_eq!(settings.suggestions(), None, "{word} local={local}");
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{word}");
+            }
+            let settings = with("person-word", Some(r#"{"suggestions": "true"}"#), on);
+            assert_ne!(settings.suggestions(), Some(true), "local={local}");
+        }
+
+        // The project file's `false` is not lifted by the local file's `true`, which is reported.
+        let settings = Layers::new("suggestions-local-over-project")
+            .project(r#"{"suggestions": false}"#)
+            .local(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(false));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // The person's own file turns them on, and a checkout's `false` then turns them off.
+        let settings = Layers::new("suggestions-person-on")
+            .global(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(true));
+        let settings = Layers::new("suggestions-person-on-checkout-off")
+            .global(r#"{"suggestions": true}"#)
+            .local(r#"{"suggestions": false}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(false));
+
+        // The file the command line named is the person's own act and turns them on, over the
+        // person's `false`, wherever it sits, and a checkout's `true` over its `false` is refused.
+        let settings = Layers::new("suggestions-named-on")
+            .global(r#"{"suggestions": false}"#)
+            .named(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("suggestions-named-inside-on")
+            .global(r#"{"suggestions": false}"#)
+            .named_inside_the_workspace(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(true));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+        let settings = Layers::new("suggestions-named-off-checkout-on")
+            .named(r#"{"suggestions": false}"#)
+            .project(r#"{"suggestions": true}"#)
+            .read();
+        assert_eq!(settings.suggestions(), Some(false));
+        assert_eq!(settings.not_obeyed_all().count(), 1);
+    }
+
+    /// SERVERS-16, BACKEND-24: a project or local layer may lower the size past which server tools
+    /// are offered by name, and state one where the person's own files state none, and may not
+    /// raise it or state something that reads as no size over one the person stated. The file that
+    /// tried is reported.
+    #[test]
+    fn a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it() {
+        let key = "deferMcpToolsAbove";
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, named: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("defer-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                let layers = match named {
+                    Some(text) => layers.named(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let object = |value: &str| format!(r#"{{"{key}": {value}}}"#);
+
+            // The reproduction: a figure no count exceeds does not replace the person's.
+            let settings = with(
+                "huge",
+                Some(&object(r#""20k""#)),
+                None,
+                &object("18446744073709551615"),
+            );
+            assert_eq!(settings.defer_mcp_tools_above(), Some(20_000), "{local}");
+            let reported: Vec<_> = settings.not_obeyed_all().collect();
+            assert_eq!(reported.len(), 1, "local={local}");
+            assert_eq!(reported[0].0, key);
+            assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+            assert!(!settings.is_empty());
+
+            // A figure that reads as no size does not remove the person's, and is reported.
+            for word in ["0", "null", "true", "-5", r#""banana""#, r#""0k""#] {
+                let settings = with("unreadable", Some(&object("20000")), None, &object(word));
+                assert_eq!(
+                    settings.defer_mcp_tools_above(),
+                    Some(20_000),
+                    "{word} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 1, "{word} local={local}");
+            }
+
+            // A lower figure is obeyed and costs nothing to report. So is an equal one.
+            for (written, expected) in [("1000", 1_000), (r#""5k""#, 5_000), ("20000", 20_000)] {
+                let settings = with("lower", Some(&object(r#""20k""#)), None, &object(written));
+                assert_eq!(
+                    settings.defer_mcp_tools_above(),
+                    Some(expected),
+                    "{written} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{written}");
+            }
+
+            // Where the person's own files state no size, a checkout may state one.
+            for global in [
+                None,
+                Some(r#"{"model": "m"}"#),
+                Some(r#"{"deferMcpToolsAbove": 0}"#),
+            ] {
+                let settings = with("stated", global, None, &object(r#""30k""#));
+                assert_eq!(
+                    settings.defer_mcp_tools_above(),
+                    Some(30_000),
+                    "{global:?} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{global:?}");
+            }
+
+            // Nothing stated by anyone leaves every tool offered in full, and a checkout that
+            // states no size where there is none is not reported.
+            let settings = with("none", None, None, &object("0"));
+            assert_eq!(settings.defer_mcp_tools_above(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // The file the command line named is the person's own act: it decides the key over
+            // the person's own file in either direction, and a checkout is held to it.
+            let settings = with(
+                "named",
+                Some(&object(r#""20k""#)),
+                Some(&object(r#""50k""#)),
+                &object(r#""40k""#),
+            );
+            assert_eq!(
+                settings.defer_mcp_tools_above(),
+                Some(40_000),
+                "local={local}"
+            );
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with(
+                "named-raised",
+                Some(&object(r#""20k""#)),
+                Some(&object(r#""50k""#)),
+                &object(r#""60k""#),
+            );
+            assert_eq!(
+                settings.defer_mcp_tools_above(),
+                Some(50_000),
+                "local={local}"
+            );
+            assert_eq!(settings.not_obeyed_all().count(), 1);
+        }
+
+        // The local file is held to what the project file lowered, and a lower one is obeyed.
+        let settings = Layers::new("defer-local-over-project")
+            .global(&format!(r#"{{"{key}": "20k"}}"#))
+            .project(&format!(r#"{{"{key}": "10k"}}"#))
+            .local(&format!(r#"{{"{key}": "15k"}}"#))
+            .read();
+        assert_eq!(settings.defer_mcp_tools_above(), Some(10_000));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+
+        // A file `--settings` names inside the workspace is the person's own act as one outside it.
+        let settings = Layers::new("defer-named-inside")
+            .global(&format!(r#"{{"{key}": "20k"}}"#))
+            .named_inside_the_workspace(&format!(r#"{{"{key}": "50k"}}"#))
+            .read();
+        assert_eq!(settings.defer_mcp_tools_above(), Some(50_000));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
     }
 
     /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`
@@ -8084,11 +9864,16 @@ mod tests {
         ("references", false, false),
         ("attribution", false, false),
         ("askIdleSeconds", false, false),
+        ("run.scrubEnv", false, false),
     ];
 
-    /// The text of a layer naming only `key`.
+    /// The text of a layer naming only `key`, inside its block where the key is written
+    /// `block.name`.
     fn naming_only(key: &str) -> String {
-        format!(r#"{{"{key}": "stated"}}"#)
+        match key.split_once('.') {
+            Some((block, name)) => format!(r#"{{"{block}": {{"{name}": "stated"}}}}"#),
+            None => format!(r#"{{"{key}": "stated"}}"#),
+        }
     }
 
     /// Every key of [`HOME_ONLY`] is refused to the project and local layers, admitted to the home
@@ -8462,6 +10247,66 @@ mod tests {
         )
     }
 
+    /// BACKEND-33: which of the person's services receives a conversation is the person's to choose,
+    /// so the default model is read from the home layer and the file `--settings` names, and a
+    /// checkout's project and local files neither set it nor displace the person's. `doctor` is told
+    /// the checkout's file stated it, and no layer is reported as having overridden another.
+    #[test]
+    fn a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do() {
+        let name = "BRAVEBOT_DEFAULT_MODEL";
+        let block = r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "checkout/model"}}"#;
+
+        let project = Layers::new("default-model-checkout-project")
+            .project(block)
+            .read();
+        let local = Layers::new("default-model-checkout-local")
+            .local(block)
+            .read();
+        for (file, settings) in [("project", &project), ("local", &local)] {
+            assert_eq!(settings.get(name), None, "a {file} file chose the model");
+            let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+            assert_eq!(reported, [name], "{file}");
+            assert_eq!(settings.network_values().count(), 0, "{file}");
+        }
+
+        // The person's value stands over each checkout file, and the checkout's is not reported as
+        // having overridden it.
+        for (file, layers) in [
+            (
+                "project",
+                Layers::new("default-model-home-and-project").project(block),
+            ),
+            (
+                "local",
+                Layers::new("default-model-home-and-local").local(block),
+            ),
+        ] {
+            let settings = layers
+                .global(r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "person/model"}}"#)
+                .read();
+            assert_eq!(settings.get(name), Some("person/model"), "{file}");
+            assert_eq!(settings.overridden().count(), 0, "{file}");
+            assert_eq!(settings.network_ignored().count(), 1, "{file}");
+        }
+
+        // The person's own file, and the file the command line named wherever it sits, still decide.
+        let own = Layers::new("default-model-home")
+            .global(r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "person/model"}}"#)
+            .read();
+        assert_eq!(own.get(name), Some("person/model"));
+        assert_eq!(own.network_ignored().count(), 0);
+        let named_text = r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "named/model"}}"#;
+        let outside = Layers::new("default-model-named-outside")
+            .named(named_text)
+            .read();
+        assert_eq!(outside.get(name), Some("named/model"));
+        let inside = Layers::new("default-model-named-inside")
+            .named_inside_the_workspace(named_text)
+            .read();
+        assert_eq!(inside.get(name), Some("named/model"));
+        assert_eq!(inside.network_ignored().count(), 0);
+    }
+
     /// Every name a managed layer may pin is read from the person's layers alone, so a name added
     /// to `PINNABLE` has to be placed in the person-only lists of `env_var`, which is what keeps a
     /// checkout from choosing the host that receives a conversation or a credential (BACKEND-33).
@@ -8472,7 +10317,7 @@ mod tests {
         for name in [
             crate::env_var::KEY_ID,
             crate::env_var::SIGNING_KEY,
-            crate::env_var::DEFAULT_MODEL,
+            crate::env_var::CONTEXT_BUDGET,
         ] {
             assert_eq!(a_checkouts_files_decide(name), (true, true), "{name}");
         }
@@ -9729,6 +11574,143 @@ mod tests {
             .read();
         assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// BACKEND-24, BACKEND-27: a project or local layer may ask for the five minute lifetime and may
+    /// not ask for the hour over the person's `5m` or over nothing, and the file that tried is
+    /// reported. The person's own files and the file `--settings` names may choose either.
+    #[test]
+    fn a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one() {
+        use crate::CacheTtl;
+        let key = "promptCacheTtl";
+        for local in [false, true] {
+            let file = if local {
+                LOCAL_SETTINGS_FILE
+            } else {
+                SETTINGS_FILE
+            };
+            let with = |name: &str, global: Option<&str>, named: Option<&str>, written: &str| {
+                let layers = Layers::new(&format!("cache-ttl-{name}-{local}"));
+                let layers = match global {
+                    Some(text) => layers.global(text),
+                    None => layers,
+                };
+                let layers = match named {
+                    Some(text) => layers.named(text),
+                    None => layers,
+                };
+                if local {
+                    layers.local(written).read()
+                } else {
+                    layers.project(written).read()
+                }
+            };
+            let object = |value: &str| format!(r#"{{"{key}": {value}}}"#);
+
+            // The reproduction: a checkout's hour does not replace the person's five minutes, and
+            // does not state one where the person stated nothing.
+            for (name, global) in [
+                ("over-five", Some(object(r#""5m""#))),
+                ("over-none", None),
+                ("over-other-key", Some(r#"{"model": "m"}"#.to_string())),
+                ("over-unreadable", Some(object(r#""2h""#))),
+            ] {
+                let settings = with(name, global.as_deref(), None, &object(r#""1h""#));
+                let expected = global
+                    .as_deref()
+                    .filter(|text| text.contains("5m"))
+                    .map(|_| CacheTtl::FiveMinutes);
+                assert_eq!(
+                    settings.prompt_cache_ttl(),
+                    expected,
+                    "{name} local={local}"
+                );
+                let reported: Vec<_> = settings.not_obeyed_all().collect();
+                assert_eq!(reported.len(), 1, "{name} local={local}");
+                assert_eq!(reported[0].0, key);
+                assert!(reported[0].1.ends_with(file), "{:?}", reported[0].1);
+                assert!(!settings.is_empty(), "{name}");
+                assert_eq!(settings.unread_keys().count(), 0, "{name}");
+            }
+
+            // The five minutes is obeyed over the person's hour and over nothing, and costs
+            // nothing to report.
+            for (name, global) in [
+                ("short-over-hour", Some(object(r#""1h""#))),
+                ("short-over-none", None),
+                ("short-over-five", Some(object(r#""5m""#))),
+            ] {
+                let settings = with(name, global.as_deref(), None, &object(r#""5m""#));
+                assert_eq!(
+                    settings.prompt_cache_ttl(),
+                    Some(CacheTtl::FiveMinutes),
+                    "{name} local={local}"
+                );
+                assert_eq!(settings.not_obeyed_all().count(), 0, "{name}");
+            }
+
+            // The hour over the person's own hour changes nothing, so nothing is reported.
+            let settings = with(
+                "hour-over-hour",
+                Some(&object(r#""1h""#)),
+                None,
+                &object(r#""1h""#),
+            );
+            assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::OneHour));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // A word that states no lifetime where the person stated none removes nothing and is
+            // not reported.
+            let settings = with("unreadable-over-none", None, None, &object(r#""2h""#));
+            assert_eq!(settings.prompt_cache_ttl(), None, "local={local}");
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+
+            // The file the command line named is the person's own act, and a checkout is held
+            // to what it decides.
+            let settings = with(
+                "named-hour",
+                Some(&object(r#""5m""#)),
+                Some(&object(r#""1h""#)),
+                &object(r#""5m""#),
+            );
+            assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+            let settings = with(
+                "named-hour-held",
+                Some(&object(r#""5m""#)),
+                Some(&object(r#""1h""#)),
+                &object(r#""1h""#),
+            );
+            assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::OneHour));
+            assert_eq!(settings.not_obeyed_all().count(), 0);
+        }
+
+        // The named file admits the hour over the person's five minutes, inside the workspace too.
+        let settings = Layers::new("cache-ttl-named-inside")
+            .global(&format!(r#"{{"{key}": "5m"}}"#))
+            .named_inside_the_workspace(&format!(r#"{{"{key}": "1h"}}"#))
+            .read();
+        assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::OneHour));
+        assert_eq!(settings.not_obeyed_all().count(), 0);
+
+        // The local file is held to what the project file chose.
+        let settings = Layers::new("cache-ttl-local-over-project")
+            .global(&format!(r#"{{"{key}": "1h"}}"#))
+            .project(&format!(r#"{{"{key}": "5m"}}"#))
+            .local(&format!(r#"{{"{key}": "1h"}}"#))
+            .read();
+        assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
+        let reported: Vec<_> = settings.not_obeyed_all().collect();
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.ends_with(LOCAL_SETTINGS_FILE));
+    }
+
+    /// The words the settlement compares are the ones the setting is read with, in the order of how
+    /// long each keeps the prefix, so a lifetime added to [`crate::CacheTtl`] is not left out of it.
+    #[test]
+    fn the_cache_lifetime_words_of_the_table_are_the_lifetimes_the_setting_reads() {
+        let read: Vec<&str> = crate::CacheTtl::ALL.iter().map(|ttl| ttl.wire()).collect();
+        assert_eq!(CACHE_TTL_WORDS, read.as_slice());
     }
 
     /// A pin written to a scratch file, for the resolution tests below.

@@ -55,12 +55,14 @@ fn run_description() -> String {
 
 /// The planner is told the two credentials fixed in the source, and no string a settings file
 /// wrote. The files do reach the filtering, which is what the controls below establish: a
-/// provider's `env` entry and a checkout's `run.scrubEnv` entry are both withheld from a program, so
-/// their absence from the planner's text is a decision and not an accident of a file going unread.
+/// provider's `env` entry and a `run.scrubEnv` entry of the person's own file are both withheld from
+/// a program, so their absence from the planner's text is a decision and not an accident of a file
+/// going unread. A checkout's `run.scrubEnv` entry is not read at all (BACKEND-24), so it is neither
+/// withheld nor said.
 ///
 /// The provider entry is shaped like a key a person pasted into the wrong field. Listing the
-/// entries of `env` would send it to the model provider with every request, and a checkout's own
-/// `run.scrubEnv` entry would put a string its author chose in the planner's context.
+/// entries of `env` would send it to the model provider with every request, and a `run.scrubEnv`
+/// entry would put a string its author chose in the planner's context.
 ///
 /// With the filtering switched off nothing is removed, so nothing is said.
 #[test]
@@ -75,7 +77,7 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
         r#"{"provider": {"acme": {
             "options": {"baseURL": "https://gateway.acme.invalid/v1"},
             "env": ["ACME_GATEWAY_TOKEN", "sk-live-0123456789abcdef"]
-        }}}"#,
+        }}, "run": {"scrubEnv": ["PERSON_CHOSEN_NAME"]}}"#,
     )
     .expect("write the person's settings");
     std::fs::write(
@@ -97,7 +99,7 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
     for written in [
         "ACME_GATEWAY_TOKEN",
         "sk-live-0123456789abcdef",
-        "CHECKOUT_CHOSEN_NAME",
+        "PERSON_CHOSEN_NAME",
     ] {
         assert!(
             removed_from_a_program.iter().any(|name| name == written),
@@ -105,6 +107,12 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
              an accident"
         );
     }
+    assert!(
+        !removed_from_a_program
+            .iter()
+            .any(|name| name == "CHECKOUT_CHOSEN_NAME"),
+        "a checkout's run.scrubEnv entry was withheld: {removed_from_a_program:?}"
+    );
 
     let described = run_description();
     for told in [
@@ -117,6 +125,7 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
     for written in [
         "ACME_GATEWAY_TOKEN",
         "sk-live-0123456789abcdef",
+        "PERSON_CHOSEN_NAME",
         "CHECKOUT_CHOSEN_NAME",
     ] {
         assert!(

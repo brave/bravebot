@@ -308,7 +308,7 @@ try {
   assert.equal(sent[0].prompt, 'Use this conversation’s selected model\nOn a second line')
   await app.evaluate(() => globalThis.finishModelTurn())
   await page.waitForFunction(() => !document.querySelector('.model-trigger')?.shadowRoot?.querySelector('button')?.disabled)
-  await page.waitForFunction(() => localStorage.getItem('bravebot.conversation-model:["/tmp/bravebot-model-picker-project","A"]')?.includes('sonnet'))
+  await page.waitForFunction(() => localStorage.getItem('bravebot.picked-model:["/tmp/bravebot-model-picker-project","A"]')?.includes('sonnet'))
 
   await page.locator('.session').filter({ hasText: 'Conversation B' }).click()
   await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('haiku'))

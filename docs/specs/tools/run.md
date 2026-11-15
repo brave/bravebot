@@ -768,7 +768,10 @@ names, so the set follows the configuration with no second list to keep in step.
 names is the person's own and stays. The same set is taken off a background job, a hook
 ([HOOK-4](../hooks.md#HOOK-4)), a language server ([lsp.md](lsp.md)) and the `aws` CLI the
 Bedrock backend starts. Reading the token for a request is unaffected: only the programs this agent
-starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set.
+starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set. It is
+read from the person's own settings and the file `--settings` names only: a name in it can keep a
+restriction off a program as well as a secret from it, so a project or local layer's list is not
+read ([BACKEND-24](../backends.md#BACKEND-24)).
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` restores every variable, gateway variables included.
 
 **The planner is told what is removed.** The description of `run`, on a turn that offers it, names
@@ -794,8 +797,8 @@ needs a removed variable then fails for a reason nothing in the planner's contex
 
 **Why only the fixed names are listed.** The three names are the same for everyone and fixed in
 the source. The other names are strings from a settings file: an entry in a provider's `env` is
-free-form and can be a key pasted into the wrong field, and `run.scrubEnv` takes entries from a
-checkout's layer as well. Listing them would send a person's mistake to the model provider with every
+free-form and can be a key pasted into the wrong field, and `run.scrubEnv` is a string the person
+chose. Listing them would send a person's mistake to the model provider with every
 request and put a string its author chose in the planner's context, so such variables are removed
 from the program and said to exist without being named.
 
@@ -854,6 +857,8 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::tools::tests::arguments::a_turn_whose_filtering_is_off_says_nothing_of_a_removal`
 `verified-by: bravebot_agent::tools::tests::arguments::a_list_without_run_is_given_no_statement`
 `verified-by: bravebot_agent::withheld_variables::the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote`
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::scrub::the_credentials_told_to_the_planner_are_the_fixed_ones`
 `verified-by: bravebot_agent::turn::a_turn_tells_the_planner_which_variables_run_removes`
 `verified-by: bravebot_config::build_script::a_build_missing_the_withheld_credentials_says_run_removes_them`
@@ -2429,7 +2434,10 @@ An entry in `run.scrubEnv` may hold `*`, standing for any run of characters incl
 by it. An entry holding neither character is an exact name and is compared as one. A pattern
 matching a variable already withheld leaves it withheld once. A pattern matching nothing withholds
 nothing, while an exact name is withheld whether this process holds the variable or not. `*` and `?`
-are the whole of the syntax: there is no character class and no brace group.
+are the whole of the syntax: there is no character class and no brace group. A pattern is read from
+the person's own settings and `--settings` only, as every other entry is ([RUN-12](#RUN-12),
+[BACKEND-24](../backends.md#BACKEND-24)): a project or local layer's list is not read, so a checkout
+cannot add a pattern, and none of its patterns is shown by `doctor`.
 
 What a pattern selects is read from the names this process holds when a stage is built, since a
 pattern is a way of naming variables and the names it stands for are not known until there are
@@ -2457,6 +2465,7 @@ here.
 person who wanted every `AWS_*` or `*_TOKEN` kept from the programs a turn starts had a list that
 went out of date without saying so.
 
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::scrub::a_pattern_withholds_the_family_it_names_whatever_the_case`
 `verified-by: bravebot_config::scrub::the_report_names_what_a_pattern_reached_and_not_what_an_exact_entry_spelled`
 `verified-by: bravebot_config::scrub::a_pattern_that_reached_nothing_is_not_reported`
@@ -2466,6 +2475,7 @@ went out of date without saying so.
 `verified-by: bravebot_config::scrub::a_pattern_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
+`verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 
 <a id="RUN-29"></a>
 ### RUN-29: the description points text made from an output at the processor

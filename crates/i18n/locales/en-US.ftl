@@ -765,6 +765,8 @@ doctor-region-source-managed = AWS_REGION pinned by the machine-level file
 doctor-region-source-provider-entry = options.region of the amazon-bedrock entry under provider
 doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-default-model-ignored =
+    { $name } in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =
@@ -791,6 +793,10 @@ doctor-settings-retrieval-ignored =
     retrieval in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-ask-idle-ignored =
     askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# A name in run.scrubEnv can keep a restriction off a program as well as a secret from it, so a
+# checkout's list is not read and the names in it withhold nothing.
+doctor-settings-scrub-env-ignored =
+    run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -803,6 +809,49 @@ doctor-settings-retention-ignored =
 # reported before its words are written.
 doctor-settings-home-only-ignored =
     { $key } in { $path } is not obeyed: it is read from the person's own settings only
+# The spend limit is the one key a checkout may state, and only to lower it. A value that removes the
+# person's limit, raises it or counts in another unit is dropped, so the question about spending is
+# still put at the figure the person wrote.
+doctor-settings-limit-ignored =
+    limit in { $path } is not obeyed: it may lower the limit in ~/.bravebot/settings.json and cannot remove it, raise it or count it in another unit
+# A checkout may turn the startup check for a newer release off and not on, so a `true` over the
+# person's `false` is dropped and the check stays off.
+doctor-settings-update-check-ignored =
+    updateCheck in { $path } is not obeyed: it may turn the update check off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may switch `bravebot://` links off and not on, so a `true` over the person's `false` is
+# dropped and links stay refused.
+doctor-settings-deep-links-ignored =
+    deepLinks in { $path } is not obeyed: it may switch links off and cannot switch them back on once ~/.bravebot/settings.json, the file --settings names or the project file has switched them off
+# A checkout may leave follow-up suggestions off and not turn them on, so a `true` is dropped and no
+# request for a suggestion is made after a turn, whether the person's own settings state `false` or
+# state nothing.
+doctor-settings-suggestions-ignored =
+    suggestions in { $path } is not obeyed: it may leave suggestions off and cannot turn them on, which only ~/.bravebot/settings.json and the file --settings names can
+# A checkout may turn the automatic recap of an away session off and not on, so a `true` over the
+# person's `false` is dropped and no recap is requested when the terminal is focused again.
+doctor-settings-away-summary-ignored =
+    awaySummaryEnabled in { $path } is not obeyed: it may turn the automatic recap off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may turn the capture of the mouse off and not on, so a `true` over the person's `false`
+# is dropped and the terminal keeps its own selection and wheel.
+doctor-settings-tui-mouse-ignored =
+    tui.mouse in { $path } is not obeyed: it may turn mouse capture off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may turn the right-click menu off and not on, so a `true` over the person's `false` is
+# dropped and a right click opens no menu.
+doctor-settings-tui-context-menu-ignored =
+    tui.contextMenu in { $path } is not obeyed: it may turn the right-click menu off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may lower the size past which a server's tools are offered by name, and may not raise it
+# or state a value that reads as no size, so a figure that does is dropped and the person's own size
+# stays in force.
+doctor-settings-defer-mcp-tools-ignored =
+    deferMcpToolsAbove in { $path } is not obeyed: it may lower the size in ~/.bravebot/settings.json and cannot raise it or remove it
+# The longer cache lifetime is charged at a higher write rate, so a checkout may ask for 5m and not
+# for 1h, which only the person's own settings and the file --settings names may choose.
+doctor-settings-prompt-cache-ttl-ignored =
+    promptCacheTtl in { $path } is not obeyed: it may ask for 5m and cannot ask for 1h, which only ~/.bravebot/settings.json and the file --settings names can ask for
+# A key a checkout may only narrow that has no message of its own above, so a key added to the table
+# is reported before its words are written.
+doctor-settings-narrowed-ignored =
+    { $key } in { $path } is not obeyed: it may only narrow what the person's own settings state, and this value does not
 # The sweep that removes old session records, language server indexes and findings waits while the
 # period it was asked for cannot be determined, and removes nothing, so a person who set a period
 # is not swept on the built-in one instead.

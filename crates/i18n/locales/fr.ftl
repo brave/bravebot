@@ -629,6 +629,9 @@ doctor-region-source-provider-entry = options.region de l'entrée amazon-bedrock
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-default-model-ignored =
+    { $name } dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-advisor-ignored =
     advisorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -663,6 +666,11 @@ doctor-settings-retrieval-ignored =
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+# Un nom de run.scrubEnv peut empêcher une restriction de s'appliquer à un programme autant qu'un
+# secret de lui parvenir : la liste d'une copie de travail n'est pas lue et ses noms ne retirent rien.
+doctor-settings-scrub-env-ignored =
+    run.scrubEnv dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings, et aucun de ses noms n'est retiré
 doctor-settings-references-ignored =
     references dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -678,6 +686,52 @@ doctor-settings-retention-ignored =
 # sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
 doctor-settings-home-only-ignored =
     { $key } dans { $path } n'est pas appliqué : il n'est lu que dans les réglages de la personne elle-même
+# La limite de dépense est la seule clé qu'une copie de travail peut nommer, et seulement pour
+# l'abaisser. Une valeur qui supprime la limite de la personne, la relève ou compte dans une autre
+# unité est écartée, de sorte que la question sur la dépense est posée au chiffre que la personne a écrit.
+doctor-settings-limit-ignored =
+    limit dans { $path } n'est pas appliqué : il peut abaisser la limite de ~/.bravebot/settings.json et ne peut ni la supprimer, ni la relever, ni la compter dans une autre unité
+# Une copie de travail peut désactiver la vérification de mise à jour au démarrage et ne peut pas la
+# réactiver : un `true` posé sur le `false` de la personne est écarté et la vérification reste désactivée.
+doctor-settings-update-check-ignored =
+    updateCheck dans { $path } n'est pas appliqué : il peut désactiver la vérification de mise à jour et ne peut pas la réactiver une fois qu'elle a été désactivée par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver les liens `bravebot://` et ne peut pas les réactiver : un
+# `true` posé sur le `false` de la personne est écarté et les liens restent refusés.
+doctor-settings-deep-links-ignored =
+    deepLinks dans { $path } n'est pas appliqué : il peut désactiver les liens et ne peut pas les réactiver une fois qu'ils ont été désactivés par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut laisser les suggestions de suite désactivées et ne peut pas les activer : un
+# `true` est écarté et aucune requête de suggestion n'est faite après un tour, que les réglages de la
+# personne indiquent `false` ou n'indiquent rien.
+doctor-settings-suggestions-ignored =
+    suggestions dans { $path } n'est pas appliqué : il peut laisser les suggestions désactivées et ne peut pas les activer, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
+# Une copie de travail peut désactiver le récapitulatif automatique d'une session laissée de côté et
+# ne peut pas le réactiver : un `true` posé sur le `false` de la personne est écarté et aucun
+# récapitulatif n'est demandé au retour dans le terminal.
+doctor-settings-away-summary-ignored =
+    awaySummaryEnabled dans { $path } n'est pas appliqué : il peut désactiver le récapitulatif automatique et ne peut pas le réactiver une fois qu'il a été désactivé par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver la capture de la souris et ne peut pas la réactiver : un
+# `true` posé sur le `false` de la personne est écarté et le terminal garde sa propre sélection et sa
+# propre molette.
+doctor-settings-tui-mouse-ignored =
+    tui.mouse dans { $path } n'est pas appliqué : il peut désactiver la capture de la souris et ne peut pas la réactiver une fois qu'elle a été désactivée par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver le menu du clic droit et ne peut pas le réactiver : un `true`
+# posé sur le `false` de la personne est écarté et un clic droit n'ouvre aucun menu.
+doctor-settings-tui-context-menu-ignored =
+    tui.contextMenu dans { $path } n'est pas appliqué : il peut désactiver le menu du clic droit et ne peut pas le réactiver une fois qu'il a été désactivé par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut abaisser la taille au-delà de laquelle les outils d'un serveur sont proposés
+# par leur nom, et ne peut ni la relever ni indiquer une valeur lue comme une absence de taille : une
+# telle valeur est écartée et la taille de la personne reste en vigueur.
+doctor-settings-defer-mcp-tools-ignored =
+    deferMcpToolsAbove dans { $path } n'est pas appliqué : il peut abaisser la taille de ~/.bravebot/settings.json et ne peut ni la relever, ni la supprimer
+# La durée de cache la plus longue est facturée à un tarif d'écriture plus élevé : une copie de travail
+# peut demander 5m et ne peut pas demander 1h, que seuls les réglages de la personne et le fichier
+# nommé par --settings peuvent choisir.
+doctor-settings-prompt-cache-ttl-ignored =
+    promptCacheTtl dans { $path } n'est pas appliqué : il peut demander 5m et ne peut pas demander 1h, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
+# Une clé qu'une copie de travail ne peut que restreindre et qui n'a pas de message propre ci-dessus,
+# de sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
+doctor-settings-narrowed-ignored =
+    { $key } dans { $path } n'est pas appliqué : il ne peut que restreindre ce que les réglages de la personne elle-même indiquent, et cette valeur ne le fait pas
 # Le balayage qui supprime les anciens enregistrements de session, les index du serveur de langage et
 # les constats attend tant que la durée demandée ne peut pas être déterminée, et ne supprime rien,
 # afin que la personne qui a fixé une durée ne se voie pas appliquer à la place celle qui est intégrée.

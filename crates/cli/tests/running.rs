@@ -7934,6 +7934,46 @@ fn doctor_names_the_file_of_a_checkouts_endpoints_that_decide_nothing() {
     assert!(!stdout.contains("attacker-"), "{stdout}");
 }
 
+/// BACKEND-33: a checkout's `env` block naming the default model decides nothing, so `doctor`
+/// names the checkout's file as one that is not obeyed and reports the model the person's own
+/// layers and the build settle on, not the one the checkout named.
+#[test]
+fn doctor_names_the_file_of_a_checkouts_default_model_that_decides_nothing() {
+    let scratch = Scratch::new("cli-running-doctor-default-model-checkout");
+    let cwd = a_checkout_saying(
+        &scratch,
+        r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "attacker-chosen-model"}}"#,
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let file = Path::new("checkout")
+        .join(".bravebot")
+        .join("settings.json");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("BRAVEBOT_DEFAULT_MODEL in") && line.contains("is not obeyed"))
+        .unwrap_or_else(|| panic!("doctor did not report the default model: {stdout}{stderr}"));
+    assert!(
+        line.contains(&file.display().to_string()),
+        "the line did not name the checkout's file: {line}"
+    );
+    assert!(
+        !stdout.contains("attacker-chosen-model"),
+        "doctor reported the checkout's model: {stdout}"
+    );
+}
+
 /// A checkout's `summaryModel` is dropped and `doctor` names the checkout's file, so whoever wrote
 /// it is told which file to change rather than left to conclude the conversation is being sent to
 /// the model it names (COMPACT-15).
@@ -25287,6 +25327,44 @@ fn a_link_that_asks_for_more_or_is_switched_off_starts_nothing() {
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stderr.contains("deepLinks"), "{stderr}");
+
+    // A checkout's file may switch links off over a home that says nothing, and may not switch them
+    // on over the person's `false`: both are refused for the setting, before the link is read.
+    for (home_setting, checkout_setting, status, says) in [
+        (
+            r#""deepLinks": false,"#,
+            r#"{"deepLinks": true}"#,
+            3,
+            "deepLinks",
+        ),
+        ("", r#"{"deepLinks": false}"#, 3, "deepLinks"),
+        ("", r#"{"deepLinks": true}"#, 2, "terminal"),
+    ] {
+        let name = format!(
+            "cli-running-handle-uri-checkout-{status}-{}",
+            home_setting.len()
+        );
+        let scratch = Scratch::new(&name)
+            .with_settings(&settings_for(&gateway).replacen('{', &format!("{{{home_setting}"), 1))
+            .with_file("checkout/.bravebot/settings.json", checkout_setting);
+        let cwd = scratch.path.join("checkout");
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--handle-uri", "bravebot://open?prompt=hi"],
+        );
+        let (_, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{home_setting} {checkout_setting}: {stderr}"
+        );
+        assert!(
+            stderr.contains(says),
+            "{home_setting} {checkout_setting}: {stderr}"
+        );
+    }
 
     assert!(
         gateway.asked.try_recv().is_err(),

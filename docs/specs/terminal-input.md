@@ -2871,7 +2871,10 @@ does not remove it. What the request cost is charged to the session and its trai
 not the answer was offered.
 
 Only a boolean `true` turns the setting on; a quoted `"true"` is absence, and the default is off,
-because the request spends on every turn.
+because the request spends on every turn. A project or local settings file may state `false` and
+cannot state `true`: its `true` is dropped, over the person's own `false` and over a person who
+stated nothing, and `doctor` names the file ([BACKEND-24](backends.md#BACKEND-24)). The person's own
+settings and the file `--settings` names are the only files that turn it on.
 
 **Why.** The request is the driver's own words over the planner's own context, which holds no
 untrusted content, and the answer is text a person must take and send themselves, so it decides
@@ -2883,6 +2886,10 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_agent::aside::the_suggestion_limit_counts_characters_rather_than_bytes`
 `verified-by: bravebot_agent::aside::a_suggestion_asks_its_own_question_and_leaves_the_exchange_alone`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_suggestions_on`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
+`verified-by: bravebot_tui::app::a_checkouts_suggestions_do_not_turn_the_session_on`
 `verified-by: bravebot_tui::app::tab_and_right_move_the_suggestion_into_the_box_and_send_nothing`
 `verified-by: bravebot_tui::app::a_suggestion_that_begins_with_a_slash_is_text_until_enter`
 `verified-by: bravebot_tui::app::any_other_key_removes_the_suggestion_and_still_types`
