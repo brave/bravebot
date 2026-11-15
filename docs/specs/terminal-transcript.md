@@ -1582,9 +1582,9 @@ its own frame over the whole screen and reads the keyboard itself, so no button 
 up, and the frame drawn once it is answered holds the view where it was and draws the button again
 ([MOUSE-44](mouse.md#MOUSE-44)).
 
-**Why.** Only a dim sentence on the hint line, under the box, said that the view was held, and a person
-who scrolled up and looked away had to know the key or find it there. The button is where the rows that
-arrive go on arriving, at the edge of the transcript the eye is on, and a click on it needs no key.
+**Why.** Without the button, the only sign that the view is held is a dim sentence under the box, and a
+person who scrolled up and looked away has to know the key or find it there. The button is at the edge of
+the transcript the eye is on, where the rows that arrive go on arriving, and a click on it needs no key.
 
 The label is a sentence of the catalog and a count of rows from the layout, so it holds no bytes of
 what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
