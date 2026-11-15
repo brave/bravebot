@@ -5492,6 +5492,16 @@ shown by running the program, or not entirely:
   generic mode, so the generic test sets `DISPLAY`. The generic-mode test failed on the CI runner
   with the installed handler not run; its run now prints `xdg-open`'s debug output when that
   happens.
+  A test that runs the installed `xdg-open` or `gio` waits for it at most 20 seconds (a run of this
+  test binary that starts it, 60 seconds). A program that has not ended by then is killed with
+  every program it started (it runs in a process group of its own), and the test fails with the
+  variable under test in the message, including where `CI` is not set. It is not skipped. The
+  generic-mode test ran for 16 and 48 minutes in two runs until the child was killed by hand, which
+  the deadline turns into a failure within 20 seconds. The cause of that hang is not
+  recorded here: it was not reproduced, since no host with `xdg-open` and a desktop was available
+  to the change that added the deadline. `an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started`
+  and `a_command_that_does_not_end_is_killed_at_the_deadline_and_one_that_ends_is_not` show the
+  deadline against a stand-in that never ends.
   What is covered, per name and per desktop mode:
 
   | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |
@@ -6283,6 +6293,8 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
 `verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode`
+`verified-by: bravebot_tui::opener::an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started`
+`verified-by: bravebot_tui::opener::a_command_that_does_not_end_is_killed_at_the_deadline_and_one_that_ends_is_not`
 `verified-by: bravebot_tui::opener::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::opener::a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk`
 `verified-by: bravebot_tui::opener::gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
