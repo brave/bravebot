@@ -30,7 +30,7 @@ pub const MOST_PARAMETERS: usize = 64;
 /// ask the terminal something, so the person is shown every byte of them.
 #[expect(
     clippy::string_slice,
-    reason = "every index is the start of an ESC found by `find`, the end of a parameter run, or one byte past an ASCII `m`, so it is a char boundary"
+    reason = "every index is the start of an ESC found by `find`, or one byte past the ASCII `m` that `code_end` found, so it is a char boundary"
 )]
 pub fn without(text: &str) -> (String, usize) {
     if !text.contains('\u{1b}') {
@@ -45,14 +45,7 @@ pub fn without(text: &str) -> (String, usize) {
     let mut from = 0;
     while let Some(found) = text[from..].find("\u{1b}[") {
         let start = from + found;
-        let parameters = start + 2;
-        let ends = bytes[parameters..]
-            .iter()
-            .take(MOST_PARAMETERS + 1)
-            .position(|byte| !matches!(byte, b'0'..=b'9' | b';' | b':'))
-            .map(|length| parameters + length)
-            .filter(|&end| bytes[end] == b'm');
-        match ends {
+        match code_end(bytes, start, MOST_PARAMETERS) {
             Some(end) => {
                 drawn.push_str(&text[kept..start]);
                 kept = end + 1;
@@ -64,6 +57,45 @@ pub fn without(text: &str) -> (String, usize) {
     }
     drawn.push_str(&text[kept..]);
     (drawn, dropped)
+}
+
+/// The offset of the `m` that ends the colour code whose `ESC [` starts at `start` in `bytes`, or
+/// `None` where what follows the `ESC [` is not a colour code.
+///
+/// The bytes after the `ESC [` are scanned until the first one that is not `0-9`, `;` or `:`, and
+/// that one has to be `m`. At most `most + 1` bytes are looked at, so a run of more than `most`
+/// parameters is not a code. Every offset it reads is inside `bytes`, and the one it returns is
+/// the ASCII `m`, so the offset after it is a char boundary of the text the bytes came from.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    requires
+        start + 2 <= bytes.len(),
+    ensures
+        r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm',
+        r is Some ==> r->Some_0 <= start + 2 + most,
+))]
+fn code_end(bytes: &[u8], start: usize, most: usize) -> Option<usize> {
+    let parameters = start + 2;
+    let room = bytes.len() - parameters;
+    let mut taken = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            parameters == start + 2,
+            room == bytes.len() - parameters,
+            taken <= room,
+        decreases room - taken,
+    ))]
+    while taken < room && taken <= most {
+        let at = parameters + taken;
+        let byte = bytes[at];
+        if byte == b'm' {
+            return Some(at);
+        }
+        if !matches!(byte, b'0'..=b'9' | b';' | b':') {
+            return None;
+        }
+        taken += 1;
+    }
+    None
 }
 
 /// The sentence a result puts after text that had `dropped` colour codes taken out, in the driver's

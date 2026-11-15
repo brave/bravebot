@@ -957,7 +957,11 @@ It applies to the output of a command typed in shell mode, whether the command i
 drawn under a call the planner read, and to the quarantined block a one-shot run writes to stderr.
 The same removal is made on the text of a result that the planner may read
 ([RUN-21](tools/run.md#RUN-21)). The code that does it is in `bravebot-core`, so both read the same
-definition of a colour code.
+definition of a colour code. The function that finds where a code ends, `code_end` in
+`crates/core/src/colour_codes.rs`, has a Verus contract in `verify/contracts.txt`: for every input
+it reads only offsets inside the text, and any offset it returns is an `m` at or after the two bytes
+of `ESC [` and no further than 64 parameters from them, so the text is cut only on a character
+boundary.
 Everything else draws every byte. That includes a block's heading, where the origin can be a
 filename, a path or a name wherever one is drawn, the hunks of a write, and every prompt that asks a
 person to approve text: a write, a command's output, a read, a message, a server and its tools. A
