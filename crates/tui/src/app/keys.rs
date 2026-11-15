@@ -2248,6 +2248,12 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
             session.return_to_the_tail();
             true
         }
+        // The face on the opening screen blinks or looks to the other side (MOUSE-56). It is drawn
+        // again at once, since the loop only looks at the face between keys.
+        Hit::Face => {
+            crate::avatar::poke();
+            true
+        }
         // A prompt waiting behind the turn comes back into the box, with the ones typed after it, as
         // Up takes them all. A command a click queued has nothing to put there, so the click removes
         // it, and so do the words on the row (MOUSE-28).
@@ -2442,6 +2448,7 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Scrollbar
         | Hit::Pinned(_)
         | Hit::ToTail
+        | Hit::Face
         | Hit::Item(_)
         | Hit::Text { .. }
         | Hit::Link(_)

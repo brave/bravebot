@@ -60,6 +60,9 @@ pub enum Hit {
     /// The button drawn at the bottom of the transcript while the view is held off its tail: a click
     /// returns the view to the tail (VIEW-45, MOUSE-55).
     ToTail,
+    /// The pixel face on the opening screen: a click makes it blink or look to the other side, the
+    /// two things it does on its own (MOUSE-56).
+    Face,
     /// The row of the list of what could be typed under the box that holds this item of what is
     /// offered: a click puts the cursor on it, and a second takes it as Tab does (MOUSE-15).
     Item(usize),
@@ -158,6 +161,8 @@ impl Hit {
             }
             // Drawn over the session's own transcript only, at rest and in the scroller.
             Hit::Pinned(_) => beneath && session.watching().is_none() && !session.files_open(),
+            // Drawn with the opening screen, which the plain frame holds and no other frame does.
+            Hit::Face => beneath && session.in_the_plain_frame() && !session.files_open(),
             Hit::Queued(_) | Hit::Discard(_) => {
                 beneath && !session.files_open() && session.in_the_plain_frame()
             }

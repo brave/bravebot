@@ -832,6 +832,17 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Drawn {
             width,
             height,
         ));
+        // The cells of the face are a target on each row it is drawn in, so a click on it is found
+        // where it was drawn (MOUSE-56).
+        if let Some((first, column, across)) = logo::face_at(width, height) {
+            pins.extend((0..crate::avatar::ROWS).map(|row| LinePin {
+                line: first + row,
+                column,
+                width: across,
+                padding: 0,
+                hit: Hit::Face,
+            }));
+        }
         lines.push(Line::raw(""));
     }
 
@@ -2204,6 +2215,17 @@ fn lay_out_with_entries(
     };
     // A delegate's view is measured too, since the sentence that closes it is a place to click.
     if !session.scrolling() && !session.watching_a_delegate() {
+        // At rest nothing is measured, but the face is a place to click on the opening screen. The
+        // lines above and on it are one row each, since the face is drawn only where the mark fits
+        // beside it, so the row of a line is its index (MOUSE-56).
+        let face: Vec<LinePin> = pins
+            .iter()
+            .filter(|pin| pin.hit == Hit::Face)
+            .copied()
+            .collect();
+        place_pins(&mut laid, &face, |line| {
+            u16::try_from(line).unwrap_or(u16::MAX)
+        });
         return (lines, laid, None);
     }
 

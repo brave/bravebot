@@ -641,7 +641,9 @@ Where `NO_MOTION` is set to anything but the empty string, the glyph beside a ru
 still instead of cycling, and the pixel face on the opening screen keeps its eyes open and its
 pupils on one side instead of blinking and glancing. The glyph is still drawn, and the elapsed time
 and the token counts change as they always did: a figure that moves when the thing it measures
-moves is information rather than animation.
+moves is information rather than animation. A click on the face
+([MOUSE-56](mouse.md#MOUSE-56)) moves it for a moment where the person has not declined motion, and
+does nothing where they have.
 
 It is read from the environment the way the request for no colour is, and answers to presence the
 same way. Where it is not set, the glyph cycles.
