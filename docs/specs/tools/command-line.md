@@ -1000,7 +1000,17 @@ leave a child holding the write end of the pipe.
 
 Not a safety property. A program that finishes in time is no safer than one that does not.
 
+A run stopped at a deadline equal to the ceiling in force is reported separately from one stopped
+below it. A longer deadline cannot be asked for there, so the sentence says so and says to start the
+line again with `background: true`, which a deadline does not stop. The choice compares the
+deadline the run was given with the ceiling in force, two figures a person set, and reads nothing the
+program printed. The description of `run` also says that a build or test gate that may outlast the
+ceiling starts in the background.
+
 `verified-by: bravebot_agent::turn::a_run_is_stopped_at_the_deadline_its_call_named`
+`verified-by: bravebot_agent::turn::a_run_stopped_at_the_ceiling_in_force_is_told_so_and_one_below_it_is_not`
+`verified-by: bravebot_agent::report::a_run_stopped_at_the_ceiling_is_sent_to_the_background_and_one_below_it_is_not`
+`verified-by: bravebot_agent::tools::the_run_tool_says_a_gate_that_may_outlast_the_ceiling_starts_in_the_background`
 `verified-by: bravebot_agent::turn::a_null_deadline_takes_the_default`
 `verified-by: bravebot_agent::turn::a_negative_deadline_is_clamped_to_floor`
 `verified-by: bravebot_agent::tools::run_deadline_is_held_to_bounds_and_defaults_cleanly`

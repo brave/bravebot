@@ -1772,8 +1772,10 @@ fn table(
              browser only after that probe is refused. \
              \
              A program meant to keep running, such as a server or a watcher, needs \
-             background: true. Without it the line is waited on and stopped at its deadline \
-             ("
+             background: true. A build or test gate that may take longer than the ceiling \
+             also starts with background: true, because a foreground run is stopped at \
+             its deadline and has to be run again from the start. Without it the line is \
+             waited on and stopped at its deadline ("
                 + &format!(
                     "{deadline_default} seconds by default; set deadline_seconds to allow up to \
                      {deadline_ceiling}"
