@@ -32,7 +32,8 @@ tool tells the planner that a path resolves outside the workspace, the trail rec
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
 reference, the path otherwise. A `run` line's redirection refused for leaving the workspace is
 recorded the same way, with the remedy the planner was told, which is none where nobody can be asked
-in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A path inside the workspace that is refused for not being named
+in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). The same holds for every file tool's
+refusal for leaving the workspace ([TRUST-10](trust-map.md#TRUST-10)). A path inside the workspace that is refused for not being named
 relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
 relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
 write call the permission mode refuses before the tool runs

@@ -3073,6 +3073,9 @@ where
     if !offered_names(&offered, "read_file") {
         policy.without_reading_files();
     }
+    if task.permission_mode.nobody_to_ask() {
+        policy.without_anybody_to_ask();
+    }
     if !offers_read_output {
         policy.without_reading();
     }

@@ -405,6 +405,10 @@ fn run_once_under(
         &mut sink,
     )
     .expect("policy");
+    // The turn tells the policy what the mode says, as it does in `turn.rs`.
+    if mode.nobody_to_ask() {
+        policy.without_anybody_to_ask();
+    }
 
     let produced = with_tools(&workspace, |tools| {
         tools.permission_mode = mode;
@@ -554,6 +558,123 @@ fn a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path
         refused[0].contains("remedy offered: none"),
         "the trail records a remedy the planner was not told: {}",
         refused[0]
+    );
+}
+
+/// What the planner was told for one call of `tool` (`read_file` or `list_files`) naming `path`,
+/// and the confinement refusals the trail recorded, with `nobody_to_ask` as the turn would set it.
+#[cfg(unix)]
+fn file_tool_refusal(
+    workspace: &Workspace,
+    nobody_to_ask: bool,
+    tool: &str,
+    path: &std::path::Path,
+) -> (String, Vec<String>) {
+    let mut sink = RecordingSink::new();
+    let said = {
+        let mut policy = run_and_read_policy(&mut sink);
+        if nobody_to_ask {
+            policy.without_anybody_to_ask();
+        }
+        let produced = match tool {
+            "read_file" => with_tools(workspace, |tools| {
+                read_file(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({ "path": path.display().to_string() }),
+                )
+            }),
+            _ => list_files(
+                &mut policy,
+                workspace,
+                &json!({ "directory": path.display().to_string() }),
+            ),
+        };
+        let said = told(&mut policy, &produced.text);
+        let _ = policy.finish();
+        said
+    };
+    let refused = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "confine",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    (said, refused)
+}
+
+/// TRUST-10, CLI-1, TRACE-1: where nobody can be asked, a file tool's refusal for a path outside
+/// the workspace names no `/add-dir`, `--add-dir` or drop, says nobody can be asked and to say in
+/// the reply which path the work needs, and the trail records `remedy offered: none`. Covers a
+/// read and a list, a file and a directory outside, a file in the directory holding the
+/// workspace (the checkout warning is not said), and a credential location, which keeps its
+/// meaning. The control with somebody to ask keeps `/add-dir` and the drop. The regression it
+/// rejects: the wording chosen from the remedy alone, so a run with nobody at the terminal is told
+/// to ask for a directory to be opened.
+#[cfg(unix)]
+#[test]
+fn file_tools_with_nobody_to_ask_name_no_route_and_record_none() {
+    let place = outside_fixture("file-tools-unattended");
+    let holding = place
+        .workspace
+        .root()
+        .parent()
+        .expect("the directory holding the workspace")
+        .join("sibling.txt");
+    let cases = [
+        ("read_file", place.beside.join("notes.txt")),
+        ("read_file", place.beside.clone()),
+        ("read_file", holding.clone()),
+        ("list_files", place.beside.clone()),
+        (
+            "list_files",
+            place.workspace.root().parent().unwrap().to_path_buf(),
+        ),
+    ];
+    for (tool, path) in cases {
+        let (said, trail) = file_tool_refusal(&place.workspace, true, tool, &path);
+        for route in ["/add-dir", "--add-dir", "drop the file", "ends checkouts"] {
+            assert!(
+                !said.contains(route),
+                "{tool} {path:?}: a run nobody can be asked in was told of {route}: {said}"
+            );
+        }
+        assert!(
+            said.contains("Nobody can be asked in this run")
+                && said.contains("say in the reply which path the work needs and what for"),
+            "{tool} {path:?}: not told to name the path in the reply: {said}"
+        );
+        let [recorded] = trail.as_slice() else {
+            panic!("{tool} {path:?}: expected one refusal in the trail: {trail:?}");
+        };
+        assert!(
+            recorded.ends_with("remedy offered: none"),
+            "{tool} {path:?}: the trail records a remedy the planner was not told: {recorded}"
+        );
+
+        let (control, _) = file_tool_refusal(&place.workspace, false, tool, &path);
+        assert!(
+            control.contains("/add-dir") && !control.contains("Nobody can be asked"),
+            "{tool} {path:?}: the control with somebody to ask lost its route: {control}"
+        );
+    }
+
+    let credential = place.home.join(".ssh/config");
+    let (said, trail) = file_tool_refusal(&place.workspace, true, "read_file", &credential);
+    assert!(
+        said.contains(CREDENTIAL_CLAUSE) && !said.contains("drop") && !said.contains("/add-dir"),
+        "a credential location lost its meaning or kept its drop: {said}"
+    );
+    assert!(
+        trail.iter().all(|reason| !reason.contains("drop")),
+        "the trail records a drop nobody can make: {trail:?}"
     );
 }
 

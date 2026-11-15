@@ -4812,6 +4812,7 @@ pub(crate) fn materialise<S: Sink>(
     // reads on the screen were the planner's, which are the ones that read nothing.
     // Exclusive: `Policy::materialise` emits the slot's `SlotWritten` and trail lines inside
     // this closure, and a shared capture must emit nothing while it is held.
+    let nobody_to_ask = policy.nobody_to_ask();
     policy.capture_files(|policy, _capture| {
         let mut opened = Vec::new();
         for slot in wanted {
@@ -4837,10 +4838,9 @@ pub(crate) fn materialise<S: Sink>(
                         None => read_into_slot(workspace, path),
                     }
                     .map_err(|e| {
-                        if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = &e {
-                            escaped = Some(*remedy);
-                        }
-                        e.describe(&slot.to_string())
+                        let (said, remedy) = describe_for(&e, &slot.to_string(), nobody_to_ask);
+                        escaped = remedy;
+                        said
                     })
                 });
             // Recorded here rather than where it is worded, which is inside the policy's read.
@@ -5118,10 +5118,48 @@ fn workspace_failure<S: Sink>(
     e: &crate::workspace::WorkspaceError,
     named: &str,
 ) -> String {
-    if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = e {
-        record_confinement_refusal(policy, &format!("{tool}.{field}"), named, *remedy);
+    let (said, remedy) = describe_for(e, named, policy.nobody_to_ask());
+    if let Some(remedy) = remedy {
+        record_confinement_refusal(policy, &format!("{tool}.{field}"), named, remedy);
     }
-    e.describe(named)
+    said
+}
+
+/// Said after a refusal for leaving the workspace whose remedy named a route only a person can
+/// take, where nobody can be asked in this run (CLI-1, TRUST-10). Names no directory to open and
+/// no file to drop, and tells the planner what it can do instead.
+const NOBODY_TO_ASK: &str = ". Nobody can be asked in this run, so nothing this session accepts \
+     makes that path reachable: say in the reply which path the work needs and what for";
+
+/// `e` worded about `named`, and the remedy the planner was told where `e` is a refusal for
+/// leaving the workspace, so the trail records what the planner read (TRACE-1).
+///
+/// Where nobody can be asked, a remedy that names `/add-dir`, `--add-dir` or a file drop is said as
+/// the remedy that names none, followed by [`NOBODY_TO_ASK`] (TRUST-10). Decided from the remedy and
+/// the session's setting, never from anything a file or a program holds.
+fn describe_for(
+    e: &crate::workspace::WorkspaceError,
+    named: &str,
+    nobody_to_ask: bool,
+) -> (String, Option<crate::workspace::Remedy>) {
+    use crate::workspace::WorkspaceError;
+    let WorkspaceError::Escapes { path, remedy } = e else {
+        return (e.describe(named), None);
+    };
+    match nobody_to_ask
+        .then(|| remedy.when_nobody_can_be_asked())
+        .flatten()
+    {
+        Some(instead) => {
+            let said = WorkspaceError::Escapes {
+                path: path.clone(),
+                remedy: instead,
+            }
+            .describe(named);
+            (format!("{said}{NOBODY_TO_ASK}"), Some(instead))
+        }
+        None => (e.describe(named), Some(*remedy)),
+    }
 }
 
 /// Put the refusal of a path the workspace's confinement turned away into the trail, worded as the
@@ -10504,45 +10542,6 @@ fn unconfined_way_out<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> &'s
     }
 }
 
-/// A redirection refused for leaving the workspace, as the planner is told of it, and what it is
-/// told it can do where no person can open the directory (CMDLINE-5, TRUST-10, CLI-1).
-///
-/// The remedy is the one the file tools give, chosen by [`crate::workspace::Workspace::confines`],
-/// so the refusal names `/add-dir` alone and not `request_path`, whose grant a redirection does not
-/// pass (PATHREQ-7). Where nobody can be asked in this run, opening a directory is not a route
-/// anyone can take, so a remedy that names one is said as none, with what the planner can do
-/// instead. Decided from the remedy and the session's settings, never from anything a file or a
-/// program holds.
-fn redirection_route(
-    tools: &Tools<'_>,
-    escape: crate::workspace::WorkspaceError,
-) -> (crate::workspace::WorkspaceError, &'static str) {
-    use crate::workspace::{Remedy, WorkspaceError};
-    let WorkspaceError::Escapes { path, remedy } = escape else {
-        return (escape, "");
-    };
-    let opens = matches!(
-        remedy,
-        Remedy::Open
-            | Remedy::OpenEndsCheckouts
-            | Remedy::OpenItself
-            | Remedy::OpenItselfEndsCheckouts
-    );
-    if opens && tools.permission_mode.nobody_to_ask() {
-        let escape = WorkspaceError::Escapes {
-            path,
-            remedy: Remedy::Nothing,
-        };
-        return (escape, REDIRECTION_NOBODY_TO_ASK);
-    }
-    (WorkspaceError::Escapes { path, remedy }, "")
-}
-
-/// Said after a refused redirection whose directory could be opened, where nobody can be asked in
-/// this run (CLI-1). Worded to follow [`crate::workspace::WorkspaceError::describe`].
-const REDIRECTION_NOBODY_TO_ASK: &str = ". Nobody can be asked in this run, so nothing this \
-     session accepts opens that directory: say in the reply which path the work needs and what for";
-
 /// Whether the redirection targets of a `run` line may leave the workspace (CMDLINE-5).
 ///
 /// The confinement of a target exists because this process opens the file and not the stage, so a
@@ -10754,7 +10753,6 @@ fn check_the_plan_before_asking<S: Sink>(
     for path in &plan.writes {
         if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
             let target = told(path);
-            let (escape, route) = redirection_route(tools, escape);
             let way_out = match escape {
                 crate::workspace::WorkspaceError::Escapes { .. } => {
                     unconfined_way_out(policy, tools)
@@ -10762,7 +10760,7 @@ fn check_the_plan_before_asking<S: Sink>(
                 _ => "",
             };
             return Err(Box::new(Produced::problem(format!(
-                "refused: {}{route}{way_out}",
+                "refused: {}{way_out}",
                 workspace_failure(policy, "run", "command", &escape, &target)
             ))));
         }
@@ -12339,11 +12337,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                         &plan.directory,
                         (!at_the_root).then_some(told_directory.as_str()),
                     );
-                    let (escape, route) = redirection_route(tools, escape);
-                    let detail = format!(
-                        "{}{route}",
-                        workspace_failure(policy, "run", "command", &escape, &target)
-                    );
+                    let detail = workspace_failure(policy, "run", "command", &escape, &target);
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
                         detail,

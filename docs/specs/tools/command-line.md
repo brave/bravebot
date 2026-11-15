@@ -402,7 +402,8 @@ each `..` taken out, is inside the workspace or an opened directory, which means
 out. A destination in a directory the remedy names is let through once that directory is opened.
 It names no `request_path`, whose grant a redirection does not pass. Where nobody can be asked in
 the run ([CLI-1](../cli.md#CLI-1)), a remedy that opens a directory is given as none, and the
-planner is told to say in its reply which path the work needs. The `unconfined` sentence above is
+planner is told to say in its reply which path the work needs. A file tool's refusal for leaving the
+workspace is worded the same way ([TRUST-10](../trust-map.md#TRUST-10)). The `unconfined` sentence above is
 said with every remedy, a credential location's included, where the session accepts that argument
 and only there. The trail records the remedy the planner was told. The choice reads the line's
 path, the file system and the session's settings, never a byte a file or a program holds.

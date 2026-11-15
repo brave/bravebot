@@ -678,6 +678,9 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether the run is offered `read_file`, which the refusal to edit an unvouched file names
     /// as the read that puts the vouch question.
     reading_files_offered: bool,
+    /// Whether nobody can be asked in this run, a one-shot command or a pipeline (CLI-1), so a
+    /// refusal for a path outside the workspace names no directory to open and no file to drop.
+    nobody_to_ask: bool,
     /// The names this run's definition, and every one above it, allowed it to start, where any
     /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
     /// installed, and a delegate it starts carries them on, so a child cannot start what the file
@@ -864,6 +867,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             running_offered: true,
             reading_offered: true,
             reading_files_offered: true,
+            nobody_to_ask: false,
             spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
@@ -1768,6 +1772,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             running_offered: self.running_offered,
             reading_offered: self.reading_offered,
             reading_files_offered: self.reading_files_offered,
+            nobody_to_ask: self.nobody_to_ask,
             spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
@@ -2504,6 +2509,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is.
     pub fn without_reading_files(&mut self) {
         self.reading_files_offered = false;
+    }
+
+    /// Say that nobody can be asked in this run (CLI-1), so a refusal worded from here on does not
+    /// send the planner to a directory to open or a file to drop. Told by the turn when its list is
+    /// settled, as [`Policy::without_vetting`] is.
+    pub fn without_anybody_to_ask(&mut self) {
+        self.nobody_to_ask = true;
+    }
+
+    /// Whether nobody can be asked in this run, which a refusal may say instead of naming a route
+    /// only a person can take.
+    pub fn nobody_to_ask(&self) -> bool {
+        self.nobody_to_ask
     }
 
     /// Whether a reference the run holds can be given to a processor: the run is offered

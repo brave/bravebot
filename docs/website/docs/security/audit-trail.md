@@ -58,6 +58,8 @@ BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; re
         open its directory, or drop the file
 ```
 
+Where nobody can be asked in the run, the remedy offered is `none`, as for a `run` redirection.
+
 A `watch_file` on a path outside the workspace is recorded the same way, with the path as typed and
 the remedy, and the turn does not end as clean. Where the person has turned permission prompts off,
 a path a read would reach is armed instead, and the first time the session reaches its directory

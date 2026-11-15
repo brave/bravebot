@@ -274,7 +274,7 @@ path outside the project and every directory you opened, the refusal tells the m
 open the directory the file is in with `/add-dir` or `--add-dir`. If the path names a directory, that
 directory is the one to open. A name nothing is at yet is offered through the directory it is in, as
 a file is. Only a read is also told the file can be dropped on the window, and a read of a directory
-is not, since a directory cannot be dropped. The refusal names `/add-dir` alone: with
+is not, since a directory cannot be dropped. In a run nobody can be asked in, the refusal names no `/add-dir`, `--add-dir` or drop and asks the planner to say which path the work needs. The refusal names `/add-dir` alone: with
 permissions bypassed the file tools reach such a path with no request and the refusal is not given,
 outside the paths a granted request refuses ([`request_path`](../reference/tools.md#request_path)).
 An absolute path that lands inside the project is

@@ -1264,7 +1264,7 @@ answer yes or no. The grant and the record of it hold the resolved path, and the
 back, a success as much as a refusal, names the path as the planner typed it, so the name of what a link
 points at does not reach the planner. The path is judged when you answer and again each time a line starts: the grant keeps the directory you approved, so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link, by another directory or by a link to a refused place is given no row when a stage starts, and the grant is still listed. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
-`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
+`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone, and names none where nobody can be asked in the run, such as a one-shot command or a pipeline. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
 the answer is yes without a question, and the directory is also opened for those five tools and
 trusted, as `/add-dir` would, and the result tells the planner whether they now reach it: `/add-dir close` and `/clear` close it, and `--resume` carries it. With permissions bypassed the file tools do not need the

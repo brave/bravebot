@@ -101081,6 +101081,184 @@ fn a_redirection_into_an_ordinary_file_is_not_marked_protected_and_auto_still_an
     }
 }
 
+/// What the planner read after a `read_file` of a path outside the workspace, in a turn whose
+/// `mode` decides whether anybody can be asked.
+fn what_the_planner_read_after_an_outside_read(
+    name: &str,
+    mode: bravebot_agent::LiveMode,
+) -> String {
+    let elsewhere = Scratch::new(&format!("{name}-elsewhere"));
+    std::fs::write(elsewhere.path.join("todo.txt"), "buy milk").unwrap();
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let outside = elsewhere
+        .path
+        .join("todo.txt")
+        .to_string_lossy()
+        .to_string();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &format!(r#"{{"path":"{outside}"}}"#)),
+        reply_with("could not read it"),
+    ]);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read my todo list").with_permission_mode(mode.clone()),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::Confining::new(&mut asked, mode, false),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let requests = every_request(&received);
+    tool_results(requests.last().expect("a last request"))
+}
+
+/// TRUST-10, CLI-1: in a run nobody can be asked in (a one-shot command or a pipeline), the
+/// refusal of a file tool for a path outside the workspace names neither `/add-dir` nor a file
+/// drop, since nobody is there to type or drop, and says nobody can be asked. The control is the
+/// same turn with a person to ask, which names both. The regression it rejects: the file tools
+/// wording the refusal from the remedy alone, so an unattended planner is told to ask for a
+/// directory that nothing in its run opens.
+#[test]
+fn a_read_outside_the_workspace_nobody_can_be_asked_in_names_no_persons_route() {
+    let unattended = what_the_planner_read_after_an_outside_read(
+        "outside-read-unattended",
+        bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Bypass),
+    );
+    let attended = what_the_planner_read_after_an_outside_read(
+        "outside-read-attended",
+        bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass),
+    );
+
+    for route in [
+        "with /add-dir in the terminal",
+        "drop the file on the window",
+    ] {
+        assert!(
+            attended.contains(route),
+            "the control with a person to ask did not name {route}: {attended}"
+        );
+        assert!(
+            !unattended.contains(route),
+            "a run nobody can be asked in was told of {route}: {unattended}"
+        );
+    }
+    assert!(
+        unattended.contains("Nobody can be asked in this run"),
+        "the run was not told nobody can be asked: {unattended}"
+    );
+    assert!(
+        !unattended.contains("buy milk"),
+        "content from outside the workspace reached the model"
+    );
+}
+
+/// TRUST-10, CMDLINE-5, CLI-1: in one turn nobody can be asked in, a `read_file` of a file outside
+/// the workspace and then a `run` redirecting into a directory outside it are both refused, and
+/// neither refusal names `/add-dir`, `--add-dir`, a file drop, a checkout route or `request_path`.
+/// Both say nobody can be asked and ask the planner to say which path the work needs. The planner
+/// is not given one route by the file tool and a different one by `run`.
+///
+/// The regression it rejects: the file tools and `run` wording the same refusal differently in
+/// one run, so the planner is told to ask for a directory by one tool and told it cannot by the
+/// other (#4231).
+#[test]
+fn an_unattended_turn_refused_outside_by_read_file_and_by_run_is_given_one_answer() {
+    let elsewhere = Scratch::new("outside-both-elsewhere");
+    std::fs::write(elsewhere.path.join("todo.txt"), "buy milk").unwrap();
+    let scratch = Scratch::new("outside-both");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let outside = elsewhere.path.join("todo.txt").to_string_lossy().to_string();
+    let escaped = elsewhere
+        .path
+        .join("escaped.txt")
+        .to_string_lossy()
+        .to_string();
+    let mode =
+        bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Ask);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &json!({ "path": outside }).to_string()),
+        tool_request_2(
+            "run",
+            &json!({ "command": format!("echo hi > {escaped}") }).to_string(),
+        ),
+        reply_with("could not do either"),
+    ]);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read my todo list and note it elsewhere").with_permission_mode(mode.clone()),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::Confining::new(&mut asked, mode, false),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let requests = every_request(&received);
+    assert_eq!(requests.len(), 3, "the turn did not make two tool rounds");
+    // Each request carries every earlier tool result too, so take the last one of each.
+    let last_tool_result = |request: &str| {
+        let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+        parsed["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .rfind(|message| message["role"] == "tool")
+            .expect("a tool result")["content"]
+            .to_string()
+    };
+    let after_read = last_tool_result(&requests[1]);
+    let after_run = last_tool_result(&requests[2]);
+    assert_ne!(after_read, after_run, "the two results are one message");
+
+    for (tool, told) in [("read_file", &after_read), ("run", &after_run)] {
+        assert!(
+            told.contains("outside the workspace"),
+            "{tool}: not refused for leaving the workspace: {told}"
+        );
+        for route in [
+            "/add-dir",
+            "--add-dir",
+            "drop the file",
+            "drop the directory",
+            "checkout",
+            "request_path",
+        ] {
+            assert!(
+                !told.contains(route),
+                "{tool}: a run nobody can be asked in was told of {route}: {told}"
+            );
+        }
+        assert!(
+            told.contains("Nobody can be asked in this run"),
+            "{tool}: not told nobody can be asked: {told}"
+        );
+        assert!(
+            told.contains("say in the reply which path"),
+            "{tool}: not told to name the path in its reply: {told}"
+        );
+    }
+    assert!(
+        !elsewhere.path.join("escaped.txt").exists(),
+        "the redirection ran"
+    );
+}
+
 /// What the tools answered in a turn whose one `run` is `git commit -am m` in a session directory
 /// whose `.git` is a file naming a directory that does not exist, so git fails, under
 /// `workspace-write` in a workspace nobody vouched for, so the session accepts no request, with

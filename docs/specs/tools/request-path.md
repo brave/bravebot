@@ -206,7 +206,8 @@ The planner cannot see the permission mode and is not told it. The tool's descri
 exception as applying where the person has turned permission prompts off, and says the file tools
 reach a path outside the workspace there with no request. A file tool's refusal names `/add-dir`
 alone and does not send the planner to `request_path`: where the mode reaches a path the refusal is
-not given, and where it does not, a request for the path is refused as well. A `run` line's
+not given, and where it does not, a request for the path is refused as well. Where nobody can be
+asked in the run, the refusal names no `/add-dir` either ([TRUST-10](../trust-map.md#TRUST-10)). A `run` line's
 redirection refused for leaving the workspace names `/add-dir` the same way and not `request_path`,
 whose grant a redirection does not pass ([CMDLINE-5](command-line.md#CMDLINE-5)). A skill that depends on
 the exception says the same and does not branch on the mode.
