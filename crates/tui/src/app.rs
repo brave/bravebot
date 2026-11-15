@@ -11507,7 +11507,9 @@ mod tests {
         let _held = crate::theme::exclusive();
         let mut session = a_long_reply(80);
         drawn_at(&mut session, 120, 24);
-        for _ in 0..4 {
+        // Three turns of the wheel, so that the words are still above the button under the view
+        // (VIEW-45) after a page key has moved them down.
+        for _ in 0..3 {
             wheel_up(&mut session);
         }
         let buffer = drawn_at(&mut session, 120, 24);
@@ -12894,7 +12896,10 @@ mod tests {
         let buffer = drawn_at(&mut session, 120, 24);
         let pane = the_transcript_pane(&session);
         let (row, column) = find_cell(&buffer, "row 60");
-        swept(&mut session, (row, column), (pane.bottom(), 8));
+        // The row under the one the button is drawn in, which is below the transcript at the tail
+        // as well (VIEW-45).
+        let below = pane.bottom() + 1;
+        swept(&mut session, (row, column), (below, 8));
 
         let start = Instant::now();
         let mut steps = 0;
@@ -12918,7 +12923,7 @@ mod tests {
         );
         assert!(!session.scroll_toward_the_pointer(at_a_step(start, steps + 2)));
 
-        let handed = let_go(&mut session, (120, 24), pane.bottom(), 8);
+        let handed = let_go(&mut session, (120, 24), below, 8);
         let [copied] = handed.as_slice() else {
             panic!("the clipboard was handed {handed:?}");
         };
@@ -13426,8 +13431,12 @@ mod tests {
         assert!(selection.covers(transcript.bottom() - 2, 0));
         assert!(!selection.covers(transcript.bottom() - 1, 0));
 
+        // The row the button returning to the tail is drawn in is the last row of the pane, and is no
+        // row of the transcript to select (VIEW-45).
         wheel_up(&mut session);
         drawn_at(&mut session, 120, 24);
+        let transcript = session.laid.panes[0].1;
+        assert_eq!(transcript.bottom(), session.laid.jump.expect("a button").y);
         swept(&mut session, (0, 0), (23, 10));
         let selection = session.selection.expect("selection");
         assert!(selection.covers(transcript.bottom() - 1, 0));
@@ -42490,6 +42499,7 @@ mod tests {
     mod history_search;
     mod hover;
     mod interrupt;
+    mod jump;
     mod menu;
     mod pasting;
     mod pickers;

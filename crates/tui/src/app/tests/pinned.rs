@@ -29,7 +29,7 @@ fn two_long_turns() -> Session {
 }
 
 /// The text of row `row` of `buffer`, without the blanks at its end or the thumb of a scrollbar.
-fn row_text(buffer: &ratatui::buffer::Buffer, row: u16) -> String {
+pub(super) fn row_text(buffer: &ratatui::buffer::Buffer, row: u16) -> String {
     (0..buffer.area.width)
         .map(|column| buffer[(column, row)].symbol())
         .collect::<String>()
@@ -38,7 +38,7 @@ fn row_text(buffer: &ratatui::buffer::Buffer, row: u16) -> String {
 }
 
 /// Every row of `buffer`, for the message of a failed assertion.
-fn screen(buffer: &ratatui::buffer::Buffer) -> String {
+pub(super) fn screen(buffer: &ratatui::buffer::Buffer) -> String {
     (0..buffer.area.height)
         .map(|row| row_text(buffer, row))
         .collect::<Vec<_>>()
@@ -46,7 +46,7 @@ fn screen(buffer: &ratatui::buffer::Buffer) -> String {
 }
 
 /// How many rows of `buffer` hold `needle`.
-fn rows_holding(buffer: &ratatui::buffer::Buffer, needle: &str) -> usize {
+pub(super) fn rows_holding(buffer: &ratatui::buffer::Buffer, needle: &str) -> usize {
     (0..buffer.area.height)
         .filter(|&row| row_text(buffer, row).contains(needle))
         .count()

@@ -863,7 +863,8 @@ word is what an interface is given, so no interface can draw the name as it was 
 
 While the resting view is scrolled off the tail ([VIEW-1](#VIEW-1)), the hint line says it is held,
 how many rows lie below it and the key that returns to the latest. The cue is dim, is dropped whole
-on a terminal with no room for it, and is gone once the view is at the tail.
+on a terminal with no room for it, and is gone once the view is at the tail. The button drawn at the
+bottom of the transcript ([VIEW-45](#VIEW-45)) is beside it and does not replace it.
 
 **Why.** The view stays where it was put while the turn goes on, and a person who scrolled up and
 looked away had no sign on the screen that the turn had moved on, or which key returned to it.
@@ -1339,7 +1340,8 @@ captured, in the scroller or the delegate view, over the search of earlier promp
 screen, or in a pane with fewer than three rows.
 
 The column is chrome and not text: the transcript's pane for selecting and copying ends before it, so
-a drag that reaches it takes no cell of it. The wheel, the arrow keys and the page keys move the view.
+a drag that reaches it takes no cell of it. It runs beside the rows above the button of
+[VIEW-45](#VIEW-45), where one is drawn. The wheel, the arrow keys and the page keys move the view.
 
 What a copy takes and what a click on a link opens are read at the width the lines were wrapped to,
 so a wrapped line copies as one line and an address or a path that wraps is one link, with the bar
@@ -1508,7 +1510,8 @@ last prompt.
 No prompt is drawn above the view where its first row is a row of a prompt, since that prompt is on
 the screen; where a shell command the person ran is later than the prompt, since what the command
 printed is not an answer to it; where the prompt has no words; in a pane of fewer than four rows or
-sixteen columns; and over a delegate's view or a request `/request` opened, neither of which holds
+sixteen columns, which are the rows left once the button of [VIEW-45](#VIEW-45) has taken its row;
+and over a delegate's view or a request `/request` opened, neither of which holds
 the person's prompts. At the tail a view a row shorter begins a row further down, and a prompt is
 drawn only where one is to be drawn above both the view of the whole pane and that shorter view, so a
 view whose shorter form begins at the next prompt keeps the whole pane. A view held above the tail
@@ -1544,6 +1547,60 @@ layout's row geometry, so the row holds no bytes of a reply, a result or a note.
 `verified-by: bravebot_tui::render::transcript::a_prompt_is_pinned_only_in_a_pane_with_room_and_where_the_shorter_view_has_one_too`
 `verified-by: bravebot_tui::render::transcript::the_prompt_pinned_is_the_latest_one_above_the_first_row_and_not_past_a_shell_command`
 `verified-by: bravebot_tui::render::transcript::a_prompt_on_one_row_joins_its_lines_and_is_cut_to_the_room`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+
+<a id="VIEW-45"></a>
+### VIEW-45: a view held off the tail has a button in the last row of the transcript's pane
+
+While the resting view is off the tail ([VIEW-1](#VIEW-1)), the last row of the transcript's pane
+holds a button drawn in the middle of the columns the text is drawn in, which are the pane's less the
+scrollbar's, in reverse video and bold on the brand colour: `↓ Jump to bottom  ·  12 rows below`. The
+row under it is the status row while a turn or a command runs and one is drawn, and the top of the box
+otherwise. A click on it returns the view to the tail as `ctrl-end` does
+([MOUSE-55](mouse.md#MOUSE-55)). It is drawn in the frame that leaves the tail and is gone once
+the view is back.
+
+The row is taken from the transcript's rows and covers none of them. A view held on a row stays on it,
+the rows above the button are the pane's less its own, and a prompt drawn above the view
+([VIEW-44](#VIEW-44)) takes its row from those that are left. The scrollbar ([VIEW-39](#VIEW-39)),
+a selection and a copy count only the rows above the button, so the button's words are never copied.
+A view one row off the tail whose last row a prompt drawn above the view took has a button as well:
+whether the view is off the tail is read from the rows that are drawn, with that prompt.
+
+The count is how many rows of the transcript lie below the last row the view shows. It is read from the
+layout's row geometry in the frame that draws the button, and the cue on the hint line
+([VIEW-27](#VIEW-27)), which stays, says the same count in that frame. Where the sentence with its count
+does not fit the width of the pane, the words alone are drawn. Where they do not fit either, or the pane
+has fewer than four rows, no button is drawn and no row is taken, and the cue on the hint line is the
+only one.
+
+No button is drawn in the scroller, in a delegate's view, a view of an aside or of what a command
+printed, in the view of a request or in the opening screen. Each has its own way back, and none draws
+the session's transcript in the pane the button is drawn over. A panel drawn over the frame covers it as
+it covers the rest ([MOUSE-45](mouse.md#MOUSE-45)). A question the interface puts to the person draws
+its own frame over the whole screen and reads the keyboard itself, so no button is drawn while one is
+up, and the frame drawn once it is answered holds the view where it was and draws the button again
+([MOUSE-44](mouse.md#MOUSE-44)).
+
+**Why.** Only a dim sentence on the hint line, under the box, said that the view was held, and a person
+who scrolled up and looked away had to know the key or find it there. The button is where the rows that
+arrive go on arriving, at the edge of the transcript the eye is on, and a click on it needs no key.
+
+The label is a sentence of the catalog and a count of rows from the layout, so it holds no bytes of
+what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
+
+`verified-by: bravebot_tui::app::tests::jump::a_view_held_off_the_tail_draws_the_button_above_the_box_with_the_rows_below`
+`verified-by: bravebot_tui::app::tests::jump::at_rest_the_button_is_in_the_row_directly_above_the_box`
+`verified-by: bravebot_tui::app::tests::jump::while_a_turn_runs_the_button_is_in_the_row_directly_above_the_status_row`
+`verified-by: bravebot_tui::app::tests::jump::a_reply_arriving_below_a_held_view_raises_the_count_and_moves_no_text`
+`verified-by: bravebot_tui::app::tests::jump::a_narrow_pane_drops_the_count_and_then_the_button`
+`verified-by: bravebot_tui::app::tests::jump::a_pane_of_fewer_than_four_rows_keeps_every_row_for_the_transcript`
+`verified-by: bravebot_tui::app::tests::jump::a_view_one_row_off_the_tail_whose_last_row_a_pinned_prompt_took_has_the_button_and_its_count`
+`verified-by: bravebot_tui::app::tests::jump::the_button_is_in_the_middle_of_the_text_columns_in_reverse_video_and_bold_on_the_brand_colour`
+`verified-by: bravebot_tui::app::tests::jump::no_button_is_drawn_in_the_scroller_a_delegates_view_or_a_request`
+`verified-by: bravebot_tui::app::tests::jump::no_button_is_drawn_in_the_view_of_what_a_command_printed_an_aside_or_the_opening_screen`
+`verified-by: bravebot_tui::app::tests::jump::the_hint_under_the_box_stays_while_the_button_is_drawn`
+`verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
 `verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
 
 ## Known costs

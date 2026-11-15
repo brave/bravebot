@@ -793,7 +793,10 @@ fn a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_se
     let buffer = drawn_at(&mut session, 120, 24);
     let pane = the_transcript_pane(&session);
     let (row, column) = find_cell(&buffer, "row 60");
-    swept(&mut session, (row, column), (pane.bottom(), 8));
+    // The row under the one the button is drawn in, which is below the transcript at the tail as
+    // well (VIEW-45).
+    let below = pane.bottom() + 1;
+    swept(&mut session, (row, column), (below, 8));
 
     let start = Instant::now();
     let mut steps = 0;
@@ -811,7 +814,7 @@ fn a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_se
         session.selection.is_some(),
         "the next words of the reply put the selection away at the tail"
     );
-    let copied = handed_at_the_release(&mut session, pane.bottom(), 8);
+    let copied = handed_at_the_release(&mut session, below, 8);
     assert!(copied.starts_with("row 60 of the reply\n"), "{copied:?}");
     assert!(
         copied.ends_with("\n  row 80 of the reply and more"),

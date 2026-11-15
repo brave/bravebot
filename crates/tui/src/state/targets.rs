@@ -57,6 +57,9 @@ pub enum Hit {
     /// The prompt drawn above the view, which begins at this row of the transcript: a click puts that
     /// row at the top of the view (VIEW-44, MOUSE-54).
     Pinned(u16),
+    /// The button drawn at the bottom of the transcript while the view is held off its tail: a click
+    /// returns the view to the tail (VIEW-45, MOUSE-55).
+    ToTail,
     /// The row of the list of what could be typed under the box that holds this item of what is
     /// offered: a click puts the cursor on it, and a second takes it as Tab does (MOUSE-15).
     Item(usize),
@@ -181,6 +184,9 @@ impl Hit {
             }
             Hit::Wheel(_) => beneath && session.in_the_plain_frame() && session.files_open(),
             Hit::Scrollbar => beneath && session.in_the_plain_frame(),
+            // Drawn at rest over the session's own transcript, as the scrollbar is, and by no view
+            // that replaces the frame.
+            Hit::ToTail => beneath && session.in_the_plain_frame(),
             // The Sessions screen is the whole frame while it is open, and no other target is recorded then.
             Hit::SessionsScreen(_) => session.showing_sessions(),
             Hit::Item(_) => beneath && session.in_the_plain_frame() && session.is_completing(),

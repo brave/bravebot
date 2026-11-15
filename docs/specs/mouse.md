@@ -1788,7 +1788,7 @@ says whether a cell is a panel's. The way
 back out of a delegate's view ([MOUSE-24](#MOUSE-24)), the marker that leads a reply
 ([MOUSE-26](#MOUSE-26)), the word that copies a fenced block ([MOUSE-27](#MOUSE-27)), a prompt
 waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)), the prompt drawn above the view
-([MOUSE-54](#MOUSE-54)) and each hint on the row under the box, with the
+([MOUSE-54](#MOUSE-54)), the button at the bottom of the view ([MOUSE-55](#MOUSE-55)) and each hint on the row under the box, with the
 permission mode ([MOUSE-14](#MOUSE-14), [MOUSE-48](#MOUSE-48)), are in the record. The marker and the word are not
 targets in a delegate's view, whose entries are the delegate's and not the session's, or in the files
 state.
@@ -1804,7 +1804,7 @@ last column is the state it is in whichever of those it was opened over.
 | a file's row, the close control, a control of the edit bar and a pane the wheel scrolls, in the files state | yes | yes | yes | no | no | yes | no |
 | a hint under the box, the permission mode included | yes | yes | no | no | no | no | no |
 | a place in the box's text, a prompt waiting behind a turn and the words that remove it | yes | yes | yes | no | no | no | no |
-| the track of the scrollbar, a row of the list under the box | yes | yes | yes | no | no | yes | no |
+| the track of the scrollbar, the button at the bottom of the view, a row of the list under the box | yes | yes | yes | no | no | yes | no |
 | a reply's marker, the word that copies a block, a call, a delegate's block, the prompt drawn above the view | yes | yes | yes | yes | no | no | no |
 | a web address | yes | yes | yes | yes | no | yes | yes |
 | a file path | yes | no | no | yes | no | yes | no |
@@ -2083,6 +2083,50 @@ nothing.
 
 `verified-by: bravebot_tui::app::tests::pinned::a_click_on_the_prompt_drawn_above_the_view_puts_that_prompt_at_the_top`
 `verified-by: bravebot_tui::app::tests::pinned::a_selection_never_begins_on_the_prompt_drawn_above_the_view_or_takes_its_words`
+`verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
+`verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
+`verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
+`verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`
+
+<a id="MOUSE-55"></a>
+### MOUSE-55: a click on the button at the bottom of the view returns it to the tail
+
+A left click that sweeps nothing on the button drawn in the last row of the transcript's
+pane while the view is held off the tail ([VIEW-45](terminal-transcript.md#VIEW-45)) returns the view to
+the tail as `ctrl-end` does, and as a click on the hint that names the key does
+([MOUSE-48](#MOUSE-48)). The view follows what arrives again and the button is gone. The target is the
+button's cells, which are its words and the blank on each side of them, and the rest of the row is
+not. As for every click, the press and the release are on one cell and the press is a single click,
+so a drag is a selection and the first click of a double click acts once. A press of another button
+does nothing. A click puts away the selection that was held, as every click that acts does.
+`ctrl-end` leaves it, since the selection stays on its text as the view scrolls
+([MOUSE-34](#MOUSE-34)).
+
+A press on the button begins no selection, since the row is not the transcript's, so a drag along it
+selects nothing. A drag from the transcript that ends on the row or below it reaches the rows above the
+button and no further, and a copy does not take its words. Held below the pane, the drag scrolls the
+view toward the tail ([MOUSE-37](#MOUSE-37)), and the row is below the pane for that, beside the
+button's words and on them. Where that brings the view back to the tail the button is gone and its
+row is a row of the pane again. The selection ends on the last row of text the drag reached, and a
+copy ends there.
+
+The target is recorded as the cells of the screen the button is drawn in. It stands as the scrollbar
+does ([MOUSE-50](#MOUSE-50)): at rest, while a turn or a command runs and in the files state, and in
+no view that replaces the frame. A panel drawn over it takes the press first
+([MOUSE-45](#MOUSE-45)). A question the interface puts to the person is not a panel of the frame: it
+draws its own frame over the whole screen, so no button is drawn while it is up, and a press, a release
+or a move of the pointer on the cells the button was in answers nothing and leaves the view held
+([MOUSE-44](#MOUSE-44)). The pointer over it is held ([MOUSE-51](#MOUSE-51)), and the row of hints says
+what a click does. The key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::tests::jump::a_click_on_the_button_returns_the_view_to_the_tail_as_ctrl_end_does`
+`verified-by: bravebot_tui::app::tests::jump::only_a_single_click_of_the_left_button_on_the_words_of_the_button_acts`
+`verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
+`verified-by: bravebot_tui::app::tests::jump::a_drag_held_on_the_row_of_the_button_scrolls_the_view_toward_the_tail`
+`verified-by: bravebot_tui::app::tests::jump::a_click_on_the_button_puts_a_held_selection_away_and_ctrl_end_leaves_it`
+`verified-by: bravebot_tui::confirm::tests::mouse_tests::no_pointer_event_answers_any_question`
+`verified-by: bravebot_tui::app::tests::jump::the_pointer_over_the_button_marks_it_and_says_what_a_click_does`
+`verified-by: bravebot_tui::app::tests::selection::a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_selection`
 `verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
 `verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
 `verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`

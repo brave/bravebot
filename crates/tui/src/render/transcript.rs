@@ -1337,7 +1337,7 @@ fn draw_measured(
         total,
     } = measured;
     let starts = entries.starts();
-    let (area, offset, pinned) = kept_view(frame, area, session, &entries, total);
+    let (area, offset, pinned, jump) = kept_view(frame, area, session, &entries, total);
     let height = usize::from(area.height);
 
     // The line holding the first row on the screen, and how far into it the screen starts. Lines
@@ -1418,18 +1418,20 @@ fn draw_measured(
     if let Some((row, prompt)) = pinned {
         place_pinned(&mut laid, row, row_of(entries.entries[prompt]));
     }
+    place_jump(&mut laid, jump);
     (laid, offset)
 }
 
-/// Where [`draw_measured`] draws the transcript in `pane`, the row of it at the top, and the row a
-/// prompt was drawn in above it with the entry that prompt is, where one was (VIEW-44).
+/// Where [`draw_measured`] draws the transcript in `pane`, the row of it at the top, the row a prompt
+/// was drawn in above it with the entry that prompt is, where one was (VIEW-44), and the row at the
+/// bottom of the pane the button that returns to the tail was drawn in, where one was (VIEW-45).
 fn kept_view(
     frame: &mut Frame,
     pane: Rect,
     session: &Session,
     entries: &EntryLines,
     total: usize,
-) -> (Rect, usize, Option<(Rect, usize)>) {
+) -> KeptView {
     let starts = entries.starts();
     let held = (session.scroll > 0).then(|| {
         // The words a scroller was closed on are put at the top, where they were: the row they were
@@ -1451,12 +1453,34 @@ fn kept_view(
             .checked_sub(1)?;
         pinned_prompt(&session.transcript, holding, top >= head_rows)
     };
-    let view = pin_a_prompt(pane, offset_at, prompt_above);
-    if let (_, _, Some((row, prompt))) = view {
+    // The view is off the tail where rows lie below it as it would be drawn without the button. Read
+    // from the rows and not from the last frame's, so that the frame that leaves the tail is the one
+    // that draws the button, and so is the frame of a view one row off the tail, whose last row a
+    // prompt drawn above the view has taken (VIEW-45).
+    let (area, offset, pinned) = pin_a_prompt(pane, offset_at, prompt_above);
+    let off_the_tail = total > offset + usize::from(area.height);
+    let (area, offset, pinned, jump) = match room_for_the_jump(pane, off_the_tail) {
+        (rest, Some(row)) => {
+            let (area, offset, pinned) = pin_a_prompt(rest, offset_at, prompt_above);
+            (area, offset, pinned, Some(row))
+        }
+        (_, None) => (area, offset, pinned, None),
+    };
+    if let Some((row, prompt)) = pinned {
         draw_pinned(frame, row, &session.transcript[prompt]);
     }
-    view
+    let below = total.saturating_sub(offset + usize::from(area.height));
+    (
+        area,
+        offset,
+        pinned,
+        jump.map(|row| draw_jump(frame, row, below)),
+    )
 }
+
+/// What [`kept_view`] settles: the rows the transcript is drawn in, the row of it at the top, the
+/// prompt drawn above them (VIEW-44) and the button drawn under them (VIEW-45).
+type KeptView = (Rect, usize, Option<(Rect, usize)>, Option<Jump>);
 
 /// Where the long way draws the transcript in `pane`, the row of it at the top, and the row a prompt
 /// was drawn in above it with the entry that prompt is, where one was (VIEW-44). `total` is the rows
@@ -1509,6 +1533,84 @@ fn laid_out_view(
 /// The fewest rows a pane has for a prompt to be drawn above the view (VIEW-44). A shorter one keeps
 /// every row for the transcript.
 const PINNED_ROWS: u16 = 4;
+
+/// The fewest rows a pane has for the button that returns to the tail (VIEW-45): its own row and
+/// three of the transcript above it. A shorter pane keeps every row for the transcript.
+const JUMP_ROWS: u16 = 4;
+
+/// The button drawn at the bottom of the transcript: the row it is in, and the cells of the row the
+/// words of the button are drawn in, which are what a click on it is (MOUSE-55).
+#[derive(Clone, Copy)]
+struct Jump {
+    row: Rect,
+    button: Rect,
+}
+
+/// The rows of `pane` left to the transcript and the row at the bottom for the button, where the
+/// view is `off_the_tail` and the pane has room for one and the words of the button fit its width
+/// (VIEW-45).
+fn room_for_the_jump(pane: Rect, off_the_tail: bool) -> (Rect, Option<Rect>) {
+    let fits = pane.height >= JUMP_ROWS && jump_label(pane.width, 0).is_some();
+    if !(off_the_tail && fits) {
+        return (pane, None);
+    }
+    let row = Rect {
+        y: pane.bottom() - 1,
+        height: 1,
+        ..pane
+    };
+    let rest = Rect {
+        height: pane.height - 1,
+        ..pane
+    };
+    (rest, Some(row))
+}
+
+/// The words of the button in `width` columns, a blank on each side of them: with the count of the
+/// rows below where they fit, and without it where only the words do. `None` where not even the
+/// words fit (VIEW-45). Only a sentence of the catalog and a number from the layout's row geometry
+/// are in it, so it holds no bytes of what the rows contain (SCROLL-5).
+fn jump_label(width: u16, below: usize) -> Option<String> {
+    let count = u32::try_from(below).unwrap_or(u32::MAX);
+    let with_the_count = (below > 0).then(|| t!(jump_to_bottom_rows, count = count).to_string());
+    [with_the_count, Some(t!(jump_to_bottom).to_string())]
+        .into_iter()
+        .flatten()
+        .map(|words| format!(" {words} "))
+        .find(|label| wrap::display_width(label) <= usize::from(width))
+}
+
+/// Draw the button in `row`, in the middle of it, in reverse video on the brand colour so that it is
+/// told from the text around it and from the fill a selection is drawn in (VIEW-45).
+fn draw_jump(frame: &mut Frame, row: Rect, below: usize) -> Jump {
+    let label = jump_label(row.width, below).unwrap_or_default();
+    let wide = u16::try_from(wrap::display_width(&label)).unwrap_or(row.width);
+    let button = Rect {
+        x: row.x + (row.width - wide) / 2,
+        width: wide,
+        ..row
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        ))),
+        button,
+    );
+    Jump { row, button }
+}
+
+/// Record the row the button was drawn in and the click on its words, which returns the view to the
+/// tail (MOUSE-55).
+fn place_jump(laid: &mut Laid, jump: Option<Jump>) {
+    let Some(Jump { row, button }) = jump else {
+        return;
+    };
+    laid.jump = Some(row);
+    laid.targets.push(Target::on_screen(button, Hit::ToTail));
+}
 
 /// The fewest columns a pane has for a prompt to be drawn above the view, which leave the marker
 /// room for a few words of the prompt.
