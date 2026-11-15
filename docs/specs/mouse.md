@@ -1791,7 +1791,7 @@ says whether a cell is a panel's. The way
 back out of a delegate's view ([MOUSE-24](#MOUSE-24)), the marker that leads a reply
 ([MOUSE-26](#MOUSE-26)), the word that copies a fenced block ([MOUSE-27](#MOUSE-27)), a prompt
 waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)), the prompt drawn above the view
-([MOUSE-54](#MOUSE-54)), the button at the bottom of the view ([MOUSE-55](#MOUSE-55)) and each hint on the row under the box, with the
+([MOUSE-54](#MOUSE-54)), the button at the bottom of the view ([MOUSE-55](#MOUSE-55)), the face on the opening screen ([MOUSE-56](#MOUSE-56)) and each hint on the row under the box, with the
 permission mode ([MOUSE-14](#MOUSE-14), [MOUSE-48](#MOUSE-48)), are in the record. The marker and the word are not
 targets in a delegate's view, whose entries are the delegate's and not the session's, or in the files
 state.
@@ -2130,6 +2130,40 @@ what a click does. The key stays the way to do it without a mouse.
 `verified-by: bravebot_tui::confirm::tests::mouse_tests::no_pointer_event_answers_any_question`
 `verified-by: bravebot_tui::app::tests::jump::the_pointer_over_the_button_marks_it_and_says_what_a_click_does`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_selection`
+`verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
+`verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
+`verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
+`verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`
+
+<a id="MOUSE-56"></a>
+### MOUSE-56: a click on the face on the opening screen makes it blink or look to the other side
+
+A left click that sweeps nothing on the cells the pixel face is drawn in on the opening screen
+([VIEW-21](terminal-transcript.md#VIEW-21)) makes the face do for a moment one of the two things it
+does on its own schedule. The first click makes it blink, the next makes it look to the other side, and
+they alternate after that. A blink lasts 200 ms and a glance 1400 ms, after which the face is held as
+its own schedule holds it, and the schedule goes on as before while a click is shown. The face is
+drawn again at once. Where `NO_MOTION` is set a click does nothing, since that face never moves.
+
+The target is the face's cells and no others: its columns and its rows, and not the wordmark beside
+it, the rows above or below it or the margin to its left. It is recorded where the face is drawn, so
+where the face is not drawn (no colour, or a screen too narrow for it) there is no target, and once
+the screen shows anything but the opening screen there is none either. It stands as the scrollbar
+does ([MOUSE-50](#MOUSE-50)): in the plain frame and not in the files state, and a panel drawn over it
+takes the press first ([MOUSE-45](#MOUSE-45)). As for every click, the press and the release are on
+one cell and the press is a single click. The pointer over it is held ([MOUSE-51](#MOUSE-51)), and the
+row of hints says what a click does.
+
+**Why.** The face already blinks and looks around by itself, so a person who points at it expects it
+to answer. The click shows nothing that the schedule does not, so it gives no one a way to read or
+change anything else.
+
+`verified-by: bravebot_tui::app::tests::clicks::a_click_on_any_cell_of_the_face_blinks_it_and_the_next_one_makes_it_glance`
+`verified-by: bravebot_tui::app::tests::clicks::a_click_beside_the_face_or_on_the_mark_does_not_move_it`
+`verified-by: bravebot_tui::app::tests::clicks::the_face_is_a_target_only_on_the_opening_screen`
+`verified-by: bravebot_tui::avatar::a_click_makes_the_face_blink_and_the_next_one_glance_for_a_moment`
+`verified-by: bravebot_tui::avatar::a_click_does_nothing_where_no_motion_is_asked_for`
+`verified-by: bravebot_tui::avatar::look_now_shows_a_click_at_once`
 `verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
 `verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
 `verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`

@@ -207,6 +207,13 @@ pub(super) fn targets() -> Vec<Target> {
             jump::returned_to_the_tail,
         ),
         Target::plain(
+            "the face on the opening screen",
+            located_on_the_face,
+            // A click that acted redraws the face. The thread's record of a click is not read here,
+            // since it would carry one session's click into another's check.
+            |_, action| matches!(action, Action::Redraw),
+        ),
+        Target::plain(
             "a place in the text of the box",
             || {
                 let mut session = typed_into("a line of words to click in");
@@ -452,6 +459,23 @@ pub(super) fn targets() -> Vec<Target> {
             |_, action| matches!(action, Action::OpenUrl(_)),
         ),
     ]
+}
+
+/// The opening screen drawn 120 columns by 24 rows, with the face nobody has clicked, and the cell
+/// of the first row of the face that a click finds as the face.
+pub(super) fn located_on_the_face() -> (Session, (u16, u16)) {
+    crate::avatar::reset_pokes();
+    let mut session = Session::new("none");
+    let buffer = drawn(&mut session);
+    let cell = (0..buffer.area.height)
+        .flat_map(|row| (0..buffer.area.width).map(move |column| (row, column)))
+        .find(|&(row, column)| {
+            session
+                .target_at(row, column)
+                .is_some_and(|target| target.hit == crate::state::Hit::Face)
+        })
+        .expect("the opening screen drew no face");
+    (session, cell)
 }
 
 /// A session, 120 columns wide, whose write calls changed `a.rs` `edits` times and then `b.rs` once.

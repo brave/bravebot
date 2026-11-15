@@ -4623,6 +4623,7 @@ hover-item = cliquer pour choisir celui-ci, cliquer encore pour le prendre
 hover-scrollbar = cliquer pour amener la vue ici, glisser le curseur pour défiler
 hover-pinned = cliquer pour aller à cette invite
 hover-to-tail = cliquer pour revenir aux dernières lignes
+hover-face = cliquer pour le faire cligner des yeux ou regarder ailleurs
 
 # Le petit menu qu'un clic droit ouvre sur une réponse, le bloc d'un délégué ou une sélection tenue.
 # Un mot ou une courte expression par entrée, et chacune fait ce que fait la commande ou le clic
