@@ -4636,6 +4636,9 @@ paste-files-refused =
     a copied file's name is not text or holds a line break, so none of the files were pasted
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
+# Said when Enter is pressed mid-turn on a line that begins with `!`. The line stays in the box.
+shell-mode-idle-only =
+    shell mode is available at an idle prompt only, so this line was not sent: it stays in the box
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
 suspend-not-pressed =

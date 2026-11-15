@@ -36,7 +36,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [pasting.md](pasting.md) | `PASTE` | 12 | what Ctrl-V puts into a turn, text, a picture or a copied file, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 12 | what dragging a file onto a window puts into a turn, and on what footing |
 | [deep-links.md](deep-links.md) | `LINK` | 6 | a `bravebot://open` link: what it may ask for, where it starts, and why its words are put in the box and not sent |
-| [shell-mode.md](shell-mode.md) | `SHELL` | 7 | the `!` prompt: a line the user typed, and why the planner can never reach it |
+| [shell-mode.md](shell-mode.md) | `SHELL` | 8 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
 | [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
 | [skill-evals.md](skill-evals.md) | `SKILLEVAL` | 9 | `bravebot skill eval <name>`: a skill's saved cases run with the skill and without it, graded from the driver's own record of each run, and the two scores set side by side |

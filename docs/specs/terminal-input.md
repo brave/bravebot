@@ -421,7 +421,7 @@ named here and nowhere else:
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
 | Ctrl-P | does nothing, since the exchange the rewrite is asked over belongs to the turn (INPUT-48) |
-| `!` | arms a mode that changes what Enter does, over whatever the box holds when the turn ends ([shell-mode.md](shell-mode.md)) |
+| `!` | arms nothing mid-turn and is typed as a character; Enter on a line that begins with it is held in the box with a note ([shell-mode.md](shell-mode.md#SHELL-8)), and a mode armed before the turn began keeps its line waiting ([shell-mode.md](shell-mode.md#SHELL-6)) |
 | Up | takes back what is waiting before it walks the history (INPUT-18) |
 
 **What is offered beneath the box while work runs is the commands and the list of keys.** A line

@@ -196,6 +196,31 @@ everything above is void.
 `verified-by: bravebot_agent::tools::no_shell_is_offered`
 `verified-by: bravebot_agent::turn::a_shell_the_planner_names_is_not_dispatched`
 
+<a id="SHELL-8"></a>
+### SHELL-8: Enter mid-turn on a line that begins with `!` holds the line in the box
+
+The mode is armed at an idle prompt only, so a `!` typed or pasted while a turn runs is a character
+in the line. Enter on a line whose first character after any leading white space is `!`, in one or
+two of them, queues nothing and sends nothing: the line stays in the box as it was typed, and a note
+says shell mode is available at an idle prompt only. Ctrl-Enter is held the same way and stops
+nothing. Nothing is put in the planner's interjection buffer, so the next round of the turn does
+not carry the line and nothing is recorded as something the person said. A line armed before the
+turn began is [SHELL-6](#SHELL-6)'s and is not held. A line the planner wrote, the `/handoff` brief
+and the enhanced line, is answered by the arms that own it and is never read for a `!`. A `!` after
+the first character is an ordinary character and the line is queued as any prompt is.
+
+**Why.** Queueing puts the line into the buffer the planner reads at once, so a line written as a
+command, and for `!!` meant to stay private, would reach the model as a sentence, once for each
+press, and the model could run it itself. The line cannot be queued as a command, since a typed
+bang and a pasted one are the same characters in the box and only a keystroke may arm the mode
+([SHELL-4](#SHELL-4)). Holding the line loses nothing: Enter at rest sends it as words, as it does
+for a pasted line.
+
+`verified-by: bravebot_tui::app::a_bang_line_pressed_mid_turn_is_held_and_never_interjected`
+`verified-by: bravebot_tui::app::ctrl_enter_on_a_bang_line_mid_turn_neither_queues_it_nor_stops_the_turn`
+`verified-by: bravebot_tui::app::a_line_with_a_bang_after_its_first_character_is_still_queued`
+`verified-by: bravebot_tui::app::shell_mode_cannot_be_entered_while_a_turn_runs`
+
 ## Known costs
 
 - **The rows drawn while a command runs are drawn before the gate has run.** A change that made

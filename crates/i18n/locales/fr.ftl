@@ -3741,6 +3741,8 @@ paste-files-refused =
     le nom d'un fichier copié n'est pas du texte ou contient un saut de ligne : aucun fichier n'a été collé
 return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
+shell-mode-idle-only =
+    le mode shell n'est disponible que sur une invite au repos, donc cette ligne n'a pas été envoyée : elle reste dans la zone de saisie
 leave-not-pressed =
     cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour quitter
 suspend-not-pressed =

@@ -1764,6 +1764,19 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return Action::None;
     }
 
+    // A line that begins with `!` is held in the box, whatever arm below would have queued it. The
+    // mode is armed at an idle prompt only, so a bang in the line mid-turn is a character the person
+    // typed or pasted, and queueing it puts the text into the planner's buffer at once, which is
+    // where a line meant to stay private must not go (SHELL-8). After the arms for the `/handoff`
+    // brief and the enhanced line, which answer those lines and return, so the check reads only
+    // what the person typed or pasted and never a line the planner wrote. Ctrl-Enter is held with
+    // it, so it hurries nothing.
+    if key.code == KeyCode::Enter && !session.shell && session.input().trim_start().starts_with('!')
+    {
+        session.answer_while_working(|session| session.note(t!(shell_mode_idle_only)));
+        return Action::Redraw;
+    }
+
     // Before the arm that queues a command, because these commands need not wait: each reads or
     // changes only what the session keeps for itself, a loop, a goal, a watch, the spend so far, its
     // name, a level or a theme, or what is kept for the next session here, and the turn holds none

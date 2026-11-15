@@ -16452,6 +16452,86 @@ mod tests {
         assert_eq!(session.input(), "!", "the keystroke was dropped");
     }
 
+    /// A line typed `!!` mid-turn is held in the box with a note, for both bang forms and for a
+    /// leading space, pressed twice as the person did. The wrong implementation is the one that
+    /// leaves the line to the generic queueing arm: that copies it into the planner's buffer, and
+    /// the turn then records it as a user message once per press (SHELL-8).
+    #[test]
+    fn a_bang_line_pressed_mid_turn_is_held_and_never_interjected() {
+        for line in ["!!pwd", "!pwd", "  !!pwd"] {
+            let mut session = a_turn_running_on("list the files");
+            type_while_working_without_enter(&mut session, line);
+
+            for press in 0..2 {
+                assert_eq!(
+                    handle_key_while_working(&mut session, key(KeyCode::Enter)),
+                    Action::Redraw,
+                    "{line:?} press {press}"
+                );
+                assert_eq!(session.input(), line, "{line:?} left the box");
+            }
+
+            assert!(!session.shell, "{line:?} armed the mode");
+            assert_eq!(
+                session.queued_ahead(usize::MAX).count(),
+                0,
+                "{line:?} was queued"
+            );
+            assert!(
+                session.interjections().drain().is_empty(),
+                "{line:?} reached the planner's buffer"
+            );
+            session.interjected();
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .all(|entry| entry.speaker != crate::Speaker::User || entry.text != line.trim()),
+                "{line:?} was recorded as something said to the model"
+            );
+            let note = t!(shell_mode_idle_only).to_string();
+            assert_eq!(
+                session
+                    .transcript
+                    .iter()
+                    .filter(|entry| entry.text == note)
+                    .count(),
+                2,
+                "{line:?} did not say each press was refused"
+            );
+        }
+    }
+
+    /// Ctrl-Enter reaches the same arm and hurries nothing: the wrong implementation checks the
+    /// bang only for plain Enter, so the chord queues the line and then stops the turn for it.
+    #[test]
+    fn ctrl_enter_on_a_bang_line_mid_turn_neither_queues_it_nor_stops_the_turn() {
+        let mut session = a_turn_running_on("list the files");
+        type_while_working_without_enter(&mut session, "!!pwd");
+
+        let action = handle_key_while_working(&mut session, ctrl_enter());
+
+        assert_eq!(action, Action::Redraw);
+        assert_eq!(session.input(), "!!pwd");
+        assert_eq!(session.queued_ahead(usize::MAX).count(), 0);
+        assert!(session.interjections().drain().is_empty());
+    }
+
+    /// The hold is for a first character of `!` only. A bang later in the line, a slash word and a
+    /// plain sentence are queued and interjected as before.
+    #[test]
+    fn a_line_with_a_bang_after_its_first_character_is_still_queued() {
+        for line in ["wait! stop", "stop!!"] {
+            let mut session = a_turn_running_on("list the files");
+            type_while_working_without_enter(&mut session, line);
+
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+            assert_eq!(session.queued_ahead(usize::MAX).count(), 1, "{line:?}");
+            assert_eq!(session.interjections().drain(), [line], "{line:?}");
+        }
+    }
+
     /// Enter on a bare marker would run an empty line, which a shell accepts and which would put a
     /// pointless entry in the transcript.
     #[test]
@@ -26350,10 +26430,14 @@ mod tests {
     }
 
     fn type_while_working(session: &mut Session, line: &str) -> Action {
+        type_while_working_without_enter(session, line);
+        handle_key_while_working(session, key(KeyCode::Enter))
+    }
+
+    fn type_while_working_without_enter(session: &mut Session, line: &str) {
         for c in line.chars() {
             handle_key_while_working(session, key(KeyCode::Char(c)));
         }
-        handle_key_while_working(session, key(KeyCode::Enter))
     }
 
     /// What issue #1128 asks for: a word that reads or ends a loop, a goal, a watch or the spend
