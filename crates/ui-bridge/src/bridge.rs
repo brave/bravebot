@@ -180,6 +180,9 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// Whether every session opens asking, whatever the person's `permissions.startInAuto` says. A
+    /// client that cannot leave auto, or answer from it, sets it.
+    opening_in_ask: bool,
     /// The front end the planner is told it runs in (INSTR-9): the desktop application unless a
     /// host that projects this bridge says otherwise, as the editor server does.
     front_end: bravebot_agent::FrontEnd,
@@ -200,6 +203,7 @@ impl Bridge {
             closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
+            opening_in_ask: false,
             sign_ins: crate::accounts::SignIns::default(),
         }
     }
@@ -208,6 +212,14 @@ impl Bridge {
     /// [`Bridge::attach_view`] says who can answer it.
     pub fn refusing_questions_until_set(mut self) -> Self {
         self.refuse_until_set = true;
+        self
+    }
+
+    /// Open every session asking, a new one, an opened one and a fork, where the person's own
+    /// `permissions.startInAuto` would open it in auto (AUTO-1). For a client that is offered no way
+    /// out of auto, so a session never opens in a mode it cannot leave (ACP-7, HOST-2).
+    pub fn opening_in_ask(mut self) -> Self {
+        self.opening_in_ask = true;
         self
     }
 
@@ -697,10 +709,14 @@ impl Bridge {
     }
 
     /// The mode a session opened in `project` starts in: auto where the person's own settings say
-    /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1). A checkout's file and the
-    /// managed file are not read for it, and nothing a request carries chooses it, which is what
-    /// `session.mode` is for once the session is open.
+    /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
+    /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
+    /// read for it, and nothing a request carries chooses it, which is what `session.mode` is for
+    /// once the session is open.
     fn opening_mode(&self, project: &std::path::Path) -> PermissionMode {
+        if self.opening_in_ask {
+            return PermissionMode::Ask;
+        }
         match crate::settings::layers(Some(project), self.settings.as_deref()).start_in_auto() {
             true => PermissionMode::Auto,
             false => PermissionMode::Ask,

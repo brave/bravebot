@@ -51,8 +51,8 @@ Only the boolean `true` opens a session in auto: `false`, a quoted `"true"`, a n
 outside the `permissions` block leave a session asking, and none of them is reported. A mode flag on
 the line wins over the setting ([MODE-5](permission-modes.md#MODE-5)).
 
-A session an editor opens over ACP and one a local-host client opens are put back to asking right
-after `session.new`, because neither can leave auto ([ACP-7](acp.md#ACP-7), [HOST-2](local-host.md#HOST-2)).
+The bridge behind an editor's ACP server and the one behind the local host open every session asking, a new
+one, an opened one and a fork, because neither client can leave auto ([ACP-7](acp.md#ACP-7), [HOST-2](local-host.md#HOST-2)).
 A session a `bravebot://open` link starts opens asking whatever the setting says, since the link
 comes from outside the person's own typing ([LINK-2](deep-links.md#LINK-2)). A one-shot run, a scheduled run, a trigger, `skill eval`, a background session, a delegate and the
 plain client do not read the setting. A behavioural test runs

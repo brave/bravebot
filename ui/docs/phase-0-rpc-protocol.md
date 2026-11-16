@@ -1768,8 +1768,8 @@ Still open:
   window selected (AUTO-1); a checkout's copy opens nothing in auto. The reply names the mode the
   session's own handle holds, which is the one its turns run in. A mode is not written to the record
   and a fork does not take its parent's (MODE-10). The key from auto goes to `ask`, since a window has
-  no bypassing. A session opened through ACP or the local host's `session.new` is put to `ask` before
-  it replies, so its `permissionMode` is `ask` (ACP-7, HOST-2).
+  no bypassing. The bridge behind ACP and the one behind the local host open every session in `ask`,
+  so a `session.new` reply from either says `ask` as `permissionMode` (ACP-7, HOST-2).
 - `turn.started` and `manifest.started` carry `mode`, the mode the turn or run started in.
 - `session.sandbox` takes `session` and `mode`, one of `strict`, `read-only` or `workspace-write`, and answers
   `{ sandboxMode }`. `off`, and any other word, is `bad_request`: a window has no line that shows

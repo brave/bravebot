@@ -145,7 +145,8 @@ impl Acp {
         let heard = Arc::clone(&shared);
         let bridge = Bridge::new(Box::new(move |event| on_event(&heard, event)))
             .with_settings(settings)
-            .with_front_end(bravebot_agent::FrontEnd::Editor);
+            .with_front_end(bravebot_agent::FrontEnd::Editor)
+            .opening_in_ask();
         Self { bridge, shared }
     }
 
@@ -291,21 +292,10 @@ impl Acp {
         // directory and asked about before it starts, and an editor's list is neither.
         let made = self.call("session.new", session_params).map_err(failed)?;
         let handle = made["session"].as_str().unwrap_or_default().to_string();
-        // A window's session opens in auto where the person's own settings say so (AUTO-1), and an
-        // editor's modes are asking, accepting edits and planning, so the session is put in the one
-        // the reply below names. The editor is the person who answers its questions (ACP-5), and it
-        // is not offered auto to move back to.
-        // One that cannot be moved is closed and refused, so none stays in auto with an editor that
-        // cannot leave it.
-        if let Err(refused) = self.call("session.mode", json!({ "session": handle, "mode": "ask" }))
-        {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "the session is being refused, so a close that fails leaves nothing more to report"
-            )]
-            let _ = self.call("session.close", json!({ "session": handle }));
-            return Err(failed(refused));
-        }
+        // The bridge opens the session asking, where the person's own settings would open a
+        // window's in auto (AUTO-1). An editor's modes are asking, accepting edits and planning, the
+        // editor is the person who answers its questions (ACP-5), and it is not offered auto to move
+        // back to.
         let mut shared = self.lock();
         shared.sessions.insert(
             handle.clone(),
