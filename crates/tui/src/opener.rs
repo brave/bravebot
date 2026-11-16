@@ -2801,13 +2801,18 @@ mod tests {
     ///
     /// Asserted: a handler written with the helper's own path runs it through the opener's start,
     /// so a helper that does not run under a name is not a registration that cannot run; and for
-    /// each of the ten names the opener's start with that name set to the stage's directory does
-    /// not run the helper. Printed and not asserted, because the answer is what `rundll32` does and
-    /// not what the opener decides: for each name, whether the handler written with the helper's
-    /// own path still runs it with the name removed (that the start works without the name), and
-    /// for each value type whether the helper ran when the name was put back on the command, which
-    /// is the name selecting the program. `rundll32` shows a message box when a command cannot be
-    /// started, so each child waits for it at most [`WINDOWS_START_DEADLINE`].
+    /// each of the nine names other than `PATHEXT` the opener's start with that name set to the
+    /// stage's directory does not run the helper.
+    ///
+    /// Printed and not asserted: `PATHEXT` and `PSModulePath`. The `PATHEXT` handler names the
+    /// helper by a path in the stage's directory, and `rundll32` reaches that helper with `PATHEXT`
+    /// removed and with it put back, so no start that removes `PATHEXT` keeps it from running.
+    /// For every name the printed lines are the answer to what `rundll32` does, which the opener
+    /// does not decide: whether the handler written with the helper's own path still runs with the
+    /// name removed (that the start works without the name), and for each value type whether the
+    /// helper ran when the name was put back on the command, which is the name selecting the
+    /// program. `rundll32` shows a message box when a command cannot be started, so each child
+    /// waits for it at most [`WINDOWS_START_DEADLINE`].
     ///
     /// The regression it rejects: a name that a handler's command expands, dropped from
     /// [`CODE_SELECTORS`] or not removed under the case the environment holds it in, so the
@@ -2918,7 +2923,7 @@ mod tests {
                 println!(
                     "{kind} handler expanding {name}: the opener's start ran the helper {ran_checked}, with {name} put back it ran the helper {ran_put_back}"
                 );
-                if *name != "PSModulePath" {
+                if *name != "PSModulePath" && *name != "PATHEXT" {
                     assert!(
                         !ran_checked,
                         "the opener's start ran a helper a {kind} handler reached through {name}: {checked}"

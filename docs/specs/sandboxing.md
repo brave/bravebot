@@ -5804,7 +5804,10 @@ shown by running the program, or not entirely:
   in a directory a stage may write. It starts the opener's `rundll32` through the address of that
   scheme in a child run of the test binary, with the name set to that directory. It asserts that a
   handler written with the helper's own path runs it through the opener's start, and that the
-  start with each of the ten names set does not run the helper. It prints, for each of the ten
+  start with each of the nine names other than `PATHEXT` set does not run the helper. The
+  `PATHEXT` handler names the helper by a path in the stage's directory, and on the Windows
+  Server 2025 runner `rundll32` ran it with `PATHEXT` removed and with it put back, so the
+  test prints that case and does not assert it. It prints, for each of the ten
   names and `PSModulePath`, whether the helper ran with the name removed and with it put back on
   the command, and whether it ran when the handler is written with the helper's own path and the
   name is removed. The put-back result says which names select the program. #3822 owns the rest of the opener list.
