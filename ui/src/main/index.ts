@@ -651,6 +651,7 @@ const ALLOWED = new Set([
   'ask.reply',
   'trust.reply',
   'rules.reply',
+  'folder.reply',
   'permissions.list',
   'permissions.revoke',
   'doctor',

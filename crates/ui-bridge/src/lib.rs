@@ -54,6 +54,7 @@ pub mod definitions;
 pub mod effort;
 pub mod emit;
 pub mod enhance;
+mod folders;
 pub mod fork;
 pub mod help;
 pub mod hooks;

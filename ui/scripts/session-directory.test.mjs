@@ -83,7 +83,11 @@ const TAKES_NO_DIRECTORY = [
   'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
-  'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'permissions.list', 'permissions.revoke',
+  'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'rules.reply',
+  // Opens the folder the bridge resolved from the checkout's settings and put in its question; the
+  // window names only the question it answers.
+  'folder.reply',
+  'permissions.list', 'permissions.revoke',
   'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
   'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',

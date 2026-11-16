@@ -1,5 +1,6 @@
 //! The questions a desktop session puts once its trust question is answered (PERM-15): one about
-//! the `allow` rules the checkout proposed that the grant record does not already hold.
+//! the `allow` rules the checkout proposed that the grant record does not already hold, then one
+//! about each directory its settings name (TRUST-9).
 //!
 //! Each test runs in a profile of its own, since a yes is written to the grant record under it.
 
@@ -339,6 +340,16 @@ fn work_is_refused_until_the_rules_are_answered() {
 /// A session with a written record, in `project`, with the trust its map holds and the question
 /// about the rules out, as one opened before the person answered.
 fn a_parent_asking(bridge: &mut Bridge, project: &Path) -> String {
+    a_recorded_session(bridge, project, bravebot_agent::opening::Whence::Asked)
+}
+
+/// A session with a written record, in `project`, with the trust its map holds, its questions
+/// settled as a session that came to its trust answer by `whence` settles them.
+fn a_recorded_session(
+    bridge: &mut Bridge,
+    project: &Path,
+    whence: bravebot_agent::opening::Whence,
+) -> String {
     let mut conversation = bravebot_agent::Conversation::new();
     conversation.push(bravebot_aichat::protocol::Message::user("work"));
     let record: Record = serde_json::from_value(json!({
@@ -359,7 +370,7 @@ fn a_parent_asking(bridge: &mut Bridge, project: &Path) -> String {
     ));
     bridge.open.get_mut(&parent).unwrap().questions =
         Questions::Unsettled(Box::new(crate::settings::layers(Some(project), None)));
-    bridge.settle_questions(&parent, bravebot_agent::opening::Whence::Asked);
+    bridge.settle_questions(&parent, whence);
     parent
 }
 
@@ -459,7 +470,10 @@ fn a_bridge_not_putting_the_questions_grants_nothing_and_asks_nothing() {
     if !test_profile::in_isolated_profile() {
         return;
     }
-    let project = proposing("not-putting", &[THE_RULE]);
+    let (project, beside, _) = naming(
+        "not-putting",
+        json!({"allow": [THE_RULE], "additionalDirectories": ["../not-putting-beside"]}),
+    );
     let (bridge, events) = hearing();
     let mut bridge = bridge.not_putting_project_questions();
     let opened = call(&mut bridge, "session.new", json!({"directory": project})).unwrap();
@@ -483,4 +497,313 @@ fn a_bridge_not_putting_the_questions_grants_nothing_and_asks_nothing() {
     )
     .expect_err("an answer to a question never put");
     assert_eq!(refused.code, ErrorCode::NoSuchRequest);
+    assert!(settled.get("folderQuestion").is_none(), "{settled}");
+    assert!(sent(&events, "folder.request").is_empty());
+    assert_eq!(holds(&bridge, &session, &beside), (vec![], false));
+    let refused = call(
+        &mut bridge,
+        "folder.reply",
+        json!({"session": session, "request": 1, "open": true}),
+    )
+    .expect_err("an answer to a question never put");
+    assert_eq!(refused.code, ErrorCode::NoSuchRequest);
+}
+
+/// A project whose checkout writes `permissions`, and two directories beside it.
+fn naming(name: &str, permissions: Value) -> (PathBuf, PathBuf, PathBuf) {
+    let project = test_profile::project(name);
+    std::fs::create_dir_all(project.join(".bravebot")).unwrap();
+    let beside = project.parent().unwrap().join(format!("{name}-beside"));
+    let other = project.parent().unwrap().join(format!("{name}-other"));
+    std::fs::create_dir_all(&beside).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(
+        project.join(".bravebot/settings.json"),
+        json!({ "permissions": permissions }).to_string(),
+    )
+    .unwrap();
+    (
+        project.canonicalize().unwrap(),
+        beside.canonicalize().unwrap(),
+        other.canonicalize().unwrap(),
+    )
+}
+
+fn shown(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn answer_folder(bridge: &mut Bridge, session: &str, question: &Value, open: bool) -> Value {
+    call(
+        bridge,
+        "folder.reply",
+        json!({"session": session, "request": question["request"], "open": open}),
+    )
+    .unwrap()
+}
+
+/// What the session holds open beside its project, and whether its map vouches for `directory`.
+fn holds(bridge: &Bridge, session: &str, directory: &Path) -> (Vec<PathBuf>, bool) {
+    let state = bridge.open[session].state.lock().unwrap();
+    let vouched = state
+        .answers
+        .trust
+        .is_trusted(&bravebot_agent::workspace::key_of(
+            &directory.join("notes.md"),
+        ));
+    (state.directories.clone(), vouched)
+}
+
+/// TRUST-9: each directory a settings file names is its own question, put after the trust
+/// question, one at a time: a yes to one opens that one and no other, and a no leaves it closed.
+/// Nothing runs while one is out, and the one not opened is still reported as named.
+#[test]
+fn each_named_directory_is_asked_about_on_its_own() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, other) = naming(
+        "each-named",
+        json!({"additionalDirectories": ["../each-named-beside", "../each-named-other"]}),
+    );
+    let (mut bridge, events) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    assert_eq!(settled["rulesQuestion"], Value::Null, "{settled}");
+    assert_eq!(settled["foldersRefused"], json!([]), "{settled}");
+    let first = settled["folderQuestion"].clone();
+    assert_eq!(first["directory"], json!(shown(&beside)), "{first}");
+    assert_eq!(first["named"], json!(["../each-named-beside"]), "{first}");
+    assert_eq!(first["remaining"], 1, "{first}");
+    assert_eq!(
+        sent(&events, "folder.request"),
+        std::slice::from_ref(&first)
+    );
+    let refused = bridge.open[&session].ready_for_work().unwrap_err();
+    assert!(
+        refused.message.contains("folder.reply"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(holds(&bridge, &session, &beside), (vec![], false));
+
+    let answered = answer_folder(&mut bridge, &session, &first, true);
+    assert_eq!(answered["opened"], true, "{answered}");
+    assert_eq!(answered["folder"], json!(shown(&beside)), "{answered}");
+    assert_eq!(answered["folders"], json!([shown(&beside)]), "{answered}");
+    let second = answered["folderQuestion"].clone();
+    assert_eq!(second["directory"], json!(shown(&other)), "{second}");
+    assert_eq!(second["remaining"], 0, "{second}");
+    assert_ne!(second["request"], first["request"]);
+    assert_eq!(sent(&events, "folder.request").last(), Some(&second));
+    assert!(bridge.open[&session].ready_for_work().is_err());
+    // The first answer cannot be given again.
+    let repeated = call(
+        &mut bridge,
+        "folder.reply",
+        json!({"session": session, "request": first["request"], "open": false}),
+    )
+    .expect_err("a repeated answer");
+    assert_eq!(repeated.code, ErrorCode::NoSuchRequest);
+
+    let answered = answer_folder(&mut bridge, &session, &second, false);
+    assert_eq!(answered["opened"], false, "{answered}");
+    assert_eq!(answered["folders"], json!([shown(&beside)]), "{answered}");
+    assert_eq!(answered["folderQuestion"], Value::Null, "{answered}");
+    assert!(bridge.open[&session].ready_for_work().is_ok());
+    assert_eq!(
+        holds(&bridge, &session, &beside),
+        (vec![beside.clone()], true)
+    );
+    assert_eq!(
+        holds(&bridge, &session, &other),
+        (vec![beside.clone()], false)
+    );
+
+    // The workspace a turn is given reaches the one accepted and not the one declined.
+    let open = &bridge.open[&session];
+    let settings = crate::settings::layers(Some(&project), None);
+    let workspace = session_workspace(open, &settings).unwrap();
+    assert_eq!(workspace.added_directories(), std::slice::from_ref(&beside));
+    let listed = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
+    assert_eq!(
+        listed["settingsRules"]["directories"],
+        json!(["../each-named-other"]),
+        "{listed}"
+    );
+}
+
+/// The directories are asked about after the rules, whatever the rules were answered.
+#[test]
+fn the_named_directories_are_asked_about_after_the_rules() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, _) = naming(
+        "after-the-rules",
+        json!({"allow": [THE_RULE], "additionalDirectories": ["../after-the-rules-beside"]}),
+    );
+    let (mut bridge, events) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    assert_eq!(settled["folderQuestion"], Value::Null, "{settled}");
+    assert!(sent(&events, "folder.request").is_empty());
+    let answered = reply(&mut bridge, &session, &settled["rulesQuestion"], false);
+    let folder = &answered["folderQuestion"];
+    assert_eq!(folder["directory"], json!(shown(&beside)), "{answered}");
+    assert_eq!(
+        sent(&events, "folder.request"),
+        std::slice::from_ref(folder)
+    );
+    assert!(bridge.open[&session].ready_for_work().is_err());
+    answer_folder(&mut bridge, &session, folder, true);
+    assert!(bridge.open[&session].ready_for_work().is_ok());
+}
+
+/// A name that cannot be opened at all, one that does not exist or one inside the project, is
+/// reported with why and not asked about. A path two names reach is asked about once.
+#[test]
+fn a_name_that_cannot_be_opened_is_reported_and_not_asked_about() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, _) = naming(
+        "cannot-open",
+        json!({"additionalDirectories": [
+            "../cannot-open-nowhere", ".bravebot", "../cannot-open-beside",
+            "../cannot-open/../cannot-open-beside"
+        ]}),
+    );
+    let (mut bridge, events) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    let refused = settled["foldersRefused"].as_array().unwrap();
+    let names: Vec<_> = refused.iter().map(|entry| &entry["directory"]).collect();
+    assert_eq!(names, ["../cannot-open-nowhere", ".bravebot"], "{settled}");
+    assert!(
+        refused.iter().all(|entry| entry["problem"]
+            .as_str()
+            .is_some_and(|said| !said.is_empty())),
+        "{settled}"
+    );
+    let question = &settled["folderQuestion"];
+    assert_eq!(question["directory"], json!(shown(&beside)), "{settled}");
+    assert_eq!(
+        question["named"],
+        json!([
+            "../cannot-open-beside",
+            "../cannot-open/../cannot-open-beside"
+        ])
+    );
+    assert_eq!(question["remaining"], 0);
+    assert_eq!(sent(&events, "folder.request").len(), 1);
+    let answered = answer_folder(&mut bridge, &session, question, true);
+    assert_eq!(answered["folders"], json!([shown(&beside)]), "{answered}");
+    let listed = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
+    assert_eq!(
+        listed["settingsRules"]["directories"],
+        json!(["../cannot-open-nowhere", ".bravebot"]),
+        "{listed}"
+    );
+}
+
+/// A session resumed from a record that carries its map asks nothing, about the rules or the
+/// directories: the ones it has open are the ones its own record reopened.
+#[test]
+fn a_resumed_session_asks_nothing() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, _) = naming(
+        "resumed-asks",
+        json!({"allow": [THE_RULE], "additionalDirectories": ["../resumed-asks-beside"]}),
+    );
+    let (mut bridge, events) = hearing();
+    let session = a_recorded_session(
+        &mut bridge,
+        &project,
+        bravebot_agent::opening::Whence::Resumed,
+    );
+    assert!(sent(&events, "rules.request").is_empty());
+    assert!(sent(&events, "folder.request").is_empty());
+    assert!(bridge.open[&session].ready_for_work().is_ok());
+    assert!(!allows(&bridge, &session, "example.test"));
+    assert_eq!(holds(&bridge, &session, &beside), (vec![], false));
+}
+
+/// Bypass answers the directories as it answers everything: each is opened with nothing put.
+#[test]
+fn bypass_opens_the_named_directories_unasked() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, other) = naming(
+        "bypass-opens",
+        json!({"additionalDirectories": ["../bypass-opens-beside", "../bypass-opens-other"]}),
+    );
+    let (mut bridge, events) = hearing();
+    let opened = call(&mut bridge, "session.new", json!({"directory": project})).unwrap();
+    let session = opened["session"].as_str().unwrap().to_string();
+    bridge.open[&session]
+        .permission_mode
+        .set(PermissionMode::Bypass);
+    let settled = call(
+        &mut bridge,
+        "trust.reply",
+        json!({"session": session, "trusted": true}),
+    )
+    .unwrap();
+    assert_eq!(settled["folderQuestion"], Value::Null, "{settled}");
+    assert!(sent(&events, "folder.request").is_empty());
+    assert_eq!(
+        holds(&bridge, &session, &beside),
+        (vec![beside.clone(), other.clone()], true)
+    );
+    assert!(bridge.open[&session].state.lock().unwrap().answered_by_mode);
+    assert_eq!(
+        settled["settingsRules"]["directories"],
+        json!([]),
+        "{settled}"
+    );
+    assert!(bridge.open[&session].ready_for_work().is_ok());
+}
+
+/// A fork takes over a directory question its parent had not answered, under an id of its own,
+/// and what the child opens the parent does not.
+#[test]
+fn a_fork_takes_over_the_directory_question() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, _) = naming(
+        "fork-folder",
+        json!({"additionalDirectories": ["../fork-folder-beside"]}),
+    );
+    let (mut bridge, events) = hearing();
+    let parent = a_parent_asking(&mut bridge, &project);
+    let asked = sent(&events, "folder.request");
+    let [parents] = asked.as_slice() else {
+        panic!("{asked:?}");
+    };
+    let forked = call(
+        &mut bridge,
+        "session.fork",
+        json!({"session": parent, "prompt": 0, "text": "work"}),
+    )
+    .unwrap();
+    let child = forked["session"].as_str().unwrap().to_string();
+    let question = forked["folderQuestion"].clone();
+    assert_eq!(question["directory"], json!(shown(&beside)), "{forked}");
+    assert_ne!(question["request"], parents["request"]);
+    let stale = call(
+        &mut bridge,
+        "folder.reply",
+        json!({"session": child, "request": parents["request"], "open": true}),
+    )
+    .expect_err("the parent's id answered the child's question");
+    assert_eq!(stale.code, ErrorCode::NoSuchRequest);
+    answer_folder(&mut bridge, &child, &question, true);
+    assert_eq!(
+        holds(&bridge, &child, &beside),
+        (vec![beside.clone()], true)
+    );
+    assert_eq!(holds(&bridge, &parent, &beside), (vec![], false));
+    assert!(bridge.open[&parent].ready_for_work().is_err());
 }

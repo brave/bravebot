@@ -105,8 +105,11 @@ struct Open {
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
     /// The questions put once the trust question is answered, about what the checkout's settings
-    /// ask for (PERM-15). A turn is refused while one is waiting.
+    /// ask for (PERM-15, TRUST-9). A turn is refused while one is waiting.
     questions: Questions,
+    /// The names in `additionalDirectories` that cannot be opened at all, which are reported
+    /// rather than asked about.
+    refused_folders: Vec<crate::project_questions::Refused>,
 }
 
 impl Open {
@@ -135,6 +138,7 @@ impl Open {
             enhancing: None,
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
+            refused_folders: Vec::new(),
         }
     }
 
@@ -404,6 +408,7 @@ impl Bridge {
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
             "rules.reply" => self.reply_rules(request),
+            "folder.reply" => self.reply_folder(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
             "settings.inspect" => Ok(crate::settings::report(
@@ -714,12 +719,17 @@ impl Bridge {
     }
 
     /// Settle the questions the session opened as `handle` puts once its trust question is answered,
-    /// where it is: the proposed `allow` rules the record does not already grant (PERM-15).
+    /// where it is: the proposed `allow` rules the record does not already grant (PERM-15), then
+    /// each directory named in `additionalDirectories`, one at a time (TRUST-9).
     ///
     /// `whence` is where the answer came from. Bypass answers in its place, as it does in the
-    /// terminal. A session settled already, or still waiting on the trust question, is left as it is.
+    /// terminal, and opens the named directories unasked. A resumed session opens none: the ones it
+    /// has open are the ones its record reopened. A session settled already, or still waiting on
+    /// the trust question, is left as it is.
     fn settle_questions(&mut self, handle: &str, whence: bravebot_agent::opening::Whence) {
-        use bravebot_agent::opening::{Whence, mode_answers, rules_to_grant};
+        use bravebot_agent::opening::{
+            Named, Whence, mode_answers, named_directories, rules_to_grant,
+        };
         let Some(open) = self.open.get_mut(handle) else {
             return;
         };
@@ -755,14 +765,45 @@ impl Bridge {
             // What the mode granted is the mode's, and the record says so (MODE-4).
             state.answered_by_mode |= whence == Whence::Unasked && !question.granted.is_empty();
         }
+
+        // Resolved now, before anything is asked, so what is asked about is what a yes opens.
+        let (names, unasked) = match named_directories(
+            whence,
+            bravebot_agent::permissions::additional_directories(&settings),
+        ) {
+            Named::Opening(names) => (names, true),
+            Named::Asking(names) => (names, false),
+        };
+        let (mut folders, refused) = match workspace_of(open, &settings, |state| state.lock().ok())
+        {
+            Ok(workspace) if !names.is_empty() => {
+                crate::project_questions::named_folders(&workspace, &names)
+            }
+            _ => Default::default(),
+        };
+        open.refused_folders = refused;
+        if unasked {
+            let mut opened_any = false;
+            for folder in folders.drain(..) {
+                match open_named_folder(open, &settings, &folder) {
+                    Ok(_) => opened_any = true,
+                    Err(problem) => open.refused_folders.push(problem),
+                }
+            }
+            if let Ok(mut state) = open.state.lock() {
+                state.answered_by_mode |= whence == Whence::Unasked && opened_any;
+            }
+        }
+
         open.questions = if question.needs_asking() {
             Questions::Rules {
                 request: crate::project_questions::take(&mut self.project_questions),
                 question,
                 settings,
+                folders,
             }
         } else {
-            Questions::Settled
+            Questions::next_folder(folders, settings, &mut self.project_questions)
         };
         self.put_question(handle);
     }
@@ -776,6 +817,11 @@ impl Bridge {
         if !rules.is_null() {
             self.emitter
                 .send(Event::new("rules.request", handle, rules));
+        }
+        let folder = open.questions.folder_json();
+        if !folder.is_null() {
+            self.emitter
+                .send(Event::new("folder.request", handle, folder));
         }
     }
 
@@ -796,6 +842,8 @@ impl Bridge {
             .unwrap_or(Value::Null);
         json!({
             "rulesQuestion": open.questions.rules_json(&open.project),
+            "folderQuestion": open.questions.folder_json(),
+            "foldersRefused": crate::project_questions::refused_json(&open.refused_folders),
             "settingsRules": rules,
         })
     }
@@ -1085,6 +1133,7 @@ impl Bridge {
         // A question the parent has not answered is the child's to answer, since the child carries
         // on the same session and is refused turns until it is.
         let questions = open.questions.clone();
+        let refused_folders = open.refused_folders.clone();
 
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
@@ -1219,6 +1268,7 @@ impl Bridge {
         let settings_rules = self.open_under_rules(&child, Some(inherited));
         if let Some(open) = self.open.get_mut(&child) {
             open.questions = questions.renumbered(&mut self.project_questions);
+            open.refused_folders = refused_folders;
         }
         self.put_question(&child);
         // A parent still waiting on the trust question hands down the questions after it too, which
@@ -2558,7 +2608,10 @@ impl Bridge {
             ));
         }
         let Questions::Rules {
-            question, settings, ..
+            question,
+            settings,
+            folders,
+            ..
         } = std::mem::take(&mut open.questions)
         else {
             unreachable!("matched above");
@@ -2587,10 +2640,81 @@ impl Bridge {
         );
         let rules = state.answers.rules.json();
         drop(state);
+        // The directories the files named are asked about next, whatever the answer was: a no to
+        // the rules is not a no to a directory.
+        open.questions = Questions::next_folder(folders, settings, &mut self.project_questions);
+        let folder = open.questions.folder_json();
+        self.put_question(&handle);
         Ok(json!({
             "granted": granted,
             "kept": kept,
             "settingsRules": rules,
+            "folderQuestion": folder,
+        }))
+    }
+
+    /// Record what the person answered to the question about one directory a settings file named
+    /// (TRUST-9). A yes opens it on the terms `/add-dir` opens one, for this session: reachable,
+    /// vouched for, and kept in the session's record. A no leaves it closed. Either way the next
+    /// named directory is asked about. A reply to a question that is not out is refused.
+    fn reply_folder(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let id = request.number("request")?;
+        let yes = request
+            .params
+            .get("open")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| Failure::bad_request("`open` must be a boolean"))?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if !matches!(open.questions, Questions::Folder { request, .. } if request == id) {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                format!("request {id} is not waiting for an answer"),
+            ));
+        }
+        let Questions::Folder {
+            folder,
+            rest,
+            settings,
+            ..
+        } = std::mem::take(&mut open.questions)
+        else {
+            unreachable!("matched above");
+        };
+        let mut problem = Value::Null;
+        let opened = yes
+            && match open_named_folder(open, &settings, &folder) {
+                Ok(_) => true,
+                Err(refused) => {
+                    problem = json!(refused.problem);
+                    open.refused_folders.push(refused);
+                    false
+                }
+            };
+        let folders: Vec<String> = open
+            .state
+            .lock()
+            .map(|state| {
+                state
+                    .directories
+                    .iter()
+                    .map(|directory| directory.display().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        open.questions = Questions::next_folder(rest, settings, &mut self.project_questions);
+        let next = open.questions.folder_json();
+        self.put_question(&handle);
+        Ok(json!({
+            "opened": opened,
+            "folder": folder.directory,
+            "shownFolder": bravebot_agent::confirm::shown_path(Path::new(&folder.directory)),
+            "problem": problem,
+            "folders": folders,
+            "folderQuestion": next,
         }))
     }
 
@@ -3302,6 +3426,35 @@ fn workspace_of(
         let _ = workspace.add_directory(&directory.display().to_string());
     }
     Ok(workspace)
+}
+
+/// Open a directory the settings files named, which the person (or the mode) said yes to, in the
+/// session `open`, on the terms `/add-dir` opens one (TRUST-9). The names that reached it are no
+/// longer reported as not opened. A directory that cannot be opened now, one deleted since it was
+/// asked about, is refused with why.
+fn open_named_folder(
+    open: &Open,
+    settings: &Settings,
+    folder: &crate::project_questions::Named,
+) -> Result<PathBuf, crate::project_questions::Refused> {
+    let refused = |problem: String| crate::project_questions::Refused {
+        name: folder.directory.clone(),
+        problem,
+    };
+    let mut workspace =
+        workspace_of(open, settings, |state| state.lock().ok()).map_err(|f| refused(f.message))?;
+    let mut state = open
+        .state
+        .lock()
+        .map_err(|_| refused("session state is poisoned".to_string()))?;
+    let added = crate::folders::open_folder(&mut workspace, &mut state, &folder.directory)
+        .map_err(|problem| refused(problem.to_string()))?;
+    state
+        .answers
+        .rules
+        .directories
+        .retain(|name| !folder.names.contains(name));
+    Ok(added)
 }
 
 /// `workspace`, the one a turn is about to run in, given the checkouts the session keeps, or

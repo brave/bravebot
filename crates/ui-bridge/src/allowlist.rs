@@ -230,6 +230,7 @@ pub const DENIED: &[&str] = &[
     // sessions put none of them (`Bridge::not_putting_project_questions`), so there is nothing to
     // answer.
     "rules.reply",
+    "folder.reply",
 ];
 
 fn refused(message: String) -> Failure {

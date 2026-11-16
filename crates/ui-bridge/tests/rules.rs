@@ -780,3 +780,122 @@ fn a_fork_runs_under_the_rules_its_parent_opened_under() {
     );
     assert!(!run.reached_the_site());
 }
+
+/// A session whose checkout names a directory beside the project, and whose planner writes a
+/// file there. Returns the directory, as the session is asked about it, and the question.
+fn naming_a_folder(name: &str) -> (Scratch, FrontEnd, String, PathBuf, Value) {
+    let scratch = Scratch::new(name);
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&beside).expect("a directory beside the project");
+    scratch.the_checkout_writes(json!({"additionalDirectories": ["../beside"]}));
+    let write = json!({"path": beside.join("notes.md").display().to_string(),
+        "contents": "# Notes\n"});
+    let (endpoint, _rounds) = a_planner_calling("write_file", write);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, rules) = front.session(&scratch);
+    assert_eq!(rules["directories"], json!(["../beside"]), "{rules}");
+    let asked = front.until(|message| message["event"] == "folder.request");
+    assert_eq!(asked["session"], json!(session), "{asked}");
+    assert_eq!(
+        asked["data"]["directory"],
+        json!(beside.display().to_string()),
+        "{asked}"
+    );
+    let refused = front.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("folder.reply")),
+        "a turn started with the folder question out: {refused}"
+    );
+    (scratch, front, session, beside, asked["data"].clone())
+}
+
+/// TRUST-9: a directory a checkout's settings name is opened once the person says yes to it, as
+/// `/add-dir` opens one: a write there goes through unasked, and still does after a rewind.
+#[test]
+fn a_directory_a_checkout_named_is_opened_once_the_person_says_yes() {
+    let (scratch, mut front, session, beside, asked) = naming_a_folder("bridge-folder-yes");
+    let answered = front.call(
+        "folder.reply",
+        json!({"session": session, "request": asked["request"], "open": true}),
+    );
+    assert_eq!(answered["opened"], true, "{answered}");
+    assert_eq!(
+        answered["folders"],
+        json!([beside.display().to_string()]),
+        "{answered}"
+    );
+    assert_eq!(answered["folderQuestion"], Value::Null, "{answered}");
+    let stale = front.answered(
+        "folder.reply",
+        json!({"session": session, "request": asked["request"], "open": true}),
+    );
+    assert_eq!(stale["error"]["code"], "no_such_request", "{stale}");
+
+    let ended = front.ask(&session);
+    assert_eq!(
+        ended["event"], "turn.done",
+        "a write in a directory the person opened was put to the window: {ended}"
+    );
+    let notes = beside.join("notes.md");
+    assert_eq!(
+        std::fs::read_to_string(&notes).ok().as_deref(),
+        Some("# Notes\n")
+    );
+
+    std::fs::remove_file(&notes).expect("the note is removed");
+    let until = Instant::now() + PATIENCE;
+    loop {
+        let rewound = front.answered("session.rewind", json!({"session": session, "steps": 1}));
+        if rewound.get("ok").is_some() {
+            break;
+        }
+        assert_eq!(rewound["error"]["code"], "turn_in_flight", "{rewound}");
+        assert!(Instant::now() < until, "the turn never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ended = front.ask(&session);
+    assert_eq!(
+        ended["event"], "turn.done",
+        "a rewind closed a directory the person opened: {ended}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&notes).ok().as_deref(),
+        Some("# Notes\n")
+    );
+    drop(scratch);
+}
+
+/// TRUST-9: a directory the person says no to is not opened, and a write there does not land.
+#[test]
+fn a_directory_a_checkout_named_is_not_opened_on_a_no() {
+    let (_scratch, mut front, session, beside, asked) = naming_a_folder("bridge-folder-no");
+    let answered = front.call(
+        "folder.reply",
+        json!({"session": session, "request": asked["request"], "open": false}),
+    );
+    assert_eq!(answered["opened"], false, "{answered}");
+    assert_eq!(answered["folders"], json!([]), "{answered}");
+
+    let mut ended = front.ask(&session);
+    while ended["event"] != "turn.done" && ended["event"] != "turn.error" {
+        front.reply(
+            &ended["event"]
+                .as_str()
+                .unwrap()
+                .replace(".request", ".reply"),
+            &session,
+            &ended,
+            "reject",
+        );
+        ended = front.question_or_the_end();
+    }
+    assert!(
+        !beside.join("notes.md").exists(),
+        "a write landed in a directory the person declined"
+    );
+}

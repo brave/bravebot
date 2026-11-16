@@ -994,7 +994,8 @@ before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": true 
 
 The question is answered once. A repeat, and a reply to a session that was never asked, is refused
 with `no_such_request`, and the trust already given stands. The response also carries
-`rulesQuestion` and `settingsRules`, the questions the answer made due (§9.1).
+`settingsRules`, and `rulesQuestion`, `folderQuestion` and `foldersRefused`, the questions the
+answer made due (§9.1).
 
 #### `rules.reply`
 
@@ -1006,14 +1007,32 @@ with `no_such_request`, and the trust already given stands. The response also ca
 Answers the question `rules.request` put (§9.1). `granted` is a boolean, else `bad_request`. A
 `request` that is not the question out in that session, including one already answered, is
 refused with `no_such_request` and changes nothing. Returns
-`{ granted, kept, settingsRules }`: `kept` is `true` where the yes was written to the grant
-record, and `false` for a no or a yes held for this session alone.
+`{ granted, kept, settingsRules, folderQuestion }`: `kept` is `true` where the yes was written to
+the grant record, and `false` for a no or a yes held for this session alone. `folderQuestion` is
+the first folder question, the one `folder.request` now puts, or `null` where no directory is to
+be asked about.
 
 A yes is kept for later sessions in the directory wherever the question carried `keeping`, and
 there is no separate field or call to ask for it. A no is never kept. `kept` is `true` when the
 yes was written down, `false` when writing it failed (the answer is then a yes for this session
 only, and the client says so, naming the file), and `null` when nothing was to be kept: a no, or
 a question that carried no `keeping`.
+
+#### `folder.reply`
+
+```json
+{ "id": 10, "method": "folder.reply",
+  "params": { "session": "s1", "request": 4, "open": true } }
+```
+
+Answers the question `folder.request` put (§9.1). `open` is a boolean, else `bad_request`. A
+`request` that is not the folder question out in that session, including one already answered, is
+refused with `no_such_request` and changes nothing. Returns
+`{ opened, folder, shownFolder, problem, folders, folderQuestion }`: `opened` is whether the
+directory is now open, `folder` is the directory asked about, `problem` is `null` or the sentence
+saying why a yes could not open it (it is then also added to `foldersRefused`), `folders` is every
+folder the session holds open beside its project, and `folderQuestion` is the next folder question,
+which `folder.request` now puts, or `null` where this was the last.
 
 #### `doctor`
 
@@ -1132,6 +1151,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, shownDirectory, keeping, shownKeeping, confinedLines }` | initial project trust; `keeping` as §9 |
 | `rules.request` | `{ request, rules, grantedBefore, keeping, shownKeeping }` | grant the checkout's proposed `allow` rules, §9.1 |
+| `folder.request` | `{ request, directory, shownDirectory, named, shownNamed, remaining }` | open a directory the checkout's settings name, §9.1 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
 
@@ -1439,17 +1459,30 @@ asks what the terminal asks about the checkout's settings files (PERM-15), one q
    where it holds for this session alone, as in an incognito session. A rule the checkout
    edited since it was granted is a rule nobody granted, so it is asked about again. A yes
    grants every rule listed; a no grants none, and they stay in `settingsRules.proposed`.
+2. **Folders.** Then, whatever the rules were answered, each directory named in
+   `additionalDirectories` is asked about on its own, in the order the files name them, with one
+   `folder.request`: `{ request, directory, shownDirectory, named, shownNamed, remaining }`.
+   `directory` is where the names resolve to, canonical, which is what a yes opens; `named` is
+   each name in the files that resolves there, as written; `remaining` is how many folder
+   questions come after this one. A yes opens it as `/add-dir` does: it joins the session's open
+   folders, the trust map vouches for it, and a rewind keeps it. A no leaves it closed and in
+   `settingsRules.directories`. A name that cannot be opened at all (it does not exist, is inside
+   the project, or is a location that holds credentials) is not asked about: it is listed in
+   `foldersRefused` as `{ directory, shownDirectory, problem, shownProblem }`, `directory` being
+   the name as written.
 
 The responses of `session.new`, `session.open`, `session.fork` and `trust.reply` carry
-`rulesQuestion`, the question as the event carries it or `null`, so a client may put it from
-either. Until it is answered, `turn.send`, a run and `watches.add` are refused with
-`bad_request` naming the method that answers it. There is no default and no dismissal.
+`rulesQuestion` and `folderQuestion`, each the question as its event carries it or `null`, so a
+client may put it from either, and `foldersRefused`. At most one of the two is out at a time. Until
+every question is answered, `turn.send`, a run and `watches.add` are refused with `bad_request`
+naming the method that answers the one out. There is no default and no dismissal.
 
 A session resumed from a record that carries its trust map asks nothing: its rules stand as they
-were answered. A fork inherits what its parent holds, and takes over a question the parent had not
-answered under a request id of its own. Where the session is bypassing, the mode answers the
-question as the terminal's does: the rules are granted for the session only and nothing is
-written. The local host and the ACP server put none of these questions.
+were answered, and the folders it has open are the ones its record reopens. A fork inherits what
+its parent holds, and takes over a question the parent had not answered under a request id of its
+own. Where the session is bypassing, the mode answers the questions as the terminal's does: the
+rules are granted for the session only and nothing is written, and every named directory that can
+be opened is. The local host and the ACP server put none of these questions.
 
 ---
 
@@ -1794,8 +1827,9 @@ Still open:
   in force and also listed in `allow`; `before` is `true` where the grant came from an earlier
   session. `grantedRecord` is the grant record for the checkout, with `shownGrantedRecord`, or
   `null` where the checkout proposed nothing or no record is kept. `directories` holds the names
-  in `additionalDirectories`, none of which is opened, and `shownDirectories` the same names
-  spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
+  in `additionalDirectories` that are not open: ones not answered yet, said no to, or refused
+  (§9.1). A name the person opened leaves the list, and the directory is in the session's open
+  folders instead. `shownDirectories` holds the same names spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
   each entry of `filesystemIgnored` carries `shownFile`, spelled the same way.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.

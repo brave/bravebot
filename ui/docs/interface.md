@@ -978,12 +978,17 @@ edited afterwards changes the next conversation.
 - A settings file chosen under **Agent settings** counts as your own where it is outside the
   project, so an `allow` rule in it is in force. One inside the project is the project's
   file, and its `allow` rule is not.
-- A directory named in `additionalDirectories` is not opened.
+- A directory named in `additionalDirectories` is not opened until you say so. After the
+  question about the rules, the conversation asks about each named directory on its own, showing
+  where the name leads. Yes opens it as `/add-dir` does; no leaves it closed. A name that cannot
+  be opened, such as one that does not exist or is inside the project, is not asked about and
+  the folded note says why. Nothing runs until each is answered. A conversation resumed from
+  history does not ask, and in bypass mode every one that can be opened is.
 - A plan run applies the rules about a server's tools and no others. A plan card names the other
   `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 
 A folded note at the top of the conversation says what a settings file wrote that is not in
-force: an entry that is not a rule, a project's `allow` rule, or a named directory.
+force: an entry that is not a rule, a project's `allow` rule, or a named directory not opened.
 **Permissions…**, in the header's **More** menu, lists the rules in force. They cannot be
 revoked there, since they are changed in their file.
 
