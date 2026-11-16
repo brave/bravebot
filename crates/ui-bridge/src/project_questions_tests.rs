@@ -591,6 +591,14 @@ fn each_named_directory_is_asked_about_on_its_own() {
     assert_eq!(answered["folder"], json!(shown(&beside)), "{answered}");
     assert_eq!(answered["folders"], json!([shown(&beside)]), "{answered}");
     let second = answered["folderQuestion"].clone();
+    // Opened as a picked folder is: listed with them, and not opened a second time.
+    let listed = call(
+        &mut bridge,
+        "session.folders.list",
+        json!({"session": session}),
+    )
+    .unwrap();
+    assert_eq!(listed["folders"], json!([shown(&beside)]), "{listed}");
     assert_eq!(second["directory"], json!(shown(&other)), "{second}");
     assert_eq!(second["remaining"], 0, "{second}");
     assert_ne!(second["request"], first["request"]);
@@ -610,6 +618,13 @@ fn each_named_directory_is_asked_about_on_its_own() {
     assert_eq!(answered["folders"], json!([shown(&beside)]), "{answered}");
     assert_eq!(answered["folderQuestion"], Value::Null, "{answered}");
     assert!(bridge.open[&session].ready_for_work().is_ok());
+    let again = call(
+        &mut bridge,
+        "session.folders.add",
+        json!({"session": session, "path": beside}),
+    )
+    .expect_err("a folder a yes opened is open already");
+    assert!(again.message.contains("already open"), "{}", again.message);
     assert_eq!(
         holds(&bridge, &session, &beside),
         (vec![beside.clone()], true)
@@ -752,6 +767,12 @@ fn bypass_opens_the_named_directories_unasked() {
     .unwrap();
     assert_eq!(settled["folderQuestion"], Value::Null, "{settled}");
     assert!(sent(&events, "folder.request").is_empty());
+    // The response says what the mode opened, so a window can browse them without asking.
+    assert_eq!(
+        settled["folders"],
+        json!([shown(&beside), shown(&other)]),
+        "{settled}"
+    );
     assert_eq!(
         holds(&bridge, &session, &beside),
         (vec![beside.clone(), other.clone()], true)

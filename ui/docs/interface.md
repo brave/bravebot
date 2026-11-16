@@ -984,6 +984,13 @@ edited afterwards changes the next conversation.
   be opened, such as one that does not exist or is inside the project, is not asked about and
   the folded note says why. Nothing runs until each is answered. A conversation resumed from
   history does not ask, and in bypass mode every one that can be opened is.
+- A folder is also opened beside the project when you choose it: **Add folder…** in the
+  **Folders** section of the **Files** tab, or in the header's **More** menu, opens the system's
+  folder picker. The section lists each open folder by name, with its full path under it, and a
+  close button that takes it away again. A named directory you said yes to is listed there too.
+  The file tree then shows the project first and each folder after it. The agent refuses the
+  project itself, a folder inside it, and one already open, and the refusal is said where you
+  asked. Adding and closing wait for a running turn to finish.
 - A plan run applies the rules about a server's tools and no others. A plan card names the other
   `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 

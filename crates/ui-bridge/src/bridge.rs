@@ -110,6 +110,9 @@ struct Open {
     /// The names in `additionalDirectories` that cannot be opened at all, which are reported
     /// rather than asked about.
     refused_folders: Vec<crate::project_questions::Refused>,
+    /// The folders open beside the project, as the state held them when they last changed, for a
+    /// `session.folders.list` asked while a turn holds the state.
+    folders: Vec<PathBuf>,
 }
 
 impl Open {
@@ -124,6 +127,7 @@ impl Open {
     ) -> Self {
         Self {
             project,
+            folders: state.directories.clone(),
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -317,6 +321,9 @@ impl Bridge {
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
+            "session.folders.list" | "session.folders.add" | "session.folders.close" => {
+                self.folders(request)
+            }
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -792,6 +799,7 @@ impl Bridge {
             }
             if let Ok(mut state) = open.state.lock() {
                 state.answered_by_mode |= whence == Whence::Unasked && opened_any;
+                open.folders.clone_from(&state.directories);
             }
         }
 
@@ -835,16 +843,24 @@ impl Bridge {
         else {
             return json!({});
         };
-        let rules = open
+        let (rules, folders) = open
             .state
             .lock()
-            .map(|state| state.answers.rules.json())
-            .unwrap_or(Value::Null);
+            .map(|state| {
+                (
+                    state.answers.rules.json(),
+                    json!(folders::folders_json(&state.directories)),
+                )
+            })
+            .unwrap_or((Value::Null, Value::Null));
         json!({
             "rulesQuestion": open.questions.rules_json(&open.project),
             "folderQuestion": open.questions.folder_json(),
             "foldersRefused": crate::project_questions::refused_json(&open.refused_folders),
             "settingsRules": rules,
+            // The folders open beside the project now, which a mode that opens every named
+            // directory unasked has already added to, so a window learns them with the questions.
+            "folders": folders,
         })
     }
 
@@ -2694,17 +2710,10 @@ impl Bridge {
                     false
                 }
             };
-        let folders: Vec<String> = open
-            .state
-            .lock()
-            .map(|state| {
-                state
-                    .directories
-                    .iter()
-                    .map(|directory| directory.display().to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        if let Ok(state) = open.state.lock() {
+            open.folders.clone_from(&state.directories);
+        }
+        let folders = folders::folders_json(&open.folders);
         open.questions = Questions::next_folder(rest, settings, &mut self.project_questions);
         let next = open.questions.folder_json();
         self.put_question(&handle);
@@ -3447,7 +3456,7 @@ fn open_named_folder(
         .state
         .lock()
         .map_err(|_| refused("session state is poisoned".to_string()))?;
-    let added = crate::folders::open_folder(&mut workspace, &mut state, &folder.directory)
+    let added = folders::open_folder(&mut workspace, &mut state, &folder.directory)
         .map_err(|problem| refused(problem.to_string()))?;
     state
         .answers
@@ -5913,6 +5922,13 @@ mod watch_tests {
         assert_eq!(events.lock().unwrap()[0].data["reason"], "expired");
     }
 }
+
+#[path = "folders.rs"]
+mod folders;
+
+#[cfg(test)]
+#[path = "folders_tests.rs"]
+mod folders_tests;
 
 #[cfg(test)]
 #[path = "completion_tests.rs"]

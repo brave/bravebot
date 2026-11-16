@@ -63,6 +63,15 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     const { directory: _directory, ...rest } = held
     return rest
   }
+  // A folder beside the project is opened by the main process's own picker and nothing else
+  // (TRUST-9), so a new session carries none the window named. The renderer never sends one.
+  if (method === 'session.new') {
+    const { directories: _directories, ...rest } = held
+    return rest
+  }
+  // The folders are listed for a session and one is closed by the name the agent listed it under.
+  if (method === 'session.folders.list') return { session: held.session }
+  if (method === 'session.folders.close') return { session: held.session, path: held.path }
   // Words typed into a turn that is running. The turn is already running with the reach it began
   // with, so a line carries no file under any key. What is forwarded is the line and the names
   // and markers the bridge puts into words (DROP-8): a name is only text, never a path it opens.

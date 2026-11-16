@@ -76,10 +76,11 @@ const NO_GATE = {
   'manifest.read': 'reads a store record and opens nothing',
   'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',
   'connectors.connect': 'a stdio connector\'s own working folder, typed into the form',
+  'session.folders.close': 'names a folder only to take it away from the session, which the agent refuses unless it is open there',
 }
 const TAKES_NO_DIRECTORY = [
   'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
-  'session.note',
+  'session.note', 'session.folders.list',
   'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',

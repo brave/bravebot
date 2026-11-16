@@ -55,7 +55,7 @@ import {
 import { botFolders, isBotModel, isServerSelection, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
-import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
+import { rootForSession, forgetRoot, list, noteRoot, noteAnsweredFolders, open as openInApp, preview, search, chooseAttachments, chooseFolder, attachmentPaths } from './files'
 import { sanitised } from './sanitise'
 import { SIGN_IN_ORIGINS, SignIn, opensExternally } from './sign-in'
 import {
@@ -625,6 +625,11 @@ const ALLOWED = new Set([
   'session.sandbox',
   'session.rewind',
   'session.note',
+  // The folders a chat has open beside its project, and closing one (TRUST-9). Opening one is not
+  // here: `session.folders.add` is called only by `bravebot:folders:add` below, with the folder the
+  // native picker returned, so the window cannot name a folder for the agent to open and trust.
+  'session.folders.list',
+  'session.folders.close',
   'turn.send',
   'turn.cancel',
   'turn.interject',
@@ -803,6 +808,10 @@ app.whenReady().then(() => {
       // always, the directory for an opened or forked session — so a root the tree can browse is
       // one the agent confirmed rather than one the renderer asserted. See `files.ts`.
       noteOpenedRoot(method, params, ok)
+      // The folders open beside a session's project, which the tree may browse until one is
+      // closed: read off the agent's list, and never off what the window sent. A yes to a folder
+      // question opens one, and an opened session's answer lists the ones it has.
+      noteAnsweredFolders(method, params, ok)
       // The agent has removed these records, so what this app kept about them goes too. The
       // coordinates are the ones the agent confirmed deleting, among the ones the window named.
       for (const { directory, id } of deletedConversations(method, params, ok)) {
@@ -1191,8 +1200,12 @@ app.whenReady().then(() => {
   //
   // Note what this does not touch: `ALLOWED` above. The tree reaches no agent method, so the list
   // of things the renderer may ask the agent to do is exactly as long as it was.
-  ipcMain.handle('bravebot:files:preview', (_event, session: unknown, path: unknown) => {
-    return typeof session === 'string' && isSubpath(path) ? preview(session, path) : null
+  //
+  // A path may instead be relative to a folder the session has open beside its project, named by
+  // `folder` exactly as the agent listed it. `files.ts` answers only for a folder the agent's last
+  // list had, so a folder closed is one the tree can no longer read.
+  ipcMain.handle('bravebot:files:preview', (_event, session: unknown, path: unknown, folder?: unknown) => {
+    return typeof session === 'string' && isSubpath(path) ? preview(session, path, folder) : null
   })
   // Files a person dropped, from the preload and nowhere else. The page has no way to call this:
   // the preload exposes no function that reaches it, and calls it only with paths it took from a
@@ -1218,21 +1231,36 @@ app.whenReady().then(() => {
     if (!window || typeof session !== 'string') throw new Error('No active project.')
     return chooseAttachments(window, session)
   })
-  ipcMain.handle('bravebot:files:search', (_event, session: unknown, query: unknown, hidden: unknown) => {
-    return typeof session === 'string' && typeof query === 'string' && query.length < 1000 ? search(session, query, hidden === true) : { paths: [], incomplete: true }
+  // Open a folder beside a session's project, as `/add-dir` does (TRUST-9). The folder is the one
+  // the native picker returns, and the agent decides whether it may be opened; null when the
+  // person picked nothing.
+  ipcMain.handle('bravebot:folders:add', async (_event, session: unknown) => {
+    if (!window || !isSessionId(session)) return { error: { code: 'bad_request', message: 'No active project.' } }
+    try {
+      return await chooseFolder(window, session, async (path) => {
+        if (!bridge) throw new BridgeError('no_bridge', 'the agent is not running')
+        return bridge.request('session.folders.add', { session, path })
+      })
+    } catch (error) {
+      if (error instanceof BridgeError) return { error: { code: error.code, message: error.message } }
+      return { error: { code: 'internal', message: String(error) } }
+    }
   })
-  ipcMain.handle('bravebot:files:list', (_event, session: unknown, path: unknown) => {
+  ipcMain.handle('bravebot:files:search', (_event, session: unknown, query: unknown, hidden: unknown, folder?: unknown) => {
+    return typeof session === 'string' && typeof query === 'string' && query.length < 1000 ? search(session, query, hidden === true, folder) : { paths: [], incomplete: true }
+  })
+  ipcMain.handle('bravebot:files:list', (_event, session: unknown, path: unknown, folder?: unknown) => {
     if (!isSessionId(session) || !isSubpath(path)) return null
-    return list(session, path)
+    return list(session, path, folder)
   })
 
-  ipcMain.handle('bravebot:files:open', async (_event, session: unknown, path: unknown) => {
+  ipcMain.handle('bravebot:files:open', async (_event, session: unknown, path: unknown, folder?: unknown) => {
     if (!isSessionId(session) || !isSubpath(path)) {
       // Deliberately not an echo of what arrived, the way the export refusal is not: the message
       // is for the person, and the payload is the one thing they cannot act on.
       return { status: 'failed', message: 'that is not a file in this project' }
     }
-    return openInApp(session, path, window)
+    return openInApp(session, path, window, folder)
   })
 
   // What the window can currently do, so the menu can grey what it cannot. The renderer is

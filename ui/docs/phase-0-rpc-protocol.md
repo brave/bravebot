@@ -1473,7 +1473,9 @@ asks what the terminal asks about the checkout's settings files (PERM-15), one q
 
 The responses of `session.new`, `session.open`, `session.fork` and `trust.reply` carry
 `rulesQuestion` and `folderQuestion`, each the question as its event carries it or `null`, so a
-client may put it from either, and `foldersRefused`. At most one of the two is out at a time. Until
+client may put it from either, `foldersRefused`, and `folders`, the folders open beside the project
+as `session.folders.list` lists them, which a bypassing session has already opened its named
+directories into. At most one of the two is out at a time. Until
 every question is answered, `turn.send`, a run and `watches.add` are refused with `bad_request`
 naming the method that answers the one out. There is no default and no dismissal.
 
@@ -1706,6 +1708,27 @@ Still open:
   `turn_in_flight` while a turn runs and with `bad_request` before the session's first turn, when
   there is no record yet. `session.open` returns the record's `notes` in the same shape. A note is
   not part of the conversation and is never sent to the model.
+- `session.folders.list` takes `{ session }` and returns `{ folders, busy }`: the canonical
+  absolute paths of the folders open beside the project, in the order they were opened, and
+  whether a turn is running. It is answered while a turn runs. `session.folders.add` takes
+  `{ session, path }` and opens the folder as `/add-dir` does (TRUST-9): reachable for every later
+  turn, undo and watch, and trusted in the session's trust map, which the record keeps.
+  It returns `{ folder, folders, endsCheckouts, trust: { rules }, rewind }`, where `folder` is the
+  canonical path opened and `endsCheckouts` says the folder holds the project, so no delegate gets
+  a checkout while it is open (CHECKOUT-7). `session.folders.close` takes `{ session, path }`, the
+  listed path or any absolute path that resolves to it. It closes the folder and withdraws its
+  trust as `/add-dir close` does, and returns `{ folder, withdrawn, folders, trust: { rules },
+  rewind }`. Both shut the session's rewind points, so `rewind` is `[]`, and both save the record
+  where the session has one. An add is refused with `bad_request` unless `path` is absolute and
+  names an existing directory outside the project that is not open already. An add is also
+  refused before the trust question is answered. Both are refused with `turn_in_flight` while a
+  turn runs. `.list` and `.close` are on the window's allowlist. `.add` is not: the window reaches
+  it only through `bravebot:folders:add` (main-process IPC), which opens a native folder picker and
+  asks the agent about the folder it returned. The main process lets the file tree read under a
+  folder (the optional `folder` argument of `bravebot:files:list`, `:preview`, `:search` and
+  `:open`) only while the agent's last `.list`, `.add` or `.close` answer has it. It drops a
+  `directories` list from a window's `session.new`. All three are denied to the local host and
+  ACP.
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last
