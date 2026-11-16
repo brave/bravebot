@@ -5929,6 +5929,25 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
+# The project's remembered MCP answers in the Permissions dialog, which Forget drops as
+# `bravebot mcp forget` does in a terminal. $project is the project as the agent spells it.
+ui-permissions-mcp-heading = Remembered MCP answers
+ui-permissions-mcp-note = Kept outside this conversation for { $project }, for every conversation started there. Forgetting them makes the next one ask.
+ui-permissions-mcp-every-server = Every server for this project
+ui-permissions-mcp-every-server-meta = Servers this project requests start without asking
+ui-permissions-mcp-tool-meta = Called without asking
+ui-permissions-mcp-empty = No MCP answers are remembered for this project.
+ui-permissions-mcp-no-state = No MCP answers are remembered: there is no state directory.
+ui-permissions-mcp-unreadable = The remembered MCP answers can't be read, so they are neither listed nor forgotten: { $path } ({ $reason }).
+ui-permissions-mcp-forget = Forget MCP answers
+ui-permissions-mcp-incognito = An incognito session writes nothing, so it can't forget remembered MCP answers.
+ui-permissions-mcp-forgotten = Forgotten:
+ui-permissions-mcp-forgot-nothing = Nothing was remembered for this project, so nothing was forgotten.
+ui-permissions-mcp-after = Servers this conversation already started keep running until it ends, and the next conversation here asks before it starts one. The next call to a forgotten tool asks again.
+ui-permissions-mcp-failed = The MCP answers could not be forgotten. Try again.
+# The tooltip on the standing answer of an MCP server's question, and of a tool call's.
+ui-mcp-server-always-tooltip = Servers this project requests from now on start without asking, until you forget them in Permissions
+ui-mcp-tool-always-tooltip = Later calls to this tool in this project are made without asking, until you forget it in Permissions
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

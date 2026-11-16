@@ -195,6 +195,11 @@
   color: var(--ink-tertiary);
   --leo-icon-size: var(--icon-meta);
 }
+.grant-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-meta); color: var(--ink-primary); }
+.grant-actions { display: flex; justify-content: flex-end; margin-top: var(--leo-spacing-m); }
+.grant-section > leo-alert { display: block; margin-bottom: var(--leo-spacing-m); }
+.grant-forgotten { margin: var(--leo-spacing-s) 0; padding-left: var(--leo-spacing-xl); }
+.grant-forgotten code { font: var(--type-code); overflow-wrap: anywhere; }
 .watch-add { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); }
 .watch-add leo-input { flex: 1; min-width: 0; }
 

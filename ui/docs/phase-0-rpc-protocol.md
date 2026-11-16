@@ -1455,8 +1455,9 @@ responses of `session.new`, `session.open` and `session.fork` carry `shownDirect
 - A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
 - What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
-- MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
-  import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
+- MCP configuration (declaring, approving ahead of time and enabling), subscription import and
+  skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first. A project's
+  remembered MCP answers are forgotten from the Permissions dialog (`permissions.revoke`).
 - File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
   completion is `mentions.offer` and `mentions.named`, what a dropped file is comes from
   `drops.classify`, and whether a paste fits from `pastes.check`.

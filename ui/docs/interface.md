@@ -104,7 +104,8 @@ toggle:
 - **Export** (a download icon) opens the export menu described under [Forking, and
   export](#forking). It is disabled until somebody has said something in the session.
 - **More** (vertical dots) holds the two dialogs that are seldom wanted mid-conversation:
-  **Permissions…** lists and revokes path and command grants after the current turn stops, and
+  **Permissions…** lists and revokes path and command grants after the current turn stops, lists
+  the project's remembered MCP answers and forgets them as `bravebot mcp forget` does, and
   **File watches…** opens the [watches](#agent-09-controls) list.
 
 A bot's own page has a header of its face and its name, with a search over its conversations and
