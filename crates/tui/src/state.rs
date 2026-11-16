@@ -1555,6 +1555,11 @@ impl Session {
             hunks_listed: None,
             links_listed: None,
             references: Vec::new(),
+            // A unit test that clicks a link must not start the tester's browser; it names an
+            // opener of its own to see the address.
+            #[cfg(test)]
+            opens_an_address: |_| false,
+            #[cfg(not(test))]
             opens_an_address: crate::opener::open_address,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
