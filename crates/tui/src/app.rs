@@ -10379,6 +10379,7 @@ mod tests {
         use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
         use bravebot_core::todo::{Item, List, Status};
         let (mut session, _) = panel_of_command_rows(false);
+        session.opens_an_address = records_the_address;
         type_line(
             &mut session,
             "do the work on brave/bravebot#7 and https://github.com/brave/bravebot/pull/8",
@@ -10509,13 +10510,29 @@ mod tests {
                 let mut session = a_session_whose_tools_returned_something(turn_running);
                 drawn_at(&mut session, 120, 32);
                 let said = session.transcript.len();
-                if turn_running {
+                let _ = addresses_opened();
+                // At rest the loop opens what the click asks for, so the action says it; during a
+                // turn the click opens it at once, through the session's opener.
+                let opened = if turn_running {
                     beside_a_turn(|beside| {
                         clicked_during_a_turn(&mut session, row, column, beside);
                     });
+                    addresses_opened()
                 } else {
-                    click(&mut session, row, column);
-                }
+                    match click(&mut session, row, column) {
+                        Action::OpenUrl(address) => vec![address],
+                        _ => Vec::new(),
+                    }
+                };
+                let expected: &[&str] = match target {
+                    Target::Issue(_) => &["https://github.com/brave/bravebot/issues/7"],
+                    Target::PullRequest(_) => &["https://github.com/brave/bravebot/pull/8"],
+                    _ => &[],
+                };
+                assert_eq!(
+                    opened, expected,
+                    "{target:?} opened the wrong addresses (turn running: {turn_running})"
+                );
 
                 let after = drawn_at(&mut session, 120, 32);
                 if let Some((_, panel)) = session
