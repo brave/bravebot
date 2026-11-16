@@ -5497,9 +5497,14 @@ shown by running the program, or not entirely:
   every program it started (it runs in a process group of its own), and the test fails with the
   variable under test in the message, including where `CI` is not set. It is not skipped. The
   generic-mode test ran for 16 and 48 minutes in two runs until the child was killed by hand, which
-  the deadline turns into a failure within 20 seconds. The cause of that hang is not
-  recorded here: it was not reproduced, since no host with `xdg-open` and a desktop was available
-  to the change that added the deadline. `an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started`
+  the deadline turns into a failure within 20 seconds. The cause of that hang is `xprop`, which
+  `xdg-open`'s `detectDE` runs when a display is set. With `DISPLAY=:9999` and no local socket,
+  libxcb connects over TCP to `localhost` port 15999. On a host whose `/etc/hosts` maps `localhost`
+  to an address that does not answer, that connect waits for the kernel's connection timeout
+  instead of being refused. The generic-mode test now sets `DISPLAY` to a socket path that does not
+  exist, which `xprop` fails to open at once, and
+  `the_display_given_to_xdg_open_is_one_xprop_fails_to_open_at_once` runs the installed `xprop` on it.
+  `an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started`
   and `a_command_that_does_not_end_is_killed_at_the_deadline_and_one_that_ends_is_not` show the
   deadline against a stand-in that never ends.
   What is covered, per name and per desktop mode:
