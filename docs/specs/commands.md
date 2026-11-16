@@ -1379,7 +1379,7 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 <a id="CMD-22"></a>
-### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach` and `/schedule` spell out what they take after the word
+### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach`, `/mcp` and `/schedule` spell out what they take after the word
 
 Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
 `workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
@@ -1390,10 +1390,13 @@ the end of the line, finishes it by the rule CMD-21 gives for `/effort`, so `/sa
 `/limit` draws `[<n>[k|m] | <n> credits | off]`, the figures it takes, and not the words `tokens`
 and `credits` as choices. `/review` draws `[staged | since <ref> | commit <ref> | pr <n>] [focus]`,
 the targets its parser reads. `/reach` draws the credential scopes, the `write` and `always`
-words, `remove <n>` and `keys`. In each, the words are the ones the parser compares against, taken
+words, `remove <n>` and `keys`. `/mcp` draws `[list | reconnect | disable | remove]`, the
+constants its parser reads, where the table and the list keep `[action]`. In each, the words are
+the ones the parser compares against, taken
 from the type or constant it reads, so a mode, scope or target added there appears in the hint.
-The completion list and the table keep the short form, so the description column does not move,
-and `--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
+The completion list and the table keep the short form, so the description column does not move
+and every row of the list shows its whole description on a terminal 120 columns wide.
+`--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
 because a name there may come from a file a person wrote. `/schedule` completes the subcommand word
 from `bravebot_schedule::words::SUBCOMMANDS` ([SCHEDULE-8](schedule.md#SCHEDULE-8)) and nothing
 after it.
@@ -1404,6 +1407,8 @@ Nothing from the conversation reaches any of them. They read the typed line and 
 apart from the parser drifts from it.
 
 `verified-by: bravebot_tui::render::the_sandbox_command_offers_its_modes_after_its_word`
+`verified-by: bravebot_tui::render::the_mcp_command_offers_its_subcommands_after_its_word`
+`verified-by: bravebot_tui::render::every_slash_row_shows_its_whole_description_at_120_columns`
 `verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
