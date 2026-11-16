@@ -207,7 +207,7 @@ cli-auto-not-with-bypass =
 cli-auto-not-with-accept-edits =
     --auto est refusé avec --accept-edits : auto répond aussi à une écriture comme le fait l'acceptation des modifications, donnez donc --auto seul
 cli-auto-needs-a-run =
-    --auto s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
+    --auto s'applique à une exécution ponctuelle, comme -p "tâche", ou à une session qui s'ouvre dans le terminal. Cette ligne ne démarre ni l'une ni l'autre
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -225,9 +225,12 @@ cli-option-accept-edits =
     Pour une exécution ponctuelle, écrire les fichiers sans demander. Les commandes, les
     récupérations et une écriture qui créerait un identifiant restent refusées
 cli-option-auto =
-    Pour une exécution ponctuelle, laisser un classificateur répondre pour une commande que le bac à
-    sable confine et pour la première récupération d'une URL, et écrire les fichiers sans demander.
-    Tout ce que le classificateur n'autorise pas est refusé, de même qu'une écriture qui créerait un identifiant
+    Laisser un classificateur répondre pour une commande que le bac à sable confine et pour la
+    première récupération d'une URL, et écrire les fichiers sans demander. Dans une exécution
+    ponctuelle, tout ce que le classificateur n'autorise pas est refusé, de même qu'une écriture qui
+    créerait un identifiant. Une session s'ouvre dans ce mode et vous pose ces questions. La touche de
+    mode le quitte, et permissions.startInAuto dans ~/.bravebot/settings.json ouvre les sessions dans
+    ce mode sans l'option
 cli-option-help = Afficher ce message
 cli-option-version = Afficher la version
 
@@ -665,6 +668,9 @@ doctor-settings-retrieval-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-start-in-auto-ignored =
+    permissions.startInAuto dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 # Un nom de run.scrubEnv peut empêcher une restriction de s'appliquer à un programme autant qu'un
 # secret de lui parvenir : la liste d'une copie de travail n'est pas lue et ses noms ne retirent rien.

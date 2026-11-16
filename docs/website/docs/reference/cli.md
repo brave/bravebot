@@ -132,7 +132,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--accept-edits` | for a one-shot run, write files without asking; commands, fetches and a write that would create a credential are still refused ([below](#--accept-edits)) |
-| `--auto` | for a one-shot run, open it in the auto permission mode, where a classifier answers a confined command and the first fetch of a URL ([below](#--auto)) |
+| `--auto` | open a one-shot run or a session in the auto permission mode, where a classifier answers a confined command and the first fetch of a URL ([below](#--auto)) |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked, a language server's start included, and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
@@ -204,17 +204,28 @@ one-shot run: a session has the mode key.
 
 ### `--auto`
 
-Opens a one-shot run in the [auto mode](../security/permission-modes.md#auto). Writes go through as
-they do under `--accept-edits`, and a command the sandbox confines and the first fetch of a URL are
-put to a classifier on the session's own model, which answers only by allowing. Where it does not
-allow, the question is refused, because nobody can be asked.
+Opens a one-shot run, or an interactive session, in the
+[auto mode](../security/permission-modes.md#auto). Writes go through as they do under
+`--accept-edits`, and a command the sandbox confines and the first fetch of a URL are put to a
+classifier on the session's own model, which answers only by allowing. Where it does not allow, a
+one-shot run refuses the question, because nobody can be asked, and a session puts it to you.
 
 ```sh
 bravebot --auto -p "run the tests and fix what fails"
+bravebot --auto
 ```
 
+A session takes it on a bare `bravebot`, `-i`, `--fork`, `--from-pr`, and `--resume` or `--continue`
+with no task, and draws the mode under the input box. Shift-Tab leaves it: the next press goes to
+bypassing where that is reachable and then to asking, and goes straight to asking where a settings
+file made bypassing unreachable. A session you resume or fork opens in auto only because the
+line or the setting says so.
+
 It is refused together with `--dangerously-skip-permissions` or `--accept-edits`, and refused where
-the line starts no one-shot run: a session has the mode key.
+the line starts neither a one-shot run nor a session, as on `--plain`, `--bg`, `--handle-uri` and
+`bravebot doctor`. To open every session in auto without the flag, set
+[`permissions.startInAuto`](../customize/configuration.md#permissionsstartinauto) in your own settings
+file. A flag typed on the line wins over that setting.
 
 ## `--mode <turn|manifest>`
 

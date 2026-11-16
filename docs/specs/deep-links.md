@@ -71,8 +71,15 @@ dropped the part that mattered is not the one the link asked for, and a link has
 hold a way to make that decision for them. Refusing, rather than ignoring, means the day somebody adds
 such a parameter on the sender's side is the day it fails visibly.
 
+A session a link starts opens asking, where the person's `permissions.startInAuto` would open one they
+started themselves in auto ([AUTO-1](auto-mode.md#AUTO-1)). The setting is the person's choice for the
+sessions they open, and a link is text from outside their own typing, so it does not take the choice
+for them. A session the person then opens with `/resume` reads the setting as any other does.
+
 `verified-by: bravebot_cli::deep_link::a_link_asking_for_anything_else_is_refused_whole`
 `verified-by: bravebot_cli::running::a_link_that_asks_for_more_or_is_switched_off_starts_nothing`
+`verified-by: bravebot_cli::auto_start::a_session_a_link_starts_asks_where_the_setting_opens_others_in_auto`
+`verified-by: bravebot_tui::app::a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto`
 
 <a id="LINK-3"></a>
 ### LINK-3: a link starts in the directory it names only where a person already vouched for it

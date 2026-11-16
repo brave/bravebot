@@ -174,7 +174,14 @@ Bypassing is reachable only where the command line asked for it
 question reaches the editor is [MODE-2](permission-modes.md#MODE-2) for accepting edits and
 [MODE-3](permission-modes.md#MODE-3) for planning.
 
+A session opens asking even where the person's `permissions.startInAuto` opens a desktop window's
+sessions in auto ([AUTO-1](auto-mode.md#AUTO-1)). The editor is offered no way to leave auto, and it
+is the one that answers the questions, so the bridge an ACP server runs opens every session asking,
+and no session opens in auto and is moved.
+
 `verified-by: bravebot_ui_bridge::acp::an_editor_selects_three_modes_and_bypass_is_refused`
+`verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_asks_where_the_setting_opens_a_windows_in_auto`
+`verified-by: bravebot_ui_bridge::dispatch::a_bridge_opening_in_ask_opens_every_session_asking_where_the_setting_says_auto`
 `verified-by: bravebot_cli::acp::acp_refuses_the_flags_that_would_stop_the_editor_being_asked`
 
 <a id="ACP-9"></a>

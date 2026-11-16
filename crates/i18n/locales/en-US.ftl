@@ -211,7 +211,7 @@ cli-auto-not-with-bypass =
 cli-auto-not-with-accept-edits =
     --auto is refused with --accept-edits: auto also answers a write the way accepting edits does, so give only --auto
 cli-auto-needs-a-run =
-    --auto is for a one-shot run, such as -p "task". A session has the mode key
+    --auto is for a one-shot run, such as -p "task", or a session that opens in the terminal. This line starts neither
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -229,9 +229,11 @@ cli-option-accept-edits =
     For a one-shot run, write files without asking. Commands, fetches and a write that would
     create a credential are still refused
 cli-option-auto =
-    For a one-shot run, let a classifier answer a command the sandbox confines and the first fetch of
-    a URL, and write files without asking. Anything the classifier does not allow is refused, and so
-    is a write that would create a credential
+    Let a classifier answer a command the sandbox confines and the first fetch of a URL, and write
+    files without asking. In a one-shot run, anything the classifier does not allow is refused, and
+    so is a write that would create a credential. A session opens in this mode and puts those
+    questions to you. The mode key leaves it, and permissions.startInAuto in ~/.bravebot/settings.json
+    opens sessions in it without the flag
 cli-option-help = Show this message
 cli-option-version = Show the version
 
@@ -793,6 +795,11 @@ doctor-settings-retrieval-ignored =
     retrieval in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-ask-idle-ignored =
     askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# Which sessions open in auto decides who answers a command and a fetch, so a checkout's file or the
+# managed file cannot choose it. The managed file is named here as well, since an administrator who
+# wrote it there believes it binds.
+doctor-settings-start-in-auto-ignored =
+    permissions.startInAuto in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A name in run.scrubEnv can keep a restriction off a program as well as a secret from it, so a
 # checkout's list is not read and the names in it withhold nothing.
 doctor-settings-scrub-env-ignored =

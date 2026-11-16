@@ -483,6 +483,36 @@ fn an_editor_selects_three_modes_and_bypass_is_refused() {
     }
 }
 
+/// AUTO-1, MODE-1: a session an editor opens asks where the person's settings open a window's in
+/// auto. The editor is offered asking, accepting edits and planning, and is the person who answers
+/// its questions, so the session is reported as asking and a write in it is put to the editor. The
+/// fault it rejects is an editor's session left in the mode a window's opens in, which the editor
+/// has no way to leave and no way to show.
+#[test]
+fn a_session_an_editor_opens_asks_where_the_setting_opens_a_windows_in_auto() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("start-in-auto");
+    let (config, _requests, _server) = endpoint::endpoint(writing(), None);
+    let mut editor = Editor::on_settings(
+        json!({"model": "acp-test/test", "permissions": {"startInAuto": true}}),
+        &config.endpoint,
+        &project,
+    );
+    let id = editor.request("session/new", json!({"cwd": project, "mcpServers": []}));
+    let made = editor.response(id)["result"].clone();
+    assert_eq!(made["modes"]["currentModeId"], "ask", "{made}");
+    let session = made["sessionId"].as_str().unwrap().to_string();
+    let prompt = editor.prompt(&session, text("write it"));
+    // Untrusted, so that a write in asking is a question: see `run_write`.
+    editor.answer_next(selected("reject-once"));
+    let asked = editor.answer_next(selected("reject-once"));
+    assert_eq!(asked["params"]["toolCall"]["kind"], "edit", "{asked}");
+    editor.response(prompt);
+    assert!(!project.join("output.txt").exists());
+}
+
 /// No turn starts, and so no model is asked, until the trust question is answered.
 #[test]
 fn no_turn_starts_before_the_trust_question_is_answered() {

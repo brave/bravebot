@@ -652,6 +652,46 @@ fn a_controller_that_started_its_view_is_asked_and_its_approval_lands() {
     client.leave();
 }
 
+/// AUTO-1, MODE-1: a host's session asks where the host was started on a settings file saying
+/// `permissions.startInAuto`, which opens a window's sessions in auto. The host offers its client no
+/// `session.mode`, so a session left in auto would have no way to be put back, and its writes would
+/// land unasked. The reply names asking, the turn runs in it, and the write is put to the client.
+/// The fault it rejects is a host that opens its sessions the way a window's open.
+#[test]
+fn a_hosts_session_asks_where_the_setting_opens_a_windows_in_auto() {
+    let scratch = Scratch::new();
+    let file = scratch.path("chosen.json");
+    std::fs::write(&file, r#"{"permissions": {"startInAuto": true}}"#).expect("a settings file");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_with(&scratch, &endpoint, &scratch.project(), Some(&file));
+    let mut client = host.client();
+    let opened = client.call("session.new", json!({"directory": scratch.project()}));
+    assert_eq!(opened["permissionMode"], "ask", "{opened}");
+    let session = opened["session"].as_str().expect("a handle").to_string();
+    client.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    client.call("trust.reply", json!({"session": session, "trusted": false}));
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    assert_eq!(client.event("turn.started")["data"]["mode"], "ask");
+    let asked = client.event("confirm.request");
+    client.call(
+        "confirm.reply",
+        json!({"session": session, "request": asked["data"]["request"], "decision": "deny"}),
+    );
+    client.event("turn.done");
+    assert!(
+        !scratch.project().join("out.txt").exists(),
+        "a write landed in a host's session without being approved"
+    );
+    client.leave();
+}
+
 /// A client that never started a view is not ready to answer: what the turn asks is refused
 /// without being shown, and the turn goes on to its end.
 #[test]

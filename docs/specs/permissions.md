@@ -51,7 +51,12 @@ What a rule may decide is narrow, and the boundary is the point. A rule decides 
 is asked** and **whether an action happens at all**. It never decides what a value is trusted for,
 which is [labels.md](labels.md), and never what is reachable, which is
 [trust-map.md](trust-map.md). `defaultMode` is read and acted on by nothing: this spec covers the
-three lists, `additionalDirectories`, and the two keys of the block that are not rules.
+three lists, `additionalDirectories`, and the two keys of the block that are not rules. A third key
+of the block, `startInAuto`, is not a rule and is not covered here: it opens a session in auto, it is
+read from the home settings file and the file `--settings` names only, and
+[AUTO-1](auto-mode.md#AUTO-1) is its clause. It is the one key of the block a checkout and a managed
+file cannot set, because it widens what happens where the others only narrow it, and `deny` and
+`ask` rules and the two keys below hold in a session it opened in auto as in any other.
 
 Those two are the block's other half and are not rules at all. `readsStayInWorkspace`
 ([PERM-16](#PERM-16)) and `bypassUnreachable` ([PERM-17](#PERM-17)) name nothing they refuse, so no
@@ -1536,5 +1541,8 @@ against them whole. A wrapper added to the table is a decision about both questi
   and a prompt is what the key exists to remove.
 - **`defaultMode` is read and does nothing.** The key is parsed so the file is not rejected for
   carrying it, and no mode is selected from it. A person who wrote `acceptEdits` gets the prompts
-  they would have got without it. The modes exist, and the command line and the mode key are what
-  choose one: [permission-modes.md](permission-modes.md).
+  they would have got without it. The modes exist, and the command line, the mode key and
+  `permissions.startInAuto` are what choose one: [permission-modes.md](permission-modes.md). The last
+  is a different key, in the same block, and it opens a session in auto only; it is read from fewer
+  layers than `defaultMode` is parsed from, because a checkout's file or a managed file must not choose
+  who answers the prompts ([AUTO-1](auto-mode.md#AUTO-1)). `defaultMode` still does nothing.

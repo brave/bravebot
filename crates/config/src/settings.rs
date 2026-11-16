@@ -133,6 +133,16 @@ const PROVIDER_BLOCK: &str = "provider";
 /// parse of the merged root both spell it here.
 const REFERENCES_BLOCK: &str = "references";
 
+/// The key that opens an interactive session in auto, as a person's own settings file or the file
+/// `--settings` names states it (AUTO-1).
+///
+/// Named as a constant because the table of keys a checkout may not name, the list of keys this
+/// build reads in `permissions` and the report of the file that carried it all spell it here.
+const START_IN_AUTO_KEY: &str = "permissions.startInAuto";
+
+/// The name of [`START_IN_AUTO_KEY`] inside the `permissions` block.
+const START_IN_AUTO_NAME: &str = "startInAuto";
+
 /// The key naming how many days the state directory keeps a record, which the home layer alone may
 /// state.
 ///
@@ -235,6 +245,10 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // A question closed on a clock is one the person was not asked, so a clock that closes the
     // person's questions is theirs to set and not the checkout's.
     ("askIdleSeconds", Entitled::OwnOrNamed),
+    // A session that opens in auto has its run and fetch questions answered by a classifier and
+    // not put to the person, so which sessions open there is the person's to say and not a
+    // checkout's, whose file arrives with a clone and would be choosing who answers (AUTO-1).
+    (START_IN_AUTO_KEY, Entitled::OwnOrNamed),
     // A name here is a variable no program the agent runs is handed, and a variable can restrict
     // as well as grant: `npm_config_ignore_scripts` set by the person is what keeps a package's
     // install scripts from running, and a checkout listing it, or a pattern holding it, runs them
@@ -708,6 +722,11 @@ pub struct Settings {
     /// nobody has said otherwise (ASK-9). It is read from the layers entitled to say it only: see
     /// [`HOME_ONLY`].
     ask_idle_seconds: Option<u64>,
+    /// What `permissions.startInAuto` said, if it said a boolean.
+    ///
+    /// Read from the layers entitled to say it only: see [`HOME_ONLY`]. `None` is a session that
+    /// opens asking (MODE-1).
+    start_in_auto: Option<bool>,
     /// What the top-level `maxRunningDelegates` key said, if it said a whole positive count.
     ///
     /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
@@ -1906,6 +1925,8 @@ impl Settings {
         settings.away_summary_enabled = flag(root, "awaySummaryEnabled");
         settings.away_summary_idle_seconds = positive(root.get("awaySummaryIdleSeconds"));
         settings.ask_idle_seconds = positive(root.get("askIdleSeconds"));
+        settings.start_in_auto =
+            object(root, PERMISSIONS_BLOCK).and_then(|block| flag(block, START_IN_AUTO_NAME));
         // A count past what a `u32` holds is more delegates than a turn could start, which is
         // no bound at all, so it is read as the largest the kernel counts rather than dropped.
         settings.max_running_delegates = positive(root.get("maxRunningDelegates"))
@@ -2710,6 +2731,7 @@ impl Settings {
             && self.shared_skills.is_empty()
             && self.language.is_none()
             && self.ask_idle_seconds.is_none()
+            && self.start_in_auto.is_none()
             // A file that holds only a reference, or only a name `doctor` reports as ignored, is
             // listed as a settings layer a few lines under this answer, so it cannot be absence.
             && self.references.is_empty()
@@ -2817,6 +2839,16 @@ impl Settings {
         self.ask_idle_seconds
     }
 
+    /// Whether the settings in force say an interactive session opens in auto, which only the
+    /// person's own file and the file `--settings` names can say (AUTO-1).
+    ///
+    /// `false` where nothing is stated, where the value is not a boolean, and where it is `false`:
+    /// a session opens asking (MODE-1). A checkout's file and the managed file are never obeyed:
+    /// see [`Settings::not_obeyed_all`].
+    pub fn start_in_auto(&self) -> bool {
+        self.start_in_auto == Some(true)
+    }
+
     /// The directories the `references` block names, by alias (REFER-1).
     pub fn references(&self) -> &[Reference] {
         &self.references
@@ -2914,6 +2946,7 @@ impl Settings {
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
             .chain(self.ask_idle_seconds.is_some().then_some("askIdleSeconds"))
+            .chain(self.start_in_auto.is_some().then_some(START_IN_AUTO_KEY))
             .chain(self.language.is_some().then_some("language"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
@@ -3581,6 +3614,7 @@ const PERMISSIONS_READ: &[&str] = &[
     "deny",
     Narrowing::BYPASS_UNREACHABLE,
     Narrowing::READS_STAY_IN_WORKSPACE,
+    START_IN_AUTO_NAME,
 ];
 
 /// The keys of the `run` block this build reads.
@@ -7838,7 +7872,7 @@ mod tests {
                     "permissions": {
                         "defaultMode": "plan", "allow": [], "ask": [], "deny": [],
                         "additionalDirectories": [], "readsStayInWorkspace": true,
-                        "bypassUnreachable": true
+                        "bypassUnreachable": true, "startInAuto": true
                     },
                     "sandbox": {"filesystem": {
                         "allowRead": [], "denyRead": [], "allowWrite": [], "denyWrite": []
@@ -10038,6 +10072,7 @@ mod tests {
         ("references", false, false),
         ("attribution", false, false),
         ("askIdleSeconds", false, false),
+        ("permissions.startInAuto", false, false),
         ("run.scrubEnv", false, false),
     ];
 
@@ -11139,6 +11174,118 @@ mod tests {
             .read();
         assert_eq!(inside.ask_idle_seconds(), Some(5));
         assert_eq!(inside.not_obeyed("askIdleSeconds").count(), 0);
+    }
+
+    /// AUTO-1: only a boolean `true` under `permissions` opens a session in auto. A quoted word, a
+    /// number, `null`, `false`, the same name outside the block, and `defaultMode` naming auto all
+    /// leave a session asking. Rejects: a key read as a word or a truthy value, a top-level or
+    /// `tui` copy honoured, and `defaultMode: "auto"` becoming the setting.
+    #[test]
+    fn only_a_boolean_true_under_permissions_opens_a_session_in_auto() {
+        let settings = Settings::parse(r#"{"permissions": {"startInAuto": true}}"#);
+        assert!(settings.start_in_auto());
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["permissions.startInAuto"]
+        );
+        assert_eq!(settings.unread_keys().count(), 0);
+
+        for text in [
+            r#"{"permissions": {"startInAuto": false}}"#,
+            r#"{"permissions": {"startInAuto": "true"}}"#,
+            r#"{"permissions": {"startInAuto": 1}}"#,
+            r#"{"permissions": {"startInAuto": null}}"#,
+            r#"{"permissions": {"startInAuto": ["true"]}}"#,
+            r#"{"permissions": {"defaultMode": "auto"}}"#,
+            r#"{"permissions": "startInAuto"}"#,
+            r#"{"startInAuto": true}"#,
+            r#"{"tui": {"startInAuto": true}}"#,
+            "{}",
+        ] {
+            assert!(
+                !Settings::parse(text).start_in_auto(),
+                "{text:?} opened a session in auto"
+            );
+        }
+    }
+
+    /// AUTO-1: which sessions open in auto decides who answers a run and a fetch question, so a
+    /// checkout's layers cannot say it and each is reported, while the home layer and a named file
+    /// can. Rejects: a project or local layer read for the key, a checkout's `false` or `true`
+    /// beating the person's own file, and a checkout copy that is dropped without being reported.
+    #[test]
+    fn a_checkout_layer_cannot_open_sessions_in_auto() {
+        let on = r#"{"permissions": {"startInAuto": true}}"#;
+        let off = r#"{"permissions": {"startInAuto": false}}"#;
+        let key = "permissions.startInAuto";
+
+        let home = Layers::new("start-in-auto-home").global(on).read();
+        assert!(home.start_in_auto());
+        assert_eq!(home.not_obeyed(key).count(), 0);
+
+        let checkout = Layers::new("start-in-auto-checkout")
+            .project(on)
+            .local(on)
+            .read();
+        assert!(!checkout.start_in_auto());
+        assert_eq!(checkout.not_obeyed(key).count(), 2);
+
+        let beside_the_persons_own = Layers::new("start-in-auto-checkout-false")
+            .global(on)
+            .project(off)
+            .local(off)
+            .read();
+        assert!(beside_the_persons_own.start_in_auto());
+        assert_eq!(beside_the_persons_own.not_obeyed(key).count(), 2);
+
+        let beside_a_refusal = Layers::new("start-in-auto-checkout-true")
+            .global(off)
+            .project(on)
+            .read();
+        assert!(!beside_a_refusal.start_in_auto());
+        assert_eq!(beside_a_refusal.not_obeyed(key).count(), 1);
+
+        let named = Layers::new("start-in-auto-named").named(on).read();
+        assert!(named.start_in_auto());
+        assert_eq!(named.not_obeyed(key).count(), 0);
+
+        let inside = Layers::new("start-in-auto-named-inside")
+            .named_inside_the_workspace(on)
+            .read();
+        assert!(inside.start_in_auto());
+        assert_eq!(inside.not_obeyed(key).count(), 0);
+
+        // The rest of a checkout's `permissions` block is read as before.
+        let rules = Layers::new("start-in-auto-rules")
+            .project(r#"{"permissions": {"startInAuto": true, "deny": ["Read(./.env)"]}}"#)
+            .read();
+        assert!(!rules.start_in_auto());
+        assert_eq!(rules.not_obeyed(key).count(), 1);
+        assert!(!rules.permissions().deny.is_empty());
+    }
+
+    /// AUTO-1: the managed file is read for the keys it pins and `permissions.startInAuto` is not
+    /// one, so an administrator's `true` opens nothing in auto, and it does not take away the
+    /// person's own. Rejects: the managed layer being read for the key.
+    #[test]
+    fn a_managed_file_cannot_open_sessions_in_auto() {
+        let managed = pinned("start-in-auto", r#"{"permissions": {"startInAuto": true}}"#);
+        assert!(
+            !Layers::new("start-in-auto-managed-only")
+                .read()
+                .under(&managed)
+                .start_in_auto()
+        );
+        assert!(
+            Layers::new("start-in-auto-managed-beside-home")
+                .global(r#"{"permissions": {"startInAuto": true}}"#)
+                .read()
+                .under(&managed)
+                .start_in_auto()
+        );
+        assert!(managed.names_start_in_auto());
+        assert!(managed.is_empty(), "the key must pin nothing");
     }
 
     /// INSTR-17: naming a directory to read skills from is the person's, so a checkout's layers

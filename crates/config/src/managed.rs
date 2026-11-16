@@ -260,6 +260,10 @@ impl Models {
 /// Not comparable, because a gateway it pinned may carry a token and [`crate::Secret`] refuses
 /// equality. What a test wants of one of these is a field of it rather than the whole.
 #[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the independent things the file said about keys it may not set: one flag for each"
+)]
 pub struct Managed {
     /// The pinnable variables the file set, blank ones left out.
     pins: BTreeMap<String, String>,
@@ -304,6 +308,12 @@ pub struct Managed {
     /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
     /// out the pin does nothing.
     narrowing_unreadable: Vec<&'static str>,
+    /// Whether the file wrote `permissions.startInAuto` as `true`, which is not read from this
+    /// layer and so decides nothing, for `doctor` to say so (AUTO-1).
+    ///
+    /// Kept apart from [`Managed::pinned`], since nothing is pinned: an administrator who wrote it
+    /// believing it binds would otherwise find no word that it does not.
+    start_in_auto_named: bool,
     /// The `deny` and `ask` rules it wrote (PERM-19).
     ///
     /// Read from this layer for the reason the keys above are: a rule in either list only narrows,
@@ -431,6 +441,7 @@ impl Managed {
         Self {
             narrowing,
             narrowing_unreadable,
+            start_in_auto_named: layer.start_in_auto(),
             turned_off: [
                 (CRASH_REPORTS_KEY, root.get(CRASH_REPORTS_KEY)),
                 (
@@ -592,6 +603,12 @@ impl Managed {
     /// `enabled`, which pins nothing (RETRIEVE-23).
     pub fn retrieval_unreadable(&self) -> bool {
         self.retrieval_unreadable
+    }
+
+    /// Whether the file named `permissions.startInAuto`, which a managed file cannot set: which
+    /// sessions open in auto is the person's to say (AUTO-1).
+    pub fn names_start_in_auto(&self) -> bool {
+        self.start_in_auto_named
     }
 
     /// The keys it named as something other than a boolean, which are absence.

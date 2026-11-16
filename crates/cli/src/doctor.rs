@@ -265,6 +265,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "references" => t!(doctor_settings_references_ignored, path = path),
         "attribution" => t!(doctor_settings_attribution_ignored, path = path),
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
+        "permissions.startInAuto" => t!(doctor_settings_start_in_auto_ignored, path = path),
         "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
@@ -2046,6 +2047,16 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
             FACT,
         ));
     }
+    // The managed file is not one of the layers `permissions.startInAuto` is read from, so it is
+    // said here: an administrator who wrote it there believes it binds, and nothing else says it
+    // opens no session in auto (AUTO-1).
+    if managed.names_start_in_auto() {
+        lines.push(aligned(
+            t!(doctor_settings_ignored),
+            t!(doctor_settings_start_in_auto_ignored, path = &path),
+            FACT,
+        ));
+    }
     lines
 }
 
@@ -3762,6 +3773,37 @@ mod tests {
             ),
             "the line does not say the file pinned nothing: {lines:?}"
         );
+    }
+
+    /// AUTO-1: a managed file that names `permissions.startInAuto` decides nothing, and `doctor`
+    /// says so and names the file, since an administrator who wrote it believes it binds. A file
+    /// that says `false`, or a quoted `"true"`, is not reported, because the key is not named as
+    /// the boolean that would open a session in auto. The fault it rejects is the line missing.
+    #[test]
+    fn doctor_says_a_managed_file_naming_the_start_in_auto_setting_decides_nothing() {
+        let scratch = Scratch::new("doctor-managed-start-in-auto");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(&path, r#"{"permissions": {"startInAuto": true}}"#).expect("a managed file");
+
+        let said = managed_layer(&Managed::at(&path)).join("\n");
+        let line = said
+            .lines()
+            .find(|line| line.contains("permissions.startInAuto"))
+            .unwrap_or_else(|| panic!("the key is not reported: {said}"));
+        assert!(line.contains("not obeyed"), "{line}");
+        assert!(line.contains(&path.display().to_string()), "{line}");
+
+        for text in [
+            r#"{"permissions": {"startInAuto": false}}"#,
+            r#"{"permissions": {"startInAuto": "true"}}"#,
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+            let said = managed_layer(&Managed::at(&path)).join("\n");
+            assert!(
+                !said.contains("permissions.startInAuto"),
+                "{text} was reported: {said}"
+            );
+        }
     }
 
     /// Which directory this is depends on the environment of whoever started the process, so a

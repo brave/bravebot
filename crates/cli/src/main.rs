@@ -100,7 +100,8 @@ struct Settled {
     /// where `skip_permissions` is true.
     bypass_flag: &'static str,
     /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
-    /// `--auto`), or `None` where neither was given and the run asks.
+    /// `--auto`), or `None` where neither was given and the run asks. `--auto` also opens a session
+    /// in the terminal in auto, which `main` reads off this.
     starts_in: Option<bravebot_agent::PermissionMode>,
     carried: Option<String>,
     agent: Option<String>,
@@ -448,13 +449,17 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     }
 
     args.extend(foreign);
-    // Refused rather than ignored where there is no one-shot run to open in the mode: a session
-    // has the mode key, and a line that asked for a run to write unasked and was started as
-    // something that asks would leave its author believing the flag had been honoured.
+    // Refused rather than ignored where there is no one-shot run and no terminal session to open in
+    // the mode: a line that asked for a run to write unasked and was started as something that asks
+    // would leave its author believing the flag had been honoured. `--auto` opens an interactive
+    // session too (AUTO-1); `--accept-edits` does not, since a session has the key for it.
     // `schedule add` is the one command that takes the mode of a run it starts later.
+    let a_session_opens_in_it =
+        starts_in == Some(bravebot_agent::PermissionMode::Auto) && opens_a_session(args);
     if starts_in.is_some()
         && args.first().map(String::as_str) != Some("schedule")
         && !is_a_one_shot(args, continues_with_a_task(args))
+        && !a_session_opens_in_it
     {
         return Err(stopped_before_the_turn(
             as_json,
@@ -544,6 +549,9 @@ fn main() -> ExitCode {
         Ok(settled) => settled,
         Err(code) => return code,
     };
+    // Whether `--auto` was typed, for the sessions that open in the terminal. A one-shot run reads
+    // `starts_in` itself, and the setting that opens a session in auto is read by the interface.
+    let asked_for_auto = starts_in == Some(bravebot_agent::PermissionMode::Auto);
 
     match args.first().map(String::as_str) {
         Some("--version" | "-V") => {
@@ -562,13 +570,20 @@ fn main() -> ExitCode {
             agent,
             links,
             skip_permissions,
+            asked_for_auto,
             prompts,
         ),
         // The same session, with a prompt from the command line sent as its first turn (CLI-31). A
         // flag of its own because `bravebot "<task>"` is the one-shot run scripts already call.
-        Some("-i" | "--interactive") => {
-            open_on(&args[1..], as_json, agent, links, skip_permissions, prompts)
-        }
+        Some("-i" | "--interactive") => open_on(
+            &args[1..],
+            as_json,
+            agent,
+            links,
+            skip_permissions,
+            asked_for_auto,
+            prompts,
+        ),
         // What a `bravebot://open` link starts (LINK-1). Takes the link and nothing else, and none of
         // the flags that compose with other ways of starting: the line is written by the operating
         // system's registration, and a flag on it would be a way for a link to ask for more.
@@ -578,12 +593,13 @@ fn main() -> ExitCode {
             run_task(&args, skip_permissions, starts_in, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
-            Some(id) => resume_named(id, agent, links, skip_permissions, prompts),
+            Some(id) => resume_named(id, agent, links, skip_permissions, asked_for_auto, prompts),
             None => interactive(
                 bravebot_tui::app::Start::Choose,
                 agent,
                 links,
                 skip_permissions,
+                asked_for_auto,
                 prompts,
             ),
         },
@@ -596,6 +612,7 @@ fn main() -> ExitCode {
                 agent,
                 links,
                 skip_permissions,
+                asked_for_auto,
                 prompts,
             ),
             _ => fail(Ending::Argument, t!(cli_from_pr_needs_a_value)),
@@ -603,11 +620,11 @@ fn main() -> ExitCode {
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
         Some("--continue" | "-c") if !continues_with_a_task(&args) => {
-            continue_here(agent, links, skip_permissions, prompts)
+            continue_here(agent, links, skip_permissions, asked_for_auto, prompts)
         }
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
-            Some(id) => fork_named(id, agent, links, skip_permissions, prompts),
+            Some(id) => fork_named(id, agent, links, skip_permissions, asked_for_auto, prompts),
             // No result object here, and none is owed: reaching this arm means the arguments held
             // `--fork` and nothing after it, so the command line cannot also have carried `--json`.
             // `bravebot --fork --json` reads the flag as the session id and is refused by name in
@@ -717,6 +734,7 @@ fn open_on(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let (prompt, named) = match prompt_to_open_on(words) {
@@ -731,6 +749,7 @@ fn open_on(
         agent,
         links,
         skip_permissions,
+        asked_for_auto,
         prompts,
     )
 }
@@ -788,6 +807,7 @@ fn open_link(
         bravebot_tui::app::Start::Prefilling(link.prompt.unwrap_or_default(), placement.note),
         None,
         bravebot_tui::app::Links::default(),
+        false,
         false,
         prompts,
     )
@@ -2337,6 +2357,7 @@ fn resume_named(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
@@ -2375,6 +2396,7 @@ fn resume_named(
             agent,
             links,
             skip_permissions,
+            asked_for_auto,
             prompts,
         ),
         None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
@@ -2386,6 +2408,7 @@ fn fork_named(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
@@ -2405,6 +2428,7 @@ fn fork_named(
                 agent,
                 links,
                 skip_permissions,
+                asked_for_auto,
                 prompts,
             ),
             None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
@@ -2422,6 +2446,7 @@ fn continue_here(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
@@ -2430,7 +2455,14 @@ fn continue_here(
     match bravebot_session::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
-        Some(session) => resume_named(&session.id, agent, links, skip_permissions, prompts),
+        Some(session) => resume_named(
+            &session.id,
+            agent,
+            links,
+            skip_permissions,
+            asked_for_auto,
+            prompts,
+        ),
         None => fail(Ending::Failed, t!(cli_nothing_to_continue)),
     }
 }
@@ -2440,6 +2472,7 @@ fn interactive(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     if agent.is_some() {
@@ -2536,6 +2569,7 @@ fn interactive(
         agent,
         links,
         skip_permissions,
+        asked_for_auto,
         prompts,
         &mut moments,
     );

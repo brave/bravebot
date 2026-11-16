@@ -1886,6 +1886,8 @@ struct Startup {
     named: Option<String>,
     links: Links,
     skip_permissions: bool,
+    /// Whether the command line asked for auto with `--auto` (AUTO-1).
+    asked_for_auto: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
 }
 
@@ -1904,6 +1906,7 @@ pub fn run(
     agent: Option<String>,
     links: Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
     moments: &mut bravebot_agent::hooks::SessionMoments,
 ) -> io::Result<Ended> {
@@ -1974,6 +1977,7 @@ pub fn run(
                         named: named.take(),
                         links: std::mem::take(&mut links),
                         skip_permissions,
+                        asked_for_auto,
                         prompts: prompts.clone(),
                     },
                     moments,
@@ -2496,12 +2500,54 @@ fn note_startup_input_lost(session: &mut Session, lost: usize) {
 
 /// What `run` settled for the session itself, apart from what it starts with: how it is confined,
 /// the sandbox, whether the permission rungs start in bypass, and the words of its turns.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts the session was started with, each read on its own"
+)]
 struct SessionBasis {
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
     skip_permissions: bool,
+    asked_for_auto: bool,
+    /// Whether a `bravebot://open` link started the session, which then never reads
+    /// `permissions.startInAuto` (LINK-2).
+    from_link: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+}
+
+/// Settle the mode a new session opens in and where the key can reach from there (MODE-1, MODE-5,
+/// AUTO-1).
+///
+/// A mode the line asked for decides, and the setting is read only where the line asked for none:
+/// `--dangerously-skip-permissions` opens in bypass, which is put back to asking where a settings
+/// layer took bypass off the ladder, and `--auto` opens in auto. Without either, a session opens in
+/// auto where the settings in force say `permissions.startInAuto`, which only the person's own file
+/// and the file `--settings` names can say (see `bravebot_config::Settings::start_in_auto`), and
+/// asking everywhere else. Every way into the terminal client opens here, a resumed, continued or
+/// forked session included, since a record keeps no mode (MODE-10). A session a
+/// `bravebot://open` link started does not read the setting, since the link comes from outside the
+/// person's own typing and keeps asking (LINK-2). No environment variable that selects a mode is
+/// read.
+fn open_in_the_mode_asked_for(
+    session: Session,
+    skip_permissions: bool,
+    asked_for_auto: bool,
+    from_link: bool,
+    settings: &bravebot_config::Settings,
+) -> Session {
+    let setting = !from_link && settings.start_in_auto();
+    let mut session = match (skip_permissions, asked_for_auto || setting) {
+        // The flag opens the session in bypass. The rung is on the ladder the key walks either
+        // way, unless a settings layer took it off (MODE-5).
+        (true, _) => session.starting_in_bypass(),
+        (false, true) => session.starting_in_auto(),
+        (false, false) => session,
+    };
+    if bypass_is_unreachable(settings) {
+        session.make_bypass_unreachable();
+    }
+    session
 }
 
 /// The session `begin_session` opens on, built and configured from the settings and what the
@@ -2519,6 +2565,8 @@ fn new_session(
         sockets_with_a_path_reachable,
         sandbox,
         skip_permissions,
+        asked_for_auto,
+        from_link,
         prompts,
     } = basis;
     // The one place persistence is turned on: history in ~/.bravebot outlives the session.
@@ -2543,14 +2591,13 @@ fn new_session(
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
     // asked there, so the question only settles it elsewhere.
     session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
-    // The flag opens the session in bypass. The rung is on the ladder the key walks either way,
-    // unless a settings layer took it off (MODE-5).
-    if skip_permissions {
-        session = session.starting_in_bypass();
-    }
-    if bypass_is_unreachable(settings) {
-        session.make_bypass_unreachable();
-    }
+    session = open_in_the_mode_asked_for(
+        session,
+        skip_permissions,
+        asked_for_auto,
+        from_link,
+        settings,
+    );
     // Before the first turn, and kept until the session ends: a resumed record stores none, so
     // these are the words of the turns this process sends (CLI-19).
     session = session.with_system_prompts(prompts);
@@ -2686,6 +2733,7 @@ fn begin_session(
         named,
         links,
         skip_permissions,
+        asked_for_auto,
         prompts,
     } = startup;
     let basis = SessionBasis {
@@ -2693,6 +2741,8 @@ fn begin_session(
         sockets_with_a_path_reachable,
         sandbox,
         skip_permissions,
+        asked_for_auto,
+        from_link: matches!(start, Start::Prefilling(..)),
         prompts,
     };
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
@@ -10643,6 +10693,152 @@ mod tests {
         assert_eq!(click(&mut session, row, column + 1), Action::Redraw);
         assert_ne!(session.permission_mode(), first);
         assert!(session.selection.is_none());
+    }
+
+    /// MODE-1, MODE-5, AUTO-1: a session opens asking, and opens in auto where `--auto` was typed
+    /// or the person's own settings say `permissions.startInAuto`. A mode typed on the line beats
+    /// the setting, `defaultMode` still selects nothing, and where a layer made bypass unreachable
+    /// the key from the opening mode no longer reaches it. Each row rejects one fault: opening in
+    /// auto without being asked (the default flipped), a setting nobody reads, `--auto` ignored, a
+    /// `false` setting that beats the flag, the setting that overrides the bypass flag, and
+    /// `defaultMode` read as a mode.
+    #[test]
+    fn a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto() {
+        use bravebot_agent::PermissionMode::{Ask, Auto, Bypass};
+        let on = r#"{"permissions": {"startInAuto": true}}"#;
+        let off = r#"{"permissions": {"startInAuto": false}}"#;
+        let rows: [(bool, bool, &str, bravebot_agent::PermissionMode); 9] = [
+            (false, false, "{}", Ask),
+            (false, false, off, Ask),
+            (
+                false,
+                false,
+                r#"{"permissions": {"defaultMode": "auto"}}"#,
+                Ask,
+            ),
+            (false, false, on, Auto),
+            (false, true, "{}", Auto),
+            (false, true, off, Auto),
+            (true, false, "{}", Bypass),
+            (true, false, on, Bypass),
+            (
+                false,
+                false,
+                r#"{"permissions": {"startInAuto": "true"}}"#,
+                Ask,
+            ),
+        ];
+        for (skip_permissions, asked_for_auto, text, expected) in rows {
+            let settings = bravebot_config::Settings::parse(text);
+            let session = open_in_the_mode_asked_for(
+                Session::new("none"),
+                skip_permissions,
+                asked_for_auto,
+                false,
+                &settings,
+            );
+            assert_eq!(
+                session.permission_mode(),
+                expected,
+                "skip {skip_permissions}, --auto {asked_for_auto}, settings {text}"
+            );
+            assert_eq!(session.began_in_bypass(), expected == Bypass);
+        }
+
+        // Where a layer made bypass unreachable, the key from the opening mode goes to asking.
+        let unreachable = bravebot_config::Settings::parse(
+            r#"{"permissions": {"startInAuto": true, "bypassUnreachable": true}}"#,
+        );
+        let mut session =
+            open_in_the_mode_asked_for(Session::new("none"), false, false, false, &unreachable);
+        assert_eq!(session.permission_mode(), Auto);
+        session.cycle_permission_mode();
+        assert_eq!(session.permission_mode(), Ask);
+    }
+
+    /// LINK-2, AUTO-1: a session a `bravebot://open` link started opens asking where the person's
+    /// own file says `permissions.startInAuto`, and the same setting opens a session the person
+    /// started themselves in auto. The fault it rejects is the setting read for a link's session,
+    /// which lets a page on the web start a session that answers its own questions.
+    #[test]
+    fn a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto() {
+        use bravebot_agent::PermissionMode::{Ask, Auto};
+        let on = bravebot_config::Settings::parse(r#"{"permissions": {"startInAuto": true}}"#);
+        let opens = |from_link: bool| {
+            open_in_the_mode_asked_for(Session::new("none"), false, false, from_link, &on)
+                .permission_mode()
+        };
+        assert_eq!(opens(false), Auto, "the setting was not read");
+        assert_eq!(opens(true), Ask, "a link's session opened in auto");
+    }
+
+    /// AUTO-1: the settings a session reads are the layered ones, so a checkout's file that carries
+    /// `permissions.startInAuto` opens nothing in auto where the person's own file says nothing, and
+    /// the person's own file and the file `--settings` names open the session in it. The fault it
+    /// rejects is the setting being read from a layer that arrives with a clone.
+    #[test]
+    fn only_the_persons_own_files_open_a_session_in_auto() {
+        let root = crate::testutil::scratch_dir("bravebot-app-start-in-auto-layers");
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, work) = (root.join("home"), root.join("work"));
+        std::fs::create_dir_all(work.join(".bravebot")).expect("a checkout");
+        std::fs::create_dir_all(work.join(".git")).expect("a checkout");
+        std::fs::create_dir_all(&home).expect("a home");
+        let on = r#"{"permissions": {"startInAuto": true}}"#;
+        std::fs::write(work.join(".bravebot/settings.json"), on).expect("project");
+        std::fs::write(work.join(".bravebot/settings.local.json"), on).expect("local");
+        let opens_in = |home: Option<std::path::PathBuf>, named: Option<&std::path::Path>| {
+            let settings = bravebot_config::Settings::layered(home, Some(&work), named);
+            open_in_the_mode_asked_for(Session::new("none"), false, false, false, &settings)
+                .permission_mode()
+        };
+        assert_eq!(
+            opens_in(Some(home.clone()), None),
+            bravebot_agent::PermissionMode::Ask,
+            "a checkout's files opened the session in auto"
+        );
+
+        let file = root.join("named.json");
+        std::fs::write(&file, on).expect("named");
+        assert_eq!(
+            opens_in(Some(home.clone()), Some(&file)),
+            bravebot_agent::PermissionMode::Auto,
+            "the file --settings names was not read"
+        );
+
+        std::fs::write(home.join("settings.json"), on).expect("home");
+        assert_eq!(
+            opens_in(Some(home), None),
+            bravebot_agent::PermissionMode::Auto,
+            "the person's own file was not read"
+        );
+    }
+
+    /// AUTO-1, MODE-1: a session opened in auto says so on the line under the box, as one the key
+    /// moved there does, and one that asks says nothing. The fault it rejects is a session put in
+    /// auto in the handle only, so that the line under the box and what a turn does disagree.
+    #[test]
+    fn a_session_that_opens_in_auto_names_it_on_the_line_under_the_box() {
+        let settings = bravebot_config::Settings::parse("{}");
+        let mut session =
+            open_in_the_mode_asked_for(Session::new("none"), false, true, false, &settings);
+        assert_eq!(
+            session.permission_mode(),
+            bravebot_agent::PermissionMode::Auto
+        );
+        let name = crate::status::named_mode(bravebot_agent::PermissionMode::Auto, false)
+            .expect("auto is named");
+        let buffer = drawn(&mut session);
+        // Panics when the line is not on the screen.
+        find_on(&buffer, name);
+
+        let mut asking =
+            open_in_the_mode_asked_for(Session::new("none"), false, false, false, &settings);
+        let buffer = drawn(&mut asking);
+        assert!(
+            !buffer_text(&buffer).contains(name),
+            "a session that asks drew the auto line"
+        );
     }
 
     /// MOUSE-14: a click on the permission mode moves to the mode the key moves to and says nothing
@@ -37025,6 +37221,28 @@ mod tests {
             )
             .unwrap_err(),
             t!(session_bg_bypass).to_string()
+        );
+    }
+
+    /// BG-8: a session in auto is not handed over either, and says why, so a session the setting
+    /// opened in auto is refused until the key leaves it. The fault it rejects is a session in auto
+    /// started in the background with nobody to answer a question the classifier does not allow.
+    #[test]
+    fn the_background_command_is_refused_in_auto() {
+        if !cfg!(unix) {
+            return;
+        }
+        let session = Session::new("none").starting_in_auto();
+        assert_eq!(
+            handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
+                false
+            )
+            .unwrap_err(),
+            t!(session_bg_auto).to_string()
         );
     }
 

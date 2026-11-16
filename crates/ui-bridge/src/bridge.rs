@@ -81,7 +81,8 @@ struct Open {
     /// which has no request to carry one.
     definition: Option<String>,
     /// What the next turn asks before it acts. Asking whenever a session opens, a resume or a fork
-    /// included, since a mode is never read from a record (MODE-10).
+    /// included, since a mode is never read from a record (MODE-10), unless the person's own
+    /// `permissions.startInAuto` opens it in auto (AUTO-1).
     ///
     /// Held here rather than sent with each `turn.send`, because a watch fires a turn that no
     /// request asked for, and that turn must run in the mode the window shows.
@@ -132,6 +133,13 @@ impl Open {
         }
     }
 
+    /// This session opened in `mode`, which the three ways a window opens one choose from the
+    /// person's own settings (AUTO-1).
+    fn starting_in(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = LiveMode::new(mode);
+        self
+    }
+
     /// Whether the session can take a turn or a manifest run now: the trust question is answered
     /// and nothing is running.
     fn ready_for_work(&self) -> Result<(), Failure> {
@@ -172,6 +180,9 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// Whether every session opens asking, whatever the person's `permissions.startInAuto` says. A
+    /// client that cannot leave auto, or answer from it, sets it.
+    opening_in_ask: bool,
     /// The front end the planner is told it runs in (INSTR-9): the desktop application unless a
     /// host that projects this bridge says otherwise, as the editor server does.
     front_end: bravebot_agent::FrontEnd,
@@ -192,6 +203,7 @@ impl Bridge {
             closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
+            opening_in_ask: false,
             sign_ins: crate::accounts::SignIns::default(),
         }
     }
@@ -200,6 +212,14 @@ impl Bridge {
     /// [`Bridge::attach_view`] says who can answer it.
     pub fn refusing_questions_until_set(mut self) -> Self {
         self.refuse_until_set = true;
+        self
+    }
+
+    /// Open every session asking, a new one, an opened one and a fork, where the person's own
+    /// `permissions.startInAuto` would open it in auto (AUTO-1). For a client that is offered no way
+    /// out of auto, so a session never opens in a mode it cannot leave (ACP-7, HOST-2).
+    pub fn opening_in_ask(mut self) -> Self {
+        self.opening_in_ask = true;
         self
     }
 
@@ -576,13 +596,16 @@ impl Bridge {
         state.account = self.account_session(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
-        let handle = self.mint(Open::opened(
-            directory.clone(),
-            state,
-            opening.answered,
-            opening.keeping,
-            auto_vetting,
-        ));
+        let handle = self.mint(
+            Open::opened(
+                directory.clone(),
+                state,
+                opening.answered,
+                opening.keeping,
+                auto_vetting,
+            )
+            .starting_in(self.opening_mode(&directory)),
+        );
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
         if let Some(open) = self
@@ -685,6 +708,33 @@ impl Bridge {
         bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
+    /// The mode a session opened in `project` starts in: auto where the person's own settings say
+    /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
+    /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
+    /// read for it, and nothing a request carries chooses it, which is what `session.mode` is for
+    /// once the session is open.
+    fn opening_mode(&self, project: &std::path::Path) -> PermissionMode {
+        if self.opening_in_ask {
+            return PermissionMode::Ask;
+        }
+        match crate::settings::layers(Some(project), self.settings.as_deref()).start_in_auto() {
+            true => PermissionMode::Auto,
+            false => PermissionMode::Ask,
+        }
+    }
+
+    /// The name of the mode the session opened as `handle` is in, read off the handle a turn reads so
+    /// that what a reply says and what the session does cannot differ. A handle that is not open
+    /// names asking.
+    fn permission_mode_of(&self, handle: &str) -> &'static str {
+        wire::permission_mode_name(
+            self.open
+                .get(handle)
+                .map(|open| open.permission_mode.get())
+                .unwrap_or_default(),
+        )
+    }
+
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
         crate::settings::auto_vetting(&crate::settings::layers(
             Some(project),
@@ -756,7 +806,7 @@ impl Bridge {
                 crate::FRONT,
             ),
             "autoVetting": auto_vetting,
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(handle),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(directory, None)),
         })
     }
@@ -819,13 +869,16 @@ impl Bridge {
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
         state.directories = additional;
-        let handle = self.mint(Open::opened(
-            directory.clone(),
-            state,
-            opening.answered,
-            opening.keeping,
-            auto_vetting,
-        ));
+        let handle = self.mint(
+            Open::opened(
+                directory.clone(),
+                state,
+                opening.answered,
+                opening.keeping,
+                auto_vetting,
+            )
+            .starting_in(self.opening_mode(&directory)),
+        );
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -840,7 +893,7 @@ impl Bridge {
             "branch": branch,
             "autoVetting": auto_vetting,
             "scratch": self.scratch_report(&handle),
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(&handle),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&directory, None)),
         });
         merge(&mut made, reported);
@@ -982,32 +1035,36 @@ impl Bridge {
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
-        let child = self.mint(Open::opened(
-            project.clone(),
-            {
-                let mut forked = State::forked(
-                    begun,
-                    cut.before,
-                    opening.trust,
-                    programs,
-                    directories,
-                    ordinal,
-                    todos.clone(),
-                    first_prompt,
-                );
-                // The map is the parent's, so what the mode answered in it is still the mode's.
-                forked.answered_by_mode = by_mode;
-                forked.account = self.account_session(&project);
-                forked
-            },
-            // Inherited along with the map itself: the same person, in the same directory, in
-            // the same window, so asking again would be asking somebody to answer twice.
-            opening.answered,
-            opening.keeping,
-            // The parent's, not read again: the child's transcript is the parent's up to the cut,
-            // and the notice at its top says what the parent opened under.
-            auto_vetting,
-        ));
+        let opening_mode = self.opening_mode(&project);
+        let child = self.mint(
+            Open::opened(
+                project.clone(),
+                {
+                    let mut forked = State::forked(
+                        begun,
+                        cut.before,
+                        opening.trust,
+                        programs,
+                        directories,
+                        ordinal,
+                        todos.clone(),
+                        first_prompt,
+                    );
+                    // The map is the parent's, so what the mode answered in it is still the mode's.
+                    forked.answered_by_mode = by_mode;
+                    forked.account = self.account_session(&project);
+                    forked
+                },
+                // Inherited along with the map itself: the same person, in the same directory, in
+                // the same window, so asking again would be asking somebody to answer twice.
+                opening.answered,
+                opening.keeping,
+                // The parent's, not read again: the child's transcript is the parent's up to the cut,
+                // and the notice at its top says what the parent opened under.
+                auto_vetting,
+            )
+            .starting_in(opening_mode),
+        );
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
@@ -1038,7 +1095,7 @@ impl Bridge {
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(&child),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&project, None)),
             "settingsRules": settings_rules,
             "scratch": self.scratch_report(&child),

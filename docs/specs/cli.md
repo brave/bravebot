@@ -82,8 +82,12 @@ question; the second answers the write prompt and no other, so a run and a fetch
 a write the credential scan found a value in, are still refused, because nobody can be asked. The
 third answers the write prompt the same way, and a run the sandbox confines and the first question
 about a URL when a classifier says to allow it, and refuses anything the classifier does not allow.
-The three are refused in pairs, and `--accept-edits` and `--auto` are refused where the line starts
-no one-shot run, since a session has the mode key for the same thing. The planner's questions are
+The three are refused in pairs. `--accept-edits` is refused where the line starts no one-shot run,
+since a session has the mode key for the same thing. `--auto` is also taken by a line that starts a
+session in the terminal, where it opens the session in auto and the mode key leaves it
+([AUTO-1](auto-mode.md#AUTO-1)), and is refused where the line starts neither, as on `--plain`,
+`--bg`, `--handle-uri` and a command that opens no session. `permissions.startInAuto` has no effect
+on a one-shot run, which stays in the mode its flags give. The planner's questions are
 declined in both modes, because they are not permissions. A run given `--input-format lines` puts
 them to the program sending its lines instead, which picks among the choices the planner offered,
 and on a channel the person vouched for may answer in words (CLI-36). With `--approve-input-lines`
@@ -118,7 +122,9 @@ answer. Writing stays refused unless a rule or one of the flags above allows it.
 `verified-by: bravebot_cli::running::an_accept_edits_run_writes_and_a_plain_run_does_not`
 `verified-by: bravebot_cli::running::accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run`
 `verified-by: bravebot_cli::main::the_accept_edits_flag_is_taken_out_and_belongs_to_a_one_shot_run`
-`verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
+`verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_where_nothing_opens_in_it`
+`verified-by: bravebot_cli::running::the_setting_that_opens_sessions_in_auto_leaves_a_one_shot_run_asking`
+`verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
 `verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
 `verified-by: bravebot_cli::main::an_allow_rule_decides_for_a_run_nobody_is_watching_as_it_does_in_a_session`
 `verified-by: bravebot_cli::main::a_rule_a_checkout_proposed_decides_in_a_one_shot_run_only_once_it_was_granted`

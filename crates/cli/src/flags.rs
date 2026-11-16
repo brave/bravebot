@@ -22,8 +22,8 @@ pub(crate) const BYPASS_APPROVALS_AND_SANDBOX: &str = "--dangerously-bypass-appr
 /// `--accept-edits`, which answers the write prompt of a one-shot run and no other (CLI-1).
 pub(crate) const ACCEPT_EDITS: &str = "--accept-edits";
 
-/// Opens a one-shot run in the auto mode, in which a classifier answers a run the sandbox confines
-/// and a first fetch of a URL (AUTO-1, AUTO-3).
+/// Opens a one-shot run, or a session that opens in the terminal, in the auto mode, in which a
+/// classifier answers a run the sandbox confines and a first fetch of a URL (AUTO-1, AUTO-3).
 pub(crate) const AUTO: &str = "--auto";
 
 /// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
