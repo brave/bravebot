@@ -226,6 +226,10 @@ pub const DENIED: &[&str] = &[
     "mcp-tools.reply",
     "mcp-call.reply",
     "mcp-move.reply",
+    // The questions a session opens with about what its checkout's settings ask for. The host's
+    // sessions put none of them (`Bridge::not_putting_project_questions`), so there is nothing to
+    // answer.
+    "rules.reply",
 ];
 
 fn refused(message: String) -> Failure {

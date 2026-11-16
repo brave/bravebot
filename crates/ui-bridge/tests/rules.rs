@@ -332,10 +332,13 @@ impl FrontEnd {
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
         // A yes an earlier session here gave is kept, and settles the next one without asking.
-        if opened["remembered"].is_null() {
-            self.call("trust.reply", json!({"session": session, "trusted": true}));
-        }
-        (session, opened["settingsRules"].clone())
+        // The rules as they stand once it is answered are the ones the answer reports.
+        let settled = if opened["remembered"].is_null() {
+            self.call("trust.reply", json!({"session": session, "trusted": true}))
+        } else {
+            opened
+        };
+        (session, settled["settingsRules"].clone())
     }
 
     /// Ask for a turn, and return the next question it puts to the window or the event that
@@ -374,10 +377,11 @@ impl Drop for FrontEnd {
 
 /// Whether an event is a question a turn or a run puts to the window.
 ///
-/// The trust question is not one. It is put when a session opens, before any work, and the
-/// tests answer it as they open a session.
+/// The trust question is not one, nor are the questions after it about the checkout's settings.
+/// They are put when a session opens, before any work, and the tests answer them.
 fn asks_about_the_work(event: &str) -> bool {
-    event.ends_with(".request") && event != "trust.request"
+    event.ends_with(".request")
+        && !matches!(event, "trust.request" | "rules.request" | "folder.request")
 }
 
 fn lines(stdout: ChildStdout) -> mpsc::Receiver<Value> {
@@ -439,7 +443,8 @@ fn with_no_rule_a_fetch_is_put_to_the_window() {
     assert_eq!(
         rules,
         json!({"deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [],
-            "unreadable": [], "proposed": [], "directories": [], "shownDirectories": [],
+            "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null,
+            "shownGrantedRecord": null, "directories": [], "shownDirectories": [],
             "filesystem": [], "filesystemIgnored": []})
     );
 
@@ -490,14 +495,26 @@ fn an_allow_rule_the_person_wrote_answers_the_fetch_prompt() {
     assert!(run.reached_the_site(), "an allowed host was not fetched");
 }
 
-/// PERM-14: an allow rule a checkout wrote answers no prompt. The fetch is put to the window,
-/// and the session says which rule is not in force and which file wrote it.
+/// PERM-14, PERM-15: an allow rule a checkout wrote answers no prompt the person did not grant it
+/// for. Said no to, the session still opens, the fetch is put to the window, and the session says
+/// which rule is not in force and which file wrote it.
 #[test]
 fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
     let mut run = fetching("bridge-rules-checkout-allow", |scratch| {
         scratch.the_checkout_writes(json!({"allow": [THE_SITE]}));
     });
-    let (session, rules) = run.front.session(&run.scratch);
+    let (session, _) = run.front.session(&run.scratch);
+    let asked = run
+        .front
+        .until(|message| message["event"] == "rules.request");
+    let answered = run.front.call(
+        "rules.reply",
+        json!({"session": session, "request": asked["data"]["request"], "granted": false}),
+    );
+    assert_eq!(answered["granted"], false, "{answered}");
+    assert_eq!(answered["kept"], false, "{answered}");
+    let rules = answered["settingsRules"].clone();
+    assert_eq!(rules["granted"], json!([]), "{rules}");
     assert_eq!(rules["allow"], json!([]), "{rules}");
     assert_eq!(
         rules["proposed"],
@@ -518,8 +535,96 @@ fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
     assert!(!run.reached_the_site(), "the fetch went out unasked");
     run.front
         .reply("fetch.reply", &session, &question, "reject");
-    assert_eq!(run.front.question_or_the_end()["event"], "turn.done");
+    let ended = run.front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done");
     assert!(!run.reached_the_site());
+
+    // Resumed from its record, the session carries its trust map, and the rules it was asked
+    // about stand as they were answered: nothing is asked again, and the rule is still reported.
+    let id = ended["data"]["id"]
+        .as_str()
+        .expect("the record")
+        .to_string();
+    run.front.call("session.close", json!({"session": session}));
+    let opened = run.front.call(
+        "session.open",
+        json!({"directory": run.scratch.project().display().to_string(), "id": id}),
+    );
+    assert_eq!(opened["rulesQuestion"], Value::Null, "{opened}");
+    assert_eq!(
+        opened["settingsRules"]["proposed"][0]["rule"], THE_SITE,
+        "{opened}"
+    );
+    let reopened = opened["session"].as_str().expect("a handle").to_string();
+    let question = run.front.ask(&reopened);
+    assert_eq!(question["event"], "fetch.request", "{question}");
+    let held = run.front.held.borrow();
+    assert!(
+        !held
+            .iter()
+            .any(|message| message["event"] == "rules.request"),
+        "a resumed session asked about the rules again"
+    );
+}
+
+/// PERM-15: granted, an allow rule a checkout wrote answers the prompt as the person's own would,
+/// and is reported as granted. A session resumed from its record asks nothing about the rules.
+#[test]
+fn an_allow_rule_a_checkout_wrote_answers_the_prompt_once_granted() {
+    let mut run = fetching("bridge-rules-checkout-granted", |scratch| {
+        scratch.the_checkout_writes(json!({"allow": [THE_SITE]}));
+    });
+    let (session, _) = run.front.session(&run.scratch);
+    let asked = run
+        .front
+        .until(|message| message["event"] == "rules.request");
+    assert_eq!(asked["session"], json!(session), "{asked}");
+    assert_eq!(asked["data"]["rules"][0]["rule"], THE_SITE, "{asked}");
+    let refused = run.front.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("rules.reply")),
+        "a turn started with the rules question out: {refused}"
+    );
+    let answered = run.front.call(
+        "rules.reply",
+        json!({"session": session, "request": asked["data"]["request"], "granted": true}),
+    );
+    assert_eq!(answered["granted"], true, "{answered}");
+    let rules = &answered["settingsRules"];
+    assert_eq!(rules["allow"], json!([THE_SITE]), "{rules}");
+    assert_eq!(rules["proposed"], json!([]), "{rules}");
+    assert_eq!(rules["granted"][0]["rule"], THE_SITE, "{rules}");
+
+    let ended = run.front.ask(&session);
+    assert_eq!(
+        ended["event"], "turn.done",
+        "a host a granted rule allows was put to the window: {ended}"
+    );
+    assert!(run.reached_the_site(), "a granted host was not fetched");
+
+    let id = ended["data"]["id"]
+        .as_str()
+        .expect("the record")
+        .to_string();
+    run.front.call("session.close", json!({"session": session}));
+    let opened = run.front.call(
+        "session.open",
+        json!({"directory": run.scratch.project().display().to_string(), "id": id}),
+    );
+    assert_eq!(opened["rulesQuestion"], Value::Null, "{opened}");
+    assert_eq!(
+        opened["settingsRules"]["allow"],
+        json!([THE_SITE]),
+        "{opened}"
+    );
+    let reopened = opened["session"].as_str().expect("a handle").to_string();
+    let ended = run.front.ask(&reopened);
+    assert_eq!(ended["event"], "turn.done", "{ended}");
 }
 
 /// A deny rule only narrows, so one a checkout wrote holds, and it beats an allow rule in the

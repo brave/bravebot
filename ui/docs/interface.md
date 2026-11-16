@@ -967,9 +967,14 @@ edited afterwards changes the next conversation.
 - An `ask` rule puts a card that would not otherwise have appeared.
 - An `allow` rule in your own `~/.bravebot/settings.json` answers a card for you, so none
   appears. It does not make what a command prints trusted.
-- An `allow` rule in a project's settings file is not in force. Only your own file may write
-  one. The terminal asks whether to grant a project's rules. This app has no such question
-  yet, so it grants none and you are still asked.
+- An `allow` rule in a project's settings file is not in force until you grant it. Once the
+  trust question is answered, the conversation asks once, as the terminal does, whether to
+  grant the project's rules you have not granted before, each listed with the file that wrote
+  it. Yes grants them all and is remembered for the project, so the next conversation there
+  does not ask about them again; in an incognito conversation it holds for that conversation
+  only. No grants none, and their cards still appear. A rule the project has changed since is
+  asked about again. Nothing runs until the question is answered, and it has no default. A
+  conversation resumed from history, or forked from one that answered, does not ask.
 - A settings file chosen under **Agent settings** counts as your own where it is outside the
   project, so an `allow` rule in it is in force. One inside the project is the project's
   file, and its `allow` rule is not.

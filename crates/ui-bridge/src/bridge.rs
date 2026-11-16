@@ -14,6 +14,7 @@
 
 use crate::answerers::Answerers;
 use crate::emit::{Emitter, Listener};
+use crate::project_questions::Questions;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
@@ -103,6 +104,9 @@ struct Open {
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
+    /// The questions put once the trust question is answered, about what the checkout's settings
+    /// ask for (PERM-15). A turn is refused while one is waiting.
+    questions: Questions,
 }
 
 impl Open {
@@ -130,6 +134,7 @@ impl Open {
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
             sends: crate::sends::Sends::default(),
+            questions: Questions::Settled,
         }
     }
 
@@ -140,14 +145,20 @@ impl Open {
         self
     }
 
-    /// Whether the session can take a turn or a manifest run now: the trust question is answered
-    /// and nothing is running.
+    /// Whether the session can take a turn or a manifest run now: the trust question and the
+    /// questions after it are answered, and nothing is running.
     fn ready_for_work(&self) -> Result<(), Failure> {
         if !self.answered_trust {
             return Err(Failure::bad_request(
                 "this session has not been asked whether the directory is trusted; \
                  send trust.reply first",
             ));
+        }
+        if let Some(method) = self.questions.reply_method() {
+            return Err(Failure::bad_request(format!(
+                "this session has a question about the project's settings waiting; \
+                 send {method} first"
+            )));
         }
         if self.running.is_some() {
             return Err(Failure::new(
@@ -188,6 +199,13 @@ pub struct Bridge {
     front_end: bravebot_agent::FrontEnd,
     /// The ChatGPT or xAI sign-in the window started, while it runs.
     sign_ins: crate::accounts::SignIns,
+    /// Whether a session puts the questions about its checkout's settings once trust is answered
+    /// (PERM-15). A client that has no way to answer them is built with
+    /// [`Bridge::not_putting_project_questions`], and its sessions grant and open none of it.
+    putting_project_questions: bool,
+    /// The last request id given to one of those questions. Never reused, so a reply meant for
+    /// one cannot answer a later one.
+    project_questions: u64,
 }
 
 impl Bridge {
@@ -205,7 +223,17 @@ impl Bridge {
             refuse_until_set: false,
             opening_in_ask: false,
             sign_ins: crate::accounts::SignIns::default(),
+            putting_project_questions: true,
+            project_questions: 0,
         }
+    }
+
+    /// Put none of the questions about a checkout's settings (PERM-15): its proposed `allow` rules
+    /// stay proposed and the directories it names stay closed, each reported. For a client that
+    /// has no way to answer them, so a session never waits on a question nobody can see.
+    pub fn not_putting_project_questions(mut self) -> Self {
+        self.putting_project_questions = false;
+        self
     }
 
     /// Refuse every question of a session until [`Bridge::set_answerable`] or
@@ -375,6 +403,7 @@ impl Bridge {
             "mcp-move.reply" => self.reply_decision(request, Reply::McpMove),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
+            "rules.reply" => self.reply_rules(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
             "settings.inspect" => Ok(crate::settings::report(
@@ -618,6 +647,16 @@ impl Bridge {
         );
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
+        // The record's own map is that session's user's answer, and the session asks nothing it
+        // did not grant (PERM-10). A kept yes is the person here answering (TRUST-23).
+        self.settle_questions(
+            &handle,
+            if settled.is_some() {
+                bravebot_agent::opening::Whence::Asked
+            } else {
+                bravebot_agent::opening::Whence::Resumed
+            },
+        );
         if let Some(open) = self
             .open
             .get(&handle)
@@ -639,6 +678,7 @@ impl Bridge {
             opened["trust"] = settled;
         }
         merge(&mut opened, reported);
+        merge(&mut opened, self.questions_report(&handle));
         Ok(Stored::Opened(opened))
     }
 
@@ -647,25 +687,117 @@ impl Bridge {
     ///
     /// Read from the settings files once, here, and kept by the session (PERM-12). `inherited`
     /// is a parent's rules, which a fork takes in place of reading the files again.
+    ///
+    /// The layers read are also what the questions after the trust question ask about, so they are
+    /// held until those are settled.
     fn open_under_rules(
-        &self,
+        &mut self,
         handle: &str,
         inherited: Option<crate::rules::SettingsRules>,
     ) -> Value {
-        let Some(open) = self.open.get(handle) else {
+        let Some(open) = self.open.get_mut(handle) else {
             return Value::Null;
         };
         let rules = inherited.unwrap_or_else(|| {
-            crate::rules::SettingsRules::read(
-                &crate::settings::layers(Some(&open.project), self.settings.as_deref()),
-                &open.project,
-            )
+            let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+            let rules = crate::rules::SettingsRules::read(&settings, &open.project);
+            if self.putting_project_questions {
+                open.questions = Questions::Unsettled(Box::new(settings));
+            }
+            rules
         });
         let reported = rules.json();
         if let Ok(mut state) = open.state.lock() {
             state.answers.rules = rules;
         }
         reported
+    }
+
+    /// Settle the questions the session opened as `handle` puts once its trust question is answered,
+    /// where it is: the proposed `allow` rules the record does not already grant (PERM-15).
+    ///
+    /// `whence` is where the answer came from. Bypass answers in its place, as it does in the
+    /// terminal. A session settled already, or still waiting on the trust question, is left as it is.
+    fn settle_questions(&mut self, handle: &str, whence: bravebot_agent::opening::Whence) {
+        use bravebot_agent::opening::{Whence, mode_answers, rules_to_grant};
+        let Some(open) = self.open.get_mut(handle) else {
+            return;
+        };
+        if !open.answered_trust || !matches!(open.questions, Questions::Unsettled(_)) {
+            return;
+        }
+        let Questions::Unsettled(settings) = std::mem::take(&mut open.questions) else {
+            return;
+        };
+        let whence = if mode_answers(open.permission_mode.get()) {
+            Whence::Unasked
+        } else {
+            whence
+        };
+        let store = crate::project_questions::grant_record(&open.project);
+        let proposed = bravebot_agent::opening::proposed_rules(&settings);
+        let question = rules_to_grant(whence, store.as_ref(), &proposed);
+        let rules = crate::rules::SettingsRules::read_granting(
+            &settings,
+            &open.project,
+            crate::rules::Granting {
+                granted: &question.granted,
+                held: &question.held,
+                // Named only where there is something it could hold, as the terminal names it.
+                record: store
+                    .as_ref()
+                    .filter(|_| !proposed.is_empty())
+                    .map(bravebot_agent::granted::Store::path),
+            },
+        );
+        if let Ok(mut state) = open.state.lock() {
+            state.answers.rules = rules;
+            // What the mode granted is the mode's, and the record says so (MODE-4).
+            state.answered_by_mode |= whence == Whence::Unasked && !question.granted.is_empty();
+        }
+        open.questions = if question.needs_asking() {
+            Questions::Rules {
+                request: crate::project_questions::take(&mut self.project_questions),
+                question,
+                settings,
+            }
+        } else {
+            Questions::Settled
+        };
+        self.put_question(handle);
+    }
+
+    /// Send the event for the question the session opened as `handle` has out, if it has one.
+    fn put_question(&self, handle: &str) {
+        let Some(open) = self.open.get(handle) else {
+            return;
+        };
+        let rules = open.questions.rules_json(&open.project);
+        if !rules.is_null() {
+            self.emitter
+                .send(Event::new("rules.request", handle, rules));
+        }
+    }
+
+    /// What a response that may make a question due adds about it: the question out, if any, and
+    /// the rules as they stand. Nothing for a bridge that puts none.
+    fn questions_report(&self, handle: &str) -> Value {
+        let Some(open) = self
+            .open
+            .get(handle)
+            .filter(|_| self.putting_project_questions)
+        else {
+            return json!({});
+        };
+        let rules = open
+            .state
+            .lock()
+            .map(|state| state.answers.rules.json())
+            .unwrap_or(Value::Null);
+        json!({
+            "rulesQuestion": open.questions.rules_json(&open.project),
+            "settingsRules": rules,
+        })
     }
 
     /// Put the trust question to the window, where the session opened as `handle` is waiting on it.
@@ -894,6 +1026,8 @@ impl Bridge {
         // leave no trace, which is also how `bravebot` behaves.
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
+        // A kept yes answered the trust question, and the person who gave it is here (TRUST-23).
+        self.settle_questions(&handle, bravebot_agent::opening::Whence::Asked);
 
         let mut made = json!({
             "session": handle,
@@ -907,6 +1041,7 @@ impl Bridge {
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&directory, None)),
         });
         merge(&mut made, reported);
+        merge(&mut made, self.questions_report(&handle));
         Ok(made)
     }
 
@@ -947,6 +1082,9 @@ impl Bridge {
         let project = open.project.clone();
         let answered_trust = open.answered_trust;
         let auto_vetting = open.auto_vetting;
+        // A question the parent has not answered is the child's to answer, since the child carries
+        // on the same session and is refused turns until it is.
+        let questions = open.questions.clone();
 
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
@@ -1079,6 +1217,13 @@ impl Bridge {
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
         let settings_rules = self.open_under_rules(&child, Some(inherited));
+        if let Some(open) = self.open.get_mut(&child) {
+            open.questions = questions.renumbered(&mut self.project_questions);
+        }
+        self.put_question(&child);
+        // A parent still waiting on the trust question hands down the questions after it too, which
+        // a kept yes about the directory settles for the child.
+        self.settle_questions(&child, bravebot_agent::opening::Whence::Asked);
         if let Some(touched) = touched.filter(|touched| !touched.is_empty())
             && let Some(open) = self.open.get(&child)
         {
@@ -1117,6 +1262,7 @@ impl Bridge {
             },
         });
         merge(&mut forked, reported);
+        merge(&mut forked, self.questions_report(&child));
         Ok(forked)
     }
 
@@ -2381,7 +2527,71 @@ impl Bridge {
         // sentence is kept without it.
         let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named, said_confined_lines);
 
-        Ok(json!({ "trusted": trusted, "kept": kept }))
+        // The person is here, so what the checkout's settings ask for is put to them next, a no
+        // to the trust question included, as in the terminal (PERM-15).
+        self.settle_questions(&handle, bravebot_agent::opening::Whence::Asked);
+        let mut replied = json!({ "trusted": trusted, "kept": kept });
+        merge(&mut replied, self.questions_report(&handle));
+        Ok(replied)
+    }
+
+    /// Record what the person answered to the question about the `allow` rules a checkout proposed
+    /// (PERM-15). A yes grants the rules the question named and no others, and is kept in the grant
+    /// record unless the session is incognito, where the rules hold for this session alone. A reply
+    /// to a question that is not out, answered already or never put, changes nothing and is refused.
+    fn reply_rules(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let id = request.number("request")?;
+        let granted = request
+            .params
+            .get("granted")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| Failure::bad_request("`granted` must be a boolean"))?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if !matches!(open.questions, Questions::Rules { request, .. } if request == id) {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                format!("request {id} is not waiting for an answer"),
+            ));
+        }
+        let Questions::Rules {
+            question, settings, ..
+        } = std::mem::take(&mut open.questions)
+        else {
+            unreachable!("matched above");
+        };
+        let store = crate::project_questions::grant_record(&open.project);
+        let kept = granted && crate::project_questions::keeps(store.as_ref());
+        let held = question.held.clone();
+        let mut state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
+        let named = state
+            .handle
+            .as_ref()
+            .map(|handle| handle.id().to_string())
+            .unwrap_or_default();
+        let in_force = question.answer(granted, store.as_ref(), &named);
+        state.answers.rules = crate::rules::SettingsRules::read_granting(
+            &settings,
+            &open.project,
+            crate::rules::Granting {
+                granted: &in_force,
+                held: &held,
+                record: store.as_ref().map(bravebot_agent::granted::Store::path),
+            },
+        );
+        let rules = state.answers.rules.json();
+        drop(state);
+        Ok(json!({
+            "granted": granted,
+            "kept": kept,
+            "settingsRules": rules,
+        }))
     }
 
     /// Inspect or reduce existing grants. No operation on this channel can add trust.
@@ -2502,6 +2712,11 @@ impl Bridge {
                     "Answer the project trust question first.",
                 ));
             }
+            if open.questions.reply_method().is_some() {
+                return Err(Failure::bad_request(
+                    "Answer the question about the project's settings first.",
+                ));
+            }
             if open.running.is_some() {
                 return Err(Failure::new(
                     ErrorCode::TurnInFlight,
@@ -2550,7 +2765,10 @@ impl Bridge {
             let Some(open) = self.open.get(&handle) else {
                 continue;
             };
-            if open.running.is_some() || !open.answered_trust {
+            if open.running.is_some()
+                || !open.answered_trust
+                || open.questions.reply_method().is_some()
+            {
                 continue;
             }
             if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) {
@@ -5594,3 +5812,7 @@ mod link_tests;
 #[cfg(test)]
 #[path = "account_session_tests.rs"]
 mod account_session_tests;
+
+#[cfg(test)]
+#[path = "project_questions_tests.rs"]
+mod project_questions_tests;

@@ -993,7 +993,21 @@ Records the user's answer to the startup question into that session's `TrustStor
 before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": true }`.
 
 The question is answered once. A repeat, and a reply to a session that was never asked, is refused
-with `no_such_request`, and the trust already given stands.
+with `no_such_request`, and the trust already given stands. The response also carries
+`rulesQuestion` and `settingsRules`, the questions the answer made due (§9.1).
+
+#### `rules.reply`
+
+```json
+{ "id": 9, "method": "rules.reply",
+  "params": { "session": "s1", "request": 3, "granted": true } }
+```
+
+Answers the question `rules.request` put (§9.1). `granted` is a boolean, else `bad_request`. A
+`request` that is not the question out in that session, including one already answered, is
+refused with `no_such_request` and changes nothing. Returns
+`{ granted, kept, settingsRules }`: `kept` is `true` where the yes was written to the grant
+record, and `false` for a no or a yes held for this session alone.
 
 A yes is kept for later sessions in the directory wherever the question carried `keeping`, and
 there is no separate field or call to ask for it. A no is never kept. `kept` is `true` when the
@@ -1117,6 +1131,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, shownDirectory, keeping, shownKeeping, confinedLines }` | initial project trust; `keeping` as §9 |
+| `rules.request` | `{ request, rules, grantedBefore, keeping, shownKeeping }` | grant the checkout's proposed `allow` rules, §9.1 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
 
@@ -1411,6 +1426,30 @@ and `keeping` spelled as `shownPath` is. A client that draws the question from t
 those and never `directory` or `keeping`. `shownKeeping` is `null` exactly when `keeping` is. The
 responses of `session.new`, `session.open` and `session.fork` carry `shownDirectory` and
 `shownKeeping` the same way, for a client that puts the question from the response.
+
+### 9.1 The questions after trust
+
+Once the trust question is answered (or settled by a kept yes as the session opens), the session
+asks what the terminal asks about the checkout's settings files (PERM-15), one question at a time:
+
+1. **Rules.** Where a checkout's settings file proposes `allow` rules the grant record does not
+   already hold, one `rules.request` lists them: `rules` holds `{ rule, shownRule, file,
+   shownFile }` for each rule a yes grants, `grantedBefore` the ones held from an earlier
+   session, and `keeping` (with `shownKeeping`) the grant record a yes is written to, `null`
+   where it holds for this session alone, as in an incognito session. A rule the checkout
+   edited since it was granted is a rule nobody granted, so it is asked about again. A yes
+   grants every rule listed; a no grants none, and they stay in `settingsRules.proposed`.
+
+The responses of `session.new`, `session.open`, `session.fork` and `trust.reply` carry
+`rulesQuestion`, the question as the event carries it or `null`, so a client may put it from
+either. Until it is answered, `turn.send`, a run and `watches.add` are refused with
+`bad_request` naming the method that answers it. There is no default and no dismissal.
+
+A session resumed from a record that carries its trust map asks nothing: its rules stand as they
+were answered. A fork inherits what its parent holds, and takes over a question the parent had not
+answered under a request id of its own. Where the session is bypassing, the mode answers the
+question as the terminal's does: the rules are granted for the session only and nothing is
+written. The local host and the ACP server put none of these questions.
 
 ---
 
@@ -1741,15 +1780,20 @@ Still open:
   card says no stored answer covers it. `also` lists, as `arguments` does, each later call of the
   same round to the same tool that the answer covers, and is empty where the call is asked on its
   own. A `remember: true` sent where `mayStand` is false is read as a yes to the one call.
-- `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
-  `{ deny, ask, allow, unreadable, proposed, directories, filesystem, filesystemIgnored }`. The first three are the rules in
+- `session.new`, `session.open`, `session.fork`, `trust.reply`, `rules.reply` and
+  `permissions.list` carry `settingsRules`:
+  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored }`. The first three are the rules in
   force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
   lists spelled as text. `unreadable` holds `{ rule, shownRule, said }` for each entry that is
   not a rule, where `shownRule` is `rule` spelled as text and `said` is the agent's sentence about
   why, which quotes the entry spelled. `proposed` holds
-  `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote, which is not in
-  force; `shownRule` is `rule` spelled as text and `shownFile` is `file` spelled as `shownPath`
-  is, and a client draws those. `directories` holds the names
+  `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote that was not
+  granted, which is not in force; `shownRule` is `rule` spelled as text and `shownFile` is `file`
+  spelled as `shownPath` is, and a client draws those. `granted` holds
+  `{ rule, shownRule, file, shownFile, before }` for each checkout rule granted (§9.1), which is
+  in force and also listed in `allow`; `before` is `true` where the grant came from an earlier
+  session. `grantedRecord` is the grant record for the checkout, with `shownGrantedRecord`, or
+  `null` where the checkout proposed nothing or no record is kept. `directories` holds the names
   in `additionalDirectories`, none of which is opened, and `shownDirectories` the same names
   spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
   each entry of `filesystemIgnored` carries `shownFile`, spelled the same way.
