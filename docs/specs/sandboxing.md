@@ -4875,6 +4875,7 @@ file. A new spawn that looks a name up through
   | `SSH_ASKPASS_REQUIRE` | options | `force` makes `ssh` run `SSH_ASKPASS` even with a terminal |
   | `SSH_SK_PROVIDER` | options | the library `ssh` and `ssh-keygen` load for a hardware key |
   | `SSH_SK_HELPER` | options | the program `ssh` runs for a hardware key |
+  | `SSH_PKCS11_HELPER` | options | the program `ssh-pkcs11-client` execs for a PKCS#11 provider |
   | `DEVELOPER_DIR` | a directory | where the macOS `/usr/bin/git` shim finds the toolchain it runs, such as `usr/bin/xcrun` |
 
   `started` also sets `SHELL` to `/bin/sh` whatever the person's is, because `ssh` runs a
