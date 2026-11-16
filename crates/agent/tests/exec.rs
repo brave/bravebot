@@ -1304,7 +1304,8 @@ fn a_stage_cannot_open_the_controlling_terminal() {
     let resolved = [script(
         &scratch.path,
         "stage",
-        "#!/bin/sh\nif : </dev/tty 2>/dev/null; then echo opened; else echo refused; fi\n",
+        // In a subshell, because dash exits when a redirection of `:` fails.
+        "#!/bin/sh\nif (: </dev/tty) 2>/dev/null; then echo opened; else echo refused; fi\n",
     )];
     let ran = run_within(
         &Pipeline::new(vec![Stage::new("stage", Vec::new())]),

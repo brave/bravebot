@@ -67722,6 +67722,13 @@ fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name(
     .expect("the turn runs");
 
     use bravebot_agent::report::{JobEvent, Outcome};
+    // What the job printed is shown as well when the turn sees it before it sees the exit, and
+    // that depends on how fast the job ran.
+    let announced: Vec<&JobEvent> = reporter
+        .jobs
+        .iter()
+        .filter(|event| !matches!(event, JobEvent::Printed { .. }))
+        .collect();
     let [
         JobEvent::Started {
             name,
@@ -67733,7 +67740,7 @@ fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name(
             name: ended,
             outcome: Outcome::Succeeded,
         },
-    ] = reporter.jobs.as_slice()
+    ] = announced.as_slice()
     else {
         panic!("not a start and then a finish: {:?}", reporter.jobs);
     };
@@ -68604,7 +68611,9 @@ fn a_look_at_a_job_stopped_by_a_signal_says_so_ends_it_and_reports_the_end_once(
     let script = scratch.path.join("serve");
     std::fs::write(
         &script,
-        "#!/bin/sh\ntrap 'exit 143' TERM\necho $$ > pid\necho ready\nkill -STOP $$\nsleep 120\n",
+        "#!/bin/sh\ntrap 'exit 143' TERM\necho $$ > pid\n\
+         i=0; while [ ! -e go ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\n\
+         kill -STOP $$\nsleep 120\n",
     )
     .unwrap();
     {
@@ -68613,13 +68622,25 @@ fn a_look_at_a_job_stopped_by_a_signal_says_so_ends_it_and_reports_the_end_once(
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
+    // The job stops once the look that waits on it is handed out, so the turn's look between the
+    // first two rounds cannot find it stopped and report the end before the look does.
+    let go = scratch.path.join("go");
+    let mut replies = vec![
         tool_request("run", r#"{"command":"./serve","background":true}"#),
         tool_request("job_output", r#"{"job":"job:1","wait_seconds":60}"#),
         tool_request("job_output", r#"{"job":"job:1"}"#),
         tool_request("run", r#"{"command":"sleep 1"}"#),
         reply_with("done"),
-    ]);
+    ]
+    .into_iter();
+    let mut served = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |_| {
+        served += 1;
+        if served == 2 {
+            std::fs::write(&go, "").expect("the go file is written");
+        }
+        replies.next().map(Some)
+    });
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
