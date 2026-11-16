@@ -91,7 +91,7 @@ reason, a mark that covers more than one start, and a mark in a production file,
 a file, that `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` does not
 list.
 
-`make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`) in a
+`make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`, `resolve`) in a
 production file that `LOOKUPS_LISTED` in the same script does not count, and a `main` that does not
 call `keep_out_where_this_ran()` before it matches the command. A command that opens no
 session has recorded only that directory, so a new lookup is read for what is recorded when it runs

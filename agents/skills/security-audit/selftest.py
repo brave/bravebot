@@ -5469,7 +5469,10 @@ def test_a_new_program_lookup_is_not_unlisted():
     The faults rejected: a check that lists nothing and so lets a new lookup in a command with no
     session pass, one that counts files and not lookups, one that accepts a `main` which records the
     directory after it has matched the command, and one that drops the check for a listed file that
-    holds no lookup, which leaves the list admitting a lookup nobody wrote.
+    holds no lookup, which leaves the list admitting a lookup nobody wrote. A lookup made through
+    `programs::resolve`, which wraps `programs::find`, is a lookup: a check that reads only `find`
+    lets a new one in unread, and one that counts `resolve` apart from `find` lets a file hold one
+    more lookup than its count.
     """
     recorded = (
         "fn keep_out_where_this_ran() {}\nfn main() {\n    keep_out_where_this_ran();\n    match args.first() {}\n}\n"
@@ -5500,6 +5503,52 @@ def test_a_new_program_lookup_is_not_unlisted():
         str(kinds(found)),
     )
 
+    for prefix in ("crate::programs", "bravebot_agent::programs"):
+        resolved = f"fn a() {{\n    let r = {prefix}::resolve(\"gh\", root);\n}}\n"
+        found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": resolved})
+        check(
+            f"a `{prefix}::resolve` lookup in a file the list does not name is an error",
+            kinds(found) == ["program-lookup-unlisted"] and found[0]["severity"] == audit.ERROR,
+            str(kinds(found)),
+        )
+
+    resolve = "fn a() {\n    let r = crate::programs::resolve(\"gh\", root);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one + resolve})
+    check(
+        "a `resolve` beside a `find` in a file listed for one lookup is an error",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
+    editor = "crates/tui/src/editor.rs"
+    find = "fn a() {\n    let r = bravebot_sandbox::programs::find(name);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, editor: find + resolve})
+    check(
+        "the editor's `find` and `resolve` are the two lookups its count holds",
+        found == [],
+        str(kinds(found)),
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, editor: find})
+    check(
+        "the editor holding only its `find` is short of its count",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
+    preamble = "crates/agent/src/preamble.rs"
+    probes = (
+        "fn a() {\n    let g = crate::programs::resolve(\"gh\", root);\n"
+        "    let j = crate::programs::resolve(\"jk\", root);\n}\n"
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, preamble: probes})
+    check("the `gh` and `jk` probes are the two lookups the preamble's count holds", found == [], str(kinds(found)))
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, preamble: probes + resolve})
+    check(
+        "a third `resolve` in the preamble is an error",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
     bare = (
         "use bravebot_sandbox::programs::find_in;\n"
         "fn a() {\n    let r = find_in(\"aws\", &path);\n}\n"
@@ -5511,10 +5560,60 @@ def test_a_new_program_lookup_is_not_unlisted():
         str(kinds(found)),
     )
 
-    quiet = "fn a() {\n    // Resolved::find(\"aws\")\n}\n#[cfg(test)]\nmod t {\n    fn b() { Resolved::find(\"a\"); }\n}\n"
+    for name, imported in {
+        "a single import": "use bravebot_agent::programs::resolve;\n",
+        "a grouped import": "use bravebot_agent::programs::{Resolved, resolve};\n",
+    }.items():
+        bare_resolve = imported + "fn a() {\n    let r = resolve(\"gh\", root);\n}\n"
+        found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": bare_resolve})
+        check(
+            f"a bare `resolve` in a file that imports it from `programs` ({name}) is found",
+            kinds(found) == ["program-lookup-unlisted"],
+            str(kinds(found)),
+        )
+
+    unrelated = "fn resolve(x: u8) -> u8 {\n    x\n}\nfn a() {\n    let r = resolve(1);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": unrelated})
+    check(
+        "a bare `resolve` in a file with no `programs` import is not a lookup",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+    other_import = (
+        "use bravebot_sandbox::programs::find_in;\n"
+        "fn a() {\n    let r = resolve(\"x\");\n    let s = find_in(\"aws\", &path);\n}\n"
+    )
+    sites = audit.program_lookups({Path("crates/new/src/lib.rs"): other_import.splitlines()})
+    check(
+        "a file importing `find_in` has its own `resolve` left out of the lookups",
+        [site["line"] for site in sites] == [4],
+        str([site["line"] for site in sites]),
+    )
+    found = audit_lookups(
+        {
+            "crates/cli/src/main.rs": recorded,
+            "crates/new/src/lib.rs": "use bravebot_agent::programs::resolve_in_path;\nfn a() {\n    resolve(\"x\");\n}\n",
+        }
+    )
+    check(
+        "an import of a longer name that begins with `resolve` does not make a bare `resolve` a lookup",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+
+    quiet = (
+        "fn a() {\n    // Resolved::find(\"aws\")\n    // crate::programs::resolve(\"gh\", root)\n}\n"
+        "#[cfg(test)]\nmod t {\n    fn b() { Resolved::find(\"a\"); crate::programs::resolve(\"a\", root); }\n}\n"
+    )
     found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": quiet})
     check(
         "a comment and test-only code are not lookups",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/tests/lookups.rs": resolve})
+    check(
+        "a `resolve` in a file under `tests` is not a lookup",
         "program-lookup-unlisted" not in kinds(found),
         str(kinds(found)),
     )
