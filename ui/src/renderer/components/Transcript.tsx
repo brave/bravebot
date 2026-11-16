@@ -9,6 +9,8 @@ import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
+// `t` is the transcript here, so the window's words go by another name.
+import { t as words } from '../i18n'
 import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -186,6 +188,8 @@ interface Props {
   footer?: ComposerFooterProps
   /** Whether the open conversation runs in a bot's home folder, which has no project to show. */
   noProject: boolean
+  /** Ask for a folder to open beside the project, through the main process's picker (TRUST-9). */
+  onAddFolder?: () => void
 }
 
 /** Dispatched on `document` by the View menu's Find item. */
@@ -358,6 +362,7 @@ export function Transcript({
   onOpenSummon,
   footer,
   noProject,
+  onAddFolder,
 }: Props): React.JSX.Element {
   const bottom = useRef<HTMLDivElement>(null)
   const marked = useRef<HTMLDivElement>(null)
@@ -681,6 +686,19 @@ export function Transcript({
             <leo-menu-item onClick={() => afterMenu(() => setWatches(true))}>
               <span className="menu-icon-row"><Icon name="eye-on" />File watches…</span>
             </leo-menu-item>
+            {/* Greyed while a turn runs, which the agent refuses anyway, with the reason under it:
+                a greyed item draws no tooltip. */}
+            {onAddFolder && !noProject && (
+              <leo-menu-item aria-disabled={live.running ? 'true' : undefined} data-test="add-folder"
+                onClick={() => { if (!live.running) afterMenu(onAddFolder) }}>
+                <span className="menu-icon-row"><Icon name="folder-new" />
+                  <span className="menu-text">
+                    <span className="menu-title">{words.uiFoldersAdd()}</span>
+                    {live.running && <span className="menu-subtitle">{words.uiFoldersWait()}</span>}
+                  </span>
+                </span>
+              </leo-menu-item>
+            )}
           </IconMenu>
         </div>}
         {!contextless && <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />}

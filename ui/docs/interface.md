@@ -973,7 +973,13 @@ edited afterwards changes the next conversation.
 - A settings file chosen under **Agent settings** counts as your own where it is outside the
   project, so an `allow` rule in it is in force. One inside the project is the project's
   file, and its `allow` rule is not.
-- A directory named in `additionalDirectories` is not opened.
+- A directory named in `additionalDirectories` is not opened. A folder is opened beside the
+  project only when you choose it: **Add folder…** in the **Folders** section of the **Files**
+  tab, or in the header's **More** menu, opens the system's folder picker. The section lists each
+  open folder by name, with its full path under it, and a close button that takes it away again.
+  The file tree then shows the project first and each folder after it. The agent refuses the
+  project itself, a folder inside it, and one already open, and the refusal is said where you
+  asked. Adding and closing wait for a running turn to finish.
 - A plan run applies the rules about a server's tools and no others. A plan card names the other
   `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 

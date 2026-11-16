@@ -44,6 +44,7 @@ import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
 import { useAudit } from './use-audit'
 import { useExport } from './use-export'
+import { useFolders } from './use-folders'
 import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
@@ -625,6 +626,11 @@ export function App(): React.JSX.Element {
     }
   }, [noting, updateSession])
 
+  const { addFolder, closeFolder } = useFolders({ handle: live?.handle, handleRef, updateSession, setProblem })
+  const addFolderFromPanel = useCallback(() => { void addFolder('panel') }, [addFolder])
+  const addFolderFromMenu = useCallback(() => { void addFolder('menu') }, [addFolder])
+  const closeFolderFromPanel = useCallback((path: string) => { void closeFolder(path) }, [closeFolder])
+
   const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
   const resetColumns = useCallback(() => {
@@ -1121,6 +1127,7 @@ export function App(): React.JSX.Element {
         onOpenSummon={stableOpenSummon}
         footer={footer}
         noProject={noProject}
+        onAddFolder={addFolderFromMenu}
       />
       <Gutter
         side="right"
@@ -1131,7 +1138,8 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote} />
+      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote}
+        onAddFolder={addFolderFromPanel} onCloseFolder={closeFolderFromPanel} />
       </div>
       </div>
       {agentsOpen && (

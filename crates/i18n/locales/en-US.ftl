@@ -5929,6 +5929,19 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
+# The Folders section of the Files tab, and the More menu item that adds one: folders open beside the
+# project in one chat, as /add-dir opens them in the terminal. $name is a folder's own name.
+ui-folders-heading = Folders
+ui-folders-about = Folders open beside the project in this chat. The agent can read and change files in them until you close them.
+ui-folders-empty = Only the project is open.
+ui-folders-add = Add folder…
+ui-folders-close = Close { $name }
+ui-folders-close-explained = Close { $name } · The agent can no longer reach it
+ui-folders-wait = Wait for the turn to finish
+ui-folders-not-added = The folder could not be added.
+ui-folders-not-closed = The folder could not be closed.
+ui-folders-added = Folder added
+ui-folders-closed = Folder closed
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

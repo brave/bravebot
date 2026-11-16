@@ -182,6 +182,13 @@ export interface Live {
   awaitingOrdinal?: string | null
   /** The points the session can be put back to, newest first, as the agent last listed them. */
   rewind?: RewindPoint[]
+  /**
+   * The folders open beside the project, as the agent's last `session.folders.list`, `.add` or
+   * `.close` answer listed them (TRUST-9). Absent until the first answer.
+   */
+  folders?: string[]
+  /** What the agent said when it last refused to add or close a folder from the Folders section. */
+  folderProblem?: string | null
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
