@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn a_failure_says_its_identifier_in_front_of_the_message() {
         let mut written = Vec::new();
-        Ending::Configuration.say(&mut written, "l'adresse n'a pas de schema");
+        let _ = Ending::Configuration.say(&mut written, "l'adresse n'a pas de schema");
         let said = String::from_utf8(written).expect("utf-8");
 
         assert_eq!(said, "BB1003: l'adresse n'a pas de schema\n");
