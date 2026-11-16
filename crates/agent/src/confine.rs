@@ -5653,9 +5653,15 @@ mod tests {
             let directory = std::env::temp_dir()
                 .canonicalize()
                 .expect("a temporary directory");
+            Self::at_in(&directory, name)
+        }
+
+        /// The socket at `directory`, which may be longer than a socket path can be bound at:
+        /// it is bound through a short link, so it still stands at the full path.
+        fn at_in(directory: &Path, name: &str) -> Self {
             let path = directory.join(format!("bb{}-{name}.sock", std::process::id()));
             let _ = std::fs::remove_file(&path);
-            drop(std::os::unix::net::UnixListener::bind(&path).expect("a socket"));
+            drop(crate::testutil::socket_standing_at(&path));
             Self { path }
         }
 
@@ -5674,6 +5680,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+
+    /// A test that needs an agent socket must get one whatever the length of the temporary
+    /// directory, and the socket has to stand at the path `SSH_AUTH_SOCK` names, since a row is
+    /// granted for that path. The regression it rejects is binding the socket at its full path,
+    /// which fails with `path must be shorter than SUN_LEN` once the directory is long.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_socket_stands_at_its_path_where_the_directory_is_longer_than_a_socket_can_be_bound()
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let top = crate::testutil::scratch_dir("agent-socket-long-directory");
+        let mut long = top.clone();
+        while long.as_os_str().len() <= 120 {
+            long.push("a-directory-name-of-forty-characters-xxxx");
+        }
+        std::fs::create_dir_all(&long).unwrap();
+
+        let agent = AgentSocket::at_in(&long, "long-directory");
+
+        assert!(agent.path.starts_with(&long) && agent.name().len() > 120);
+        let kind = std::fs::symlink_metadata(&agent.path)
+            .expect("something at the path")
+            .file_type();
+        assert!(kind.is_socket(), "the path holds a socket");
+        assert_eq!(
+            agent.environment(),
+            vec![("SSH_AUTH_SOCK".to_string(), agent.name().to_string())]
+        );
+        drop(agent);
+        std::fs::remove_dir_all(&top).unwrap();
     }
 
     fn prepared_in(confinement: &Confinement) -> Result<(), ExecError> {
@@ -9998,12 +10035,10 @@ mod tests {
         std::fs::write(home.join("keys/work.pub"), "a key").unwrap();
         std::fs::write(outside.join("plain-file"), "not a socket").unwrap();
         std::fs::write(home.join(".gitconfig"), SIGNS_WITH_A_KEY).unwrap();
-        // A socket is made at a short path and moved, since a path under a home can be longer
-        // than a socket can be bound at.
+        // A path under a home can be longer than a socket can be bound at, so the socket is
+        // bound through a short link and still stands at the path.
         let socket_at = |path: PathBuf| {
-            let made = outside.join("made.sock");
-            drop(std::os::unix::net::UnixListener::bind(&made).unwrap());
-            std::fs::rename(made, &path).unwrap();
+            drop(crate::testutil::socket_standing_at(&path));
             path
         };
         let in_ssh = socket_at(home.join(".ssh/agent.sock"));
@@ -12744,7 +12779,7 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout. The path is the one the temporary directory resolves to, since the stage's row is the path its name leads to.
+    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket the driver can connect to under any temporary directory. The path is the one its directory resolves to, since the stage's row is the path its name leads to.
     #[cfg(unix)]
     fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
@@ -12754,13 +12789,20 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        // A socket path must fit in sun_path, which a home under a deep checkout does not.
         let name = home.file_name().unwrap().to_str().unwrap();
+        let file = format!("bb{}-{name}.sock", std::process::id());
+        // The driver connects to this socket by its path to ask which keys it holds, so the path
+        // has to fit in sun_path. A temporary directory that is too long for that gives way to
+        // `/tmp`.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let directory = std::env::temp_dir().canonicalize().unwrap();
-        let socket = directory.join(format!("bb{}-{name}.sock", std::process::id()));
+        let socket = if directory.join(&file).as_os_str().len() < 100 {
+            directory.join(&file)
+        } else {
+            Path::new("/tmp").canonicalize().unwrap().join(&file)
+        };
         let _ = std::fs::remove_file(&socket);
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let listener = crate::testutil::socket_standing_at(&socket);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
