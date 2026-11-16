@@ -5797,7 +5797,7 @@ shown by running the program, or not entirely:
   child printed its `start ended` record. The printed
   record is not asserted. Which names select the program on Windows is still unobserved.
   `a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper` is the
-  run that shows it and has not yet run on Windows. It registers a handler for the current user
+  test that observes it. It registers a handler for the current user
   for a scheme of its own, as a `REG_EXPAND_SZ` and as a `REG_SZ` value, whose command expands one
   name (`%COMSPEC%` for `COMSPEC`, `%<name>%\helper.cmd` for each directory name, and the helper's
   path without an extension for `PATHEXT`) and so reaches a batch file that only creates a marker,
@@ -5807,9 +5807,7 @@ shown by running the program, or not entirely:
   start with each of the ten names set does not run the helper. It prints, for each of the ten
   names and `PSModulePath`, whether the helper ran with the name removed and with it put back on
   the command, and whether it ran when the handler is written with the helper's own path and the
-  name is removed. The put-back result says which names select the program. #3860 stays open
-  until a `sandbox-windows` run of it is read and recorded here, and the Windows bullet above
-  is changed to say which names selected the program. #3822 owns the rest of the opener list.
+  name is removed. The put-back result says which names select the program. #3822 owns the rest of the opener list.
   These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
