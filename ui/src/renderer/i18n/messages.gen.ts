@@ -3,6 +3,7 @@
 
 const plural = {
   en: new Intl.PluralRules('en'),
+  fr: new Intl.PluralRules('fr'),
 }
 
 const catalogEnUs = {
@@ -62,6 +63,43 @@ const catalogEnUs = {
   uiFoldersNotAdded: (): string => 'The folder could not be added.',
   uiFoldersNotClosed: (): string => 'The folder could not be closed.',
   uiFoldersWait: (): string => 'Wait for the turn to finish',
+  uiProjectFolderDecline: (): string => 'Don\'t open',
+  uiProjectFolderDeclineAbout: (): string => 'Don\'t open it, and the agent cannot reach it from this chat.',
+  uiProjectFolderNamed: (): string => 'This project\'s settings name it as',
+  uiProjectFolderNotOpened: ({ path, problem }: { path: string | number; problem: string | number }): string => String(path) + ' was not opened: ' + String(problem),
+  uiProjectFolderOpen: (): string => 'Open folder',
+  uiProjectFolderOpenAbout: (): string => 'Open it, and the agent can read and change files in it in this chat, as with Add folder. It is listed under Folders, where you can close it.',
+  uiProjectFolderRemaining: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return String(count) + ' more folder to ask about after this one.'
+    return String(count) + ' more folders to ask about after this one.'
+  },
+  uiProjectFolderSubtitle: (): string => 'Open this folder beside the project?',
+  uiProjectFolderTitle: (): string => 'Open a folder',
+  uiProjectQuestionsStale: (): string => 'That question had been answered already, so the answer was not used. What is waiting now is shown.',
+  uiProjectQuestionsWaitingFolder: (): string => 'Answer the question about a folder this project names before sending.',
+  uiProjectQuestionsWaitingRules: (): string => 'Answer the question about this project\'s rules before sending.',
+  uiProjectQuestionsWaitingTrust: (): string => 'Answer the trust question before sending.',
+  uiProjectRulesAbout: (): string => 'This project\'s settings files propose these allow rules. A granted rule answers its question for you, so the agent does what the rule covers without asking.',
+  uiProjectRulesDecline: (): string => 'Keep asking me',
+  uiProjectRulesDeclineAbout: (): string => 'Keep asking me, and each action these rules cover asks you first, as it would without them.',
+  uiProjectRulesFrom: ({ file }: { file: string | number }): string => 'from ' + String(file),
+  uiProjectRulesGrant: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return 'Grant ' + String(count) + ' rule'
+    return 'Grant ' + String(count) + ' rules'
+  },
+  uiProjectRulesGrantedBefore: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return String(count) + ' rule from these files was granted before and stays granted:'
+    return String(count) + ' rules from these files were granted before and stay granted:'
+  },
+  uiProjectRulesKeeping: ({ path }: { path: string | number }): string => 'A grant is kept in ' + String(path) + ', so later chats here are not asked about these rules again. A rule edited since is asked about again.',
+  uiProjectRulesList: (): string => 'Proposed rules',
+  uiProjectRulesNotKept: ({ path }: { path: string | number }): string => 'Granted for this chat only: the grant could not be written to ' + String(path) + ', so the next chat here will ask again.',
+  uiProjectRulesSubtitle: (): string => 'Grant the allow rules this project proposes?',
+  uiProjectRulesThisChat: (): string => 'A grant lasts for this chat only and is not written down.',
+  uiProjectRulesTitle: (): string => 'Project rules',
   uiRecallFixKey: (): string => 'Check the embeddings key in Settings. Until then, this bot summarises long conversations as before.',
   uiRecallHeading: (): string => 'Recall',
   uiRecallIndexing: ({ indexed, eligible }: { indexed: string | number; eligible: string | number }): string => 'Indexing ' + String(indexed) + ' of ' + String(eligible) + ' earlier messages',
@@ -102,6 +140,18 @@ const catalogEnUs = {
   uiRecalledTool: (): string => 'Tool',
   uiRecalledUnread: (): string => 'Couldn\'t read what was sent.',
   uiRecalledYou: (): string => 'You',
+  uiRulesNoteDirectories: (): string => 'A settings file named these directories, and they are not open:',
+  uiRulesNoteGranted: (): string => 'These allow rules this project\'s settings propose are granted, so they are in force:',
+  uiRulesNoteGrantedBefore: (): string => 'granted before',
+  uiRulesNoteGrantedRecord: ({ path }: { path: string | number }): string => 'The grant is kept in ' + String(path) + ', so later chats here are not asked about them. A rule the project edits is asked about again.',
+  uiRulesNoteGrantedSummary: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return String(count) + ' project rule granted.'
+    return String(count) + ' project rules granted.'
+  },
+  uiRulesNoteGrantedThisChat: (): string => 'They are granted for this chat only.',
+  uiRulesNoteProposed: (): string => 'These allow rules this project\'s settings propose were not granted. An allow rule answers a question for you, so only one you grant, or one in your own settings file, is in force. You will still be asked:',
+  uiRulesNoteRefused: (): string => 'These directories a settings file named cannot be opened:',
   uiSettings: (): string => 'Settings',
   uiSettingsAppearance: (): string => 'Appearance',
   uiSettingsDisplayLanguage: (): string => 'Display language',
@@ -197,6 +247,43 @@ const catalogFr: Messages = {
   uiFoldersNotAdded: (): string => 'Le dossier n\'a pas pu être ajouté.',
   uiFoldersNotClosed: (): string => 'Le dossier n\'a pas pu être fermé.',
   uiFoldersWait: (): string => 'Attendez la fin du tour',
+  uiProjectFolderDecline: (): string => 'Ne pas ouvrir',
+  uiProjectFolderDeclineAbout: (): string => 'Ne l\'ouvrez pas, et l\'agent ne peut pas l\'atteindre depuis cette conversation.',
+  uiProjectFolderNamed: (): string => 'Les réglages de ce projet le nomment',
+  uiProjectFolderNotOpened: ({ path, problem }: { path: string | number; problem: string | number }): string => String(path) + ' n\'a pas été ouvert : ' + String(problem),
+  uiProjectFolderOpen: (): string => 'Ouvrir le dossier',
+  uiProjectFolderOpenAbout: (): string => 'Ouvrez-le, et l\'agent peut lire et modifier ses fichiers dans cette conversation, comme avec Ajouter un dossier. Il figure sous Dossiers, où vous pouvez le fermer.',
+  uiProjectFolderRemaining: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return 'Encore ' + String(count) + ' dossier à demander après celui-ci.'
+    return 'Encore ' + String(count) + ' dossiers à demander après celui-ci.'
+  },
+  uiProjectFolderSubtitle: (): string => 'Ouvrir ce dossier à côté du projet ?',
+  uiProjectFolderTitle: (): string => 'Ouvrir un dossier',
+  uiProjectQuestionsStale: (): string => 'Cette question avait déjà reçu une réponse, la vôtre n\'a donc pas été utilisée. Ce qui attend maintenant est affiché.',
+  uiProjectQuestionsWaitingFolder: (): string => 'Répondez à la question sur un dossier que nomme ce projet avant d\'envoyer.',
+  uiProjectQuestionsWaitingRules: (): string => 'Répondez à la question sur les règles de ce projet avant d\'envoyer.',
+  uiProjectQuestionsWaitingTrust: (): string => 'Répondez à la question de confiance avant d\'envoyer.',
+  uiProjectRulesAbout: (): string => 'Les fichiers de réglages de ce projet proposent ces règles d\'autorisation. Une règle accordée répond à sa question à votre place : l\'agent fait ce qu\'elle couvre sans demander.',
+  uiProjectRulesDecline: (): string => 'Continuer à demander',
+  uiProjectRulesDeclineAbout: (): string => 'Continuer à demander : chaque action que couvrent ces règles vous est d\'abord demandée, comme sans elles.',
+  uiProjectRulesFrom: ({ file }: { file: string | number }): string => 'de ' + String(file),
+  uiProjectRulesGrant: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return 'Accorder ' + String(count) + ' règle'
+    return 'Accorder ' + String(count) + ' règles'
+  },
+  uiProjectRulesGrantedBefore: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return String(count) + ' règle de ces fichiers a déjà été accordée et le reste :'
+    return String(count) + ' règles de ces fichiers ont déjà été accordées et le restent :'
+  },
+  uiProjectRulesKeeping: ({ path }: { path: string | number }): string => 'L\'accord est conservé dans ' + String(path) + ' : les prochaines conversations ici ne redemandent pas ces règles. Une règle modifiée depuis est redemandée.',
+  uiProjectRulesList: (): string => 'Règles proposées',
+  uiProjectRulesNotKept: ({ path }: { path: string | number }): string => 'Accordé pour cette conversation seulement : l\'accord n\'a pas pu être écrit dans ' + String(path) + ', la prochaine conversation ici redemandera.',
+  uiProjectRulesSubtitle: (): string => 'Accorder les règles d\'autorisation que ce projet propose ?',
+  uiProjectRulesThisChat: (): string => 'L\'accord ne vaut que pour cette conversation et n\'est pas écrit.',
+  uiProjectRulesTitle: (): string => 'Règles du projet',
   uiRecallFixKey: catalogEnUs.uiRecallFixKey,
   uiRecallHeading: catalogEnUs.uiRecallHeading,
   uiRecallIndexing: catalogEnUs.uiRecallIndexing,
@@ -229,6 +316,18 @@ const catalogFr: Messages = {
   uiRecalledTool: catalogEnUs.uiRecalledTool,
   uiRecalledUnread: catalogEnUs.uiRecalledUnread,
   uiRecalledYou: catalogEnUs.uiRecalledYou,
+  uiRulesNoteDirectories: (): string => 'Un fichier de réglages nomme ces dossiers, et ils ne sont pas ouverts :',
+  uiRulesNoteGranted: (): string => 'Ces règles d\'autorisation que proposent les réglages du projet sont accordées, et donc en vigueur :',
+  uiRulesNoteGrantedBefore: (): string => 'accordée auparavant',
+  uiRulesNoteGrantedRecord: ({ path }: { path: string | number }): string => 'L\'accord est conservé dans ' + String(path) + ' : les prochaines conversations ici ne les redemandent pas. Une règle que le projet modifie est redemandée.',
+  uiRulesNoteGrantedSummary: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return String(count) + ' règle du projet accordée.'
+    return String(count) + ' règles du projet accordées.'
+  },
+  uiRulesNoteGrantedThisChat: (): string => 'Elles ne sont accordées que pour cette conversation.',
+  uiRulesNoteProposed: (): string => 'Ces règles d\'autorisation que proposent les réglages du projet n\'ont pas été accordées. Une règle d\'autorisation répond à une question à votre place : seule une règle que vous accordez, ou une de votre propre fichier de réglages, est en vigueur. On vous demandera encore :',
+  uiRulesNoteRefused: (): string => 'Ces dossiers qu\'un fichier de réglages nomme ne peuvent pas être ouverts :',
   uiSettings: (): string => 'Réglages',
   uiSettingsAppearance: (): string => 'Apparence',
   uiSettingsDisplayLanguage: (): string => 'Langue d\'affichage',

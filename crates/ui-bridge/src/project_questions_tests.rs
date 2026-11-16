@@ -276,6 +276,10 @@ fn a_repeat_or_stale_reply_is_refused() {
         json!({"session": session, "request": id + 1, "granted": true}),
     ));
     assert!(!allows(&bridge, &session, "example.test"));
+    // A window refused as stale reads which question is out from the permissions list.
+    let listed = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
+    assert_eq!(listed["rulesQuestion"], question, "{listed}");
+    assert_eq!(listed["folderQuestion"], Value::Null, "{listed}");
     let missing = call(
         &mut bridge,
         "rules.reply",
@@ -301,6 +305,8 @@ fn a_repeat_or_stale_reply_is_refused() {
         "rules.reply",
         json!({"session": session, "request": id, "granted": false}),
     ));
+    let listed = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
+    assert_eq!(listed["rulesQuestion"], Value::Null, "{listed}");
     assert!(
         allows(&bridge, &session, "example.test"),
         "a repeat undid the yes"

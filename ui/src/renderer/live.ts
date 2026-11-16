@@ -20,8 +20,9 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
-import type { AgentEntry, SessionSettled } from '../shared/protocol'
+import type { AgentEntry, FolderQuestion, RefusedFolder, RulesQuestion, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
+import { reported } from './project-questions'
 
 /** A message waiting for the turn to end, and the grants it was written with. */
 export interface Queued {
@@ -170,6 +171,15 @@ export interface Live {
   /** The permission rules this session opened under. Null where the bridge reported none. */
   rules?: SettingsRules | null
   /**
+   * The question about the `allow` rules this checkout's settings propose, while it is out
+   * (PERM-15). Asked once trust is answered; stops the composer until it is answered.
+   */
+  rulesQuestion?: RulesQuestion | null
+  /** The question about one directory those settings name, while it is out (TRUST-9). Asked after the rules question. */
+  folderQuestion?: FolderQuestion | null
+  /** The directories a yes or the bypass mode could not open, each with the agent's sentence why. */
+  foldersRefused?: RefusedFolder[]
+  /**
    * The entry id of a prompt this window has sent and not yet been told the ordinal of.
    *
    * A prompt is drawn the moment it is sent, and where it landed among the things the user said
@@ -286,7 +296,12 @@ export function newLive(fields: Omit<Live, Starting>): Live {
 
 /** What a bridge's answer settles about a session, in the names `Live` holds it under. */
 export function settledBy(answer: SessionSettled) {
+  const asked = reported(answer)
   return {
+    rulesQuestion: asked.rulesQuestion,
+    folderQuestion: asked.folderQuestion,
+    foldersRefused: asked.foldersRefused,
+    ...(asked.folders ? { folders: asked.folders } : {}),
     keepingTrust: answer.keeping ?? null,
     shownKeepingTrust: answer.shownKeeping ?? null,
     confinedLinesNotice: answer.confinedLines ?? null,

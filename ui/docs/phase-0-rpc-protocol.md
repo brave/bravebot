@@ -949,7 +949,9 @@ remembered as declined.
 `permissions.list` takes `session` and returns `paths`, `commands` and `remembered`, the
 kept answer about the session's directory as §9 has it, read when the list is asked for. Each
 `paths` entry is `{ path, shownPath, integrity }`: a client draws `shownPath` and revokes with `path`,
-and tells the project root by an empty `path`.
+and tells the project root by an empty `path`. Both also carry `rulesQuestion`, `folderQuestion`,
+`foldersRefused` and `folders` as §9.1 has them, so a client whose reply was refused with
+`no_such_request` can read which question, if any, is out now.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
 `kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
 every answer kept about the directory so the next session there is asked, and leaves this

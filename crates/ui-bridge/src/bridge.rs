@@ -2794,7 +2794,7 @@ impl Bridge {
                 );
             }
         }
-        Ok(json!({
+        let mut listed = json!({
             "paths": listed_rules(&state.answers.trust),
             "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
@@ -2803,7 +2803,12 @@ impl Bridge {
             // The rules this session opened under. They are read from settings files and
             // cannot be revoked here: editing the file changes them for the next session.
             "settingsRules": state.answers.rules.json(),
-        }))
+        });
+        drop(state);
+        // The question out, if any, so a window whose answer to one was refused as stale can
+        // read which one is waiting now (§9.1).
+        merge(&mut listed, self.questions_report(&handle));
+        Ok(listed)
     }
 
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
