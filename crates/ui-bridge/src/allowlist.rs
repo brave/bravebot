@@ -140,6 +140,11 @@ pub const DENIED: &[&str] = &[
     "session.import",
     "session.rewind",
     "session.note",
+    // Open another directory beside the workspace and vouch for it, or close one (TRUST-9). The
+    // window adds one only through its main process's own folder picker.
+    "session.folders.list",
+    "session.folders.add",
+    "session.folders.close",
     "models.list",
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",

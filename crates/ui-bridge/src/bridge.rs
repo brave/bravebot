@@ -103,6 +103,9 @@ struct Open {
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
+    /// The folders open beside the project, as the state held them when they last changed, for a
+    /// `session.folders.list` asked while a turn holds the state.
+    folders: Vec<PathBuf>,
 }
 
 impl Open {
@@ -117,6 +120,7 @@ impl Open {
     ) -> Self {
         Self {
             project,
+            folders: state.directories.clone(),
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -285,6 +289,9 @@ impl Bridge {
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
+            "session.folders.list" | "session.folders.add" | "session.folders.close" => {
+                self.folders(request)
+            }
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -5542,6 +5549,13 @@ mod watch_tests {
         assert_eq!(events.lock().unwrap()[0].data["reason"], "expired");
     }
 }
+
+#[path = "folders.rs"]
+mod folders;
+
+#[cfg(test)]
+#[path = "folders_tests.rs"]
+mod folders_tests;
 
 #[cfg(test)]
 #[path = "completion_tests.rs"]
