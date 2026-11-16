@@ -3166,6 +3166,15 @@ mod tests {
             )
             .unwrap();
         }
+        // A run that finds no handler falls back to `BROWSER`, and with it unset and a display it
+        // starts `x-www-browser`, `firefox` or `chromium`, which may not end by the deadline.
+        let fallback = root.join("fallback.sh");
+        std::fs::write(
+            &fallback,
+            format!("#!/bin/sh\n: > '{}'\n", log.join("fallback").display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(0o755)).unwrap();
         let planted = "x-scheme-handler/bravebot-test=../../../stage/handler.desktop\n";
         let installed_default = "x-scheme-handler/bravebot-test=handler.desktop\n";
         let list = |default: &str| format!("[Default Applications]\n{default}");
@@ -3205,6 +3214,7 @@ mod tests {
             .env("XDG_CONFIG_HOME", &config)
             .env("XDG_CONFIG_DIRS", &config)
             .env("WAYLAND_DISPLAY", "bravebot-test-no-such-display")
+            .env("BROWSER", format!("{} %s", fallback.display()))
             .arg("bravebot-test://example.invalid/");
         if !removed {
             command.env(variable, &value);

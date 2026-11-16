@@ -8392,7 +8392,15 @@ mod tests {
         // bottom, so a fixed height would turn this into a test of how many commands fit on a
         // terminal of that size.
         let height = crate::command_table::commands().len() as u16 + 6;
-        let output = rendered_at(&session, 120, height);
+        // Wide enough for the widest hint beside the longest description, for the same reason.
+        let commands = crate::command_table::commands();
+        let longest = |text: fn(&crate::command_table::Command) -> usize| {
+            commands.iter().map(text).max().unwrap_or(0)
+        };
+        let hint = longest(|command| command.name.len() + 1 + command.argument.len());
+        let description = longest(|command| command.description.chars().count());
+        let width = u16::try_from(hint + description + 8).expect("a terminal width");
+        let output = rendered_at(&session, width, height);
 
         for command in crate::command_table::commands() {
             assert!(output.contains(command.name), "{} missing", command.name);
