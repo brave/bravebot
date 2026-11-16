@@ -383,6 +383,35 @@ pub(super) fn read_not_returned(
     }
 }
 
+/// What a quarantined `search` or `list_files` result says when the call did not ask to read and
+/// repeating it with `read: true` would return the result: where the mode or a check answers
+/// `vet_content`, so `read` has a release to make, and where the result fits in one.
+///
+/// Without it the reference names `vet_content` alone, and a planner follows that to a second call
+/// and then a further round to use what it returned. Where a person answers `vet_content`, `read`
+/// changes nothing (VET-6), so the planner is not sent to it. `fits` is whether the result is no
+/// larger than a result may hold and not empty, which the caller reads off the reference's stated
+/// size; a listing handed over as one reference per entry has no size, so it passes `true`.
+///
+/// Decided from the planner's argument, the mode and the tool's name, never from what the result
+/// holds. It names no mode and no check (VET-5).
+pub(super) fn read_would_release(
+    tool: &str,
+    read_asked: bool,
+    vet_content_is: ReadOutputIs,
+    fits: bool,
+) -> String {
+    match (tool, read_asked, vet_content_is, fits) {
+        ("search" | "list_files", false, ReadOutputIs::Unasked | ReadOutputIs::ByACheck, true) => {
+            format!(
+                "\n\nTo read it without a vet_content call, repeat this {tool} call with read: \
+                 true: that asks for the result to be released in the result that returns it."
+            )
+        }
+        _ => String::new(),
+    }
+}
+
 /// Where git ran in a directory whose repository `read_git` opens: the output of git log or show
 /// is what `read_git` answers with nobody asked, and for any other program, or a repository it
 /// declines, the sentence is noise. `ran_git` is decided by the caller and not when the line ran,
@@ -811,6 +840,55 @@ mod tests {
         for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
             assert_eq!(read_not_returned(true, gate, Some(11), 10), TOO_LONG);
             assert_eq!(read_not_returned(true, gate, None, 10), TOO_LONG);
+        }
+    }
+
+    /// The regression it rejects: a quarantined search or listing that did not ask to read, in a
+    /// mode where `read` has a release to make, being left to name `vet_content` alone, which costs
+    /// the planner a second call and a further round.
+    #[test]
+    fn a_walk_that_did_not_ask_to_read_is_told_read_true_would_release_it() {
+        for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            for tool in ["search", "list_files"] {
+                let said = read_would_release(tool, false, gate, true);
+                assert!(
+                    said.contains(&format!("repeat this {tool} call with read: true")),
+                    "{tool} {gate:?}: {said}"
+                );
+            }
+        }
+    }
+
+    /// The regression it rejects: the advice given where `read` changes nothing (a person answers
+    /// `vet_content`), where the call already asked, where the result is empty or past a result's
+    /// size so a repeat would be kept back again, or for a tool that has no `read` to repeat with.
+    #[test]
+    fn nothing_is_said_of_read_true_where_it_would_release_nothing() {
+        for tool in ["search", "list_files"] {
+            assert_eq!(
+                read_would_release(tool, false, ReadOutputIs::Asked, true),
+                "",
+                "{tool}: a person is asked at vet_content, so read has nothing to release"
+            );
+            for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+                assert_eq!(
+                    read_would_release(tool, true, gate, true),
+                    "",
+                    "{tool}: the call already asked"
+                );
+                assert_eq!(
+                    read_would_release(tool, false, gate, false),
+                    "",
+                    "{tool}: the result is past a result's size or empty"
+                );
+            }
+        }
+        for tool in ["read_file", "run", "fetch_url", "read_git"] {
+            assert_eq!(
+                read_would_release(tool, false, ReadOutputIs::Unasked, true),
+                "",
+                "{tool}: not a walk"
+            );
         }
     }
 
