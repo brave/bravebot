@@ -2,7 +2,8 @@
 // answered from the main process, so no agent and no model service is involved.
 //
 // `makeProfile` writes into fresh temporary directories, and the drivers launch with
-// `--user-data-dir=<profile>`, so the app's own state is not the person's.
+// `--user-data-dir=<profile>` and `BRAVEBOT_HOME=<state>`, so neither the app's own state nor the
+// bots file the agent keeps is the person's.
 //
 // The values at the bottom are test data the other mocked-bridge drivers (`drive-visual`,
 // `drive-perf`, `drive-shown` and `drive-session-list`) repeat. A driver passes them to its own
@@ -16,8 +17,9 @@ export const idA = '11111111-1111-4111-8111-111111111111'
 export const idB = '22222222-2222-4222-8222-222222222222'
 
 /**
- * A temporary profile and project directory, with a Review Bot in `bravebot-ui.json` and its
- * memory file under the project. `copy` also creates the sibling `<directory>-copy`.
+ * A temporary profile, state directory and project directory, with a Review Bot in the state
+ * directory's `bots.json` and its memory file under the project. `copy` also creates the sibling
+ * `<directory>-copy`.
  */
 export function makeProfile({ conversations = [idA, idB], copy = false } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-ux-profile-'))
@@ -38,10 +40,13 @@ export function makeProfile({ conversations = [idA, idB], copy = false } = {}) {
     retired: 0,
     created: 1,
   }
-  writeFileSync(join(profile, 'bravebot-ui.json'), JSON.stringify({ bots: [bot], recents: [directory] }))
+  const state = join(profile, 'agent-state')
+  mkdirSync(state)
+  writeFileSync(join(state, 'bots.json'), JSON.stringify({ bots: [bot] }))
+  writeFileSync(join(profile, 'bravebot-ui.json'), JSON.stringify({ recents: [directory] }))
   mkdirSync(join(directory, '.bravebot-ui/bots'), { recursive: true })
   writeFileSync(join(directory, '.bravebot-ui/bots/review-bot.md'), '# Preferences\n\n- Keep reviews concise.\n')
-  return { profile, directory }
+  return { profile, directory, state }
 }
 
 /**

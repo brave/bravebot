@@ -14,13 +14,14 @@ anything, so that sentence is no reason to drop a candidate about them. This lan
 permission, a program that starts or a string that is shown?**
 
 `BACKEND-24` says which layer answers for which name, and `BACKEND-33` names the variables an `env`
-block sets and the seventeen read from the person's layers alone:
+block sets and the twenty read from the person's layers alone:
 
 {layer_clauses}
 
 `PINNABLE` in `crates/config/src/managed.rs` lists the names a machine's managed layer may pin, which
 its comment describes as the ones that decide where a request goes. All eight are read from the
-person's layers alone, the six Bedrock names and the two endpoints (`BACKEND-33`), and the test
+person's layers alone, the six Bedrock names and the two endpoints (`BACKEND-33`), as is
+`BRAVEBOT_DEFAULT_MODEL`, which is not pinnable; the test
 `no_pinnable_name_is_decided_by_a_checkouts_files` in `crates/config/src/settings.rs` fails when a
 name that a checkout's files decide is added to it.
 
@@ -37,7 +38,7 @@ The fields of `Settings`, which are what a settings file can end up setting: {se
 
 For each field, and for each name in the `env` table:
 
-**Which layers can set it.** Follow the field from `layered_since` to the merge rule BACKEND-24 states
+**Which layers can set it.** Follow the field from `Settings::layered` to the merge rule BACKEND-24 states
 for it. A name that resolves to the closest layer can be set by a project or local file.
 
 **What it decides.** A host, a region, a proxy, a certificate bundle, a profile, a model, or a path
@@ -49,18 +50,20 @@ region or a profile that is not.
 
 **What is signed, sent or granted to it.** Where a checkout's value moves a request, ask what the
 request carries: a credential's signature, a header, the conversation. Where it decides a permission,
-ask whether it can widen one. A list that can only narrow, which BACKEND-24 gives `scrubEnv` and the
-permission lists as, is sound. A value that selects or replaces is not.
+ask whether it can widen one. A list that can only narrow, which BACKEND-24 gives the
+permission lists as, is sound. `scrubEnv` is no longer one: a name in it can keep a restriction off a
+program, so BACKEND-24 reads it from the person's layers alone. A value that selects or replaces is
+not.
 
 **What it makes the program print.** A key nothing reads, an entry that does not parse, an `env` name
 and a path in a sandbox list are each printed back by `doctor`, `-p` and `--plain`, in some cases
 before the trust question. Trace each string from the file to the writer and report one that reaches
 a terminal with its control characters.
 
-**Whether the file is the person's.** A file the command line names is the person's act, and it is
-read after the others only when it sits outside the checkout. `layered_since` takes the directory the
-session started in as well as the current one. Check that a named file inside the checkout is treated
-as the checkout's.
+**Whether the file is the person's.** A file the command line names is the person's act wherever it
+sits, the checkout's own file included (PERM-14), so a finding that only says a named file inside the
+checkout is obeyed is a Known cost and not a defect. Check that the project and local files read as
+found layers, and not named, are still treated as the checkout's.
 
 ### What is not this lane
 

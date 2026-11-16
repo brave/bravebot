@@ -21,10 +21,13 @@ Filed issues are assigned to netzenbot, and `/pr-fix <issue>` implements one.
 every issue a search returns, in one pull request, and `/pr-fix <pr>` handles its review comments.
 `make implement-issues ISSUES="<issues or search>"` opens it in the terminal client. Before the session
 opens it refuses the whole run when an issue is assigned to anybody but the account `gh` writes as,
+or is labelled `develop-on/linux`, `develop-on/macos` or `develop-on/windows` and none of those is the
+platform of the host (an issue with no such label can be developed anywhere),
 assigns that account to each issue, and adds `bot/in-progress`, which it removes when the session
 ends. The session is told what was written and when, so it does not take the assignee or the label
-for another session's work. `FORCE=1` works the issues that have another assignee as well, leaves
-those assignees, and tells the session which issues they are. `BYPASS=1` opens the session with
+for another session's work. `FORCE=1` works the issues that have another assignee or are labelled for
+another platform as well, leaves those assignees and labels, and tells the session which issues they
+are. `BYPASS=1` opens the session with
 `--dangerously-bypass-approvals-and-sandbox`, so the whole session runs without asking before a command
 and without the sandbox. The session reads issue and comment text that other people wrote, so use it
 for issues whose text you trust. Fixing is a separate step from finding, and a run never does both.
@@ -45,7 +48,7 @@ The schedules are how often to run each job. Only the peer-advisories schedule i
 | [`/peer-advisories`](../../agents/skills/peer-advisories/SKILL.md) | Do security advisories published against other coding agents describe a defect bravebot shares? | Weekly | `docs/peer-advisories-vetted` |
 | [`/triage-issues`](../../agents/skills/triage-issues/SKILL.md) | Which open issues are already fixed, stale or still standing, and what are their importance, urgency and size? | Every two weeks, and before a release | none (it edits labels and closes issues) |
 | [`/session-review`](../../agents/skills/session-review/SKILL.md) | Where did bravebot fail or frustrate the person using it, or waste context, cost or time, in recorded sessions? | Weekly, on a machine that has sessions | none (a marker is written beside each session, locally) |
-| [`/security-audit`](../../agents/skills/security-audit/SKILL.md) | Does the rule hold that untrusted content never enters the driver or the planner? | Monthly, and `/security-audit changed` before asking for review on a diff that touches a label | none (it skips what the tracker holds) |
+| [`/security-audit`](../../agents/skills/security-audit/SKILL.md) | Does the rule hold that untrusted content never enters the driver or the planner? | Monthly, and `/security-audit changed` before asking for review on a diff that touches a label, and `security-audit.py --before-pr BASE` before opening a pull request, which stops on a finding at error | none (it skips what the tracker holds) |
 | [`/check-spec`](../../agents/skills/check-spec/SKILL.md) | Does the code do what each spec clause says? | Monthly, and `/check-spec changed` before committing a change to code a spec governs | `docs/check-spec-reviewed` |
 | [`/maintenance`](../../agents/skills/maintenance/SKILL.md) | What code could be deleted, shared or split without changing what it does? | Monthly, and after a large run of feature pull requests | `docs/maintenance-reviewed` |
 | [`/peer-features`](../../agents/skills/peer-features/SKILL.md) | What do other coding agents document that bravebot lacks, and where could bravebot be about 10% better than the best of them? | Monthly | `docs/peer-features-reviewed` |

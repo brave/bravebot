@@ -9,6 +9,14 @@ use std::time::Duration;
 /// what to drop.
 pub(crate) const MAX_ENTRIES: usize = 2_000;
 
+/// How many files a depth-bounded listing takes from any one directory.
+///
+/// Without it a walk in name order spends the whole of [`MAX_ENTRIES`] on the first directory
+/// that holds thousands of files, and every directory after it is missing from a listing whose
+/// purpose is to show the shape of the tree (LIST-5). The directory is named in
+/// [`Listing::partly_listed`] with how many files were left out of it.
+pub(crate) const MAX_FILES_PER_DIRECTORY: usize = 200;
+
 /// How many files a *search* may walk before it gives up on the rest.
 ///
 /// Far above [`MAX_ENTRIES`] because the two caps guard different things. A listing's paths
@@ -209,6 +217,9 @@ pub struct Listing {
     pub directories: Vec<String>,
     /// Whether files were left out because a cap was reached.
     pub truncated: bool,
+    /// Whether the cap over the whole walk ([`MAX_ENTRIES`]) was reached, as against files left
+    /// out by the per-directory cap alone. Implies `truncated`.
+    pub at_the_cap: bool,
     /// Whether a directory beneath the one named could not be opened and was left out.
     ///
     /// A fact about the shape of the walk and never the directory's name: the error that opening
@@ -221,6 +232,10 @@ pub struct Listing {
     /// links lists as empty without it, and a planner reads an empty listing as an empty
     /// directory (LIST-6).
     pub links: usize,
+    /// Directories a bounded walk took only [`MAX_FILES_PER_DIRECTORY`] files from, each with how
+    /// many of its files were left out. The count comes from directory entries and no file's
+    /// bytes. Empty for an unbounded walk, which the per-directory cap does not apply to.
+    pub partly_listed: Vec<(String, usize)>,
 }
 
 /// The result of a repository map.

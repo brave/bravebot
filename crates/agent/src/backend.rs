@@ -10,11 +10,12 @@
 //! environment and the user's own settings file before any turn starts, and nothing a model says can
 //! reach it.
 
-use crate::outcome::{BackendKind, Category, Diagnosis};
+use crate::outcome::{BackendKind, Category, Diagnosis, RetrySetting};
 use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
 use bravebot_aichat::call::Conceded;
 use bravebot_aichat::generate_content::GenerateContentClient;
+use bravebot_aichat::ollama_chat::OllamaChatClient;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::responses::ResponsesClient;
 use bravebot_aichat::{
@@ -39,7 +40,7 @@ use std::path::{Path, PathBuf};
 /// A failure from whichever backend was asked.
 ///
 /// One type so a caller handles one error. The variants stay distinct because the remedies differ:
-/// an expired AWS session is fixed by signing in, and an unusable premium key by unsetting it.
+/// an expired AWS session is fixed by signing in, and a refused premium key by replacing it.
 #[derive(Debug)]
 pub enum BackendError {
     Aichat(ChatError),
@@ -74,10 +75,10 @@ pub enum BackendError {
         conceded: Conceded,
         /// The backend that sent the requests, where the caller said so.
         backend: Option<BackendKind>,
-        /// Whether the backend that sent the requests has a `provider` entry to state `maxRetries`
-        /// in, set from the variant that sent them and never from a reply
+        /// Where the backend that sent the requests lets a person state `maxRetries`, set from the
+        /// variant that sent them and never from a reply
         /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
-        retry_setting: bool,
+        retry_setting: RetrySetting,
         cause: Box<BackendError>,
     },
 }
@@ -170,7 +171,7 @@ impl BackendError {
             context_tokens,
             conceded: Conceded::default(),
             backend: None,
-            retry_setting: false,
+            retry_setting: RetrySetting::None,
             cause: Box::new(self),
         }
     }
@@ -225,11 +226,10 @@ impl BackendError {
         }
     }
 
-    /// This failure marked with whether the backend that sent the requests has a `provider` entry to
-    /// state `maxRetries` in, which is a fact about the variant and its configuration and never
-    /// anything a reply or an address said. A failure that counted no requests is returned as it
-    /// was.
-    pub(crate) fn with_retry_setting(self, entry: bool) -> Self {
+    /// This failure marked with where the backend that sent the requests lets a person state
+    /// `maxRetries`, which is a fact about the variant and its configuration and never anything a
+    /// reply or an address said. A failure that counted no requests is returned as it was.
+    pub(crate) fn with_retry_setting(self, setting: RetrySetting) -> Self {
         match self {
             Self::Attempted {
                 attempts,
@@ -245,7 +245,7 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 backend,
-                retry_setting: entry,
+                retry_setting: setting,
                 cause,
             },
             other => other,
@@ -279,12 +279,11 @@ impl BackendError {
                 cause,
                 ..
             } => {
-                let diagnosis = cause.diagnosis().after(*attempts).with_conceded(*conceded);
-                let diagnosis = if *retry_setting {
-                    diagnosis.with_retry_setting()
-                } else {
-                    diagnosis
-                };
+                let diagnosis = cause
+                    .diagnosis()
+                    .after(*attempts)
+                    .with_conceded(*conceded)
+                    .with_retry_setting(*retry_setting);
                 return match backend {
                     Some(kind) => diagnosis.on_backend(*kind),
                     None => diagnosis,
@@ -301,11 +300,6 @@ impl BackendError {
             Self::Aichat(error) => match error {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
-                ChatError::Subscription(_) => {
-                    // The key could not be presented, so the person is sent to the key's own
-                    // commands (PREM-10) rather than told only that credentials were refused.
-                    return Diagnosis::of(Category::Unauthorized).with_premium_key();
-                }
                 ChatError::Account(failure) => category_of_account(failure),
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
                 ChatError::Incomplete => Category::Incomplete,
@@ -751,6 +745,16 @@ pub enum Backend<'a> {
 /// Not content. What a service refused is the transport's own report, read from a status.
 pub fn bedrock_reads_effort(model: &str) -> bool {
     !bravebot_bedrock::refusals(model).effort
+}
+
+/// Whether the Bedrock model `model` is recorded as refusing the cache breakpoints, so that its
+/// requests carry none and the whole prefix is paid for on each of them.
+///
+/// False for a model no Bedrock account offers, whose requests this record says nothing about.
+/// Not content. What a service refused is the transport's own report, read from a status and from
+/// counts of requests ([BACKEND-27](../../../docs/specs/backends.md#BACKEND-27)).
+pub fn breakpoints_given_up(config: &Config, model: &str) -> bool {
+    config.bedrock_for(model).is_some() && bravebot_bedrock::breakpoints_given_up(model)
 }
 
 /// What the Ollama at `host` has pulled, for the import to offer: [`bravebot_aichat::ollama`]'s
@@ -1436,17 +1440,21 @@ impl<'a> Backend<'a> {
         }
     }
 
-    /// Whether this backend is reached through a `provider` entry, which is where `maxRetries` is
-    /// stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    /// Where this backend lets a person state `maxRetries`, which is a `provider` entry or, for an
+    /// AWS account reached through the tier variables, `BRAVEBOT_BEDROCK_MAX_RETRIES`
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
     ///
-    /// Read from the configuration the backend was selected with. The Brave endpoint, a tier-variable
-    /// Bedrock account, the Vertex service the environment names and the two sign-in accounts have no
-    /// entry to put it in.
-    fn has_retry_setting(&self) -> bool {
+    /// Read from the configuration the backend was selected with. The Brave endpoint, the Vertex
+    /// service the environment names and the two sign-in accounts have no place to put it.
+    fn retry_setting(&self) -> RetrySetting {
         match self {
-            Self::Bedrock { config, .. } => config.named_by_block(),
-            Self::Gateway { provider, .. } => provider.written_in_entry(),
-            Self::Aichat { .. } | Self::Account { .. } | Self::XaiAccount { .. } => false,
+            Self::Bedrock { config, .. } if config.named_by_block() => RetrySetting::Entry,
+            Self::Bedrock { .. } => RetrySetting::Variable,
+            Self::Gateway { provider, .. } if provider.written_in_entry() => RetrySetting::Entry,
+            Self::Gateway { .. }
+            | Self::Aichat { .. }
+            | Self::Account { .. }
+            | Self::XaiAccount { .. } => RetrySetting::None,
         }
     }
 
@@ -1457,7 +1465,7 @@ impl<'a> Backend<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
-        let entry = self.has_retry_setting();
+        let entry = self.retry_setting();
         self.send(policy, request)
             .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
     }
@@ -1496,11 +1504,9 @@ impl<'a> Backend<'a> {
                 cancel,
                 session,
             } => {
-                let mut client = gateway_client(config, provider, wire_model, egress)?
-                    .with_cache_key(provider, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client =
+                    gateway_client(config, provider, wire_model, egress, cancel.as_ref())?
+                        .with_cache_key(provider, session.as_ref());
                 client.complete(policy, request)
             }
             Self::Account {
@@ -1510,10 +1516,13 @@ impl<'a> Backend<'a> {
                 session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client = account_client(
+                    wire_model,
+                    egress,
+                    &mut sign_in,
+                    session.as_ref(),
+                    cancel.as_ref(),
+                );
                 client.complete(policy, request)
             }
             Self::XaiAccount {
@@ -1539,7 +1548,7 @@ impl<'a> Backend<'a> {
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
-        let entry = self.has_retry_setting();
+        let entry = self.retry_setting();
         self.send_streaming(policy, request, progress)
             .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
     }
@@ -1601,11 +1610,9 @@ impl<'a> Backend<'a> {
                 cancel,
                 session,
             } => {
-                let mut client = gateway_client(config, provider, wire_model, egress)?
-                    .with_cache_key(provider, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client =
+                    gateway_client(config, provider, wire_model, egress, cancel.as_ref())?
+                        .with_cache_key(provider, session.as_ref());
                 client.complete_streaming(policy, request, progress)
             }
             Self::Account {
@@ -1615,10 +1622,13 @@ impl<'a> Backend<'a> {
                 session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
+                let mut client = account_client(
+                    wire_model,
+                    egress,
+                    &mut sign_in,
+                    session.as_ref(),
+                    cancel.as_ref(),
+                );
                 client.complete_streaming(policy, request, progress)
             }
             Self::XaiAccount {
@@ -1669,7 +1679,8 @@ fn bedrock_client<'a>(
     client
 }
 
-/// A client for the ChatGPT account, asking `sign_in` for a token before each request.
+/// A client for the ChatGPT account, asking `sign_in` for a token before each request and stopped by
+/// `cancel` where one is given.
 ///
 /// The service, its protocol and its headers are constants, and the session identifier is the one of
 /// `session`, or one of its own where the request belongs to none. A request that asks for an effort
@@ -1681,6 +1692,7 @@ fn account_client<'a>(
     egress: &'a Egress,
     sign_in: &'a mut crate::chatgpt::StoredSignIn,
     session: Option<&crate::chatgpt::AccountSession>,
+    cancel: Option<&Cancel>,
 ) -> GatewayClient<'a> {
     let identifier = match session {
         Some(session) => session.identifier().to_string(),
@@ -1695,10 +1707,14 @@ fn account_client<'a>(
         sign_in,
         identifier,
     );
-    GatewayClient::Responses(match session {
+    let client = GatewayClient::Responses(match session {
         Some(session) => client.holding_the_level(session.effort()),
         None => client,
-    })
+    });
+    match cancel {
+        Some(cancel) => client.with_cancel(cancel.clone()),
+        None => client,
+    }
 }
 
 /// A client for the xAI account, presenting `token`.
@@ -1752,19 +1768,20 @@ fn cache_key(
 ///
 /// The token is read here rather than held on the variant, because it is read from the process
 /// environment at the point a request needs signing: a value read once at startup would go stale in a
-/// session where somebody exported a new one.
+/// session where somebody exported a new one. The client is stopped by `cancel` where one is given.
 fn gateway_client<'a>(
     config: &'a Config,
     provider: &'a bravebot_config::provider::Provider,
     wire_model: &str,
     egress: &'a Egress,
+    cancel: Option<&Cancel>,
 ) -> Result<GatewayClient<'a>, BackendError> {
     let ((token, headers), access_token) = gateway_parts_or_google_token(
         provider,
         |name| std::env::var(name).ok(),
         crate::gcloud::token,
     )?;
-    Ok(match provider.protocol() {
+    let client = match provider.protocol() {
         Protocol::ChatCompletions => {
             let client = AichatClient::new(config, egress)
                 .for_gateway(provider, wire_model, token)
@@ -1786,6 +1803,17 @@ fn gateway_client<'a>(
         Protocol::Responses => GatewayClient::Responses(
             ResponsesClient::new(egress, provider, wire_model, token).with_gateway_headers(headers),
         ),
+        Protocol::Ollama => GatewayClient::Ollama(
+            OllamaChatClient::new(egress, provider, wire_model, token)
+                .with_gateway_headers(headers)
+                .with_window(bravebot_config::provider::ollama_window_for(
+                    config.context_budget,
+                )),
+        ),
+    };
+    Ok(match cancel {
+        Some(cancel) => client.with_cancel(cancel.clone()),
+        None => client,
     })
 }
 
@@ -1843,6 +1871,7 @@ enum GatewayClient<'a> {
     Messages(AnthropicClient<'a>),
     GenerateContent(GenerateContentClient<'a>),
     Responses(ResponsesClient<'a>),
+    Ollama(OllamaChatClient<'a>),
 }
 
 impl GatewayClient<'_> {
@@ -1869,6 +1898,7 @@ impl GatewayClient<'_> {
             Self::Messages(client) => Self::Messages(client.with_cancel(stop)),
             Self::GenerateContent(client) => Self::GenerateContent(client.with_cancel(stop)),
             Self::Responses(client) => Self::Responses(client.with_cancel(stop)),
+            Self::Ollama(client) => Self::Ollama(client.with_cancel(stop)),
         }
     }
 
@@ -1882,6 +1912,7 @@ impl GatewayClient<'_> {
             Self::Messages(client) => counted!(client, client.complete(policy, request)),
             Self::GenerateContent(client) => counted!(client, client.complete(policy, request)),
             Self::Responses(client) => counted!(client, client.complete(policy, request)),
+            Self::Ollama(client) => counted!(client, client.complete(policy, request)),
         }
     }
 
@@ -1902,6 +1933,9 @@ impl GatewayClient<'_> {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Responses(client) => {
+                counted!(client, client.complete_streaming(policy, request, progress))
+            }
+            Self::Ollama(client) => {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
         }
@@ -2550,14 +2584,14 @@ mod tests {
         ));
     }
 
-    /// BACKEND-37: only a backend reached through a `provider` entry has a `maxRetries` to raise,
-    /// so only it is told to raise one. A gateway entry and an AWS entry have one; Brave's endpoint
-    /// and an AWS account reached through the tier variables have none.
+    /// BACKEND-37: only a backend with a place to state `maxRetries` is told to raise one. A gateway
+    /// entry and an AWS entry have `options.maxRetries`; an AWS account reached through the tier
+    /// variables has `BRAVEBOT_BEDROCK_MAX_RETRIES`; Brave's endpoint has none.
     ///
-    /// The faults this rejects: the flag true for every backend, false for every backend, and
-    /// decided by the variant alone, which would treat the two kinds of AWS account alike.
+    /// The faults this rejects: the setting the same for every backend, `None` for every backend,
+    /// and decided by the variant alone, which would treat the two kinds of AWS account alike.
     #[test]
-    fn only_a_backend_reached_through_a_provider_entry_has_a_retry_setting() {
+    fn each_backend_names_the_place_it_states_max_retries_in() {
         let mut config = with_a_gateway();
         let serde_json::Value::Object(root) = serde_json::from_str(
             r#"{"provider": {"amazon-bedrock": {
@@ -2572,12 +2606,20 @@ mod tests {
             .providers
             .extend(bravebot_config::provider::Provider::all(&root));
         let egress = Egress::new();
-        let has = |model: &str| Backend::select(&config, &egress, model).has_retry_setting();
+        let has = |model: &str| Backend::select(&config, &egress, model).retry_setting();
 
-        assert!(has("z-ai/glm-4.6"), "a gateway entry");
-        assert!(has("openai.gpt-5.6-sol"), "an AWS entry");
-        assert!(!has("opus-arn"), "an AWS account the tier variables name");
-        assert!(!has(DEFAULT_MODEL), "Brave's endpoint");
+        assert_eq!(has("z-ai/glm-4.6"), RetrySetting::Entry, "a gateway entry");
+        assert_eq!(
+            has("openai.gpt-5.6-sol"),
+            RetrySetting::Entry,
+            "an AWS entry"
+        );
+        assert_eq!(
+            has("opus-arn"),
+            RetrySetting::Variable,
+            "an AWS account the tier variables name"
+        );
+        assert_eq!(has(DEFAULT_MODEL), RetrySetting::None, "Brave's endpoint");
     }
 
     /// A `provider` block naming AWS reaches Bedrock, which signs, rather than the gateway client,
@@ -3248,6 +3290,59 @@ mod tests {
         }
     }
 
+    /// A stop reaches a streamed request on a configured gateway, so a person who presses it is not kept
+    /// waiting for a host that has not answered. The client is made in `gateway_client`, which applies
+    /// the stop. The regression it rejects is a client made without the stop, which leaves the turn
+    /// waiting for as long as the host is silent.
+    #[test]
+    fn a_stop_reaches_a_request_on_a_gateway_and_does_not_wait_for_the_host() {
+        use std::time::{Duration, Instant};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        // The host accepts the connection and never answers, until the test ends.
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let host = std::thread::spawn(move || {
+            let connection = listener.accept().expect("accept");
+            let _ = held.recv();
+            drop(connection);
+        });
+        let config = with_providers(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "http://127.0.0.1:{port}/v1", "apiKey": "a-key"}},
+                "models": {{"m": {{}}}}}}}}}}"#
+        ));
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_may_fetch(&mut sink);
+        let request = ChatRequest::new(
+            "gateway-a/m",
+            vec![bravebot_aichat::protocol::Message::user("a question")],
+        );
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut backend =
+            Backend::select(&config, &egress, "gateway-a/m").with_cancel(cancel.clone());
+        assert!(matches!(backend, Backend::Gateway { .. }));
+        let stopping = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stopping.cancel();
+        });
+
+        let started = Instant::now();
+        let error = backend
+            .complete_streaming(&mut policy, &request, |_| {})
+            .expect_err("a stopped request produced a completion");
+
+        assert!(error.is_cancelled(), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the stop waited for the host: {:?}",
+            started.elapsed()
+        );
+        release.send(()).expect("the host is waiting");
+        host.join().expect("host");
+    }
+
     /// XAI-16: a stop given to the backend is the one its request carries, and is the turn's own: the
     /// variant holds it where the client is made from it. A backend whose `with_cancel` ignores the xAI
     /// account would hold none.
@@ -3836,7 +3931,6 @@ mod tests {
             status(401),
             status(429),
             status(503),
-            BackendError::from(ChatError::Subscription("none".to_string())),
             BackendError::from(ChatError::NoContent),
             BackendError::from(ChatError::Incomplete),
             BackendError::from(ChatError::Cancelled),
@@ -3897,7 +3991,7 @@ mod tests {
         let asks = ChatRequest::new("m", Vec::new()).with_effort(Some(Effort::High));
         let mut sent = |session: Option<&crate::chatgpt::AccountSession>| {
             let GatewayClient::Responses(client) =
-                account_client("m", &egress, &mut sign_in, session)
+                account_client("m", &egress, &mut sign_in, session, None)
             else {
                 panic!("the account is spoken to in the Responses protocol");
             };
@@ -4312,6 +4406,92 @@ mod tests {
             backend.complete(&mut policy, &request)
         };
         (outcome, received.recv().expect("the request arrived"))
+    }
+
+    /// BACKEND-72: an entry naming an Ollama SDK is sent Ollama's own `/api/chat`, whose
+    /// `options.num_ctx` is the window the session budgets for, so a server started with its own
+    /// smaller default allocates the window the conversation is kept within rather than dropping
+    /// its start. The regressions rejected are speaking chat completions to it, sending no window,
+    /// and sending a window other than the session's.
+    #[test]
+    fn an_ollama_entry_is_asked_for_a_window_a_quarter_over_the_sessions_budget() {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let (sender, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("request line");
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            reader.read_exact(&mut body).expect("body");
+            let _ = sender.send((line.trim().to_string(), body));
+            let reply = concat!(
+                r#"{"message":{"role":"assistant","content":"hi"},"done":false}"#,
+                "\n",
+                r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","#,
+                r#""prompt_eval_count":3,"eval_count":1}"#,
+                "\n"
+            );
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n{reply}"
+                )
+                .as_bytes(),
+            );
+        });
+        let mut config = with_providers(&format!(
+            r#"{{"provider": {{"ollama": {{"npm": "ollama-ai-provider-v2",
+                "options": {{"baseURL": "http://127.0.0.1:{port}/api"}},
+                "models": {{"qwen3:8b": {{}}}}
+            }}}}}}"#
+        ));
+        config.adopt_window(Some(32_768));
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new(
+            "ollama/qwen3:8b",
+            vec![bravebot_aichat::protocol::Message::user("hi")],
+        );
+
+        let completion = Backend::select(&config, &egress, "ollama/qwen3:8b")
+            .complete_streaming(&mut policy, &request, |_| {})
+            .expect("the reply was read");
+
+        let (line, body) = received.recv().expect("the request arrived");
+        assert_eq!(line, "POST /api/chat HTTP/1.1");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(body["model"], "qwen3:8b");
+        // A quarter over the budget, since compaction runs a round after a prompt has passed it.
+        assert_eq!(body["options"]["num_ctx"], 40_960);
+        assert_eq!(completion.usage.prompt_tokens, 3);
     }
 
     /// The value of the header `name` in what a server received.
@@ -5074,7 +5254,7 @@ mod tests {
         let config = with_a_gateway();
         let egress = Egress::new();
         let (provider, wire) = config.provider_for("z-ai/glm-4.6").expect("offered");
-        let failure = gateway_client(&config, provider, wire, &egress)
+        let failure = gateway_client(&config, provider, wire, &egress, None)
             .err()
             .expect("refused");
         assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
@@ -5243,7 +5423,7 @@ mod tests {
             "a gateway that names no credential was given one anyway"
         );
         assert!(
-            gateway_client(&config, provider, wire, &egress).is_ok(),
+            gateway_client(&config, provider, wire, &egress, None).is_ok(),
             "a gateway that names no credential was refused one"
         );
     }
@@ -5549,6 +5729,50 @@ mod tests {
         }
     }
 
+    /// BACKEND-37: which endings of a request are told as a request that did not get through and
+    /// which as a reply that stopped. A transport failure, a redirect that did not end or named no
+    /// location, and a withdrawn request are transport; a reply cut at the time its request stated
+    /// for it is incomplete. The category is chosen from the kind of error the transport raised,
+    /// never from its text.
+    ///
+    /// The faults this rejects: a deadline told as transport, which sends a person to check a
+    /// network that answered, and a dropped connection told as incomplete before any of the reply
+    /// arrived.
+    #[test]
+    fn each_ending_of_a_request_is_told_as_transport_or_as_incomplete() {
+        use bravebot_net::EgressError;
+        let url = || "https://bedrock.example/invoke".to_string();
+        let category = |error: EgressError| of_egress(&error).category;
+
+        assert_eq!(
+            category(EgressError::Transport {
+                url: url(),
+                detail: "reset".to_string(),
+                transient: true,
+            }),
+            Category::Transport,
+            "a connection that dropped or went silent"
+        );
+        assert_eq!(
+            category(EgressError::TooManyRedirects { url: url() }),
+            Category::Transport
+        );
+        assert_eq!(
+            category(EgressError::MissingLocation { url: url() }),
+            Category::Transport
+        );
+        assert_eq!(
+            category(EgressError::Stopped { url: url() }),
+            Category::Transport,
+            "a withdrawn request, which is reported as a stop before it gets here"
+        );
+        assert_eq!(
+            category(EgressError::OutOfTime { url: url() }),
+            Category::Incomplete,
+            "a reply cut at the time its request stated for it"
+        );
+    }
+
     /// A turn asks again after an empty reply, so a reply that was cut or garbled must not pass
     /// for one: asking a model to carry on from something it never finished saying is answering
     /// the wrong failure.
@@ -5588,11 +5812,10 @@ mod tests {
 
     /// BACKEND-37: a refusal of a request that carried the premium key is marked as the key's, and
     /// the mark survives the count of attempts that wraps it. A refusal with a 401 or a 403 of any
-    /// other request is not marked. A premium key that could not be produced is marked too.
+    /// other request is not marked.
     ///
-    /// The regressions it rejects are a mark lost when the failure is counted, a mark set on every
-    /// unauthorized failure, and a premium key that could not be produced told in the generic
-    /// sentence.
+    /// The regressions it rejects are a mark lost when the failure is counted and a mark set on
+    /// every unauthorized failure.
     #[test]
     fn a_refusal_of_the_premium_key_is_marked_through_the_count_of_attempts() {
         let status = |code: u16| {
@@ -5622,11 +5845,6 @@ mod tests {
             .counted(1, None, None)
             .diagnosis();
         assert_eq!(other.category, Category::Unavailable);
-        let unusable = BackendError::from(ChatError::Subscription("not held".into()))
-            .counted(0, None, None)
-            .diagnosis();
-        assert_eq!(unusable.category, Category::Unauthorized);
-        assert!(unusable.premium_key);
     }
 
     /// BACKEND-37, PREM-10: the mark on a refused premium key is set where the backend makes the
@@ -5640,12 +5858,10 @@ mod tests {
     fn a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend() {
         struct Lent;
         impl Subscription for Lent {
-            fn next_credential(
-                &mut self,
-            ) -> Result<bravebot_aichat::SubscriptionCredential, String> {
-                Ok(bravebot_aichat::SubscriptionCredential {
+            fn next_credential(&mut self) -> bravebot_aichat::SubscriptionCredential {
+                bravebot_aichat::SubscriptionCredential {
                     key: bravebot_config::Secret::new("a-key"),
-                })
+                }
             }
         }
 
@@ -5726,9 +5942,8 @@ mod tests {
         }
     }
 
-    /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
-    /// and an unusable premium key by unsetting it, and a person shown the wrong one is sent to
-    /// fix something that is not broken.
+    /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in,
+    /// and a person shown another backend's remedy is sent to fix something that is not broken.
     #[test]
     fn each_backend_keeps_its_own_explanation() {
         let bedrock = BackendError::from(BedrockError::Credentials(
@@ -5738,10 +5953,6 @@ mod tests {
         ))
         .to_string();
         assert!(bedrock.contains("aws sso login"), "{bedrock}");
-
-        let premium = BackendError::from(ChatError::Subscription("not held".into())).to_string();
-        assert!(premium.contains("bravebot auth login brave"), "{premium}");
-        assert!(!premium.contains("aws sso login"), "{premium}");
     }
 
     /// A gateway nothing holds a token for is a setting somebody has not finished, not a service
@@ -5753,7 +5964,7 @@ mod tests {
         let config = with_a_gateway();
         let egress = Egress::new();
         let (provider, wire) = config.provider_for("z-ai/glm-4.6").expect("offered");
-        let failure = gateway_client(&config, provider, wire, &egress)
+        let failure = gateway_client(&config, provider, wire, &egress, None)
             .err()
             .expect("refused");
 

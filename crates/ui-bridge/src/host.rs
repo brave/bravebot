@@ -185,7 +185,11 @@ impl Host {
         }))
         .with_settings(setup.settings)
         // Nobody can answer a session's questions until its client has the view of it.
-        .refusing_questions_until_set();
+        .refusing_questions_until_set()
+        // The host offers its client no `session.mode` ([`allowlist::DENIED`]), and nobody is at
+        // the host to press a key, so a session opened in auto, as the person's own
+        // `permissions.startInAuto` makes a window's (AUTO-1), could not be moved out of it.
+        .opening_in_ask();
         Self {
             instance: new_instance(),
             inspection: setup.inspection,
@@ -355,11 +359,15 @@ impl Host {
             params: json!({ "directory": directory }),
         };
         let opened = self.bridge.dispatch(&checked)?;
-        if let Some(handle) = opened.get("session").and_then(Value::as_str) {
+        if let Some(handle) = opened
+            .get("session")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
             if let Ok(mut owners) = self.owners.lock() {
-                owners.insert(handle.to_string(), connection);
+                owners.insert(handle.clone(), connection);
             }
-            self.sessions.insert(handle.to_string(), None);
+            self.sessions.insert(handle, None);
         }
         Ok(opened)
     }

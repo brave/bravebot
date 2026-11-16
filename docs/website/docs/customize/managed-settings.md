@@ -80,9 +80,19 @@ answered by this file and nothing else is consulted for it; these two take the s
 file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
 where it did.
 
+`"permissions": { "startInAuto": true }` is not read here. The key opens sessions in the auto mode, so
+only the file in a person's own directory and the file `--settings` names can write it, and a copy in
+this file opens nothing. `bravebot doctor` says so where this file names it. The key that would let an
+administrator remove the mode for a machine is not built yet
+([#3568](https://github.com/brave/bravebot/issues/3568)).
+
 `"crashReports": false` turns crash reports off on the machine, whatever the user's own
 `~/.bravebot/settings.json` says. It can only turn them off: `true` is not read, and a value that is
 not a boolean is ignored. See [`crashReports`](configuration.md#crashreports).
+
+`"usagePing": false` turns the daily usage ping off on the machine, whatever the user's own settings or
+the switch in `/config` say, and the switch is shown as turned off by an administrator. It can only
+turn the ping off: `true` is not read. See [`usagePing`](configuration.md#usageping).
 
 `"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
 they are added to the rules every other file wrote. A deny rule here refuses on every session on the

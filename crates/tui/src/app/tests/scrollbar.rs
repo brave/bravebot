@@ -305,7 +305,6 @@ fn the_thumb_stands_for_the_rows_shown_and_gives_the_row_back() {
 fn a_press_in_the_track_puts_the_middle_of_the_thumb_where_it_landed() {
     let mut session = with_a_transcript_two_and_a_half_panes_long();
     let (_, length) = bar(&session).thumb();
-    let height = bar(&session).track.height;
 
     let (row, column) = on_the_track(&session, 5);
     assert_eq!(click(&mut session, row, column), Action::Redraw);
@@ -328,6 +327,10 @@ fn a_press_in_the_track_puts_the_middle_of_the_thumb_where_it_landed() {
     );
     assert_eq!(bar(&session).thumb().0, 0);
 
+    // The button drawn under the view takes the last row of the pane, so the track is a row shorter
+    // than it was at the tail (VIEW-45), and its last cell is the one the press is made on.
+    let height = bar(&session).track.height;
+    assert!(height > 1, "no track to press on");
     let (row, column) = on_the_track(&session, height - 1);
     click(&mut session, row, column);
     drawn(&mut session);

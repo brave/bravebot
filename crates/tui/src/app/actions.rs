@@ -23,7 +23,8 @@ use super::directories::{
 };
 use super::opening::{Answers, Beginning, clear_session, opening_trust, switch_session};
 use super::records::{
-    carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted, with_standing,
+    carry_out_hunks, list_rewind_points, open_the_record, rewind, rewind_point, save_compacted,
+    with_standing,
 };
 use super::side_requests::{
     compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
@@ -165,8 +166,28 @@ impl Held<'_> {
         );
     }
 
+    /// Run `ask` with the confirmer a restore puts its question to: the terminal, under the mode in
+    /// force now, as a write is (PERM-9). A restore that lands on a protected name is asked of the
+    /// person at the keyboard, who is there because they typed the command.
+    pub(super) fn asking_about_a_restore<R>(
+        &mut self,
+        terminal: &mut Tty,
+        ask: impl FnOnce(&mut Self, &mut dyn bravebot_agent::confirm::Confirmer) -> R,
+    ) -> R {
+        let permission_mode = self.session.live_permission_mode();
+        let auto_vetting = self.session.auto_vetting();
+        let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
+        let mut confirmer =
+            bravebot_agent::Confining::new(&mut asking, permission_mode, auto_vetting);
+        ask(self, &mut confirmer)
+    }
+
     /// Put the session back to where it stood `steps` turns ago, for `/undo` and `/rewind`.
-    pub(super) fn rewind_steps(&mut self, steps: usize) {
+    pub(super) fn rewind_steps(
+        &mut self,
+        confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+        steps: usize,
+    ) {
         let (trust, programs, language_servers) = self.answers.what_a_rewind_takes_back();
         rewind(
             self.session,
@@ -176,22 +197,27 @@ impl Held<'_> {
             self.stored,
             self.workspace,
             language_servers,
+            confirmer,
             steps,
         );
     }
 
-    pub(super) fn rewind_command(&mut self, turns: &str) {
+    pub(super) fn rewind_command(
+        &mut self,
+        confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+        turns: &str,
+    ) {
         if turns.is_empty() {
             list_rewind_points(self.session);
         } else {
             match turns.parse::<usize>() {
-                Ok(steps) if steps > 0 => self.rewind_steps(steps),
+                Ok(steps) if steps > 0 => self.rewind_steps(confirmer, steps),
                 // A run of digits too large for `usize` is a number past what any session
                 // remembers, not a non-number: `rewind_steps` only ever compares `steps`
                 // against how many points the stack holds, so the furthest-back value takes
                 // the same "no further" path `/rewind 4` over three turns does.
                 Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => {
-                    self.rewind_steps(usize::MAX)
+                    self.rewind_steps(confirmer, usize::MAX)
                 }
                 _ => self.session.note(t!(session_rewind_needs_a_number)),
             }
@@ -205,7 +231,11 @@ impl Held<'_> {
     /// turn ended would trust a half-written file again on a resume, so the record is written again
     /// when the map changed. Nothing is appended to the audit when no gate was passed, and nothing
     /// is saved where there is no record to keep, as with closing a directory.
-    pub(super) fn hunks_command(&mut self, argument: &str) {
+    pub(super) fn hunks_command(
+        &mut self,
+        confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+        argument: &str,
+    ) {
         let (trust, programs, language_servers) = self.answers.what_a_rewind_takes_back();
         carry_out_hunks(
             self.session,
@@ -215,6 +245,7 @@ impl Held<'_> {
             trust,
             programs,
             language_servers,
+            confirmer,
             argument,
         );
     }
@@ -489,8 +520,8 @@ impl Held<'_> {
             .with_permissions(self.answers.rules.permissions.clone())
             .with_permission_mode(permission_mode.clone())
             .with_auto_vetting(self.session.auto_vetting())
-            .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-                self.settings.run_deadlines(),
+            .with_deadlines(bravebot_agent::exec::Deadlines::from_settings(
+                self.settings,
             ));
         let mut trail = Trail::new();
         let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
@@ -873,6 +904,18 @@ impl Held<'_> {
             self.session.rewind.open(point, prompt.clone());
             self.session.rewind.bind_coverage(self.workspace);
 
+            // After the rewind point took `was_wrote`, so rewinding past this turn still removes
+            // the record.
+            open_the_record(
+                self.session,
+                self.conversation,
+                self.stored,
+                &self.answers.trust,
+                &self.answers.programs,
+                self.workspace,
+                &prompt,
+            );
+
             // Everything the session holds is lent for the turn and taken back: a turn that
             // writes untrusted data into a trusted path records that, and the next turn must
             // honour it; a turn that has been had is a turn the next one can be asked about;
@@ -903,6 +946,7 @@ impl Held<'_> {
                 exposed,
                 &self.answers.rules.permissions,
                 self.run_settings,
+                self.settings,
                 self.stored,
             )?;
             let events = self.take_back(continued);

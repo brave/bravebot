@@ -151,6 +151,11 @@ pub const DENIED: &[&str] = &[
     "hooks.inspect",
     "language.get",
     "language.set",
+    // The machine's usage ping, which the person at the host decides.
+    "usage_ping.get",
+    "usage_ping.set",
+    "usage_ping.notice_due",
+    "usage_ping.mark_notice_shown",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",
@@ -160,10 +165,12 @@ pub const DENIED: &[&str] = &[
     "connectors.disconnect",
     "connectors.remove",
     "bot.define",
+    "bot.list",
     "bot.migrate",
     "bot.redefine",
     "bot.servers.read",
     "bot.servers.write",
+    "bot.replace",
     "doctor",
     // Say where the machine keeps its state and what the host's settings name, for the person at
     // the host to read and post.

@@ -124,8 +124,8 @@ pub(super) fn unfinished_account(
     // The same comparison the answering arm makes, on the same two driver-held counts.
     // A delegate that spent its whole budget and then failed to answer is the common
     // way the bound is reached rather than a corner of it, and the planner told only
-    // that it did not finish retries the identical task (DELEGATE-26). Every other
-    // category is still not named to the planner.
+    // that it did not finish retries the identical task (DELEGATE-26). Only the four
+    // categories below are named to the planner.
     let reached = ran.is_some_and(|(_, rounds)| rounds >= bound);
     let bound_text = match reached {
         true => format!(
@@ -134,10 +134,11 @@ pub(super) fn unfinished_account(
         ),
         false => String::new(),
     };
-    // A delegate whose requests met a limit or an outage meets it again when the same
-    // delegate is started again, and the planner told only that it did not finish starts
-    // another (DELEGATE-26). The sentence is chosen from the closed category name the
-    // trail records, so no word of the failure reaches the planner (BACKEND-37).
+    // A delegate whose requests met a limit, an outage, a silence or a reply that stopped
+    // meets it again when the same delegate is started again, and the planner told only that
+    // it did not finish starts another (DELEGATE-26). The sentence is chosen from the closed
+    // category name the trail records, so no word of the failure reaches the planner
+    // (BACKEND-37).
     let cause_text = match finish {
         Finish::Failed { why, .. } if *why == Category::RateLimited.name() => {
             " It ended because the service asked for fewer requests (rate-limited), so \
@@ -146,6 +147,18 @@ pub(super) fn unfinished_account(
         Finish::Failed { why, .. } if *why == Category::Unavailable.name() => {
             " It ended because the service could not answer (unavailable), so starting the \
              same delegate again meets the same limit."
+        }
+        Finish::Failed { why, .. } if *why == Category::Transport.name() => {
+            " It ended because a request to the service did not get through or went quiet \
+             (transport), and the service sent no refusal. Starting the same delegate again \
+             on the same task may meet the same silence. Split the task so that each delegate \
+             makes smaller replies or writes."
+        }
+        Finish::Failed { why, .. } if *why == Category::Incomplete.name() => {
+            " It ended because the service's reply stopped before it was finished \
+             (incomplete), and the service sent no refusal. Starting the same delegate again \
+             on the same task may stop the same way. Split the task so that each delegate \
+             makes smaller replies or writes."
         }
         _ => "",
     };
@@ -466,12 +479,14 @@ mod tests {
         );
     }
 
-    /// BACKEND-37, DELEGATE-26. A delegate that ended rate-limited or unavailable is told to the
-    /// planner with the category and that starting it again meets the same limit, and every other
-    /// ending is told as before, so the planner is given a category only for the two where a
-    /// repeat cannot pass. The sentence composes with the bound sentence and carries nothing else.
+    /// BACKEND-37, DELEGATE-26. A delegate that ended rate-limited, unavailable, transport or
+    /// incomplete is told to the planner with the category and that starting it again on the same
+    /// task meets the same ending, and every other ending is told as before, so the planner is
+    /// given a category only for the four where a repeat cannot pass. The sentence composes with
+    /// the bound sentence and carries nothing else, and the transport and incomplete ones say
+    /// that the task should be split and never that a refusal may be the cause.
     #[test]
-    fn the_planner_is_told_the_category_only_for_a_limit_or_an_outage() {
+    fn the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way() {
         let took = Duration::from_secs(3);
         let body = |why: &'static str, rounds, bound| {
             unfinished_account(
@@ -517,13 +532,47 @@ mod tests {
                  limit of 9 rounds, so the same task will not get further."
             )
         );
+        // A silence and a reply that stopped are each told with the task to be split, and the
+        // sentence is the driver's: it holds no word of the failure and does not say a refusal
+        // may be the cause.
+        let transport = format!(
+            "{head} It ended because a request to the service did not get through or went quiet \
+             (transport), and the service sent no refusal. Starting the same delegate again on \
+             the same task may meet the same silence. Split the task so that each delegate \
+             makes smaller replies or writes."
+        );
+        let incomplete = format!(
+            "{head} It ended because the service's reply stopped before it was finished \
+             (incomplete), and the service sent no refusal. Starting the same delegate again \
+             on the same task may stop the same way. Split the task so that each delegate \
+             makes smaller replies or writes."
+        );
+        assert_eq!(body("transport", 2, 9), transport);
+        assert_eq!(body("incomplete", 2, 9), incomplete);
+        let spent = " It had spent its limit of 9 rounds, so the same task will not get further.";
+        assert_eq!(body("transport", 9, 9), format!("{transport}{spent}"));
+        assert_eq!(body("incomplete", 9, 9), format!("{incomplete}{spent}"));
+        // Chosen from the closed name alone: a name that only contains one is not taken for it.
+        for why in ["transport-timeout", "Transport", "incomplete "] {
+            assert_eq!(body(why, 2, 9), head, "{why} was taken for a category");
+        }
+        for told in [&transport, &incomplete] {
+            assert!(
+                told.contains("the service sent no refusal"),
+                "the sentence leaves a refusal open as the cause: {told}"
+            );
+        }
         // Every other category, a stop and a loss are told as they were.
         for why in [
             "refused",
-            "transport",
-            "incomplete",
-            "internal",
             "unauthorized",
+            "undecodable",
+            "unrecognised",
+            "too-long",
+            "unconfigured",
+            "blocked",
+            "workspace",
+            "internal",
             "timeout",
         ] {
             assert_eq!(body(why, 2, 9), head, "{why} was named to the planner");

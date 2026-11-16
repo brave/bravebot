@@ -121,9 +121,8 @@ no other account can read.
 ### PREM-8: withdrawn, a stored subscription that cannot be used is reported rather than skipped
 
 Replaced by [PREM-10](#PREM-10), [PREM-13](#PREM-13) and [PREM-16](#PREM-16). There is no stored
-subscription to be unusable. A source that cannot present the key fails the request with the remedy
-named, a file of the key that cannot be read is said by `doctor`, and a configuration naming no model
-service says what to configure ([BACKEND-39](backends.md#BACKEND-39)).
+subscription to be unusable. A file of the key that cannot be read is said by `doctor`, and a
+configuration naming no model service says what to configure ([BACKEND-39](backends.md#BACKEND-39)).
 
 <a id="PREM-9"></a>
 ### PREM-9: the tier reported is the one the last turn ran on, not the one the build was compiled with
@@ -178,14 +177,11 @@ with the services key.
 A redirect in answer to a premium request is a failure, with the status it came with, and is not
 followed: nothing is sent to the address it names.
 
-A source that cannot present the key fails the request rather than sending it without. The failure
-reads "the premium key could not be used", gives the reason, and says to run
-`bravebot auth login brave` to replace the key or `bravebot auth logout brave` to send requests to
-the free endpoint instead. It does not mention an AWS sign-in.
-
-A request that carried the key and was refused with a 401 or a 403 is said with the same two
-commands, after its status and its count of tries ([BACKEND-37](backends.md#BACKEND-37)). Whether a
-request carried the key is known to the client that made it, and is not read from the reply.
+A request that carried the key and was refused with a 401 or a 403 is said with two commands,
+`bravebot auth login brave` to replace the key and `bravebot auth logout brave` to send requests to
+the free endpoint instead, after its status and its count of tries
+([BACKEND-37](backends.md#BACKEND-37)). Whether a request carried the key is known to the client
+that made it, and is not read from the reply.
 
 **Why.** The free endpoint answers a premium model name by substituting a weaker model rather than
 by failing, with a 200 and an ordinary reply. A request that silently lost its key would therefore
@@ -194,9 +190,7 @@ agent appearing to get worse for no reason. A redirect would re-send the convers
 the premium host chose, and the key is a bearer secret meant for the host it was configured for.
 
 `verified-by: bravebot_aichat::client::a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token`
-`verified-by: bravebot_aichat::client::an_unusable_premium_key_fails_rather_than_downgrading`
 `verified-by: bravebot_aichat::client::a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere`
-`verified-by: bravebot_agent::backend::each_backend_keeps_its_own_explanation`
 `verified-by: bravebot_session::sessions::a_refused_premium_key_names_the_commands_that_replace_or_forget_it`
 `verified-by: bravebot_aichat::client::a_client_reports_the_premium_key_only_when_a_request_carried_it`
 `verified-by: bravebot_agent::backend::a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend`

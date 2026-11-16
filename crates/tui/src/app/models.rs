@@ -508,7 +508,7 @@ pub(super) fn provider_models(
             provider: Some(provider.display_name().to_string()),
             // Stated or assumed, never absent: a window is what the budget is taken from, and
             // reporting nothing would leave the session on a default chosen for a different service.
-            conversation_tokens: Some(provider.window_of(model)),
+            conversation_tokens: Some(provider.budget_of(model)),
             // A block names models and never their parameters, so the level goes out to be judged
             // at the far end and the judgment is the only description there is: read one where
             // this service has already refused the field for this model.
@@ -617,6 +617,7 @@ fn adopt_listing(
         models,
         model_in_force(session.model(), config),
     ));
+    note_breakpoints_given_up(session, config);
 }
 
 /// Record whether the model in force, the pick or else the configured default, is one of the ChatGPT
@@ -660,6 +661,19 @@ pub(super) fn note_a_refused_level(session: &mut Session, refused: bool) {
     }
     session.note_model_reads_effort(false);
     say_if_unread(session);
+}
+
+/// Record whether the model in force is recorded as refusing the cache breakpoints, which the turn
+/// or run that has just ended may have learned, or which has lapsed since. Drawn by `/status` and
+/// the info panel, since a prefix paid for in full on every request draws no cache figure to show
+/// it ([BACKEND-27](../../../../docs/specs/backends.md#BACKEND-27)).
+///
+/// Asked of the backend crate's record, which holds statuses and counts and no content.
+pub(super) fn note_breakpoints_given_up(session: &mut Session, config: &Config) {
+    let in_force = model_in_force(session.model(), config).to_string();
+    session.note_breakpoints_given_up(bravebot_agent::backend::breakpoints_given_up(
+        config, &in_force,
+    ));
 }
 
 /// Take on what the listing says about the model in force, where there is no session to hold it.
@@ -908,6 +922,10 @@ pub(super) fn model_picked(
         None => t!(session_using_model, model = &chosen.display_name),
     });
     session.note_model_reads_effort(chosen.reads_effort);
+    session.note_breakpoints_given_up(bravebot_agent::backend::breakpoints_given_up(
+        config,
+        &chosen.key,
+    ));
     session.note_model_is_account(config.chatgpt_model(&chosen.key).is_some());
     if !chosen.reads_effort && session.effort().is_some() {
         session.note(t!(session_effort_not_read));

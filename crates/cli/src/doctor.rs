@@ -265,6 +265,20 @@ fn home_only_line(key: &str, path: String) -> String {
         "references" => t!(doctor_settings_references_ignored, path = path),
         "attribution" => t!(doctor_settings_attribution_ignored, path = path),
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
+        "permissions.startInAuto" => t!(doctor_settings_start_in_auto_ignored, path = path),
+        "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
+        "limit" => t!(doctor_settings_limit_ignored, path = path),
+        "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
+        "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
+        "suggestions" => t!(doctor_settings_suggestions_ignored, path = path),
+        "awaySummaryEnabled" => t!(doctor_settings_away_summary_ignored, path = path),
+        "tui.mouse" => t!(doctor_settings_tui_mouse_ignored, path = path),
+        "tui.contextMenu" => t!(doctor_settings_tui_context_menu_ignored, path = path),
+        "deferMcpToolsAbove" => t!(doctor_settings_defer_mcp_tools_ignored, path = path),
+        "promptCacheTtl" => t!(doctor_settings_prompt_cache_ttl_ignored, path = path),
+        other if bravebot_config::Settings::narrow_only_keys().any(|key| key == other) => {
+            t!(doctor_settings_narrowed_ignored, key = other, path = path)
+        }
         other => t!(doctor_settings_home_only_ignored, key = other, path = path),
     }
 }
@@ -625,13 +639,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     each(
         t!(doctor_settings_unread),
         settings.unread_keys(),
-        |(path, key)| {
-            t!(
-                doctor_settings_unread_key,
-                key = progress::printable(key),
-                path = progress::printable_path(path)
-            )
-        },
+        |(path, key)| unread_key_line(path, key),
     );
 
     // The same, for a key that only refuses and was spelled as something other than a boolean: it
@@ -661,6 +669,40 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             )
         },
     );
+}
+
+/// The entries of the managed file's `mcp.allow` and `mcp.deny` that are neither a host nor a
+/// command. They match no server, and the administrator who wrote one believes a server is kept
+/// from starting (SERVERS-12).
+fn report_managed_server_entries(managed: &Managed) {
+    each(
+        t!(doctor_settings_ignored),
+        bravebot_agent::mcp::managed_entries_unusable(managed),
+        |sentence| sentence,
+    );
+}
+
+/// The line for a key nothing reads, naming the file and not the value.
+///
+/// Claude Code's key for the bypass switch is the one unread key whose writer believes a
+/// restriction is in force, so it is said with the key that does the job (BACKEND-36).
+fn unread_key_line(path: &Path, key: &str) -> String {
+    let bypass = format!(
+        "permissions.{}",
+        bravebot_config::Narrowing::CLAUDE_DISABLE_BYPASS
+    );
+    match key == bypass {
+        true => t!(
+            doctor_settings_unread_bypass,
+            key = progress::printable(key),
+            path = progress::printable_path(path)
+        ),
+        false => t!(
+            doctor_settings_unread_key,
+            key = progress::printable(key),
+            path = progress::printable_path(path)
+        ),
+    }
 }
 
 /// The network for the programs `run` starts, named only where it is not open, with who decided
@@ -927,6 +969,21 @@ fn report_xai_sign_in(ending: &mut Ending) {
 
 /// What a run would actually request.
 fn report_model(config: &Config, settings: &bravebot_config::Settings) {
+    // A checkout's file that named the default model decides nothing (BACKEND-33). Said before the
+    // model, which is the one the person's own layers settled on.
+    for (file, _) in settings
+        .network_ignored()
+        .filter(|(_, name)| *name == env_var::DEFAULT_MODEL)
+    {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_default_model_ignored,
+                name = env_var::DEFAULT_MODEL,
+                path = progress::printable_path(file)
+            ),
+        );
+    }
     // What a run would actually request, since a choice made with `/model` overrides the
     // configured default and reporting only the default would explain the wrong thing. Not
     // where a checkout's settings outrank the choice, since naming it then would explain
@@ -1050,6 +1107,7 @@ pub(crate) fn doctor() -> ExitCode {
             println!("{}", t!(doctor_configuration_ok));
             report_settings_sources(&settings);
             report_ignored_settings(&settings, &managed);
+            report_managed_server_entries(&managed);
 
             let network = bravebot_config::settled_run_network()
                 .cloned()
@@ -1311,18 +1369,14 @@ pub(crate) fn direnv_available(path: Option<&std::ffi::OsStr>) -> bool {
                 "direnv"
             });
             std::fs::metadata(executable).is_ok_and(|metadata| {
-                if !metadata.is_file() {
-                    return false;
-                }
                 #[cfg(unix)]
-                {
+                let runnable = {
                     use std::os::unix::fs::PermissionsExt;
                     metadata.permissions().mode() & 0o111 != 0
-                }
+                };
                 #[cfg(not(unix))]
-                {
-                    true
-                }
+                let runnable = true;
+                metadata.is_file() && runnable
             })
         })
     })
@@ -1964,13 +2018,17 @@ pub(crate) fn fact(name: impl AsRef<str>, value: impl AsRef<str>) {
 /// A file that was read is named even where nothing in it could be pinned, because the alternative
 /// leaves whoever wrote it with no way to tell a file this program never found from one holding
 /// names it may not honour.
+///
+/// A `retrieval` value that cannot be the pin is reported on a line of its own, since the file is
+/// then named as pinning nothing or as pinning other names, and neither says that a pin somebody
+/// wrote is not in force (RETRIEVE-23).
 pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
     let Some(path) = managed.path() else {
         return Vec::new();
     };
     let path = progress::printable_path(path);
     let pinned: Vec<&str> = managed.pinned().collect();
-    vec![aligned(
+    let mut lines = vec![aligned(
         t!(doctor_managed),
         match pinned.is_empty() {
             true => t!(doctor_managed_nothing, path = &path),
@@ -1981,7 +2039,25 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
             ),
         },
         FACT,
-    )]
+    )];
+    if managed.retrieval_unreadable() {
+        lines.push(aligned(
+            t!(doctor_settings_ignored),
+            t!(doctor_managed_retrieval_unreadable, path = &path),
+            FACT,
+        ));
+    }
+    // The managed file is not one of the layers `permissions.startInAuto` is read from, so it is
+    // said here: an administrator who wrote it there believes it binds, and nothing else says it
+    // opens no session in auto (AUTO-1).
+    if managed.names_start_in_auto() {
+        lines.push(aligned(
+            t!(doctor_settings_ignored),
+            t!(doctor_settings_start_in_auto_ignored, path = &path),
+            FACT,
+        ));
+    }
+    lines
 }
 
 /// Whether a file created under the state directory is reachable only by the account that owns it.
@@ -2219,8 +2295,12 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         }
     }
     // A checkout's file that named one of them: read, reported and not used (BACKEND-33), since a
-    // clone would otherwise be able to choose where conversation content goes.
-    for (file, name) in settings.network_ignored() {
+    // clone would otherwise be able to choose where conversation content goes. The default model is
+    // reported with the model, where a person looking for why it was not obeyed will look.
+    for (file, name) in settings
+        .network_ignored()
+        .filter(|(_, name)| *name != env_var::DEFAULT_MODEL)
+    {
         lines.push(aligned(
             t!(doctor_network_file_ignored),
             t!(
@@ -2459,7 +2539,11 @@ mod tests {
             assert!(keys.contains(&required), "{required} is not in the table");
         }
         for key in keys {
-            std::fs::write(&project_file, format!(r#"{{"{key}": "stated"}}"#)).expect("project");
+            let text = match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": "stated"}}}}"#),
+                None => format!(r#"{{"{key}": "stated"}}"#),
+            };
+            std::fs::write(&project_file, text).expect("project");
             let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
             let lines = home_only_lines(&settings);
             assert_eq!(lines.len(), 1, "{key}: {lines:?}");
@@ -2474,6 +2558,389 @@ mod tests {
                 "{key} is said in the general message: {lines:?}"
             );
         }
+    }
+
+    /// TURN-8, BACKEND-24: a checkout whose `limit` removes, raises or changes the unit of the
+    /// person's is reported with the key and the file, in the message written for the limit. The
+    /// keys are read from the table of keys a checkout may only narrow, so a key added to it is held
+    /// to the first half of this as well.
+    #[test]
+    fn a_checkout_limit_that_widens_the_persons_is_reported_with_the_file() {
+        let root = scratch("narrow-only-keys");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        assert!(
+            bravebot_config::Settings::narrow_only_keys().any(|key| key == "limit"),
+            "limit is not in the table"
+        );
+        std::fs::write(home.join("settings.json"), r#"{"limit": "200k"}"#).expect("home file");
+        for written in [r#"{"limit": null}"#, r#"{"limit": "999999999999"}"#] {
+            std::fs::write(&project_file, written).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{written}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("limit in {}", project_file.display())),
+                "{written}: {lines:?}"
+            );
+            assert!(
+                lines[0].contains("may lower the limit"),
+                "{written} is said in the general message: {lines:?}"
+            );
+        }
+    }
+
+    /// UPDATE-11, BACKEND-24: a checkout whose `updateCheck` is `true` over the person's `false` is
+    /// reported with the key and the file, in the message written for the key, and one that turns
+    /// the check off is not reported.
+    #[test]
+    fn a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("update-check-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(home.join("settings.json"), r#"{"updateCheck": false}"#).expect("home file");
+        std::fs::write(&project_file, r#"{"updateCheck": true}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.update_check(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains(&format!("updateCheck in {}", project_file.display())),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("may turn the update check off"),
+            "in the message of its own: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("read from the person's own settings only"),
+            "said as a key a checkout may not name: {lines:?}"
+        );
+
+        // A checkout that turns it off is not reported.
+        std::fs::write(&project_file, r#"{"updateCheck": false}"#).expect("project");
+        std::fs::write(home.join("settings.json"), r#"{"updateCheck": true}"#).expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.update_check(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// LINK-6, BACKEND-24: a checkout whose `deepLinks` is `true` over the person's `false` is
+    /// reported with the key and the file, in the message written for the key, and one that
+    /// refuses links is not reported.
+    #[test]
+    fn a_checkout_deep_links_that_accepts_them_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("deep-links-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(home.join("settings.json"), r#"{"deepLinks": false}"#).expect("home file");
+        std::fs::write(&project_file, r#"{"deepLinks": true}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.deep_links(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains(&format!("deepLinks in {}", project_file.display())),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("may switch links off"),
+            "in the message of its own: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("read from the person's own settings only"),
+            "said as a key a checkout may not name: {lines:?}"
+        );
+
+        // A checkout that refuses links is not reported.
+        std::fs::write(&project_file, r#"{"deepLinks": false}"#).expect("project");
+        std::fs::write(home.join("settings.json"), r#"{"deepLinks": true}"#).expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.deep_links(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// CMD-20, BACKEND-24: a checkout whose `awaySummaryEnabled` is `true` over the person's `false`
+    /// is reported with the key and the file, in the message written for the key, and one that
+    /// turns the recap off is not reported.
+    #[test]
+    fn a_checkout_away_recap_that_turns_it_on_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("away-recap-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"awaySummaryEnabled": false}"#,
+        )
+        .expect("home file");
+        std::fs::write(&project_file, r#"{"awaySummaryEnabled": true}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains(&format!("awaySummaryEnabled in {}", project_file.display())),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("may turn the automatic recap off"),
+            "in the message of its own: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("read from the person's own settings only"),
+            "said as a key a checkout may not name: {lines:?}"
+        );
+
+        // A checkout that turns the recap off is not reported.
+        std::fs::write(&project_file, r#"{"awaySummaryEnabled": false}"#).expect("project");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"awaySummaryEnabled": true}"#,
+        )
+        .expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// MOUSE-4, MOUSE-52, BACKEND-24: a checkout whose `tui.mouse` or `tui.contextMenu` is `true`
+    /// over the person's `false` is reported with the key and the file, in the message written for
+    /// the key, and one that turns either off is not reported. The checkout's other names in the
+    /// block are not reported.
+    #[test]
+    fn a_checkout_tui_key_that_turns_it_on_over_the_persons_off_is_reported_with_the_file() {
+        let root = scratch("tui-on-over-off");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"tui": {"mouse": false, "contextMenu": false}}"#,
+        )
+        .expect("home file");
+        std::fs::write(
+            &project_file,
+            r#"{"tui": {"mouse": true, "contextMenu": true, "wheelRows": 3}}"#,
+        )
+        .expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        let lines = home_only_lines(&settings);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let path = project_file.display();
+        assert!(
+            lines.contains(&format!(
+                "tui.mouse in {path} is not obeyed: it may turn mouse capture off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off"
+            )),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&format!(
+                "tui.contextMenu in {path} is not obeyed: it may turn the right-click menu off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off"
+            )),
+            "{lines:?}"
+        );
+
+        // A checkout that turns them off, or names only the wheel, is not reported.
+        std::fs::write(
+            &project_file,
+            r#"{"tui": {"mouse": false, "contextMenu": false, "wheelRows": 3}}"#,
+        )
+        .expect("project");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"tui": {"mouse": true, "contextMenu": true}}"#,
+        )
+        .expect("home file");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert!(home_only_lines(&settings).is_empty());
+        std::fs::write(&project_file, r#"{"tui": {"wheelRows": 3}}"#).expect("project");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        assert_eq!(settings.tui_mouse(), Some(true));
+        assert!(home_only_lines(&settings).is_empty());
+    }
+
+    /// INPUT-43, BACKEND-24: a checkout whose `suggestions` is `true` is reported with the key and
+    /// the file, in the message written for the key, over the person's `false` and over nothing,
+    /// and one that leaves suggestions off is not reported.
+    #[test]
+    fn a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file() {
+        for (name, home_text) in [
+            ("over-off", Some(r#"{"suggestions": false}"#)),
+            ("over-nothing", None),
+        ] {
+            let root = scratch(&format!("suggestions-on-{name}"));
+            let home = root.join("home");
+            let cwd = root.join("cwd");
+            let project_file = bravebot_config::project_settings_file(&cwd);
+            std::fs::create_dir_all(&home).expect("home");
+            std::fs::create_dir_all(project_file.parent().expect("project directory"))
+                .expect("cwd");
+            if let Some(text) = home_text {
+                std::fs::write(home.join("settings.json"), text).expect("home file");
+            }
+            std::fs::write(&project_file, r#"{"suggestions": true}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            assert_ne!(settings.suggestions(), Some(true), "{name}");
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{name}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("suggestions in {}", project_file.display())),
+                "{lines:?}"
+            );
+            assert!(
+                lines[0].contains("may leave suggestions off"),
+                "in the message of its own: {lines:?}"
+            );
+            assert!(
+                !lines[0].contains("read from the person's own settings only"),
+                "said as a key a checkout may not name: {lines:?}"
+            );
+
+            // A checkout that leaves suggestions off is not reported.
+            std::fs::write(&project_file, r#"{"suggestions": false}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+            assert_eq!(settings.suggestions(), Some(false), "{name}");
+            assert!(home_only_lines(&settings).is_empty(), "{name}");
+        }
+    }
+
+    /// SERVERS-16, BACKEND-24: a checkout whose `deferMcpToolsAbove` is higher than the person's, or
+    /// reads as no size over it, is reported with the key and the file in the message written for
+    /// the key, and one that lowers the size is not.
+    #[test]
+    fn a_checkout_deferral_threshold_that_raises_the_persons_is_reported_with_the_file() {
+        for (name, written) in [
+            ("higher", r#"{"deferMcpToolsAbove": 18446744073709551615}"#),
+            ("zero", r#"{"deferMcpToolsAbove": 0}"#),
+        ] {
+            let root = scratch(&format!("defer-{name}"));
+            let home = root.join("home");
+            let cwd = root.join("cwd");
+            let project_file = bravebot_config::project_settings_file(&cwd);
+            std::fs::create_dir_all(&home).expect("home");
+            std::fs::create_dir_all(project_file.parent().expect("project directory"))
+                .expect("cwd");
+            std::fs::write(
+                home.join("settings.json"),
+                r#"{"deferMcpToolsAbove": "20k"}"#,
+            )
+            .expect("home file");
+            std::fs::write(&project_file, written).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            assert_eq!(settings.defer_mcp_tools_above(), Some(20_000), "{name}");
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{name}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("deferMcpToolsAbove in {}", project_file.display())),
+                "{lines:?}"
+            );
+            assert!(
+                lines[0].contains("may lower the size"),
+                "in the message of its own: {lines:?}"
+            );
+            assert!(
+                !lines[0].contains("read from the person's own settings only"),
+                "said as a key a checkout may not name: {lines:?}"
+            );
+
+            // A checkout that lowers the size is not reported.
+            std::fs::write(&project_file, r#"{"deferMcpToolsAbove": "5k"}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+            assert_eq!(settings.defer_mcp_tools_above(), Some(5_000), "{name}");
+            assert!(home_only_lines(&settings).is_empty(), "{name}");
+        }
+    }
+
+    /// BACKEND-24, BACKEND-27: a checkout whose `promptCacheTtl` asks for the hour over the person's
+    /// five minutes, or over nothing, is reported with the key and the file in the message written
+    /// for the key, and one that asks for the five minutes is not.
+    #[test]
+    fn a_checkout_asking_for_the_long_cache_lifetime_is_reported_with_the_file() {
+        for (name, home_text) in [
+            ("over-five", Some(r#"{"promptCacheTtl": "5m"}"#)),
+            ("over-none", None),
+        ] {
+            let root = scratch(&format!("cache-ttl-{name}"));
+            let home = root.join("home");
+            let cwd = root.join("cwd");
+            let project_file = bravebot_config::project_settings_file(&cwd);
+            std::fs::create_dir_all(&home).expect("home");
+            std::fs::create_dir_all(project_file.parent().expect("project directory"))
+                .expect("cwd");
+            if let Some(text) = home_text {
+                std::fs::write(home.join("settings.json"), text).expect("home file");
+            }
+            std::fs::write(&project_file, r#"{"promptCacheTtl": "1h"}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            assert_ne!(
+                settings.prompt_cache_ttl(),
+                Some(bravebot_config::CacheTtl::OneHour),
+                "{name}"
+            );
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{name}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("promptCacheTtl in {}", project_file.display())),
+                "{lines:?}"
+            );
+            assert!(
+                lines[0].contains("may ask for 5m"),
+                "in the message of its own: {lines:?}"
+            );
+            assert!(
+                lines[0].contains("--settings"),
+                "says the file --settings names may choose 1h: {lines:?}"
+            );
+            assert!(
+                !lines[0].contains("read from the person's own settings only"),
+                "said as a key a checkout may not name: {lines:?}"
+            );
+
+            // A checkout that asks for the shorter lifetime is not reported.
+            std::fs::write(&project_file, r#"{"promptCacheTtl": "5m"}"#).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+            assert_eq!(
+                settings.prompt_cache_ttl(),
+                Some(bravebot_config::CacheTtl::FiveMinutes),
+                "{name}"
+            );
+            assert!(home_only_lines(&settings).is_empty(), "{name}");
+        }
+    }
+
+    /// A key of the narrow-only table is said with its own name and the file, never as a key read
+    /// from the person's own settings only. A key the table gains before its own arm is written is
+    /// said in the general message, which names the key and the file and says it may only narrow.
+    #[test]
+    fn every_narrow_only_key_is_said_with_its_file_and_not_as_home_only() {
+        let line = home_only_line("limit", "/checkout/settings.json".to_string());
+        assert!(line.contains("may lower the limit"), "{line}");
+        assert!(
+            bravebot_config::Settings::narrow_only_keys().all(|key| {
+                let line = home_only_line(key, "/f".to_string());
+                line.contains(key)
+                    && line.contains("/f")
+                    && !line.contains("read from the person's own settings only")
+            }),
+            "a key of the table is said as one that is read from the person's own settings only"
+        );
     }
 
     /// BACKEND-24: a key the table gains before its own message is written is said in the general
@@ -3214,6 +3681,71 @@ mod tests {
         );
     }
 
+    /// A managed file whose `retrieval` cannot be the pin is reported beside the file's own line,
+    /// and one whose `retrieval` is a pin or says nothing about the switch is not. A quoted
+    /// `"false"`, a bare `false` and a `null` all leave retrieval to the person's own file, so
+    /// without the line an administrator who wrote one has no way to learn it is not in force
+    /// (RETRIEVE-23).
+    ///
+    /// Rejects reading the value as absence in silence, and a line for a value that is a pin.
+    #[test]
+    fn doctor_reports_a_managed_retrieval_value_that_pins_nothing() {
+        let scratch = Scratch::new("doctor-managed-retrieval");
+        let path = scratch.path.join("managed.json");
+        let said = t!(
+            doctor_managed_retrieval_unreadable,
+            path = path.display().to_string()
+        )
+        .to_string();
+        for (text, reported) in [
+            (r#"{"retrieval": {"enabled": "false"}}"#, true),
+            (r#"{"retrieval": false}"#, true),
+            (r#"{"retrieval": {"enabled": null}}"#, true),
+            (r#"{"retrieval": {"enabled": false}}"#, false),
+            (r#"{"retrieval": {"enabled": true}}"#, false),
+            (r#"{"retrieval": {}}"#, false),
+            ("{}", false),
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+
+            let lines = managed_layer(&Managed::at(&path));
+
+            assert_eq!(
+                lines.iter().any(|line| line.contains(&said)),
+                reported,
+                "{text}: {lines:?}"
+            );
+        }
+    }
+
+    /// A deny list whose every entry the reader cannot use is still a list the administrator wrote
+    /// as a pin, so `doctor` names `mcp.deny` among what the file pinned (SERVERS-12). A deny list
+    /// with no entry at all is not.
+    ///
+    /// Rejects naming the list only where an entry was kept, which leaves the file reading as
+    /// pinning nothing.
+    #[test]
+    fn doctor_names_a_deny_list_whose_every_entry_was_unusable_as_pinned() {
+        let scratch = Scratch::new("doctor-managed-deny-unusable");
+        let path = scratch.path.join("managed.json");
+        for (text, named) in [
+            (r#"{"mcp": {"deny": [{"host": "fd00::1:zz"}]}}"#, true),
+            (r#"{"mcp": {"deny": [{"command": ["evil-server"]}]}}"#, true),
+            (r#"{"mcp": {"deny": []}}"#, false),
+            (
+                r#"{"mcp": {"allow": [{"command": ["evil-server"]}]}}"#,
+                false,
+            ),
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+
+            let lines = managed_layer(&Managed::at(&path));
+
+            assert_eq!(lines.len(), 1, "{text}: {lines:?}");
+            assert_eq!(lines[0].contains("mcp.deny"), named, "{text}: {lines:?}");
+        }
+    }
+
     /// The case every machine without an administrator is in. A report listing every place a file
     /// could have been is a report where the lines that matter are the hard ones to find.
     #[test]
@@ -3241,6 +3773,37 @@ mod tests {
             ),
             "the line does not say the file pinned nothing: {lines:?}"
         );
+    }
+
+    /// AUTO-1: a managed file that names `permissions.startInAuto` decides nothing, and `doctor`
+    /// says so and names the file, since an administrator who wrote it believes it binds. A file
+    /// that says `false`, or a quoted `"true"`, is not reported, because the key is not named as
+    /// the boolean that would open a session in auto. The fault it rejects is the line missing.
+    #[test]
+    fn doctor_says_a_managed_file_naming_the_start_in_auto_setting_decides_nothing() {
+        let scratch = Scratch::new("doctor-managed-start-in-auto");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(&path, r#"{"permissions": {"startInAuto": true}}"#).expect("a managed file");
+
+        let said = managed_layer(&Managed::at(&path)).join("\n");
+        let line = said
+            .lines()
+            .find(|line| line.contains("permissions.startInAuto"))
+            .unwrap_or_else(|| panic!("the key is not reported: {said}"));
+        assert!(line.contains("not obeyed"), "{line}");
+        assert!(line.contains(&path.display().to_string()), "{line}");
+
+        for text in [
+            r#"{"permissions": {"startInAuto": false}}"#,
+            r#"{"permissions": {"startInAuto": "true"}}"#,
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+            let said = managed_layer(&Managed::at(&path)).join("\n");
+            assert!(
+                !said.contains("permissions.startInAuto"),
+                "{text} was reported: {said}"
+            );
+        }
     }
 
     /// Which directory this is depends on the environment of whoever started the process, so a

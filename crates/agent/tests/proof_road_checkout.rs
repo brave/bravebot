@@ -173,6 +173,59 @@ fn a_program_reached_through_a_link_into_the_checkout_above_the_directory_is_ask
     );
 }
 
+/// CMDLINE-8 (#3894): a relative `$PATH` entry means the directory the stage runs in, which is the
+/// working directory of the session and not the directory this process is in (`/cd` moves the
+/// first and not the second). Here the process is in `crates/agent` while the session works in
+/// `repo/sub`, and the entry is `bin`: the program is the one in `repo/sub/bin`, and being in the
+/// checkout it is asked about. The control has no file in `repo/sub/bin`, so the same entry reaches
+/// the system file by the later entries and is not asked about.
+///
+/// The regression it rejects: the relative entry joined to the process's own directory, which finds
+/// nothing there and falls through to the system file, so the planted program runs without asking.
+#[test]
+fn a_program_in_a_relative_path_entry_is_judged_under_the_directory_the_stage_runs_in() {
+    let _held = PATH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scratch = Scratch::new("proof-road-relative-entry");
+    let checkout = scratch.path.join("repo");
+    let work = checkout.join("sub");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(checkout.join(".git")).expect("git");
+    std::fs::create_dir_all(&work).expect("work");
+    std::fs::create_dir_all(&home).expect("home");
+    let system = scratch.path.join("system").join("pwd");
+    executable(&system);
+    let links = scratch.path.join("links");
+    std::fs::create_dir_all(&links).expect("links");
+    std::os::unix::fs::symlink(&system, links.join("pwd")).expect("link to the system file");
+    put_on_path(&links);
+    // SAFETY: `PATH_LOCK` is held for the whole of this body.
+    unsafe {
+        let existing = std::env::var_os("PATH").expect("a path");
+        let mut entries = vec![PathBuf::from("bin")];
+        entries.extend(std::env::split_paths(&existing));
+        std::env::set_var("PATH", std::env::join_paths(entries).expect("a path"));
+    }
+
+    let (asked, _) = a_turn_running_pwd(&work, &home, None);
+    assert_eq!(
+        asked, 0,
+        "the control was put to the person: nothing is in the relative entry"
+    );
+
+    executable(&work.join("bin").join("pwd"));
+    let (asked, shown) = a_turn_running_pwd(&work, &home, None);
+    assert_eq!(
+        asked, 1,
+        "a program in a relative PATH entry under the working directory ran without asking"
+    );
+    assert!(
+        !shown.contains("planted-or-system-pwd"),
+        "a program refused by the person still printed into the conversation: {shown}"
+    );
+}
+
 /// CMDLINE-8: a directory a remembered grant lets a stage write, such as the `bin` of a virtualenv
 /// outside the project that an activation put on `$PATH`, can hold a program a bare name resolves
 /// to, so the person is asked about it. The control is the same file reached by the same name with

@@ -190,6 +190,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         &mut stored,
         &workspace,
         &mut None,
+        &mut bravebot_agent::confirm::Unattended,
         1,
     );
     let mut before = before;
@@ -221,6 +222,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         &mut stored,
         &workspace,
         &mut None,
+        &mut bravebot_agent::confirm::Unattended,
         1,
     );
     assert_eq!(
@@ -381,6 +383,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             2,
         );
         assert_eq!(
@@ -427,6 +430,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert_eq!(session.turns, 0);
@@ -528,6 +532,7 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
 
@@ -641,6 +646,7 @@ fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_ca
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert_eq!(
@@ -910,6 +916,7 @@ fn bridge_handoff(ending: &str) {
         &mut stored,
         &workspace,
         &mut None,
+        &mut bravebot_agent::confirm::Unattended,
         1,
     );
     assert_eq!(
@@ -1040,6 +1047,7 @@ fn editing_then_running_a_program_keeps_undo_and_warns() {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert_eq!(
@@ -1238,6 +1246,7 @@ fn immediate_undo_after_resume_keeps_server_warnings_for_later_turns() {
         &mut stored,
         &workspace,
         &mut None,
+        &mut bravebot_agent::confirm::Unattended,
         1,
     );
     assert!(resumed.rewind.points().is_empty());
@@ -1309,6 +1318,7 @@ fn undo_warnings_name_recorded_causes() {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         let warnings: Vec<_> = session
@@ -1391,6 +1401,7 @@ fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert!(resumed.rewind.points().is_empty());
@@ -1751,6 +1762,7 @@ impl Wrote {
             &mut self.trust,
             servers,
             None,
+            &mut bravebot_agent::confirm::Unattended,
             &mut Trail::new(),
         );
     }
@@ -1765,6 +1777,7 @@ impl Wrote {
             &mut self.trust,
             &self.programs,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             argument,
         );
     }
@@ -1778,6 +1791,7 @@ impl Wrote {
             &mut self.stored,
             &self.workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
     }
@@ -1810,6 +1824,85 @@ impl Wrote {
 impl Drop for Wrote {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(self.workspace.root());
+    }
+}
+
+/// `/undo` and `/hunks` put the confirmer the terminal holds in front of a restore onto a protected
+/// name (PERM-9), and a refusal leaves the file as it is.
+#[test]
+fn undo_and_hunks_ask_the_confirmer_before_restoring_a_protected_name() {
+    if !in_isolated_profile() {
+        return;
+    }
+    for approved in [true, false] {
+        for command in ["undo", "hunks 1"] {
+            let mut wrote = a_point_over_file(
+                &format!("protected-{approved}-{}", command.len()),
+                ".gitmodules",
+                bravebot_agent::workspace::Before::Bytes(b"old\n".to_vec()),
+                "new\n",
+            );
+            let mut answers = answers::Answers::new(bravebot_agent::RunDecision::reject());
+            let confirmer: &mut dyn bravebot_agent::confirm::Confirmer = if approved {
+                &mut answers
+            } else {
+                &mut bravebot_agent::confirm::Unattended
+            };
+            if command == "hunks 1" {
+                wrote.list();
+                carry_out_hunks(
+                    &mut wrote.session,
+                    &wrote.conversation,
+                    &mut wrote.stored,
+                    &wrote.workspace,
+                    &mut wrote.trust,
+                    &wrote.programs,
+                    &mut None,
+                    confirmer,
+                    "1",
+                );
+            } else {
+                rewind(
+                    &mut wrote.session,
+                    &mut wrote.conversation,
+                    &mut wrote.trust,
+                    &mut wrote.programs,
+                    &mut wrote.stored,
+                    &wrote.workspace,
+                    &mut None,
+                    confirmer,
+                    1,
+                );
+            }
+
+            let held = std::fs::read_to_string(wrote.workspace.root().join(".gitmodules")).unwrap();
+            assert_eq!(
+                held,
+                if approved { "old\n" } else { "new\n" },
+                "{command}, approved {approved}: {}",
+                wrote.said()
+            );
+            if approved {
+                assert!(
+                    answers
+                        .writes
+                        .iter()
+                        .any(|asked| asked.protected && asked.path.ends_with(".gitmodules")),
+                    "{command}: the confirmer was not asked about the protected name"
+                );
+            }
+            if command == "hunks 1" && !approved {
+                // The line the specs promise: it says the hunk was not put back because the
+                // path is protected, not that the file changed or could not be read.
+                assert!(
+                    wrote
+                        .said()
+                        .contains("was not approved here, so it is not written"),
+                    "hunks 1: the refusal did not say the path is protected: {}",
+                    wrote.said()
+                );
+            }
+        }
     }
 }
 

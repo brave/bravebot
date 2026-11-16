@@ -25,6 +25,7 @@ pub mod llama_server;
 pub mod lm_studio;
 pub mod models;
 pub mod ollama;
+pub mod ollama_chat;
 pub mod protocol;
 pub mod responses;
 pub mod roster;
@@ -42,7 +43,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request};
-use call::{Concession, Driven, Pace, Plan, Spent, drive};
+use call::{CallState, Concession, Driven, Pace, Plan, drive};
 use protocol::{ChatChunk, ChatRequest, ChatResponse, STREAM_DONE, SseDecoder, StreamAccumulator};
 use std::fmt;
 use std::time::Duration;
@@ -73,10 +74,6 @@ pub enum ChatError {
     /// problem is that there was going to be more. Retried like a connection that died, because
     /// that is most often what it is.
     Incomplete,
-    /// The premium tier is configured but its key could not be presented.
-    ///
-    /// Fails the request rather than falling back: see [`AichatClient::route`].
-    Subscription(String),
     /// The ChatGPT account's access token could not be had or was refused twice, or the serving host
     /// refused a request in a code that names the account
     /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
@@ -122,35 +119,9 @@ impl fmt::Display for ChatError {
             Self::Reported { failure } => {
                 write!(f, "the service stopped the reply and reported {failure}")
             }
-            Self::TooLong(cut_off) => {
-                let ceiling = cut_off.ceiling;
-                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
-                match (&cut_off.call, cut_off.thought) {
-                    (
-                        Some(OpenCall {
-                            tool: Some(tool), ..
-                        }),
-                        _,
-                    ) => write!(
-                        f,
-                        "while writing a call to {tool}, so the call was not made"
-                    )?,
-                    (Some(OpenCall { tool: None, .. }), _) => {
-                        f.write_str("while writing a tool call, so the call was not made")?
-                    }
-                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
-                    (None, false) => f.write_str("before writing anything")?,
-                }
-                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
-            }
+            Self::TooLong(cut_off) => write!(f, "{cut_off}"),
             Self::Account(failure @ AccountFailure::Xai(_)) => write!(f, "xAI account: {failure}"),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
-            Self::Subscription(detail) => write!(
-                f,
-                "the premium key could not be used: {detail}. Run `bravebot auth login brave` to \
-                 replace it, or `bravebot auth logout brave` to send requests to the free endpoint \
-                 instead"
-            ),
         }
     }
 }
@@ -260,6 +231,30 @@ pub struct CutOff {
     pub call: Option<OpenCall>,
     /// Whether any of its reasoning arrived.
     pub thought: bool,
+}
+
+impl fmt::Display for CutOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ceiling = self.ceiling;
+        write!(f, "the model reached its output limit of {ceiling} tokens ")?;
+        match (&self.call, self.thought) {
+            (
+                Some(OpenCall {
+                    tool: Some(tool), ..
+                }),
+                _,
+            ) => write!(
+                f,
+                "while writing a call to {tool}, so the call was not made"
+            )?,
+            (Some(OpenCall { tool: None, .. }), _) => {
+                f.write_str("while writing a tool call, so the call was not made")?
+            }
+            (None, true) => f.write_str("while thinking, and wrote nothing")?,
+            (None, false) => f.write_str("before writing anything")?,
+        }
+        f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
+    }
 }
 
 /// A tool call a reply was still writing when the ceiling stopped it.
@@ -448,11 +443,7 @@ impl fmt::Display for AccountFailure {
 /// because it keeps this crate independent of where the key comes from.
 pub trait Subscription {
     /// The key presenting the next premium request.
-    ///
-    /// An error here fails the request. It deliberately does not fall back to sending none: a
-    /// configured premium tier that silently stops being used looks like the model got worse for
-    /// no reason, and the one thing worse than an error is an unexplained downgrade.
-    fn next_credential(&mut self) -> Result<SubscriptionCredential, String>;
+    fn next_credential(&mut self) -> SubscriptionCredential;
 }
 
 /// The key ready to be attached to one request.
@@ -470,24 +461,9 @@ impl fmt::Debug for SubscriptionCredential {
 }
 
 pub struct AichatClient<'a> {
-    spent: Spent,
-    config: &'a Config,
-    egress: &'a Egress,
-    subscription: Option<&'a mut dyn Subscription>,
-    /// Whether a request of this client was routed to the premium host with a key from the
-    /// subscription source. Set by [`Self::route`] once the source has produced the key, and never
-    /// from a reply. It stays false where no premium host is configured, where no source was lent,
-    /// and where the source could not produce a key (that request fails as
-    /// [`ChatError::Subscription`], which names the key by its own variant). It is not cleared
-    /// between requests, and the decision not to is deliberate: the configuration and whether a
-    /// source was lent are fixed for the life of a client, and with both a premium host and a
-    /// source `route` sends premium or fails, so a client never sends a premium request and a free
-    /// one. Once a request carried the key the flag stays set, so a later request in the same call
-    /// that finds the source empty still reports the key an earlier one carried. A request through
-    /// a gateway does not call `route` and does not set it.
-    premium_key: bool,
-    gateway: Option<Gateway<'a>>,
-    /// What this service has refused for the model of the call in progress.
+    /// What this call has spent, how it waits between attempts and learns that it should stop, and
+    /// what this service has refused for the model of the call in progress. The wait is
+    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
     ///
     /// Nothing is refused until a service says so, because there is no field in this protocol's model
     /// listings, or in Brave's, that answers whether a service reads a breakpoint, a cache lifetime or
@@ -497,14 +473,24 @@ pub struct AichatClient<'a> {
     ///
     /// Brave's own endpoint is never sent a lifetime, a lifetime being a choice about a gateway's
     /// account. Loaded and settled by [`call::drive`].
-    refusals: Refusals,
+    call: CallState,
+    config: &'a Config,
+    egress: &'a Egress,
+    subscription: Option<&'a mut dyn Subscription>,
+    /// Whether a request of this client was routed to the premium host with a key from the
+    /// subscription source. Set by [`Self::route`] once the source has produced the key, and never
+    /// from a reply. It stays false where no premium host is configured and where no source was
+    /// lent. It is not cleared between requests, and the decision not to is deliberate: the
+    /// configuration and whether a source was lent are fixed for the life of a client, and with
+    /// both a premium host and a source every request `route` makes is premium, so a client never
+    /// sends a premium request and a free one. A request through a gateway does not call `route`
+    /// and does not set it.
+    premium_key: bool,
+    gateway: Option<Gateway<'a>>,
     /// The `prompt_cache_key` a gateway request carries, where its block set `options.setCacheKey`
     /// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)). Made for the session by whoever
     /// holds the session and never read from the conversation.
     cache_key: Option<String>,
-    /// The stop to watch for and how long to wait between attempts, which is [`BACKOFF`] unless
-    /// overridden by [`Self::with_backoff`].
-    pace: Pace,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -542,12 +528,12 @@ struct Gateway<'a> {
 impl<'a> AichatClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, in order.
     pub fn conceded(&self) -> call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Whether a request of this client was routed to the premium host with the stored key, which
@@ -559,25 +545,23 @@ impl<'a> AichatClient<'a> {
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<protocol::Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             config,
             egress,
             subscription: None,
             premium_key: false,
             gateway: None,
-            refusals: Refusals::default(),
             cache_key: None,
-            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -666,7 +650,7 @@ impl<'a> AichatClient<'a> {
     /// watches the rest of the answer arrive first, which is the whole of what they asked to
     /// stop. A caller that offers no way to say so is never stopped.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -684,7 +668,7 @@ impl<'a> AichatClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
@@ -694,9 +678,8 @@ impl<'a> AichatClient<'a> {
     /// a build with no premium host sends no key rather than sending one somewhere it does not
     /// belong.
     ///
-    /// With both a premium host and a key, this is premium or nothing. A key that cannot be
-    /// produced fails the request rather than quietly sending none, because a downgrade nobody was
-    /// told about is indistinguishable from the service getting worse.
+    /// With both a premium host and a source of the key, every request is premium and carries the
+    /// key the source gives.
     fn route(&mut self) -> Result<(String, Option<SubscriptionCredential>), ChatError> {
         let base = self.config.chat_completions_url();
 
@@ -705,13 +688,10 @@ impl<'a> AichatClient<'a> {
         };
 
         match self.subscription.as_mut() {
-            Some(source) => match source.next_credential() {
-                Ok(credential) => {
-                    self.premium_key = true;
-                    Ok((premium_url, Some(credential)))
-                }
-                Err(detail) => Err(ChatError::Subscription(detail)),
-            },
+            Some(source) => {
+                self.premium_key = true;
+                Ok((premium_url, Some(source.next_credential())))
+            }
             // Premium is configured but no key is held, which is not an error: a caller with none
             // sends the free endpoint's signed request.
             None => Ok((base, None)),
@@ -726,12 +706,12 @@ impl<'a> AichatClient<'a> {
     /// request only. The level is dropped from the encoded body for the same reason, the request the
     /// caller holds still being the level they asked for.
     fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
-        let mut body = match self.refusals.caching {
+        let mut body = match self.call.refusals.caching {
             false => request.marked_body(self.cache_ttl_asked()),
             true => serde_json::to_value(request),
         }
         .map_err(|e| ChatError::Encode(e.to_string()))?;
-        if self.refusals.effort
+        if self.call.refusals.effort
             && let Some(fields) = body.as_object_mut()
         {
             fields.remove(protocol::EFFORT_FIELD);
@@ -760,7 +740,7 @@ impl<'a> AichatClient<'a> {
         self.gateway
             .as_ref()
             .and(self.config.prompt_cache_ttl)
-            .filter(|_| !self.refusals.cache_ttl)
+            .filter(|_| !self.call.refusals.cache_ttl)
     }
 
     /// The order a refusal of the body is answered in, in both loops.
@@ -895,7 +875,7 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let key = self.refusal_key(request);
         let plan = Plan {
             key: &key,
@@ -919,7 +899,7 @@ impl<'a> AichatClient<'a> {
     ) -> Result<Completion, ChatError> {
         let http = self.prepare(request)?;
 
-        self.spent.sent();
+        self.call.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // Decoding the transport envelope needs the raw bytes, so the kernel releases them
@@ -934,7 +914,7 @@ impl<'a> AichatClient<'a> {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
         // Usage belongs to the completed transport response, even if its tool calls are invalid.
-        self.spent.record(reported_usage(&envelope));
+        self.call.spent.record(reported_usage(&envelope));
         let parsed: ChatResponse =
             serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -977,7 +957,7 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let request = request.clone().streamed();
         let key = self.refusal_key(&request);
         let plan = Plan {
@@ -1018,16 +998,16 @@ impl<'a> AichatClient<'a> {
             .header("accept", "text/event-stream")
             .patient_on_this_machine();
 
-        self.spent.sent();
+        self.call.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut accumulated = StreamAccumulator::new();
@@ -1035,39 +1015,15 @@ impl<'a> AichatClient<'a> {
         let mut malformed = false;
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("chat stream", Label::untrusted_public());
-        // Whether any of the body has arrived, which is a fact about the connection and not about
-        // what the body said.
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // The request got through: part of the answer is here. Reported as a connection
-                // failure, the turn said so to a person whose model had been writing for minutes.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(ChatError::Incomplete);
-                }
-                Ok(Err(e)) => return Err(e.into()),
-                // Nothing has arrived yet, which is the whole point of waiting with a limit: it
-                // is the only chance to look at anything while a reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(ChatError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a
-                // connection that died leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.call.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::Failed(e) => return Err(e.into()),
+                Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
-            began = true;
-
-            // A stream is read and nothing else, so there is nothing part written to leave behind
-            // by stopping here, and the caller is throwing the reply away regardless.
-            if self.pace.cancelled() {
-                return Err(ChatError::Cancelled);
-            }
 
             // The SSE envelope is transport structure, like the JSON envelope in `complete`: the
             // bytes are taken out to find where events begin and end, and the reply that comes out
@@ -1115,7 +1071,7 @@ impl<'a> AichatClient<'a> {
 
             // Protocol completion establishes usage even if the server keeps the socket open.
             if accumulated.ended() {
-                self.spent.record(reported);
+                self.call.spent.record(reported);
             }
 
             let thinking = accumulated.take_thinking();
@@ -1144,7 +1100,7 @@ impl<'a> AichatClient<'a> {
 
         let (content, model, calls, usage) = accumulated.finish();
         let usage = reported.unwrap_or(usage);
-        self.spent.record(reported);
+        self.call.spent.record(reported);
         if malformed {
             return Err(ChatError::Decode {
                 detail: "the completed stream contained a malformed response frame".to_string(),
@@ -1329,6 +1285,52 @@ pub fn reply_bound(ceiling: u64) -> Duration {
         .max(bravebot_net::Timeouts::default().reply)
 }
 
+/// A model request to `url` carrying `body`, addressed, authenticated and bounded.
+///
+/// The one place the Anthropic, generateContent and Ollama clients attach the service's fixed
+/// headers, the key the entry names (`token`), the headers the block's `options.headers` asked for
+/// and the bound on the reply, so a change to any of them is made once.
+pub(crate) fn addressed(
+    url: String,
+    body: Vec<u8>,
+    provider: &bravebot_config::provider::Provider,
+    token: Option<&Secret>,
+    headers: &[(String, Secret)],
+    streaming: bool,
+    bound: Duration,
+) -> Request {
+    let mut http = Request::post(url, body)
+        .with_client_certificate()
+        .header("content-type", "application/json");
+    for (name, value) in provider.fixed_headers() {
+        http = http.header(*name, *value);
+    }
+    if let Some(token) = token.map(Secret::expose) {
+        // Attached to the socket the request was addressed to and to no other, so a hop to
+        // another host does not carry the key along. `authorization` gets that from the egress
+        // layer, which does not know this header is a credential.
+        let (name, value) = provider.credential_header(token);
+        http = http.socket_header(name, value);
+    }
+    // After the credential, and never over it: a name this request already set is refused
+    // where the block is read, because `Request::header` appends and a second copy of one of
+    // these would be sent rather than replace the first.
+    for (name, value) in headers {
+        http = http.header(name.clone(), value.expose());
+    }
+    // A stream's headers come at once and the model writes after them; a reply asked for whole
+    // is written before any of it is sent.
+    let mut http = if streaming {
+        http.stream_within(bound)
+    } else {
+        http.reply_within(bound)
+    };
+    if let Some(gap) = provider.patience.idle_timeout {
+        http = http.idle_within(gap);
+    }
+    http
+}
+
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
 /// The same interval the rest of the system waits on for the same question, and short enough that
@@ -1350,10 +1352,8 @@ const WAKE: Duration = Duration::from_millis(50);
 ///
 /// The channel holds at most 16 pieces, so a server faster than the decoder cannot pile a whole
 /// reply into it. The decoder has never been the slow end, so the bound is small. The thread stops
-/// when the body ends, when a read fails, or when the receiver is dropped.
-pub fn read_in_background(
-    stream: bravebot_net::Streamed<'static>,
-) -> std::sync::mpsc::Receiver<Result<Option<Labelled<Vec<u8>>>, EgressError>> {
+/// when the body ends, when a read fails, or when the [`Arriving`] it returns is dropped.
+pub fn read_in_background(stream: bravebot_net::Streamed<'static>) -> Arriving {
     const CHUNKS_AHEAD: usize = 16;
 
     let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
@@ -1375,7 +1375,77 @@ pub fn read_in_background(
             }
         }
     });
-    arriving
+    Arriving {
+        receiver: arriving,
+        began: false,
+    }
+}
+
+/// What [`Arriving::next`] found on a streamed body.
+pub enum Arrived {
+    /// A piece of the body, unopened and under the label it arrived with.
+    Piece(Labelled<Vec<u8>>),
+    /// The body ended, or the reader is gone without saying so.
+    Ended,
+    /// A read failed after some of the body had arrived.
+    StoppedPartWay,
+    /// A read failed before any of the body arrived, or failed with something other than a
+    /// transport error.
+    Failed(EgressError),
+    /// The turn was stopped.
+    Cancelled,
+}
+
+/// A streamed body being read by [`read_in_background`], taken a piece at a time with
+/// [`Arriving::next`].
+pub struct Arriving {
+    receiver: std::sync::mpsc::Receiver<Result<Option<Labelled<Vec<u8>>>, EgressError>>,
+    /// Whether any of the body has arrived, which is a fact about the connection and not about
+    /// what the body said.
+    began: bool,
+}
+
+impl Arriving {
+    /// Wait for the next piece of the body, looking up every [`WAKE`] to see whether `pace` says
+    /// the turn was stopped.
+    ///
+    /// A piece is handed on unopened: this neither decodes it nor reads its label.
+    pub fn next(&mut self, pace: &Pace) -> Arrived {
+        loop {
+            match self.receiver.recv_timeout(WAKE) {
+                Ok(Ok(Some(piece))) => {
+                    self.began = true;
+                    // A stream is read and nothing else, so there is nothing part written to
+                    // leave behind by stopping here, and the caller is throwing the reply away
+                    // regardless.
+                    if pace.cancelled() {
+                        return Arrived::Cancelled;
+                    }
+                    return Arrived::Piece(piece);
+                }
+                Ok(Ok(None)) => return Arrived::Ended,
+                // A read that fails once the reply has begun is the reply stopping, whatever the
+                // socket reported: the request got through and part of the answer is here.
+                // Reported as a connection failure, the turn said so to a person whose model had
+                // been writing for minutes.
+                Ok(Err(EgressError::Transport { .. })) if self.began => {
+                    return Arrived::StoppedPartWay;
+                }
+                // A reply cut at its deadline among them: asked for again, it runs as long.
+                Ok(Err(error)) => return Arrived::Failed(error),
+                // Nothing has arrived yet, which is the whole point of waiting with a limit: it is
+                // the only chance to look at anything while a reply is still being waited for.
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if pace.cancelled() {
+                        return Arrived::Cancelled;
+                    }
+                }
+                // The reader is gone without having said the body ended, which is the silence a
+                // connection that died leaves, and the caller answers it as one.
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Arrived::Ended,
+            }
+        }
+    }
 }
 
 impl Driven for AichatClient<'_> {
@@ -1385,20 +1455,12 @@ impl Driven for AichatClient<'_> {
         ChatError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     /// What the model is remembered to refuse, with the breakpoints given up from the start where
@@ -1419,10 +1481,6 @@ impl Driven for AichatClient<'_> {
         }
     }
 
-    fn remember(&self, key: &str, found: Refusals) {
-        remember(key, found);
-    }
-
     /// Only a refusal of the body is answered by giving something up, and only where the request
     /// carried what would be given up, so a service that answers this status for its own reasons
     /// cannot make a retry loop out of it. The lifetime is only in question while breakpoints are
@@ -1430,7 +1488,9 @@ impl Driven for AichatClient<'_> {
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
         refuses_the_body(error)
             && match concession {
-                Concession::CacheTtl => !self.refusals.caching && self.cache_ttl_asked().is_some(),
+                Concession::CacheTtl => {
+                    !self.call.refusals.caching && self.cache_ttl_asked().is_some()
+                }
                 Concession::Breakpoints => true,
                 Concession::Effort => request.effort.is_some(),
                 Concession::Ceiling
@@ -1452,11 +1512,7 @@ impl Driven for AichatClient<'_> {
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
-        pause_before_retry(self.pace.backoff, failures, error)
-    }
-
-    fn log_retry(&self, attempt: u32, pause: Duration) {
-        log_retry(attempt, pause);
+        pause_before_retry(self.call.pace.backoff, failures, error)
     }
 }
 
@@ -1691,6 +1747,47 @@ mod tests {
     use super::*;
     use bravebot_config::DEFAULT_MODEL;
     use protocol::Message;
+
+    /// The sentence for a reply the ceiling stopped, byte for byte, in each of its four forms.
+    /// Written once, as `Display for CutOff`, and used by every error that carries one.
+    #[test]
+    fn a_reply_the_ceiling_stopped_is_described_in_one_sentence_per_state() {
+        let cut = |call: Option<OpenCall>, thought: bool| CutOff {
+            ceiling: 32_000,
+            call,
+            thought,
+        };
+        let call = |tool: Option<&str>| {
+            Some(OpenCall {
+                tool: tool.map(str::to_string),
+                arguments: 10,
+            })
+        };
+        let tail = ". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn";
+        let cases = [
+            (
+                cut(call(Some("write_file")), true),
+                "the model reached its output limit of 32000 tokens while writing a call to write_file, so the call was not made",
+            ),
+            (
+                cut(call(None), false),
+                "the model reached its output limit of 32000 tokens while writing a tool call, so the call was not made",
+            ),
+            (
+                cut(None, true),
+                "the model reached its output limit of 32000 tokens while thinking, and wrote nothing",
+            ),
+            (
+                cut(None, false),
+                "the model reached its output limit of 32000 tokens before writing anything",
+            ),
+        ];
+        for (cut_off, head) in cases {
+            let want = format!("{head}{tail}");
+            assert_eq!(cut_off.to_string(), want);
+            assert_eq!(ChatError::TooLong(cut_off.clone()).to_string(), want);
+        }
+    }
 
     fn config() -> Config {
         Config::from_lookup(|key| {
@@ -2360,7 +2457,7 @@ mod tests {
 
         let mut refused =
             AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
-        refused.refusals.cache_ttl = true;
+        refused.call.refusals.cache_ttl = true;
         assert_eq!(
             cache_controls(&refused),
             [plain(), plain()],
@@ -2394,7 +2491,7 @@ mod tests {
                 AichatClient::new(&config, &egress).for_gateway(provider, "gpt-4o-mini", None);
             let key = client.refusal_key(&asked);
             let recalled = client.recall(&key);
-            client.refusals = recalled;
+            client.call.refusals = recalled;
             let body = client.body(&asked).expect("a body").to_string();
             (recalled.caching, body.contains("cache_control"))
         };
@@ -2636,6 +2733,110 @@ mod tests {
             backoff(Duration::from_secs(90), 1),
             LONGEST_PAUSE,
             "a base above the cap is held to it"
+        );
+    }
+
+    /// BACKEND-37: a read that fails once any of the body arrived is a reply that stopped part
+    /// way, and one that fails before anything arrived stays the failure it was. Every streaming
+    /// client takes its body through [`Arriving::next`], so this pins each of its answers once.
+    #[test]
+    fn a_body_read_in_the_background_says_what_arrived_and_whether_it_began() {
+        type Read = Result<Option<Labelled<Vec<u8>>>, EgressError>;
+
+        fn arriving(
+            results: Vec<Read>,
+            hang_up: bool,
+        ) -> (Arriving, Option<std::sync::mpsc::SyncSender<Read>>) {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(results.len().max(1));
+            for result in results {
+                sender.send(result).expect("queued");
+            }
+            let arriving = Arriving {
+                receiver,
+                began: false,
+            };
+            // The sender is kept for as long as the caller holds it, so an empty channel is a
+            // reader still waiting rather than one that is gone.
+            (arriving, (!hang_up).then_some(sender))
+        }
+        fn piece() -> Read {
+            Ok(Some(Labelled::new(
+                b"x".to_vec(),
+                Label::untrusted_public(),
+            )))
+        }
+        fn cut() -> Read {
+            Err(EgressError::Transport {
+                url: "https://example.invalid".into(),
+                detail: "reset".into(),
+                transient: true,
+            })
+        }
+        let going = Pace::new(Duration::ZERO);
+
+        let (mut began, _keep) = arriving(vec![piece(), cut()], false);
+        assert!(matches!(began.next(&going), Arrived::Piece(_)));
+        assert!(
+            matches!(began.next(&going), Arrived::StoppedPartWay),
+            "a transport failure after a piece is a reply that stopped part way"
+        );
+
+        let (mut never, _keep) = arriving(vec![cut()], false);
+        assert!(
+            matches!(
+                never.next(&going),
+                Arrived::Failed(EgressError::Transport { .. })
+            ),
+            "a transport failure before any piece is still a transport failure"
+        );
+
+        let (mut late, _keep) = arriving(
+            vec![
+                piece(),
+                Err(EgressError::OutOfTime {
+                    url: "https://example.invalid".into(),
+                }),
+            ],
+            false,
+        );
+        assert!(matches!(late.next(&going), Arrived::Piece(_)));
+        assert!(
+            matches!(
+                late.next(&going),
+                Arrived::Failed(EgressError::OutOfTime { .. })
+            ),
+            "a failure other than a transport one is handed on even after the body began"
+        );
+
+        let (mut ended, _keep) = arriving(vec![piece(), Ok(None)], false);
+        assert!(matches!(ended.next(&going), Arrived::Piece(_)));
+        assert!(matches!(ended.next(&going), Arrived::Ended));
+
+        let (mut gone, _gone) = arriving(vec![], true);
+        assert!(
+            matches!(gone.next(&going), Arrived::Ended),
+            "a reader gone without a word is an end the caller answers"
+        );
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let stopped = Pace {
+            cancel: Some(cancel.clone()),
+            backoff: Duration::ZERO,
+        };
+        cancel.cancel();
+        let (mut quiet, _keep) = arriving(vec![], false);
+        assert!(
+            matches!(quiet.next(&stopped), Arrived::Cancelled),
+            "a stop is noticed while nothing arrives"
+        );
+        let (mut after, _keep) = arriving(vec![piece(), cut()], false);
+        assert!(
+            matches!(after.next(&stopped), Arrived::Cancelled),
+            "a piece that arrives after a stop is not handed on"
+        );
+        assert!(
+            after.began,
+            "the piece that arrived after the stop still counts as the body beginning"
         );
     }
 }

@@ -127,7 +127,6 @@ type DirectoryIdentity = fn(&Path) -> Option<(u64, u64)>;
 pub(crate) use resolve::destination;
 pub use resolve::expand_home;
 use resolve::{named_home, refuse_unkeyable, written_below};
-pub(crate) use results::MAX_ENTRIES;
 pub use results::{
     ContextLine, FileTally, Listing, MAX_SEARCH_CONTEXT, MAX_SEARCH_FILES, Match, Matches, Page,
     Paging, RepoMap, SearchOutput,
@@ -136,6 +135,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
+pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
@@ -572,14 +572,6 @@ impl Workspace {
     /// The directories the person agreed to have skills read from, as written (INSTR-17).
     pub(crate) fn shared_skill_directories(&self) -> &[String] {
         &self.shared_skills
-    }
-
-    /// Stand in for the environment's profile directory, which a `~` in a shared skill directory
-    /// (INSTR-17) stands for, so a test does not depend on whose machine it runs on.
-    #[must_use]
-    pub fn with_profile_directory(mut self, profile: Option<PathBuf>) -> Self {
-        self.home = profile;
-        self
     }
 
     /// The home directory a leading `~` stands for in this workspace.
@@ -1638,7 +1630,7 @@ impl Workspace {
         let bytes = self
             .resolve(relative)
             .ok()
-            .and_then(|resolved| std::fs::read(resolved).ok());
+            .and_then(|resolved| read_regular(&resolved, usize::MAX));
         let other_encoding = bytes.as_deref().is_some_and(|bytes| {
             std::str::from_utf8(bytes).is_err() && decode_text(bytes.to_vec()).is_some()
         });
@@ -2096,6 +2088,23 @@ impl Workspace {
             self.mark_rewind_gap(CoverageGap::Scratch);
             return;
         }
+        // The guard is held to look and to push, and not across the read: a read that waits
+        // would keep `take_backups` waiting with it.
+        let room = {
+            let Ok(backups) = self.backups.lock() else {
+                self.mark_rewind_gap(CoverageGap::BackupUnavailable);
+                return;
+            };
+            if backups.iter().any(|backup| backup.path == resolved) {
+                return;
+            }
+            MAX_REWIND_BYTES.saturating_sub(bytes_held(&backups))
+        };
+
+        #[cfg(test)]
+        self.hold_while_backing_up(resolved);
+        let mut was = kept(resolved, room);
+
         let Ok(mut backups) = self.backups.lock() else {
             self.mark_rewind_gap(CoverageGap::BackupUnavailable);
             return;
@@ -2103,22 +2112,16 @@ impl Workspace {
         if backups.iter().any(|backup| backup.path == resolved) {
             return;
         }
-
-        let held: usize = backups
-            .iter()
-            .map(|backup| match &backup.was {
-                Before::Bytes(bytes) => bytes.len(),
-                Before::Nothing | Before::NotKept => 0,
-            })
-            .sum();
-        let room = MAX_REWIND_BYTES.saturating_sub(held);
-
-        #[cfg(test)]
-        self.hold_while_backing_up(resolved);
+        // Another backup may have been taken while this one was read, so the room it was read
+        // for may be gone.
+        let room = MAX_REWIND_BYTES.saturating_sub(bytes_held(&backups));
+        if matches!(&was, Before::Bytes(bytes) if bytes.len() > room) {
+            was = Before::NotKept;
+        }
         backups.push(Backup {
             captured_trust,
             path: resolved.to_path_buf(),
-            was: kept(resolved, room),
+            was,
             kept: kept_store,
         });
     }
@@ -2164,7 +2167,41 @@ impl Workspace {
     /// A path whose file did not exist is removed again, and one already gone counts as removed:
     /// the state asked for is the state that is there. A path whose contents were not kept is
     /// refused without being touched, since what it held is not here to write.
-    pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
+    ///
+    /// A path that is a protected name, or lands on one once links are followed, or shares a file
+    /// with one through a hard link, is put to `confirmer` as a write to it is (MODE-2, PERM-9) and
+    /// left alone unless the answer is yes. The question is decided from the path alone: the bytes
+    /// being put back are carried to the write and read by nothing on the way.
+    pub(crate) fn put_back(
+        &self,
+        path: &Path,
+        was: &Before,
+        confirmer: &mut dyn crate::confirm::Confirmer,
+    ) -> Result<(), WorkspaceError> {
+        self.ask_before_put_back(path, was, confirmer)?;
+        self.put_back_asked(path, was)
+    }
+
+    /// The first half of [`Workspace::put_back`]: refuse a path a rewind may not reach and put a
+    /// protected one to `confirmer`. Nothing is written. A caller that has to read the file again
+    /// between the question and the write asks here first, since a person can take as long as they
+    /// like to answer, and then writes with [`Workspace::put_back_asked`].
+    pub(crate) fn ask_before_put_back(
+        &self,
+        path: &Path,
+        was: &Before,
+        confirmer: &mut dyn crate::confirm::Confirmer,
+    ) -> Result<(), WorkspaceError> {
+        self.confine_put_back(path, matches!(was, Before::Nothing))?;
+        if !matches!(was, Before::NotKept) {
+            self.ask_about_a_protected_restore(path, confirmer)?;
+        }
+        Ok(())
+    }
+
+    /// The second half of [`Workspace::put_back`]: confine the path again and write. Asks nothing,
+    /// so it is only for a path [`Workspace::ask_before_put_back`] has passed.
+    pub(crate) fn put_back_asked(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
         self.confine_put_back(path, matches!(was, Before::Nothing))?;
         let failed = |detail: String| WorkspaceError::Io {
             path: path.display().to_string(),
@@ -2177,6 +2214,46 @@ impl Workspace {
                 other => other.map_err(|e| failed(e.to_string())),
             },
             Before::NotKept => Err(failed("what it held was not kept".to_string())),
+        }
+    }
+
+    /// Put a restore onto a protected path to `confirmer`, which refuses it where nobody can be
+    /// asked. Nothing is asked of a path that is not protected.
+    ///
+    /// The request is the one a write to a protected path raises, with `protected` set so a mode
+    /// that answers writes unasked still does not answer it short of bypassing. It carries no body
+    /// and no comparison: the bytes are the backup's, which this driver does not read, so nothing
+    /// of them is drawn and the request is not marked untrusted.
+    fn ask_about_a_protected_restore(
+        &self,
+        path: &Path,
+        confirmer: &mut dyn crate::confirm::Confirmer,
+    ) -> Result<(), WorkspaceError> {
+        let shown = self.relative_display(path);
+        if !crate::tools::write_is_protected(self, &shown) {
+            return Ok(());
+        }
+        let request = crate::confirm::WriteRequest {
+            path: shown,
+            contents: String::new(),
+            existing: None,
+            diff: crate::diff::Diff::compute("", ""),
+            intent: crate::confirm::Intent::Overwrite,
+            untrusted: false,
+            remark: None,
+            credentials: Vec::new(),
+            protected: true,
+            may_always: false,
+            record: None,
+            written_since_checkout: false,
+            may_edit: false,
+        };
+        if confirmer.confirm_write(&request).approved() {
+            Ok(())
+        } else {
+            Err(WorkspaceError::Protected {
+                path: path.display().to_string(),
+            })
         }
     }
 
@@ -2285,11 +2362,39 @@ pub(crate) fn kept(resolved: &Path, room: usize) -> Before {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Before::Nothing,
         Err(_) => Before::NotKept,
         Ok(found) if found.len() as usize > room => Before::NotKept,
-        Ok(_) => match std::fs::read(resolved) {
-            Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
-            _ => Before::NotKept,
+        Ok(_) => match read_regular(resolved, room) {
+            Some(bytes) => Before::Bytes(bytes),
+            None => Before::NotKept,
         },
     }
+}
+
+/// What a regular file holds, or `None` where the path is not one, cannot be read, or holds more
+/// than `most` bytes.
+///
+/// Opened by [`crate::recall::store::open_regular`], so a pipe at the path, or one put there since
+/// the name was resolved, is refused and never waited on for a writer. The writer would be this
+/// process, which opens a destination only after its pre-image has been read. The kind is the
+/// file system's answer about the open file and no byte decides it.
+fn read_regular(path: &Path, most: usize) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = crate::recall::store::open_regular(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(most).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= most).then_some(bytes)
+}
+
+/// The bytes the backups taken so far hold, which is what the budget is spent on.
+fn bytes_held(backups: &[Backup]) -> usize {
+    backups
+        .iter()
+        .map(|backup| match &backup.was {
+            Before::Bytes(bytes) => bytes.len(),
+            Before::Nothing | Before::NotKept => 0,
+        })
+        .sum()
 }
 
 /// What a line left at a destination it opened, as text, up to `room` bytes.
@@ -2304,8 +2409,8 @@ pub(crate) fn left_at(resolved: &Path, room: usize) -> Option<String> {
     if found.len() as usize > room {
         return None;
     }
-    let bytes = std::fs::read(resolved).ok()?;
-    (bytes.len() <= room).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    let bytes = read_regular(resolved, room)?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The label a workspace read produces, exposed for callers that need to reason about
@@ -2632,12 +2737,17 @@ struct Collected<'a> {
     /// of the tree, and what it points at is not read, so the count is all a caller can say. It
     /// is taken from the entry's file type and from nothing in a file.
     links: usize,
+    /// The most files taken from any one directory, or `None` for no such cap. Set only by a
+    /// depth-bounded listing (LIST-5).
+    per_directory: Option<usize>,
+    /// Directories `per_directory` cut, each with how many of its files were left out.
+    partly_listed: Vec<(String, usize)>,
 }
 
 impl Collected<'_> {
     /// How much of the cap has been spent.
     fn len(&self) -> usize {
-        self.files.len() + self.stopped_at.len()
+        self.files.len() + self.stopped_at.len() + self.partly_listed.len()
     }
 }
 
@@ -2841,13 +2951,35 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
+                // Only a bounded listing, whose purpose is the shape of the tree. An unbounded one
+                // asked for every file, and keeps the one cap over the whole walk.
+                per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                partly_listed: Vec::new(),
             };
-            let _ =
-                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &rules, &mut collected)?;
+            // The name the root is reported under if the per-directory cap cuts it: `.` for the
+            // workspace root, whose relative name is empty, and its relative name otherwise. Taken
+            // once from the resolved directory argument, the value `under` already holds, and
+            // passed into the walk, so no subdirectory's name is tested for it.
+            let root_shown = if under.is_empty() {
+                "."
+            } else {
+                under.as_str()
+            };
+            let _ = self.walk_filtered(
+                &root,
+                root_shown,
+                wanted,
+                depth,
+                MAX_ENTRIES,
+                &rules,
+                &mut collected,
+            )?;
             let unreadable = collected.unreadable;
             let links = collected.links;
+            let mut partly_listed = std::mem::take(&mut collected.partly_listed);
             found.sort();
             stopped_at.sort();
+            partly_listed.sort();
 
             // Labelled after the walk, because which paths were visited is not known before it. A
             // listing is trusted only if every path in it is. A directory name is a name out of the
@@ -2864,6 +2996,8 @@ impl Workspace {
             // outside the boundary like the walk, and it can only lower the label.
             let mut keyed = self.walked_keys(&walk_names, &relative, &root, &found, true);
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &stopped_at, false));
+            let cut: Vec<String> = partly_listed.iter().map(|(name, _)| name.clone()).collect();
+            keyed.extend(self.walked_keys(&walk_names, &relative, &root, &cut, false));
             // The walk above reads directory entries and no file's bytes, and runs outside the
             // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
             // names, and the label of a name is the map's answer for its path, taken inside the
@@ -2886,17 +3020,24 @@ impl Workspace {
             // the same order every time, which is the walk's doing rather than this sort's: what
             // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
             // kept.
-            let truncated = found.len() + stopped_at.len() > MAX_ENTRIES;
+            //
+            // A directory the per-directory cap cut leaves files out as the whole-walk cap does, so
+            // the listing is reported as truncated either way (LIST-4).
+            let at_the_cap = found.len() + stopped_at.len() + partly_listed.len() > MAX_ENTRIES;
+            let truncated = at_the_cap || !partly_listed.is_empty();
             found.truncate(MAX_ENTRIES);
             stopped_at.truncate(MAX_ENTRIES.saturating_sub(found.len()));
+            partly_listed.truncate(MAX_ENTRIES.saturating_sub(found.len() + stopped_at.len()));
 
             Ok(Labelled::new(
                 Listing {
                     files: found,
                     directories: stopped_at,
                     truncated,
+                    at_the_cap,
                     unreadable,
                     links,
+                    partly_listed,
                 },
                 label,
             ))
@@ -2958,9 +3099,12 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
+                per_directory: None,
+                partly_listed: Vec::new(),
             };
             let hit_the_cap = self.walk_filtered(
                 &root,
+                &under,
                 wanted,
                 None,
                 self.search_files,
@@ -3261,9 +3405,12 @@ impl Workspace {
                     withheld: false,
                     unreadable: false,
                     links: 0,
+                    per_directory: None,
+                    partly_listed: Vec::new(),
                 };
                 let unvisited = self.walk_filtered(
                     &root,
+                    &under,
                     wanted,
                     None,
                     self.search_files,
@@ -4201,9 +4348,19 @@ impl Workspace {
     /// reaches contributes its own contents before the walk disappears into the first subtree
     /// under it. A partial answer cannot be helped once the cap is reached. Which part it
     /// is can.
+    ///
+    /// `shown` is the name `directory` is reported under if the per-directory cap cuts it. The
+    /// caller supplies it: the first call passes the root's name, and each recursive call passes
+    /// the relative name it already built for the subdirectory. So the walk tests no name to tell
+    /// the root from a subdirectory.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk's arguments plus the name a cut directory is reported under"
+    )]
     fn walk_filtered<S: Sink>(
         &self,
         directory: &Path,
+        shown: &str,
         wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
@@ -4247,6 +4404,9 @@ impl Workspace {
         files.sort();
         directories.sort();
 
+        // Files this directory gave the listing, and files past `per_directory` it did not.
+        let mut taken = 0;
+        let mut left_out = 0;
         for path in files {
             if collected.len() > limit {
                 return Ok(true);
@@ -4269,7 +4429,17 @@ impl Workspace {
                 collected.withheld = true;
                 continue;
             }
+            // Counted after the include and the rules, so the number left out is of files the
+            // listing would have shown, and the cap is decided from that count alone.
+            if collected.per_directory.is_some_and(|most| taken >= most) {
+                left_out += 1;
+                continue;
+            }
+            taken += 1;
             collected.files.push(relative);
+        }
+        if left_out > 0 {
+            collected.partly_listed.push((shown.to_string(), left_out));
         }
 
         for path in directories {
@@ -4299,6 +4469,7 @@ impl Workspace {
             // records only that it did, which a caller says without a name.
             match self.walk_filtered(
                 &path,
+                &relative,
                 wanted,
                 remaining.map(|left| left - 1),
                 limit,
@@ -5963,6 +6134,24 @@ mod tests {
         let (path, workspace) = tree("file");
         assert_eq!(workspace.landing("alias.txt").as_deref(), Some(".env"));
         assert_eq!(workspace.landing("./alias.txt").as_deref(), Some(".env"));
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A link that leads into a directory whose name is not text lands on no name a rule is about
+    /// (PATH-003). The regression it rejects: the landing spelled with a lossy rendering, which is
+    /// the name of a different directory. Linux only, because the name has to exist on disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_into_a_directory_whose_name_is_not_text_has_no_landing() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("not-text");
+        let invalid = path.join(std::ffi::OsStr::from_bytes(b"lint-\xff"));
+        std::fs::create_dir(&invalid).unwrap();
+        std::fs::write(invalid.join("a.md"), "a").unwrap();
+        std::os::unix::fs::symlink(&invalid, path.join("shared")).unwrap();
+        assert_eq!(workspace.landing("shared/a.md"), None);
+        assert_eq!(workspace.landing("shared"), None);
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -7757,6 +7946,164 @@ mod tests {
         path
     }
 
+    /// A named pipe at `path`, and a reader holding it open without waiting, so that a writer's open
+    /// returns at once. `None` where `mkfifo` is not installed. The reader gives a read of the
+    /// pipe nothing to wait for either: an open for reading waits for a writer, and none comes.
+    #[cfg(unix)]
+    fn a_pipe_at(path: &Path) -> Option<std::fs::File> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let made = std::process::Command::new("mkfifo").arg(path).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is not installed, so a pipe is not tried");
+            return None;
+        }
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+            .open(path)
+            .ok()
+    }
+
+    /// A pipe where a write or a redirection is about to land has no pre-image to keep or to scan,
+    /// and reading for one does not wait for a writer. Opened for reading a pipe blocks until one
+    /// comes, and the writer would be this process, which opens the destination after the read.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_at_a_destination_has_no_pre_image_and_is_not_waited_on() {
+        let root = crate::testutil::scratch_dir("pipe-pre-image");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let path = root.join("out");
+        let Some(_reader) = a_pipe_at(&path) else {
+            return;
+        };
+        let (sender, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send((kept(&path, 1024), left_at(&path, 1024)));
+        });
+
+        let (before, after) = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a pre-image read waited on a pipe for a writer");
+
+        assert_eq!(before, Before::NotKept);
+        assert_eq!(after, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The list of backups is not held while the file a write replaces is read, so the end of the
+    /// turn, which takes the list, never waits on a read. A read that waits, such as one of a
+    /// pipe, would otherwise keep the turn from ending.
+    #[test]
+    fn the_backup_list_is_not_held_while_the_replaced_file_is_read() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let root = crate::testutil::scratch_dir("bravebot-backup-list-free");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let entered = Arc::new(Mutex::new(Vec::new()));
+        {
+            let backups = Arc::clone(&workspace.backups);
+            let entered = entered.clone();
+            workspace.hold_backup_reads(move |_| {
+                entered.lock().unwrap().push(backups.try_lock().is_ok());
+            });
+        }
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority);
+
+        let written = workspace.write(
+            &mut policy,
+            &Labelled::trusted("shared.txt".to_string()),
+            &Labelled::new("replacement".to_string(), Label::trusted_public()),
+        );
+
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(
+            *entered.lock().unwrap(),
+            [true],
+            "the backup list was held while the file was read, or the file was not read"
+        );
+        assert_eq!(workspace.take_backups().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write over a pipe returns, keeps nothing of what the pipe held, and leaves the
+    /// file-authority boundary free for the next capture. The reader the test holds is what lets
+    /// the write itself open the pipe, so a wait that is left can only be the pre-image's.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_over_a_pipe_keeps_no_backup_and_leaves_the_boundary_free() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let root = crate::testutil::scratch_dir("bravebot-write-over-pipe");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        let Some(_reader) = a_pipe_at(&root.join("out")) else {
+            return;
+        };
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let (sender, answer) = std::sync::mpsc::channel();
+        {
+            let (workspace, authority) = (workspace.clone(), authority.clone());
+            std::thread::spawn(move || {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(authority);
+                let written = workspace.write(
+                    &mut policy,
+                    &Labelled::trusted("out".to_string()),
+                    &Labelled::new("replacement".to_string(), Label::trusted_public()),
+                );
+                let _ = sender.send(written.is_ok());
+            });
+        }
+
+        let written = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a write over a pipe waited for a writer to read what it replaced");
+
+        assert!(written, "the write over the pipe failed");
+        let backups = workspace.take_backups();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].was, Before::NotKept);
+        let (entered, can_enter) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(authority.capture());
+            let _ = entered.send(());
+        });
+        assert!(
+            can_enter.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the boundary was still held after the write returned"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// CRED-11: a destination the line removed or never created has nothing to scan, and the scan
     /// reports that as no text rather than as an empty file.
     #[test]
@@ -7797,5 +8144,237 @@ mod tests {
         let path = destination_holding("left-at-lossy", &held);
 
         assert_eq!(left_at(&path, 1024), Some(format!("{declared}\u{FFFD}")));
+    }
+
+    /// The remedy a redirection refused for leaving the workspace carries.
+    fn destination_remedy(workspace: &Workspace, path: &Path) -> Remedy {
+        match workspace.confines_writing(path) {
+            Err(WorkspaceError::Escapes { remedy, .. }) => remedy,
+            other => panic!("{} was not refused for leaving: {other:?}", path.display()),
+        }
+    }
+
+    /// TRUST-10, CMDLINE-5: a redirection outside every opened directory is refused with the
+    /// remedy the file tools give an absolute path, chosen from where it lands.
+    ///
+    /// The regression it rejects: `confines_as` refusing every destination with
+    /// [`Remedy::Nothing`], so the planner is never told the directory can be opened.
+    #[test]
+    fn a_redirection_outside_is_offered_the_directory_the_file_tools_offer() {
+        let (home, project) = home_and_project("redirect-remedy-open");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(
+            destination_remedy(&workspace, &beside.join("notes.txt")),
+            Remedy::Open
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &project.join("../beside/new.txt")),
+            Remedy::Open,
+            "a climb into a directory that is not open is offered it, as TRUST-10 says"
+        );
+        assert_eq!(destination_remedy(&workspace, &beside), Remedy::OpenItself);
+        assert!(
+            workspace
+                .confines_writing(&beside.join("notes.txt"))
+                .expect_err("refused")
+                .describe("x")
+                .contains("/add-dir"),
+            "the refusal does not name /add-dir"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10, CHECKOUT-7: a destination whose directory holds the working directory says what
+    /// opening it costs.
+    ///
+    /// The regression it rejects: the plain remedy for a directory that holds the root.
+    #[test]
+    fn a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts() {
+        let (home, project) = home_and_project("redirect-remedy-checkouts");
+        let base = home.parent().expect("base").to_path_buf();
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(
+            destination_remedy(&workspace, &base.join("notes.txt")),
+            Remedy::OpenEndsCheckouts
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &base),
+            Remedy::OpenItselfEndsCheckouts
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-10, SANDBOX-18: a destination in a credential location is offered no directory, and
+    /// one naming the location itself is offered nothing.
+    ///
+    /// The regression it rejects: `/add-dir` named for a directory it refuses to open.
+    #[test]
+    fn a_redirection_into_a_credential_location_is_offered_no_directory() {
+        let (home, project) = home_and_project("redirect-remedy-credential");
+        std::fs::create_dir_all(home.join(".ssh")).expect("ssh");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        assert_eq!(
+            destination_remedy(&workspace, &home.join(".ssh/config")),
+            Remedy::Credential
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &home.join(".ssh")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a refusal opening a directory cannot fix offers nothing: a link that carries the
+    /// destination out, and the stores.
+    ///
+    /// The regression it rejects: the remedy chosen from where a link leads, which names a
+    /// directory the line's path is not written in, and the stores offered as a directory to open.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing() {
+        let (home, project) = home_and_project("redirect-remedy-nothing");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        std::os::unix::fs::symlink(&beside, project.join("out")).expect("link");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_state(&state);
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+
+        assert_eq!(
+            destination_remedy(&workspace, &project.join("out/notes.txt")),
+            Remedy::Nothing
+        );
+        assert_eq!(
+            destination_remedy(&workspace, &state.join("facts/x.md")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a redirection whose path climbs above the top of the file system offers nothing.
+    /// The kernel reads the extra `..` as `/`, so no directory the path is written in can be
+    /// opened to reach it.
+    ///
+    /// The regression it rejects: the remedy chosen from where the path lands, which names the top
+    /// of the file system as a directory to open.
+    #[test]
+    fn a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing() {
+        let (home, project) = home_and_project("redirect-remedy-off-the-top");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let climbs = "../".repeat(project.components().count() + 2);
+
+        assert_eq!(
+            destination_remedy(&workspace, &project.join(format!("{climbs}notes.txt"))),
+            Remedy::Nothing
+        );
+        assert_eq!(
+            destination_remedy(&workspace, Path::new("/../../notes.txt")),
+            Remedy::Nothing
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// TRUST-10: a redirection whose destination is a name that is not UTF-8 offers nothing, since
+    /// a sentence naming its directory would name a different one. Unix only: Windows names are
+    /// UTF-16 and macOS refuses such a name on APFS, so the directory is not made there.
+    ///
+    /// The lookalike `beside-\u{FFFD}`, which is valid UTF-8, is offered the directory to open as
+    /// any other name outside is.
+    ///
+    /// The regression it rejects: `/add-dir` offered with a lossy spelling of the directory, and
+    /// a check on the lossy spelling that also refuses the lookalike.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing() {
+        use std::os::unix::ffi::OsStrExt;
+        let (home, project) = home_and_project("redirect-remedy-not-utf8");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let beside = home
+            .parent()
+            .expect("base")
+            .join(std::ffi::OsStr::from_bytes(b"beside-\xff"));
+        let destination = beside.join("notes.txt");
+        if std::fs::create_dir_all(&beside).is_ok() {
+            assert_eq!(
+                destination_remedy(&workspace, &destination),
+                Remedy::Nothing
+            );
+        }
+        assert_eq!(
+            destination_remedy(&workspace, &destination),
+            Remedy::Nothing,
+            "a name nothing is at yet"
+        );
+        let lookalike = home.parent().expect("base").join("beside-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).expect("lookalike");
+        assert_eq!(
+            destination_remedy(&workspace, &lookalike.join("notes.txt")),
+            Remedy::Open,
+            "the valid UTF-8 lookalike"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// CMDLINE-5, TRUST-10: the destination a redirection was refused for is let through once the
+    /// directory its remedy names is opened, spelled from the top of the file system and with a
+    /// `..` out of the root.
+    ///
+    /// The regression it rejects: a remedy naming `/add-dir` for a destination that opening the
+    /// directory does not let through.
+    #[test]
+    fn a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened() {
+        let (home, project) = home_and_project("redirect-remedy-then-opened");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let absolute = beside.join("notes.txt");
+        let climbing = project.join("../beside/notes.txt");
+
+        assert_eq!(destination_remedy(&workspace, &absolute), Remedy::Open);
+        assert_eq!(destination_remedy(&workspace, &climbing), Remedy::Open);
+        workspace
+            .add_directory(beside.to_str().expect("utf-8"))
+            .expect("beside opened");
+        assert!(
+            workspace.confines_writing(&absolute).is_ok(),
+            "the absolute destination is still refused after its directory was opened"
+        );
+        assert!(
+            workspace.confines_writing(&climbing).is_ok(),
+            "the climbing destination is still refused after its directory was opened"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// PERM-16: where `readsStayInWorkspace` holds, a redirection outside is told so and offered
+    /// no directory.
+    ///
+    /// The regression it rejects: `/add-dir` named where opening a directory counts for nothing.
+    #[test]
+    fn a_redirection_outside_where_reads_stay_inside_is_offered_no_directory() {
+        let (home, project) = home_and_project("redirect-remedy-kept");
+        let beside = home.parent().expect("base").join("beside");
+        std::fs::create_dir_all(&beside).expect("beside");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_reads_kept_inside(true);
+
+        assert_eq!(
+            destination_remedy(&workspace, &beside.join("notes.txt")),
+            Remedy::Kept
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 }

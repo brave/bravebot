@@ -89,8 +89,11 @@ arguments in full, as the server will receive them.
   session, and a no, or a run with nobody to ask, leaves the plan with no call to that server. In
   the desktop application a run started before any turn also starts the session's servers first,
   asking you about each as the first turn would, and a turn after it finds them started.
-- The planner is shown the names on a list you vouched for, each tool's argument names and types, and
-  none of the server's descriptions.
+- The planner is shown the names on a list you vouched for, each tool's argument names and types,
+  whether the server marks the tool read-only, and none of the server's descriptions.
+- A tool its server marks read-only, which the list you read says, can also be read: the step comes
+  before every action, is decided as a call is, and fills a slot a processing step can read and the
+  answer can show. Any reply that arrives fills it, a failure's words included.
 - A call is an action, so it comes after every read and transform. It has no way to name what an
   earlier step produced, so every argument is fixed by the plan, and what a tool answers is shown to
   you in the margin as it comes and goes to no model and to no later step.

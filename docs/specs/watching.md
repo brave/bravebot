@@ -212,20 +212,20 @@ reading: taking the screen for it makes choosing between two delegates cost the 
 up to them. A delegate's own lines are a transcript, scrolled and read for as long as the run
 lasts, and a panel is the wrong container for that.
 
-`verified-by: bravebot_tui::app::ctrl_l_watches_the_delegate_that_is_working`
-`verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_no_delegate_has_run`
-`verified-by: bravebot_tui::app::ctrl_l_lists_the_delegate_and_not_the_command`
-`verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_only_commands_have_run`
-`verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
-`verified-by: bravebot_tui::app::alt_l_opens_the_outputs_and_not_the_agents`
-`verified-by: bravebot_tui::app::alt_l_says_what_the_outputs_command_says_where_no_command_has_run`
-`verified-by: bravebot_tui::app::ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path`
-`verified-by: bravebot_tui::app::alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents`
-`verified-by: bravebot_tui::app::alt_l_over_the_agents_with_no_command_says_so_and_stays`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_watches_the_delegate_that_is_working`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_does_nothing_where_no_delegate_has_run`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_lists_the_delegate_and_not_the_command`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_does_nothing_where_only_commands_have_run`
+`verified-by: bravebot_tui::app::tests::watching::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_opens_the_outputs_and_not_the_agents`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_says_what_the_outputs_command_says_where_no_command_has_run`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents`
+`verified-by: bravebot_tui::app::tests::watching::alt_l_over_the_agents_with_no_command_says_so_and_stays`
 `verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
 `verified-by: bravebot_tui::state::the_watch_list_holds_the_delegate_and_not_the_command`
 `verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
-`verified-by: bravebot_tui::app::enter_opens_the_delegate_the_list_is_on`
+`verified-by: bravebot_tui::app::tests::watching::enter_opens_the_delegate_the_list_is_on`
 `verified-by: bravebot_tui::state::watching_opens_on_the_delegate_that_is_working`
 `verified-by: bravebot_tui::state::there_is_nothing_to_watch_until_a_delegate_has_run`
 `verified-by: bravebot_tui::state::several_delegates_are_opened_on_the_list_of_them`
@@ -258,16 +258,19 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::render::a_delegates_view_opens_on_what_it_was_asked_above_its_lines`
 `verified-by: bravebot_tui::render::a_delegates_view_ends_on_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegates_view_does_not_open_on_the_mark`
-`verified-by: bravebot_tui::app::n_and_p_move_between_delegates`
+`verified-by: bravebot_tui::app::tests::watching::n_and_p_move_between_delegates`
 `verified-by: bravebot_tui::render::a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there`
 
 <a id="WATCH-9"></a>
 ### WATCH-9: the view takes every key, and the way out is read against the nearest level
 
 Nothing falls through to the input box, and the box is not drawn, behind the list's panel or
-anywhere else. `q` and Escape go back to the
-list from a delegate, and close the mode from the list or where there is no list behind it.
-Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
+anywhere else. `q` and Escape go back to the list from a row that was opened from the list. They
+close the mode from the list and from a row with no list behind it, which is a row the view opened
+onto directly: an answer ([WATCH-19](#WATCH-19)), a click on a delegate's block
+([MOUSE-10](mouse.md#MOUSE-10), [MOUSE-23](mouse.md#MOUSE-23)), or the watch key where there was one
+row. That holds however many rows the list has, and the footer says `q closes` there rather than
+`q goes back`. Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
 before they reach the turn: the turn in flight goes on, and the press that reaches it is the next
 one. A summary, an aside and a goal check are read the same way, each being a request the view can
 be open over. So is a command line that waited in the queue, which begins as the turn ends with the
@@ -290,22 +293,31 @@ sent to a turn they are not looking at. A person stops the nearest thing, and so
 look at what a delegate was doing is not asking for the turn to end when they come back out;
 watching is also the mode most likely to be open while something is going wrong.
 
-`verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_a_delegate_is_watched`
-`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open`
-`verified-by: bravebot_tui::app::q_goes_back_to_the_list_before_it_closes`
-`verified-by: bravebot_tui::app::q_closes_outright_where_there_is_no_list_to_go_back_to`
-`verified-by: bravebot_tui::app::escape_leaves_the_view_the_way_q_does`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_a_single_request_does`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_turn_does`
-`verified-by: bravebot_tui::app::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
-`verified-by: bravebot_tui::app::ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command`
-`verified-by: bravebot_tui::app::escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close`
-`verified-by: bravebot_tui::app::the_press_after_the_view_closes_stops_the_command`
-`verified-by: bravebot_tui::app::the_view_left_open_under_a_running_command_still_moves_between_delegates`
-`verified-by: bravebot_tui::app::x_stops_the_delegate_the_view_is_on_and_no_other`
-`verified-by: bravebot_tui::app::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
-`verified-by: bravebot_tui::app::a_chord_on_x_does_not_stop_a_delegate`
+**Why a row opened directly closes.** The way back returns a person to where they were before the
+row opened. A person handed a recap after being away, or one who clicked a delegate's block, was
+reading the conversation and never saw the list. Going back to the list would show them a screen
+they did not open, and they would need a second press to reach the conversation.
+
+`verified-by: bravebot_tui::app::tests::watching::a_typed_character_does_not_reach_the_box_while_a_delegate_is_watched`
+`verified-by: bravebot_tui::app::tests::watching::a_paste_and_a_drop_do_not_reach_the_line_while_the_view_is_open`
+`verified-by: bravebot_tui::app::tests::watching::q_goes_back_to_the_list_before_it_closes`
+`verified-by: bravebot_tui::app::tests::watching::q_closes_outright_where_there_is_no_list_to_go_back_to`
+`verified-by: bravebot_tui::app::tests::watching::the_way_back_from_an_answer_the_view_opened_by_itself_closes_it`
+`verified-by: bravebot_tui::app::tests::watching::an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back`
+`verified-by: bravebot_tui::app::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
+`verified-by: bravebot_tui::render::the_footer_says_q_closes_a_row_the_list_did_not_open`
+`verified-by: bravebot_tui::app::tests::watching::escape_leaves_the_view_the_way_q_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_a_single_request_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_the_goal_check_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_the_turn_does`
+`verified-by: bravebot_tui::app::tests::watching::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
+`verified-by: bravebot_tui::app::tests::watching::ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command`
+`verified-by: bravebot_tui::app::tests::watching::escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close`
+`verified-by: bravebot_tui::app::tests::watching::the_press_after_the_view_closes_stops_the_command`
+`verified-by: bravebot_tui::app::tests::watching::the_view_left_open_under_a_running_command_still_moves_between_delegates`
+`verified-by: bravebot_tui::app::tests::watching::x_stops_the_delegate_the_view_is_on_and_no_other`
+`verified-by: bravebot_tui::app::tests::watching::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
+`verified-by: bravebot_tui::app::tests::watching::a_chord_on_x_does_not_stop_a_delegate`
 `verified-by: bravebot_tui::render::the_footer_offers_the_stop_key_while_working_and_says_when_it_is_asked`
 
 <a id="WATCH-10"></a>
@@ -451,7 +463,7 @@ press of enter into an exit.
 `verified-by: bravebot_tui::state::moving_up_from_the_first_delegate_in_the_list_reaches_the_session`
 `verified-by: bravebot_tui::state::going_back_to_the_list_lands_on_the_delegate_that_was_open`
 `verified-by: bravebot_tui::state::moving_down_from_the_session_in_the_list_reaches_the_first_delegate`
-`verified-by: bravebot_tui::app::opening_the_session_row_goes_back_to_the_conversation`
+`verified-by: bravebot_tui::app::tests::watching::opening_the_session_row_goes_back_to_the_conversation`
 
 <a id="WATCH-15"></a>
 ### WATCH-15: what a command printed is a row of the outputs list, which the view opens
@@ -483,7 +495,7 @@ things happened would move the row under them every time a command finished.
 `verified-by: bravebot_tui::render::a_command_row_says_whether_the_planner_read_it`
 `verified-by: bravebot_tui::state::stepping_through_the_outputs_list_reaches_every_command`
 `verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
-`verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::app::tests::watching::the_outputs_command_opens_what_commands_printed`
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_a_command_being_read`
 `verified-by: bravebot_tui::render::opening_a_command_shows_what_it_printed`
 `verified-by: bravebot_tui::render::output_the_planner_was_kept_from_is_marked_on_every_row`
@@ -517,6 +529,10 @@ The row carries a mark for it, in the same three marks a delegate's row uses: on
 every stage exited zero, one for a run a stage failed, and the mark of work still going for a run
 stopped at the wall-clock limit. The view says it in the driver's words, beside the command, which
 for a failure names the step and its code.
+
+A step `SIGPIPE` ended behind a step that exited 0 is not a failed stage ([RUN-13](tools/run.md#RUN-13)),
+so a run whose only such step is that one carries the mark of a run that succeeded. A failed
+step is named by its place and its code, or by the signal that ended it.
 
 It is said from the exit codes and the clock, and never from a byte the program printed.
 
@@ -742,6 +758,55 @@ never draws a line twice, and nothing has to be reconciled between a look and th
 `verified-by: bravebot_tui::state::a_delegates_live_lines_go_to_its_job_and_not_the_turns_of_the_same_name`
 `verified-by: bravebot_tui::render::a_jobs_live_lines_are_marked_as_unread_even_after_a_look_that_was_read`
 
+<a id="WATCH-25"></a>
+### WATCH-25: a session whose turn has ended says in the row above the box that something is still active
+
+While no turn is running and at least one of these holds, the row above the box, under the line that
+says the last turn ended and under the reason where that turn failed, says that the session is
+still active:
+
+- a loop is live ([LOOP-13](loop.md#LOOP-13)), or a line `/after` holds is waiting to be sent
+- a file watch is live ([FSWATCH-10](file-watches.md#FSWATCH-10))
+- a background job is running ([RUN-15](tools/run.md#RUN-15))
+
+```
+  ✓ turn 3 done (12.1k tokens, 41s)
+  ● still active  ·  looping, next in 4m 12s  ·  1 in the background  ·  /status for the list
+```
+
+The row reads the driver's own tables and no content: the loop's number and next moment, how many
+watches are live, and how many jobs are running. It names no line, path, command or output. The
+words for a loop and for a job are the ones the hint line uses ([LOOP-13](loop.md#LOOP-13),
+[RUN-26](tools/run.md#RUN-26)), read from one place, so the two cannot disagree.
+
+The light before the label is full for one second and hollow for the next, and the screen is drawn
+again once a second while anything is live, so the light changes on a screen where nothing else
+does. With `NO_MOTION` set the light stays full. It is not the spinner: the spinner turns while a
+turn runs and this row is drawn only when none does.
+
+The row is cut whole at the width. The pointer to `/status` is given up first, then the parts from
+the end, and a part is never cut part-way. A terminal with room for the label alone still says the
+session is active. The row is not drawn while a turn or a command is running, since the row it would
+share is the indicator, and the hint line names the same things then. A goal is not named: a goal
+sends no work until a turn ends, so it is not something that goes on with nobody typing.
+
+**Why.** The line that says `done` is the last thing a turn draws, so it reads as the end of
+everything. Without the row, a loop, a watch or a job that goes on after it is named only by a dim
+part at the far end of the bottom row, which a narrow terminal drops, or by `/status`, and a person
+has to spend a turn asking whether the session is still working.
+
+**Why a light and not the spinner.** A turning shape beside `done` says the turn has not finished.
+
+`verified-by: bravebot_tui::render::a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line`
+`verified-by: bravebot_tui::render::a_session_with_nothing_going_on_has_no_still_active_row`
+`verified-by: bravebot_tui::render::each_kind_of_thing_still_active_is_named_in_the_row`
+`verified-by: bravebot_tui::render::the_still_active_row_is_not_drawn_while_a_turn_is_running`
+`verified-by: bravebot_tui::render::a_failed_turn_keeps_its_reason_and_gains_the_still_active_row`
+`verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_pointer_then_the_parts_whole`
+`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
+`verified-by: bravebot_tui::indicator::the_standing_light_changes_every_second`
+`verified-by: bravebot_tui::indicator::the_standing_light_stays_on_where_no_motion_is_asked_for`
+
 ## Known costs
 
 - **A running job's row gains lines only while a turn runs.** The release is at a turn's steps,
@@ -775,3 +840,8 @@ never draws a line twice, and nothing has to be reconciled between a look and th
 - **The view says what a delegate is doing and not how it is going.** One row changes several
   times a second while a delegate works, and nothing on the screen says whether those calls are
   getting anywhere. The report says, and it says it at the end.
+
+- **The loop and the job are named twice while a session is at rest.** The row above the box says
+  them for the end of a turn ([WATCH-25](#WATCH-25)) and the hint line goes on saying them, because
+  the hint line is the only place that names them while a turn runs and it is specified for every
+  state ([LOOP-13](loop.md#LOOP-13)).

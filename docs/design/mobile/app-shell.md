@@ -42,6 +42,7 @@ Opening a session means different things by target. Against a host it attaches t
 - Released content (`quarantined` rows and any row whose payload carries a label) renders as plain text. The label is always visible, in a region the content cannot draw into.
 - All row text is plain text in the first pass, including replies. Whether replies render markdown is decided later.
 - Control, format, separator and bidirectional characters are escaped so they are visible and cannot reorder surrounding text. Long lines wrap.
+- When the view no longer keeps a session's earliest rows, a note above the first row kept says how many are not shown. A session with no rows kept shows that note and not the empty state.
 
 ### Approvals
 

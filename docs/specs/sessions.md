@@ -154,6 +154,21 @@ loaded are in force from the first turn ([INSTR-14](instructions.md#INSTR-14),
 [INSTR-16](instructions.md#INSTR-16)). They are names only, as the paths in the trust map are. A
 record written before they were kept reads as having none.
 
+The record also holds the issues and pull requests the session has named, which `/issues` and `/prs`
+print ([CMD-31](commands.md#CMD-31)) and the info panel lists ([PANEL-16](info-panel.md#PANEL-16)):
+for each its owner, its repository, its number, its kind, and whether the text it came from named
+the kind or the kind is a guess. They are written with each turn's save, whatever way the turn
+ended. A line typed between two turns reaches the record at the next save, so a session that is
+killed before one loses what it named since the last. A resume restores the list in the order
+written, `bravebot --fork` copies it, `/clear` begins a session with none, and a record written
+before it was kept reads as having none. Each entry is read back through the one constructor of a
+reference, which allows an owner and a repository only the characters GitHub allows in them and a
+number of one to nine digits with no leading zero, so an entry that fails it, or whose kind is not
+`issue` or `pull_request`, is dropped and an edited record cannot put an escape sequence in the
+panel. An entry whose fields do not read at all, such as a negative number, a number written as a
+string or a missing owner, is dropped as well, and the other entries and the record are kept. A kind the record does not say was named reads as a guess, which a later sighting that
+names the kind settles.
+
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
@@ -173,6 +188,12 @@ record written before they were kept reads as having none.
 `verified-by: bravebot_tui::render::sessions_screen::an_empty_list_says_whether_nothing_exists_or_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_references_reads_as_having_none`
+`verified-by: bravebot_session::sessions::the_references_are_written_with_the_save_and_a_resume_and_a_fork_keep_them`
+`verified-by: bravebot_session::sessions::an_entry_that_does_not_read_is_dropped_and_the_record_and_the_other_entries_are_kept`
+`verified-by: bravebot_session::sessions::a_reference_the_record_holds_that_is_not_valid_is_dropped_on_reading`
+`verified-by: bravebot_tui::app::a_cleared_session_has_met_nothing`
+`verified-by: bravebot_tui::app::a_resumed_or_forked_session_has_met_what_its_record_says`
 `verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
 `verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
 
@@ -384,6 +405,15 @@ The status panel does not read them back. It reports the last turn run in this p
 resumed session shows no cache until a turn has run in it
 ([PANEL-8](info-panel.md#PANEL-8)).
 
+The record also keeps the reasoning effort the terminal sent with the last turn it ran, as the word
+of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was sent, as with a model
+that reads none, and a record written before it was kept has none. The list reads the word through
+the fixed set of levels, so a word that names none of them is listed as no effort and the record is
+still listed. The list also reads the record's counts of the calls that changed a file and that ran a
+program and whether the last program ended badly, and the cache figures of the split, so that the
+Sessions screen can say them ([SCREEN-3](sessions-screen.md#SCREEN-3)). A resume keeps the word until
+its next turn replaces it.
+
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
 session, and `schedule history` reads the tokens it spent from the record.
@@ -418,6 +448,9 @@ than the one in force at the time.
 `verified-by: bravebot_session::sessions::a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn`
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
+`verified-by: bravebot_session::sessions::a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it`
+`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
 `verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`
@@ -764,6 +797,22 @@ coverage.
 `verified-by: bravebot_agent::rewind::coverage_survives_rebinding_and_repeated_effects`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 
+A path a rewind or `/hunks` would put back that is a protected name, or lands on one, is put to the
+person as a write to it is ([PERM-9](permissions.md#PERM-9)) before any byte goes back, and is
+reported as not put back where it is not approved. The terminal asks at the keyboard. The desktop
+client's rewind asks nobody, so it refuses such a path. That is a known cost
+([Known costs](#known-costs)): undoing a write into
+`.bravebot` or another protected landing needs the terminal. The desktop's questions are put and
+answered only while a turn runs, and its rewind is refused while one does, so it has no way to put
+this question to a person without a new kind of question and a new card in the window.
+
+`verified-by: bravebot_agent::workspace::a_rewind_onto_a_protected_name_is_put_to_the_person`
+`verified-by: bravebot_agent::workspace::a_rewind_with_one_protected_landing_still_puts_the_others_back`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_into_a_hook_through_a_hard_link`
+`verified-by: bravebot_agent::hunks::a_hunk_through_a_link_to_a_hook_is_put_to_the_confirmer_and_refused_where_nobody_can_answer`
+`verified-by: bravebot_tui::undo_tests::undo_and_hunks_ask_the_confirmer_before_restoring_a_protected_name`
+`verified-by: bravebot_ui_bridge::bridge::the_desktop_rewind_does_not_put_back_a_protected_name`
+
 Anything that changes the session outside a turn gives up every point at once: `/clear`,
 `/compact`, `/btw`, `/rename`, `/add-dir`, and `/cd`. Shell-mode commands retain the points and
 record incomplete command coverage. For changes that give up points, `/undo` then says there is
@@ -1006,7 +1055,10 @@ line ranges and its lines, terminators included, are the same, so a hunk that ha
 shrunk or gone is not the one that was listed.
 
 The text is written through the confined path `/undo` writes through, after the session's language
-servers have been stopped as before a restoration. The file is opened without waiting for a writer
+servers have been stopped as before a restoration. A path that is a protected name, or lands on one
+once links are followed, is put to the person as a write to it is ([PERM-9](permissions.md#PERM-9))
+before the write, and the hunk is not put back unless the answer is yes; the line says it was not
+put back because the path is protected. The file is opened without waiting for a writer
 and read only if it is a file within what a rewind keeps. It is read once more just before the
 write, through the same gate, and written only if it still holds the bytes the text was worked out
 from; a file that cannot be read then is not that file, and nothing has been written when that is
@@ -1090,6 +1142,7 @@ compares nothing.
 `verified-by: bravebot_tui::undo_tests::a_file_edited_since_the_list_is_not_written_over`
 `verified-by: bravebot_tui::undo_tests::a_file_the_map_does_not_vouch_for_is_named_and_its_lines_are_not_drawn`
 `verified-by: bravebot_tui::undo_tests::a_session_with_no_turn_has_no_hunks`
+`verified-by: bravebot_tui::undo_tests::undo_and_hunks_ask_the_confirmer_before_restoring_a_protected_name`
 
 <a id="SESSION-23"></a>
 ### SESSION-23: the record says where each turn began and ended, and what came of it
@@ -1242,6 +1295,9 @@ The desktop rewinds as the terminal does, with what it puts back and what it rep
 One difference follows from what the desktop can do that the terminal cannot: a command approval
 can be revoked between turns, so a desktop rewind returns to the snapshot's approvals that are
 still held rather than to all of them. A rewind never hands back an approval the person withdrew.
+A second difference is the other way: the terminal asks about a path that is a protected name or
+lands on one, and the desktop rewind asks nobody and so does not put such a path back
+([SESSION-19](#SESSION-19)).
 
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather
@@ -1586,6 +1642,16 @@ stay behind because they were given for work that the brief describes only in wo
 
 ## Known costs
 
+- **The desktop rewind does not put back a protected name, and the terminal's question does not
+  show the bytes.** A path a rewind or `/hunks` would put back that is a protected name, or lands on
+  one, is put to the person in the terminal ([SESSION-19](#SESSION-19)). The desktop rewind passes
+  no one to ask and refuses it, since its questions are put and answered only while a turn runs and
+  its rewind is refused then, so undoing a write into `.bravebot` or another protected landing
+  needs the terminal. The question the terminal puts is the write question: it reads
+  `Overwrite <path> +0 -0` and is not marked as a restore, so a person approves a write to a
+  protected path without seeing the bytes that go back. A path refused for being protected is
+  recorded as the "unavailable backups" gap, the same as any path a rewind could not put back.
+
 - **A record holding a plan-mode notice is not read by an earlier build.** The driver tags the
   notice that says plan mode is on or has ended with `{"kind":"mode_notice","plan":true}`, or
   `"plan":false` when it says plan mode ended ([MODE-8](permission-modes.md#MODE-8)).
@@ -1645,7 +1711,10 @@ stay behind because they were given for work that the brief describes only in wo
   it comes back for the checkout at that path now, and such a line there runs unasked with the
   network closed for it. A fresh session at that path asks both
   ([TRUST-6](trust-map.md#TRUST-6), [RUN-9](tools/run.md#RUN-9)). A resume continues the session as
-  it was left, and the permissions it holds were given for the path, so this is accepted.
+  it was left, and the permissions it holds were given for the path, so this is accepted. A bot's row
+  records the folders its turns ran in, as paths ([BOT-9](bots.md#BOT-9)). A directory put at a
+  recorded path is a folder the bot may run in without a `/cd`, and a continued conversation there
+  takes its map from its record, as any resume does.
 
   Closing it means recording the project root's identity, as [TRUST-23](trust-map.md#TRUST-23)
   records it for a remembered answer (when the directory was made and its number on the volume), and
@@ -1918,6 +1987,7 @@ share that is low for one turn is a different fault from one that is low for the
 `verified-by: bravebot_agent::turn::a_turn_counts_its_requests_and_what_they_wrote_and_read_out_of_the_cache`
 `verified-by: bravebot_agent::turn::a_summary_made_during_a_turn_is_counted_as_a_compaction_and_a_request`
 `verified-by: bravebot_agent::turn::a_turn_counts_the_requests_a_delegate_made`
+`verified-by: bravebot_agent::turn::a_delegate_taken_back_at_the_start_of_a_round_is_counted_once`
 `verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
 `verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
 `verified-by: bravebot_agent::turn::compaction_progress_survives_failure`

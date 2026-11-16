@@ -406,6 +406,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
         &target,
         &mut servers,
         None,
+        &mut bravebot_agent::confirm::Unattended,
     );
     assert!(refused.is_empty());
     assert!(servers.is_none());

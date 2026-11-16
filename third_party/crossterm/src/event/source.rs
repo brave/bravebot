@@ -24,4 +24,18 @@ pub(crate) trait EventSource: Sync + Send {
     /// Returns a `Waker` allowing to wake/force the `try_read` method to return `Ok(None)`.
     #[cfg(feature = "event-stream")]
     fn waker(&self) -> Waker;
+
+    /// The mouse buttons this source last saw held, which its next mouse record is read against.
+    #[cfg(windows)]
+    fn mouse_buttons_pressed(&self) -> super::sys::windows::parse::MouseButtonsPressed {
+        super::sys::windows::parse::MouseButtonsPressed::default()
+    }
+
+    /// Set the mouse buttons this source reads its next mouse record against.
+    #[cfg(windows)]
+    fn set_mouse_buttons_pressed(
+        &mut self,
+        _buttons: super::sys::windows::parse::MouseButtonsPressed,
+    ) {
+    }
 }

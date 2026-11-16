@@ -78,7 +78,8 @@ from the generic table is a candidate against the table, and names each start it
 
 **Whether the `Names` kind is right.** `Names::Program` allows a bare name that resolves on `PATH`,
 `Names::File` a file, `Names::Directory` a directory, `Names::Directories` a colon-separated list
-each entry of which is a directory, and
+each entry of which is a directory, `Names::BusAddress` a semicolon-separated D-Bus address each
+entry of which is a socket outside every stage-writable directory, and
 `Names::Options` is never allowed. A variable whose value is run as a command line (`GIT_SSH_COMMAND`,
 `CLOUDSDK_PYTHON_ARGS`, `NODE_OPTIONS`) given a kind other than `Options` is a candidate. So is a file
 check that passes a file the account can write when a confined stage could have written it (the

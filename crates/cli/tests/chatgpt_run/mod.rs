@@ -27,9 +27,14 @@ pub struct Scratch {
 }
 
 impl Scratch {
+    /// Under `target/test-homes` rather than `target/test-scratch`, since a run under bypass gives
+    /// its stages a row for each entry of every directory on the way to the home's credential
+    /// directories (SANDBOX-28). On macOS the rows are an argument of `sandbox-exec`, and the
+    /// entries `target/test-scratch` holds for every other test made the profile too large for a
+    /// program to be started with.
     pub fn new(name: &str) -> Self {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
+            .join("../../target/test-homes")
             .join(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join(".bravebot")).expect("create scratch");

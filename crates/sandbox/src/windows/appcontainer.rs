@@ -263,6 +263,7 @@ impl AppContainerSandbox {
         if let Some(refusal) = refusal_for(policy) {
             return Err(refusal);
         }
+        crate::require_absolute_program("appcontainer", OsStr::new(program))?;
         if let Some(refusal) = refusal_for_program(program, args) {
             return Err(refusal);
         }

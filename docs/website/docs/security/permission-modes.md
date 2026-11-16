@@ -18,7 +18,9 @@ instead of one at a time.
 | **auto** | the write prompt as accepting edits does, and a command the sandbox confines and the first fetch of a URL when a classifier allows it |
 | **bypassing** | every permission question, including the two that decide trust |
 
-**Asking is where a session opens**, and it is what holds when nobody has chosen. The key comes round
+**Asking is where a session opens**, and it is what holds when nobody has chosen. Two choices of your
+own open one in another mode: a flag on the line, and the `permissions.startInAuto` setting in your own
+settings file, which opens it in auto ([below](#opening-a-session-in-auto)). The key comes round
 to the first again, so no mode is one you cannot press your way out of, and it works while a turn
 runs: the turn in flight follows it from its next question or tool call, and a diff already on your
 screen does not have its question withdrawn from under you.
@@ -65,6 +67,13 @@ or `.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit
 wherever they are. A file there is code that runs later with your own rights, such as a git hook the
 next `git commit` starts. Accepting edits does not answer a write to one, and neither does an `allow`
 rule or a vouched path. Only bypassing does, and where nobody can be asked the write is refused.
+A `run` line that redirects with `>` or `>>` into a protected path is put to you in the same way,
+whether it names the path or reaches it through a symbolic or hard link, including a link an earlier part of
+the same line made. No rule, trusted directory or remembered line answers it, auto mode's classifier is not
+asked, and your answer is not kept for later lines. A program that sends input lines, an editor and an unattended run are not offered it as a question to answer for good, and an
+unattended run refuses it. Under bypassing it is approved unasked.
+Putting old bytes back with `/undo`, `/rewind` or `/hunks` is such a write: it is asked the same way,
+and the desktop app, which has no question for it, refuses it.
 
 **Plan mode refuses a write rather than asking**, whatever you would have answered, and the planner
 is told so and why, so a run of refusals reads as a constraint to work inside rather than as a series
@@ -83,7 +92,8 @@ before any prompt, and a step that already ran is not undone.
 :::note
 **`defaultMode` in the settings file selects no mode.** The key is parsed so a file carrying it is not
 rejected, and nothing is chosen from it: if you wrote `acceptEdits` there you get the prompts you would
-have got without it. The command line and Shift-Tab are what choose a mode.
+have got without it. The command line, Shift-Tab and `permissions.startInAuto` are what choose a mode,
+and the last chooses only auto.
 :::
 
 ## Auto
@@ -98,20 +108,51 @@ printed.
 Only the single word `allow` answers the question. A reply that says anything else, a failed call
 and a refused model leave the question with you, or refuse it where nobody can be asked. The
 classifier can remove a question and never refuses one. It is not asked about a command that starts
-with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, or
-one that reads standard input from a reference. It is not asked about `download_url`, a redirect to
-another host, a delegate's questions, or any question once the planner's context holds private
-content or has met something untrusted. The questions that stay with you in every mode, and the other
+with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, one
+that reads standard input from a reference, or one with a `git` stage, which may write a
+repository's hooks and configuration and so is put to you as in asking. On Linux and Windows nothing
+holds a `.git` back from a program that is not `git`, so the classifier can answer a command whose
+program writes one there. It is not asked about `download_url`, a redirect to
+another host, a delegate's questions, or any question once the planner's context has met something
+untrusted. It is asked whether or not the planner's context holds private content, since the request
+goes to the model the planner is already running on. The questions that stay with you in every mode, and the other
 questions a mode may not answer, are put to you as in asking.
 
 Shift-Tab reaches auto after plan mode and before bypassing, and a click on the mode under the input
-box passes it by. `--auto` opens a one-shot run in it, and is refused beside
-`--dangerously-skip-permissions` or `--accept-edits`, and where the line starts no one-shot run. No
-settings file selects the mode, `/plan` does not set it, a background session cannot be in it, and a
-resumed session does not restore it. Each question put to the classifier is recorded in the
+box passes it by. `--auto` opens a one-shot run or a session in it, and is refused beside
+`--dangerously-skip-permissions` or `--accept-edits`, and where the line starts neither. The
+`permissions.startInAuto` setting opens a session in it (below). No other setting selects the mode,
+`/plan` does not set it, a background session cannot be in it, and a recorded session does not
+restore it. Each question put to the classifier is recorded in the
 [audit trail](audit-trail.md) with the model, whether it was a `run` or a `fetch`, the word and the
 cost, and the question is credited to the mode only where the word answered it. Each question costs
 one model round trip.
+
+### Opening a session in auto
+
+```sh
+bravebot --auto
+```
+
+```json
+{ "permissions": { "startInAuto": true } }
+```
+
+`--auto` opens one session in auto. The setting, written in `~/.bravebot/settings.json` or in the file
+`--settings` names, opens every interactive session in it, in the terminal and in the desktop
+application. No other file can write it: a project or local file that names it has the key removed
+and `bravebot doctor` and the desktop settings view name the file, and a copy in an administrator's
+managed file is not read. A repository you cloned and a file you did not write cannot choose who
+answers your prompts. A flag on the line wins over the setting, and a session an editor or a
+local-host client opens, a one-shot run, a background session, a scheduled run and a trigger open as
+they did before. The setting is described in [configuration](../customize/configuration.md#permissionsstartinauto).
+
+Shift-Tab leaves auto. The next press goes to bypassing where it is reachable, and the one after to
+asking. Where a settings file made bypassing unreachable the next press goes to asking, and in the
+desktop application the shortcut goes to asking. `/bg` is refused from a session in auto, so a
+session that opens there needs the key pressed first. An administrator has no key yet that stops a
+person's own file from opening sessions in auto
+([#3568](https://github.com/brave/bravebot/issues/3568)).
 
 ## Bypassing
 
@@ -119,8 +160,9 @@ one model round trip.
 bravebot --dangerously-skip-permissions
 ```
 
-The flag opens the session in that mode. Without it a session opens asking, and Shift-Tab reaches the
-mode on the fourth press, after plan mode and auto. Nothing is asked when it gets there: the line under the
+The flag opens the session in that mode, and it wins over `permissions.startInAuto`. Without it a
+session opens asking, or in auto where the setting or `--auto` says so, and Shift-Tab reaches the
+mode on the fourth press from asking, after plan mode and auto, and on the next press from auto. Nothing is asked when it gets there: the line under the
 input box names it in colour, and one more press is back to asking. With auto-vetting on, the press
 that enters it also prints one line in the transcript saying that a read a check does not pass is
 refused and not asked about ([Vetting](vetting.md)); no other press prints anything. A settings file that sets
@@ -208,31 +250,35 @@ wrote down would take protection away at the moment you were relying on a mode t
 Neither asks for consent: the first asks for information, and the second is you speaking. An answer
 invented on your behalf is reported to the planner as your own words.
 
-**The same call three times running is held and asked about**, in every mode, bypassing included. When
-the planner asks for a call whose tool and arguments equal those of the two calls before it, with no
-different call between them, it does not run. You are asked whether to refuse it and tell the planner
-to try another approach (the default, so a bare Enter is safe), run it this once, or stop the turn.
-A yes covers that one call and starts the count again. Only the tool name and the arguments are
-compared, never a result, so polling the same `read_output` or running the same test again with no
-edit between is held at the third call, and a different call between two identical ones starts the
-count again. A call that differs by one argument each time is not caught. Where nobody can be asked (a
-one-shot run, a planned run or a delegate) the call is dropped and the planner is told. The trail
-records the round, the count and your answer, and nothing of the call. There is no setting for the
-number.
+**The same call three times running is refused**, in every mode, bypassing included. When the
+planner asks for a call whose tool and arguments equal those of the two calls before it, with no
+different call between them, it does not run, and nobody is asked: a task you started and left does
+not wait for you to come back to it. The planner is told the call was not run and what to do
+instead, and a note under the turn names the tool and the count. Each further identical call is
+refused in the same way. Only the tool name and the arguments are compared, never a result, so
+polling the same `read_output` or running the same test again with no edit between is refused at the
+third call, and a different call between two identical ones starts the count again. A `job_output`
+call that waits with `wait_seconds` for a background job that is still running is not refused,
+however often it is repeated. A `job_output` call with no `wait_seconds`, one that kills the job,
+and one on a job that has ended are refused like any other call. A call that differs by one argument
+each time is not caught. The trail records the round and the count, and nothing of the call. There
+is no setting for the number.
 
 ## In the desktop application
 
-The control beside the model in the composer offers asking, accepting edits and plan mode, and
-`⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Auto is not offered, and
-neither is bypassing: the desktop has no command line for the flag to be given on. The mode belongs to the open session and
-every session opens asking, a resumed one and a fork included. A change made while a turn
+The session controls menu beside the model in the composer offers asking, accepting edits, plan mode
+and auto in its Approvals group, and `⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that
+order, from auto back to asking. Bypassing is not offered: the desktop has no command line for the
+flag to be given on. The mode belongs to the open session. A session opens asking, or in auto where
+`permissions.startInAuto` is `true` in your own settings file, a resumed one and a fork included. A change made while a turn
 runs applies to the rest of that turn.
 
 ## A mode belongs to the sitting it was chosen in
 
-A resumed session opens by asking, whatever the session that wrote the record was doing when it
-ended. The mode is not written into the session record. `--resume` with the flag opens in bypass,
-because the flag was given again.
+A resumed session opens asking, or in auto where `--auto` or the setting says so, whatever the
+session that wrote the record was doing when it ended. The mode is not written into the session
+record. `--resume` with the flag opens in bypass, because the flag was given again, and `--resume`
+with `--auto`, or with `permissions.startInAuto` set, opens in auto for the same reason.
 
 The record does say whether bypass was on at any point of the sitting. Resuming such a session
 without the flag restores neither its trust map nor the directories it opened, because the mode

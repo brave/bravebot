@@ -14,6 +14,7 @@ checks is a bug against this directory rather than an entry in it.
 |---|---|
 | [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be, and a change agreeing with the specs that govern it |
 | [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, and proving it fails first |
+| [best-practices/verification.md](best-practices/verification.md) | which code gets a Verus contract, and a contract saying what the code is for and being shown to fail |
 | [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a dependency has to be worth across package managers |
 | [best-practices/shared-implementation.md](best-practices/shared-implementation.md) | where shared client behavior lives and how callers reuse it |
@@ -24,6 +25,9 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/portability.md](best-practices/portability.md) | a fix or addition making sense for other people on other computers, with no workaround for one setup |
 | [best-practices/usability.md](best-practices/usability.md) | a change asking the person for no command, answer or setup that the feature does not need and no spec clause requires |
 | [best-practices/gaps.md](best-practices/gaps.md) | a pull request or issue that says a defect is left unfixed naming the issue that tracks it, or the spec clause that records it as an accepted cost, and a description edited when a later commit changes what it states |
+
+What a person's review covers, and what an approval says, is
+[development/reviewing-a-pull-request.md](development/reviewing-a-pull-request.md).
 
 The review pass over the rule this repository exists for is
 [development/reviewing-for-the-rule.md](development/reviewing-for-the-rule.md): the four

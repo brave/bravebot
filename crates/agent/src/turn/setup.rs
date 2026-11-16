@@ -444,6 +444,12 @@ pub(super) fn system_prompt(
                 system.push(Provenance::Driver, format!("\n\n{reading}"));
             }
             system.push(Provenance::Driver, preamble.for_a_person.clone());
+            // Which front end the person is using, as the caller that built the task said. One of
+            // three fixed sentences chosen by that value, so nothing read from the workspace, a
+            // tool or a record decides it, and said only to this side (INSTR-9).
+            if let Some(front_end) = task.front_end {
+                system.push(Provenance::Driver, format!("\n\n{}", front_end.sentence()));
+            }
             if let Some(addressed) = addressed {
                 system.push(
                     Provenance::Trusted("agent definition"),

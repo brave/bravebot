@@ -637,6 +637,10 @@ pub struct Shown {
 pub enum Outcome {
     /// Every stage exited zero, or a line with branches did what it was told.
     Succeeded,
+    /// Every stage exited zero except the listed ones, which `SIGPIPE` ended because a later stage
+    /// of the same pipeline had closed its input and exited zero, as `producer | head` does
+    /// (RUN-13). Reported as a success with the places of those stages, numbered from 1.
+    Closed { steps: Vec<usize> },
     /// A stage exited non-zero or was killed, named as the driver names them.
     Failed {
         detail: String,
@@ -647,11 +651,32 @@ pub enum Outcome {
     },
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
+    /// It outstayed the longest deadline a call may name and was stopped, with what it had run for
+    /// by then.
+    ///
+    /// Separate from [`Outcome::Stopped`] because a longer deadline is not available: a planner
+    /// told only that its run was stopped asks for more time and is held to the same ceiling, so
+    /// the sentence names the way past it, which is a run in the background. Chosen from the
+    /// deadline the run was given and the ceiling in force, both of which are figures a person
+    /// set, and from nothing the program printed.
+    StoppedAtTheCeiling(std::time::Duration),
     /// A background job the person asked to stop, with what it had run for by then.
     ///
     /// Separate from [`Outcome::Stopped`] because the planner did not ask for it and no limit was
     /// reached: a planner told its job outstayed a limit tries it again with a longer one.
     StoppedByTheUser(std::time::Duration),
+    /// A stage was found stopped by a signal, with what the job had run for by then, and the job
+    /// was ended (RUN-17).
+    ///
+    /// Separate from [`Outcome::Running`] because a stopped process runs nothing, so a planner told
+    /// it is still running waits on a program that cannot make progress, and separate from
+    /// [`Outcome::Stopped`] because no limit was reached and a longer one changes nothing. The
+    /// signal is named where it is one that stops a process. Structure only: it is the state the
+    /// kernel reports for a child the driver started, and it says nothing about what was printed.
+    StoppedBySignal {
+        ran_for: std::time::Duration,
+        signal: Option<&'static str>,
+    },
     /// It was still going when it was looked at, and was left going.
     ///
     /// Separate from [`Outcome::Stopped`] because nothing stopped it: a look at a background job is
@@ -683,6 +708,20 @@ fn seconds(duration: std::time::Duration) -> String {
     crate::tools::tally(duration.as_secs() as usize, "second", "seconds")
 }
 
+/// The places of the steps `SIGPIPE` ended, as the start of a sentence: "Step 1 stopped" or
+/// "Steps 1, 3 stopped".
+fn stopped_steps(steps: &[usize]) -> String {
+    let places = steps
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match steps {
+        [_] => format!("Step {places} stopped"),
+        _ => format!("Steps {places} stopped"),
+    }
+}
+
 impl Outcome {
     /// How the caller is told it ended.
     ///
@@ -693,6 +732,10 @@ impl Outcome {
     pub fn describe(&self) -> String {
         match self {
             Self::Succeeded => "It exited 0.".to_string(),
+            Self::Closed { steps } => format!(
+                "It exited 0. {} because the next step closed its input.",
+                stopped_steps(steps)
+            ),
             Self::Failed {
                 detail,
                 confinement: None,
@@ -706,11 +749,28 @@ impl Outcome {
                  printed by then and not the whole of what it would print. {WHAT_A_STOP_LEAVES}",
                 after.as_secs()
             ),
+            Self::StoppedAtTheCeiling(after) => format!(
+                "It was still running after {} and was stopped, so this is what it had printed by \
+                 then and not the whole of what it would print. That deadline was the longest a \
+                 call may name, so a longer one cannot be asked for. Start the line again with \
+                 background: true, which is not stopped at a deadline, and you are told when it \
+                 ends. {WHAT_A_STOP_LEAVES}",
+                seconds(*after)
+            ),
             Self::StoppedByTheUser(after) => format!(
                 "The user stopped it after {}, so this is what it had printed by then and not the \
                  whole of what it would print. {WHAT_A_STOP_LEAVES} Do not start it again unless \
                  the user asks you to.",
                 seconds(*after)
+            ),
+            Self::StoppedBySignal { ran_for, signal } => format!(
+                "A stage was stopped by {} after {} and could not run, so it was ended. This is \
+                 what it had printed by then and not the whole of what it would print. It is \
+                 stopped by a signal when it reads or configures a terminal it does not own, \
+                 so run it without that, or with its input and output redirected. \
+                 {WHAT_A_STOP_LEAVES}",
+                signal.unwrap_or("a signal"),
+                seconds(*ran_for)
             ),
             Self::Running {
                 ran_for,
@@ -747,7 +807,17 @@ impl Outcome {
                 "still running after {} seconds, so it was stopped; what it printed first is here",
                 after.as_secs()
             ),
+            Self::StoppedAtTheCeiling(after) => format!(
+                "still running after {}, the longest deadline, so it was stopped; what it printed \
+                 first is here",
+                seconds(*after)
+            ),
             Self::StoppedByTheUser(after) => format!("stopped by you after {}", seconds(*after)),
+            Self::StoppedBySignal { ran_for, signal } => format!(
+                "stopped by {} after {}, so it was ended",
+                signal.unwrap_or("a signal"),
+                seconds(*ran_for)
+            ),
             Self::Running {
                 ran_for,
                 waited: None,
@@ -760,7 +830,7 @@ impl Outcome {
                 seconds(*ran_for),
                 seconds(*waited)
             ),
-            Self::Succeeded => "succeeded".to_string(),
+            Self::Succeeded | Self::Closed { .. } => "succeeded".to_string(),
             Self::Failed { detail, .. } => detail.clone(),
         }
     }
@@ -1049,6 +1119,14 @@ pub trait Reporter {
     /// The task list changed. Rows are already shaped for display and released.
     fn todos(&mut self, rows: Vec<Row>);
 
+    /// Issues and pull requests the turn has just named that it had not named before, as the
+    /// planner's own arguments and trusted results gave them (PANEL-16).
+    ///
+    /// Sent as they are found, so a front end lists them while the turn runs and a turn that then
+    /// fails or is stopped has still handed back what it found. Each reference has had its parts
+    /// checked by [`crate::links::Reference::new`]. Not sent for a delegate.
+    fn references(&mut self, _found: &[crate::links::Reference]) {}
+
     /// The model has written more of its reply.
     ///
     /// A count and nothing else. The reply is untrusted model output, so passing the text here
@@ -1298,6 +1376,8 @@ impl Reporter for IgnoreReports {
 pub struct RecordingReporter {
     /// Every update in order, so a test can assert on the sequence rather than the end state.
     pub updates: Vec<Vec<Row>>,
+    /// Every issue and pull request reported by `references`, in order.
+    pub references: Vec<crate::links::Reference>,
     /// Every output-token count reported, in order.
     pub written: Vec<u64>,
     pub spent: Vec<crate::outcome::Spent>,
@@ -1389,6 +1469,10 @@ impl Reporter for RecordingReporter {
 
     fn todos(&mut self, rows: Vec<Row>) {
         self.updates.push(rows);
+    }
+
+    fn references(&mut self, found: &[crate::links::Reference]) {
+        self.references.extend(found.iter().cloned());
     }
 
     fn output_tokens(&mut self, written: u64) {
@@ -1681,6 +1765,10 @@ mod tests {
                 "at the deadline",
             ),
             (
+                Outcome::StoppedAtTheCeiling(std::time::Duration::from_secs(600)).describe(),
+                "at the ceiling",
+            ),
+            (
                 Outcome::StoppedByTheUser(std::time::Duration::from_secs(40)).describe(),
                 "by the person",
             ),
@@ -1704,6 +1792,68 @@ mod tests {
             !going.contains("lock files"),
             "a run nothing stopped is warned about the effects of a stop: {going}"
         );
+    }
+
+    /// A run stopped at the longest deadline a call may name is told that a longer one cannot be
+    /// asked for and that the line starts again with `background: true`. A planner told only that
+    /// the run was stopped asks for more time and is held to the same ceiling, so the whole run
+    /// is repeated in the foreground. A run stopped at a deadline below the ceiling is not sent to
+    /// the background, because a longer deadline is still available to it.
+    #[test]
+    fn a_run_stopped_at_the_ceiling_is_sent_to_the_background_and_one_below_it_is_not() {
+        let at_the_ceiling = Outcome::StoppedAtTheCeiling(std::time::Duration::from_secs(600));
+        let said = at_the_ceiling.describe();
+        assert!(
+            said.contains("background: true"),
+            "a run stopped at the ceiling is not told about the background: {said}"
+        );
+        assert!(
+            said.contains("longest a call may name"),
+            "a run stopped at the ceiling is not told a longer deadline cannot be asked for: {said}"
+        );
+        assert!(
+            said.contains("after 600 seconds"),
+            "a run stopped at the ceiling is not told how long it ran: {said}"
+        );
+        assert!(
+            at_the_ceiling.summary().contains("longest deadline"),
+            "the person's line does not say the ceiling was reached: {}",
+            at_the_ceiling.summary()
+        );
+
+        let below = Outcome::Stopped(std::time::Duration::from_secs(300)).describe();
+        assert!(
+            !below.contains("background"),
+            "a run stopped below the ceiling is sent to the background: {below}"
+        );
+    }
+
+    /// A stage stopped by a signal is said to be stopped, and ended, and by which signal: a planner
+    /// told it is still running waits on a program that cannot run, and one told it reached a limit
+    /// retries with a longer one. It is also warned that a stop can leave files behind.
+    #[test]
+    fn a_stage_stopped_by_a_signal_is_not_described_as_running_or_as_out_of_time() {
+        let stopped = Outcome::StoppedBySignal {
+            ran_for: std::time::Duration::from_secs(3),
+            signal: Some("SIGTTOU"),
+        };
+        let said = stopped.describe();
+        assert!(said.contains("SIGTTOU"), "the signal is not named: {said}");
+        assert!(
+            said.contains("ended"),
+            "it does not say it was ended: {said}"
+        );
+        assert!(
+            !said.contains("still running") && !said.contains("longer limit"),
+            "a stopped stage reads as running or as out of time: {said}"
+        );
+        assert!(said.contains("A stop can leave lock files or partly written output behind"));
+        assert!(stopped.summary().contains("stopped by SIGTTOU"));
+        let unnamed = Outcome::StoppedBySignal {
+            ran_for: std::time::Duration::from_secs(3),
+            signal: None,
+        };
+        assert!(unnamed.describe().contains("a signal"));
     }
 
     /// The first wait is the one that needs explaining: the model has the task and nothing

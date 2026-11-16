@@ -1,58 +1,70 @@
-# Review is required for the things that decide behaviour, and for the front door.
-#
-# Manifests are here because "no new dependencies without a reason that survives scrutiny"
-# is a rule nothing else enforces. .config/deny.toml is here because it is where that rule's
-# mechanical half is granted an exception: an ignored advisory, an allowed licence, a
-# duplicate version nobody has to account for again.
-#
-# The rest is what decides what executes with this tree checked out, and who decides it: the
-# workflows, the image the released binaries are built in, the script an install runs, the hook npm
-# runs on install, the three pnpm lockfiles, and the three pnpm-workspace.yaml files, which list
-# the dependencies trusted to run a script on install. None of these was owned, so the one approval
-# the protection requires for a change that moves a pinned step onto a movable tag was owed to
-# nobody in particular. required-checks.txt is here for the same reason: it is the tree's statement of
-# which checks hold a merge. contrib/affected-checks.py is here because it decides which of those
-# checks a pull request skips as passing, and the Makefile because every make target a workflow runs
-# is a recipe in it. So is every other file a workflow step runs by path, which `make check-security`
-# holds this file to.
+# Review is required for the front door, for dependencies, and for the files that decide what
+# executes with this tree checked out. Each group below says why it is owned.
 #
 # Last matching pattern wins, so keep the more specific rules below the general ones.
 
+# The front door.
 /README.md @bbondy
 
+# Manifests: "no new dependencies without a reason that survives scrutiny" is a rule nothing else
+# enforces.
 /Cargo.toml @bbondy
 /crates/*/Cargo.toml @bbondy
 /package.json @bbondy
-/.config/deny.toml @bbondy
-
-/.github/workflows/ @bbondy
-/.github/CODEOWNERS @bbondy
-/contrib/Dockerfile.cross @bbondy
-/install.sh @bbondy
-/install.ps1 @bbondy
-/npm/scripts/ @bbondy
 /ui/package.json @bbondy
+
+# Lockfiles: they pin what is actually installed and built.
+/Cargo.lock @bbondy
 /ui/pnpm-lock.yaml @bbondy
 /docs/website/pnpm-lock.yaml @bbondy
 /packages/agent-client/pnpm-lock.yaml @bbondy
-/mobile/pnpm-lock.yaml @bbondy
+
+# pnpm-workspace.yaml lists the dependencies trusted to run a script on install.
 /ui/pnpm-workspace.yaml @bbondy
 /docs/website/pnpm-workspace.yaml @bbondy
-/mobile/pnpm-workspace.yaml @bbondy
-/mobile/package.json @bbondy
-/mobile/metro.config.js @bbondy
-/mobile/babel.config.js @bbondy
-/mobile/android/build.gradle @bbondy
-/mobile/android/app/build.gradle @bbondy
-/mobile/android/settings.gradle @bbondy
-/mobile/android/gradle.properties @bbondy
-/mobile/android/gradle/wrapper/ @bbondy
-/mobile/android/gradlew @bbondy
-/mobile/android/gradlew.bat @bbondy
-/mobile/ios/Podfile @bbondy
-/mobile/ios/Bravebot.xcodeproj/ @bbondy
-/Cargo.lock @bbondy
+
+# The mobile app is Chris's. Its manifest, lockfile, workspace file and build entry points are
+# owned for the same reasons as the other packages': what it depends on, and what its builds run.
+/mobile/package.json @chrislacy
+/mobile/pnpm-lock.yaml @chrislacy
+/mobile/pnpm-workspace.yaml @chrislacy
+/mobile/metro.config.js @chrislacy
+/mobile/babel.config.js @chrislacy
+/mobile/android/build.gradle @chrislacy
+/mobile/android/app/build.gradle @chrislacy
+/mobile/android/settings.gradle @chrislacy
+/mobile/android/gradle.properties @chrislacy
+/mobile/android/gradle/wrapper/ @chrislacy
+/mobile/android/gradlew @chrislacy
+/mobile/android/gradlew.bat @chrislacy
+/mobile/ios/Podfile @chrislacy
+/mobile/ios/Bravebot.xcodeproj/ @chrislacy
+
+# .config/deny.toml is where the dependency rule's mechanical half is granted an exception: an
+# ignored advisory, an allowed licence, a duplicate version nobody has to account for again.
+/.config/deny.toml @bbondy
+
+# The workflows decide what runs in CI. This file decides who approves a change to them and to
+# itself. Neither was owned before, so the one approval branch protection requires for a change
+# that moves a pinned step onto a movable tag was owed to nobody in particular.
+/.github/workflows/ @bbondy
+/.github/CODEOWNERS @bbondy
+
+# The image the released binaries are built in.
+/contrib/Dockerfile.cross @bbondy
+
+# Scripts a person runs to install, and the hook npm runs on install.
+/install.sh @bbondy
+/install.ps1 @bbondy
+/npm/scripts/ @bbondy
+
+# required-checks.txt is the tree's statement of which checks hold a merge.
 /contrib/required-checks.txt @bbondy
+
+# Files a workflow step runs by path, which `make check-security` holds this file to.
+# affected-checks.py decides which required checks a pull request skips as passing, and the Makefile
+# holds the recipe for every make target a workflow runs. The rest are run by a workflow step by
+# their path.
 /contrib/affected-checks.py @bbondy
 /Makefile @bbondy
 /contrib/check-pnpm-lockfiles.py @bbondy

@@ -108,6 +108,7 @@ fn resolve_all(
                 ExecError::NotStarted {
                     program: stage.program.clone(),
                     detail: "not found".to_string(),
+                    before: exec::StartedBefore::Nothing,
                 }
             })
         })
@@ -635,7 +636,7 @@ fn a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step
     let mut steps = pipelines::steps_of(&pipeline, &[resolved]).expect("the steps");
     steps[0].environment = vec![("ACME_GATEWAY_TOKEN".into(), "the-lines-own".into())];
 
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("it starts");
     for _ in 0..100 {
         if job.ended() {
@@ -1116,6 +1117,209 @@ fn still_counting(at: &std::path::Path) -> bool {
         std::thread::sleep(Duration::from_millis(50));
     }
     false
+}
+
+/// A program the stage runs that stops itself the way a terminal stops a background job: the
+/// stage writes its number, and `ready`, and then stops. It ends on `SIGTERM` and says so in a
+/// file, so a test can tell an end that was asked for from a kill.
+#[cfg(unix)]
+const STOPS_ITSELF: &str = "#!/bin/sh\ntrap 'echo term > termed; exit 143' TERM\necho $$ > pid\necho ready\nkill -STOP $$\nsleep 30\n";
+
+/// Whether the process whose number `at/pid` holds still exists.
+#[cfg(unix)]
+fn stage_exists(at: &std::path::Path) -> bool {
+    let number: i32 = std::fs::read_to_string(at.join("pid"))
+        .expect("the stage wrote its number")
+        .trim()
+        .parse()
+        .expect("a number");
+    let pid = rustix::process::Pid::from_raw(number).expect("a process number");
+    rustix::process::test_kill_process(pid).is_ok()
+}
+
+/// A stage stopped by a signal runs nothing and exits nothing, so a limit that waited for it would
+/// report it as running until the deadline. It is reported as stopped by the signal as soon as it
+/// is found so, ended, and the run comes back long before its limit (RUN-17).
+///
+/// Rejects a wait loop that only watches for exits and the deadline: the run would come back at
+/// the limit, with `stopped_by_signal` unset.
+#[cfg(unix)]
+#[test]
+fn a_stage_stopped_by_a_signal_is_reported_as_stopped_and_ended_before_the_limit() {
+    let scratch = Scratch::new("stopped-by-signal");
+    let resolved = [script(&scratch.path, "stage", STOPS_ITSELF)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let limit = Duration::from_secs(60);
+
+    let started = std::time::Instant::now();
+    let ran = stopped_within(&pipeline, &resolved, &scratch.path, limit);
+    let took = started.elapsed();
+
+    let signal = ran
+        .stopped_by_signal
+        .expect("a stage stopped by a signal was not reported as such");
+    assert_eq!(signal.name(), Some("SIGSTOP"));
+    assert!(ran.stopped.is_some(), "the run was not marked ended");
+    assert!(!ran.succeeded());
+    assert!(
+        took < limit / 2,
+        "the run waited {took:?} of its {limit:?} limit on a stage that could not run"
+    );
+    assert_eq!(ran.stdout.trim(), "ready", "what it printed was lost");
+    assert!(
+        !stage_exists(&scratch.path),
+        "the stopped stage was left behind"
+    );
+}
+
+/// Ending a stopped stage continues it after asking it to end, so the request is delivered and the
+/// stage can undo what it holds. A stopped process holds `SIGTERM` back until it is continued, and
+/// would otherwise be killed after the grace with nothing undone (RUN-11).
+///
+/// Rejects an end that sends `SIGTERM` without `SIGCONT`: the stage is killed after the grace and
+/// never runs its handler, so `termed` is not written.
+#[cfg(unix)]
+#[test]
+fn a_stopped_stage_is_continued_so_the_request_to_end_reaches_it() {
+    let scratch = Scratch::new("stopped-continued");
+    let resolved = [script(&scratch.path, "stage", STOPS_ITSELF)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let ran = stopped_within(&pipeline, &resolved, &scratch.path, Duration::from_secs(60));
+
+    assert!(ran.stopped_by_signal.is_some());
+    assert!(
+        scratch.path.join("termed").exists(),
+        "the stopped stage was killed without the request to end ever reaching it"
+    );
+}
+
+/// A background job is asked whether a stage is stopped without being waited for, so a look can say
+/// so, and ending it takes the stage with it.
+///
+/// Rejects a job that reports only exits: `stopped_by_signal` stays `None` for as long as the stage
+/// is stopped and the job is reported as running.
+#[cfg(unix)]
+#[test]
+fn a_background_job_with_a_stopped_stage_says_which_signal_and_is_ended_by_a_kill() {
+    let scratch = Scratch::new("background-stopped");
+    let resolved = [script(&scratch.path, "stage", STOPS_ITSELF)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("it starts");
+
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    let signal = loop {
+        if let Some(signal) = job.stopped_by_signal() {
+            break signal;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "a stopped stage was never found stopped"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(signal.name(), Some("SIGSTOP"));
+    assert!(!job.ended(), "a stopped stage was counted as having exited");
+
+    job.kill();
+    assert!(
+        !stage_exists(&scratch.path),
+        "the stopped stage survived the kill"
+    );
+}
+
+/// A stage that exits is not a stage that is stopped: the stop is asked of the kernel without
+/// collecting the stage, and a stage that has exited and been collected is not asked at all.
+///
+/// Rejects a check that treats any child it cannot find running as stopped.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_exited_is_not_reported_stopped_by_a_signal() {
+    let scratch = Scratch::new("exited-not-stopped");
+    let resolved = [script(&scratch.path, "quick", "#!/bin/sh\necho done\n")];
+    let pipeline = Pipeline::new(vec![Stage::new("quick", Vec::new())]);
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("it starts");
+    until_ended(&mut job);
+    assert!(job.stopped_by_signal().is_none());
+    assert_eq!(job.codes(), [Some(0)]);
+
+    let ran = run(
+        Pipeline::new(vec![Stage::new("echo", vec!["done".into()])]),
+        &scratch.path,
+    )
+    .expect("echo runs");
+    assert!(ran.stopped_by_signal.is_none());
+}
+
+/// Where a controlling terminal exists, a stage is not in its session and cannot open it, so it
+/// cannot be stopped by the terminal's job control signals and cannot read the person's keys.
+///
+/// The test runs again inside a terminal, which `script` provides, because without one the open
+/// fails whether or not the stage was detached. Inside it, a program started with a plain
+/// `Command` opens `/dev/tty`, which shows the terminal is there, and a stage does not.
+///
+/// Rejects a start that gives the stage a process group and no session of its own: the stage
+/// opens `/dev/tty`.
+#[cfg(unix)]
+#[test]
+fn a_stage_cannot_open_the_controlling_terminal() {
+    const INSIDE: &str = "BRAVEBOT_TEST_INSIDE_A_TERMINAL";
+    if std::env::var_os(INSIDE).is_none() {
+        let me = std::env::current_exe().expect("this test binary");
+        let name = "a_stage_cannot_open_the_controlling_terminal";
+        let mut command = std::process::Command::new("/usr/bin/script");
+        #[cfg(target_os = "macos")]
+        command
+            .args(["-q", "/dev/null"])
+            .arg(&me)
+            .args([name, "--exact", "--nocapture"]);
+        #[cfg(target_os = "linux")]
+        command.args([
+            "-qec",
+            &format!("'{}' {name} --exact --nocapture", me.display()),
+            "/dev/null",
+        ]);
+        let output = command
+            .env(INSIDE, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("script runs this test in a terminal");
+        let shown = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            shown.contains("stage refused the terminal"),
+            "the test did not reach its end inside a terminal: {shown}"
+        );
+        return;
+    }
+
+    let control = std::process::Command::new("/bin/sh")
+        .args(["-c", ": </dev/tty"])
+        .status()
+        .expect("sh runs");
+    assert!(
+        control.success(),
+        "no controlling terminal here, so the check would pass for any stage"
+    );
+
+    let scratch = Scratch::new("no-terminal");
+    let resolved = [script(
+        &scratch.path,
+        "stage",
+        // In a subshell, because dash exits when a redirection of `:` fails.
+        "#!/bin/sh\nif (: </dev/tty) 2>/dev/null; then echo opened; else echo refused; fi\n",
+    )];
+    let ran = run_within(
+        &Pipeline::new(vec![Stage::new("stage", Vec::new())]),
+        &resolved,
+        &scratch.path,
+        Duration::from_secs(30),
+    )
+    .expect("the stage runs");
+    assert_eq!(
+        ran.stdout.trim(),
+        "refused",
+        "the stage opened the terminal"
+    );
+    println!("stage refused the terminal");
 }
 
 /// What `git commit -a` does while a hook runs: it holds `.git/index.lock`, and it removes the
@@ -3095,6 +3299,68 @@ fn a_link_pointed_elsewhere_after_approval_is_refused() {
     );
 }
 
+/// SANDBOX-17, RUN-13: a program that could not be started carries what the line had started
+/// before it, read off the processes exec spawned: nothing for the first program, an earlier part
+/// for one after `&&`, and earlier stages for one after `|`. The regressions it rejects are a
+/// position that is not recorded, so a lone program is told the line may have run in part, and a
+/// position counted from the plan's shape rather than from what started.
+#[cfg(unix)]
+#[test]
+fn a_program_that_could_not_be_started_says_what_of_the_line_had_started() {
+    let scratch = Scratch::new("not-started-before");
+    // Executable, so the line compiles, and its interpreter is missing, so the start fails.
+    script(&scratch.path, "bad", "#!/bravebot-no-such-interpreter\n");
+    for (line, expected) in [
+        ("./bad", exec::StartedBefore::Nothing),
+        ("true && ./bad", exec::StartedBefore::EarlierPart),
+        ("echo a | ./bad", exec::StartedBefore::EarlierStages),
+    ] {
+        let plan = bravebot_agent::cmdline::compile(line, &scratch.path, None, &mut |_, _| Ok(()))
+            .expect("the line compiles");
+        match past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None)) {
+            Err(ExecError::NotStarted {
+                program, before, ..
+            }) => {
+                assert_eq!(program, "./bad", "{line}");
+                assert_eq!(before, expected, "{line}");
+            }
+            other => panic!("{line}: expected NotStarted, got {other:?}"),
+        }
+    }
+}
+
+/// SANDBOX-17, RUN-2: a link repointed after approval, in the part of a line after `&&`, is
+/// refused with the earlier part recorded as started. The regression it rejects is the position
+/// dropped where the start paths are checked again, so the planner is told nothing of the line
+/// started when `true` did.
+#[cfg(unix)]
+#[test]
+fn a_repointed_link_after_an_earlier_part_records_that_the_part_had_started() {
+    let scratch = Scratch::new("started-as-repointed-after-a-part");
+    let approved = script(&scratch.path, "approved.sh", "#!/bin/sh\necho approved\n");
+    let other = script(&scratch.path, "other.sh", "#!/bin/sh\ntouch other-ran\n");
+    link(&scratch.path, "tool", &approved);
+
+    let plan =
+        bravebot_agent::cmdline::compile("true && ./tool", &scratch.path, None, &mut |_, _| Ok(()))
+            .expect("the line compiles");
+    link(&scratch.path, "tool", &other);
+
+    let refused = past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None));
+    assert!(
+        matches!(
+            &refused,
+            Err(ExecError::NotStarted { program, before, .. })
+                if program == "./tool" && *before == exec::StartedBefore::EarlierPart
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        !scratch.path.join("other-ran").exists(),
+        "the file the link now leads to ran"
+    );
+}
+
 /// RUN-2: the same holds of a line left running, and pointed back it is started by the link.
 #[cfg(unix)]
 #[test]
@@ -3111,7 +3377,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     };
     link(&scratch.path, "tool", &other);
 
-    match past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None, None)) {
+    match past_text_file_busy(|| pipelines::start_steps(steps, &scratch.path, None, None)) {
         Err(ExecError::NotStarted { program, .. }) => assert_eq!(program, "./tool"),
         Err(other) => panic!("refused for the wrong reason: {other}"),
         Ok(_) => panic!("a repointed link was started in the background"),
@@ -3122,7 +3388,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     );
 
     link(&scratch.path, "tool", &approved);
-    let mut job = past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(steps, &scratch.path, None, None))
         .expect("pointed back, the line starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3153,6 +3419,7 @@ fn expanding(program: &std::path::Path, args: &[&str], expansions: Vec<Expansion
         resolved: program.to_path_buf(),
         started_as: program.to_path_buf(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions,
         routes: Vec::new(),
@@ -3286,7 +3553,7 @@ fn an_expansion_reaches_a_job_started_in_the_background() {
         ),
         expanding(&emit, &[], Vec::new()),
     ];
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3307,7 +3574,7 @@ fn an_expansion_reaches_a_job_started_in_the_background() {
             ],
         )],
     )];
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3921,7 +4188,7 @@ fn an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start
     let mut shown = Vec::new();
 
     let good = steps_using(&emit);
-    let mut job = past_text_file_busy(|| exec::start_steps(&good, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&good, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -3938,7 +4205,7 @@ fn an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start
     shown.push(format!("{:?}", job.codes()));
 
     let bad = steps_using(&fail);
-    let failed = past_text_file_busy(|| exec::start_steps(&bad, &scratch.path, None, None))
+    let failed = past_text_file_busy(|| pipelines::start_steps(&bad, &scratch.path, None, None))
         .expect_err("the failing substitution was used");
     assert!(failed.to_string().contains("emit the value"));
     shown.push(failed.to_string());
@@ -3946,7 +4213,7 @@ fn an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start
 
     let refused_steps = steps_using(&nul);
     let refused =
-        past_text_file_busy(|| exec::start_steps(&refused_steps, &scratch.path, None, None))
+        past_text_file_busy(|| pipelines::start_steps(&refused_steps, &scratch.path, None, None))
             .expect_err("a NUL reached a program's environment");
     shown.push(refused.to_string());
     shown.push(format!("{refused:?}"));
@@ -3989,7 +4256,7 @@ fn a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only() {
     let plan = plan_of(&scratch.path, steps.clone());
     let ran = run_expanding(&plan).expect("the line runs");
     assert_eq!(ran.stdout.trim(), secret);
-    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+    let mut job = past_text_file_busy(|| pipelines::start_steps(&steps, &scratch.path, None, None))
         .expect("the job starts");
     for _ in 0..100 {
         if job.ended() {
@@ -4006,4 +4273,135 @@ fn a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only() {
     ] {
         assert!(!text.contains(secret), "{text}");
     }
+}
+
+/// RUN-13: a stage ended by SIGPIPE because the next stage closed its input and exited 0, as
+/// `yes | head` does, is recorded as closed by the next and the run succeeded, as a shell would
+/// report it. The fault it rejects is the signal dropped, which leaves the stage a failure beside
+/// a complete result.
+#[test]
+#[cfg(unix)]
+fn a_stage_ended_by_sigpipe_behind_head_counts_as_closed_and_the_run_succeeded() {
+    let scratch = Scratch::new("sigpipe-closed");
+    let ran = run(
+        Pipeline::new(vec![
+            Stage::new("yes", Vec::new()),
+            Stage::new("head", vec!["-n".into(), "3".into()]),
+        ]),
+        &scratch.path,
+    )
+    .expect("the pipeline runs");
+    assert_eq!(ran.stdout.lines().count(), 3);
+    assert_eq!(ran.codes, [None, Some(0)]);
+    assert_eq!(ran.signals, [Some(13), None]);
+    assert_eq!(ran.closed, [true, false]);
+    assert!(ran.succeeded(), "a complete result was reported as failed");
+}
+
+/// RUN-13: a stage ended by SIGPIPE with no later stage that exited 0 is still a failure, and so
+/// is a stage ended by SIGKILL beside a `head` that exited 0. The faults they reject are every
+/// killed stage forgiven, and the signal number ignored.
+#[test]
+#[cfg(unix)]
+fn only_sigpipe_with_a_later_stage_that_exited_zero_is_forgiven() {
+    let scratch = Scratch::new("sigpipe-not-closed");
+    let killed = script(&scratch.path, "killed", "#!/bin/sh\nkill -9 $$\n");
+    let piped = script(&scratch.path, "piped", "#!/bin/sh\nkill -13 $$\n");
+    let failing = script(
+        &scratch.path,
+        "failing",
+        "#!/bin/sh\ncat >/dev/null\nexit 3\n",
+    );
+    let head = bravebot_agent::programs::resolve("head", &scratch.path).expect("head");
+
+    // SIGKILL beside a head that exited 0.
+    let pipeline = Pipeline::new(vec![
+        Stage::new("killed", Vec::new()),
+        Stage::new("head", vec!["-n".into(), "1".into()]),
+    ]);
+    let ran = run_resolved(&pipeline, &[killed, head], &scratch.path).expect("the pipeline runs");
+    assert_eq!(ran.signals, [Some(9), None]);
+    assert_eq!(ran.closed, [false, false]);
+    assert!(!ran.succeeded(), "a SIGKILL was forgiven");
+
+    // SIGPIPE with the only later stage failing.
+    let pipeline = Pipeline::new(vec![
+        Stage::new("piped", Vec::new()),
+        Stage::new("failing", Vec::new()),
+    ]);
+    let ran = run_resolved(&pipeline, &[piped.clone(), failing], &scratch.path)
+        .expect("the pipeline runs");
+    assert_eq!(ran.signals[0], Some(13));
+    assert_eq!(ran.closed, [false, false]);
+    assert!(
+        !ran.succeeded(),
+        "a SIGPIPE with no later success was forgiven"
+    );
+
+    // SIGPIPE as the last stage, with nothing after it.
+    let pipeline = Pipeline::new(vec![Stage::new("piped", Vec::new())]);
+    let ran = run_resolved(&pipeline, &[piped], &scratch.path).expect("the pipeline runs");
+    assert_eq!(ran.closed, [false]);
+    assert!(!ran.succeeded());
+}
+
+/// RUN-13: a background job whose first stage SIGPIPE ended behind a `head` reports the signal and
+/// the closed flag, so the account of its ending says it succeeded. The fault it rejects is the
+/// background path keeping only the exit codes.
+#[test]
+#[cfg(unix)]
+fn a_background_stage_ended_by_sigpipe_behind_head_is_closed() {
+    let scratch = Scratch::new("sigpipe-background");
+    let pipeline = Pipeline::new(vec![
+        Stage::new("yes", Vec::new()),
+        Stage::new("head", vec!["-n".into(), "3".into()]),
+    ]);
+    let resolved = resolve_all(&pipeline, &scratch.path).expect("resolves");
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("it starts");
+    let mut ended = false;
+    for _ in 0..100 {
+        if job.ended() {
+            ended = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(ended, "the job never ended");
+    assert_eq!(job.codes(), [None, Some(0)]);
+    assert_eq!(job.signals(), [Some(13), None]);
+    assert_eq!(job.closed(), [true, false]);
+}
+
+/// RUN-13: a substitution a signal ended is refused naming the signal by number and name, as a step
+/// of a line is, and still names nothing the substitution printed. The fault it rejects is the
+/// general words `it was ended by a signal`, which leave a planner unable to tell a kill for memory
+/// from a crash.
+#[cfg(unix)]
+#[test]
+fn a_substitution_ended_by_a_signal_is_refused_naming_the_signal() {
+    let scratch = Scratch::new("expand-signalled");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let fail = script(
+        &scratch.path,
+        "fail.sh",
+        "#!/bin/sh\necho LEAKME-out\nkill -9 $$\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution(
+                    "fail.sh --flag",
+                    expanding(&fail, &[], Vec::new()),
+                )],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a killed substitution was used");
+    let shown = error.to_string();
+    assert!(shown.contains("signal 9 (SIGKILL)"), "{shown}");
+    assert!(!shown.contains("LEAKME"), "{shown}");
 }

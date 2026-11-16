@@ -239,6 +239,7 @@ fn make_step(args: &[&str]) -> Step {
         resolved: PathBuf::from("/usr/bin/make"),
         started_as: PathBuf::from("/usr/bin/make"),
         args: args.iter().map(|a| a.to_string()).collect(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),

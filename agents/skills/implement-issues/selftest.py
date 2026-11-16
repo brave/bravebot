@@ -419,6 +419,67 @@ class ImplementIssues(unittest.TestCase):
         self.assertEqual(self.writes(), [])
         self.assertIsNone(self.session())
 
+    def test_an_issue_developed_only_on_another_platform_stops_the_run_before_anything_changes(self):
+        self.world["issues"]["11"] = issue(labels=["develop-on/windows", "bug"])
+        result = self.run_script("10, 11", flags=["--platform", "linux"])
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("#11 is labelled develop-on/windows and this host is linux", result.err)
+        self.assertIn("FORCE=1", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
+        self.assertEqual(self.state()["10"], issue())
+
+    def test_an_issue_labelled_for_this_platform_or_for_none_is_worked(self):
+        self.world["issues"]["10"] = issue(labels=["develop-on/macos"])
+        self.world["issues"]["12"] = issue(labels=["bug", "develop-on-windows", "develop-on/"])
+        result = self.run_script("10, 12", flags=["--platform", "macos"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertNotIn("working past", result.out)
+        self.assertNotIn("FORCE", self.sent())
+
+    def test_an_issue_labelled_for_several_platforms_is_worked_on_any_of_them(self):
+        self.world["issues"]["10"] = issue(labels=["develop-on/linux", "develop-on/windows"])
+        self.assertEqual(self.run_script("10", flags=["--platform", "windows"]).code, 0)
+        refused = self.run_script("10", flags=["--platform", "macos"])
+        self.assertNotEqual(refused.code, 0)
+        self.assertIn("#10 is labelled develop-on/linux, develop-on/windows and this host is macos", refused.err)
+
+    def test_the_platform_defaults_to_the_host_the_script_runs_on(self):
+        here = {"darwin": "macos", "linux": "linux", "win32": "windows"}[sys.platform]
+        other = "linux" if here != "linux" else "macos"
+        self.world["issues"]["10"] = issue(labels=[f"develop-on/{here}"])
+        self.world["issues"]["12"] = issue(labels=[f"develop-on/{other}"])
+        result = self.run_script("10, 12")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(f"#12 is labelled develop-on/{other} and this host is {here}", result.err)
+        self.assertNotIn("#10 is labelled", result.err)
+
+    def test_force_works_an_issue_developed_on_another_platform_and_keeps_its_label(self):
+        self.world["issues"]["11"] = issue(labels=["develop-on/windows"])
+        result = self.run_script("10, 11", flags=["--force", "--platform", "linux"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertIn("working past the platform labels, as asked:\r\n#11 is labelled develop-on/windows", result.out)
+        self.assertEqual(self.state()["11"], issue(assignees=["netzenbot"], labels=["develop-on/windows"]))
+        line = self.told()[1]
+        self.assertIn("past the platform labels (FORCE=1): #11 is labelled develop-on/windows. That is no reason", line)
+        self.assertNotIn("#10 is labelled", line)
+
+    def test_force_reports_both_an_other_assignee_and_another_platform(self):
+        self.world["issues"]["10"] = issue(assignees=["alice"])
+        self.world["issues"]["12"] = issue(labels=["develop-on/windows"])
+        refused = self.run_script("10, 12", flags=["--platform", "linux"])
+        self.assertNotEqual(refused.code, 0)
+        self.assertIn("#10 is assigned to alice", refused.err)
+        self.assertIn("#12 is labelled develop-on/windows and this host is linux", refused.err)
+        forced = self.run_script("10, 12", flags=["--force", "--platform", "linux"])
+        self.assertEqual(forced.code, 0, forced.err)
+        self.assertIn("working past another assignee, as asked:\r\n#10 is assigned to alice", forced.out)
+        self.assertIn("working past the platform labels, as asked:\r\n#12 is labelled develop-on/windows", forced.out)
+        line = self.told()[1]
+        self.assertIn("(FORCE=1): somebody else is also assigned to #10. That is no reason", line)
+        self.assertIn("past the platform labels (FORCE=1): #12 is labelled develop-on/windows. That is no reason", line)
+        self.assertNotIn("alice", self.sent())
+
     def test_bypass_opens_the_client_with_the_flag_for_no_prompts_and_no_sandbox(self):
         """`--dangerously-skip-permissions` alone leaves the sandbox on, and the flag after `-i` would be part of
         the prompt, so the whole argument list is the assertion."""

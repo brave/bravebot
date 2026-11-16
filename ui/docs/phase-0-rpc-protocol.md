@@ -1064,6 +1064,7 @@ unknown `session` is `no_such_session`.
 | `not_a_directory` | the path given to `session.new` is not a directory |
 | `not_allowed` | the local host does not offer this method, parameter or session to this client ([local host](#local-host)) |
 | `no_home` | `~/.bravebot` could not be located or created |
+| `state_unusable` | a file in `~/.bravebot` exists and cannot be used, or another program holds its lock; `message` names the file |
 | `config` | `Config::from_env` failed; `message` carries the detail |
 | `internal` | a bug; `message` is for a report, not for a user |
 
@@ -1567,7 +1568,10 @@ Still open:
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
   held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
-  that is not UTF-8 written `\xNN`, for a client to draw in place of them. `shownDirectory` spells
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them. A `shownWrites` entry for a
+  file that a link leads elsewhere also says where it lands, and one for a protected path says so, in
+  the words the terminal draws. `protected` is true where a file the line writes is a protected path;
+  `canBeRemembered` is then false, and a client does not answer such a request for the person. `shownDirectory` spells
   `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
   by ` -> ` where they differ.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
@@ -1728,7 +1732,8 @@ Still open:
   what it runs. `digest` is what an approval binds to. `lines` is the question as the agent
   words it, one string per line, for a front end that draws the question as text.
 - `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
-  `arguments` (one line each) and `description`, which is the server's own text. `refused`
+  `arguments` (one line each), `description`, which is the server's own text, and `read_only`,
+  set where the server marks the tool read-only with its `readOnlyHint`. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
 - `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
   `mayStand`, which says whether the third answer can be recorded, and `askedForPrivateArguments`,
@@ -1758,8 +1763,13 @@ Still open:
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
   only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest
   of that turn (MODE-8).
-- `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
-  A mode is not written to the record and a fork does not take its parent's (MODE-10).
+- `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is `ask`, or `auto`
+  where the person's `permissions.startInAuto` is true in the home settings file or in the file the
+  window selected (AUTO-1); a checkout's copy opens nothing in auto. The reply names the mode the
+  session's own handle holds, which is the one its turns run in. A mode is not written to the record
+  and a fork does not take its parent's (MODE-10). The key from auto goes to `ask`, since a window has
+  no bypassing. The bridge behind ACP and the one behind the local host open every session in `ask`,
+  so a `session.new` reply from either says `ask` as `permissionMode` (ACP-7, HOST-2).
 - `turn.started` and `manifest.started` carry `mode`, the mode the turn or run started in.
 - `session.sandbox` takes `session` and `mode`, one of `strict`, `read-only` or `workspace-write`, and answers
   `{ sandboxMode }`. `off`, and any other word, is `bad_request`: a window has no line that shows

@@ -453,7 +453,9 @@ mod tests {
 
     #[test]
     fn a_directory_outside_a_repository_is_named_by_its_path() {
-        let outside = crate::servers::outside_any_repository("recall-project-outside");
+        let Some(outside) = crate::servers::outside_any_repository("recall-project-outside") else {
+            return;
+        };
         let canonical = outside.canonicalize().expect("canonical");
         for trusted in [false, true] {
             assert_eq!(
@@ -470,7 +472,10 @@ mod tests {
     #[test]
     fn a_root_that_is_not_utf8_is_not_its_lossy_lookalike() {
         use std::os::unix::ffi::OsStrExt;
-        let outside = crate::servers::outside_any_repository("recall-project-not-utf8");
+        let Some(outside) = crate::servers::outside_any_repository("recall-project-not-utf8")
+        else {
+            return;
+        };
         let raw = outside.join(std::ffi::OsStr::from_bytes(b"repo-\xff"));
         let lookalike = outside.join("repo-\u{FFFD}");
         assert_ne!(

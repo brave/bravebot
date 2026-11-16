@@ -60,9 +60,17 @@ pub const DEFAULT_COUNT: usize = 20;
 /// The most commits one log shows, however many the planner asks for.
 pub const MAX_COUNT: usize = 200;
 
-/// A blob larger than this is described rather than shown or diffed. Reading one means holding
-/// it, twice for a diff, and a line diff over it stops at a fixed number of steps.
+/// A blob larger than this is described rather than shown or searched. Reading one means holding
+/// it. A diff reads a larger one, up to [`MAX_DIFF_BLOB`].
 const MAX_BLOB: u64 = 1 << 20;
+
+/// A blob larger than this is not diffed. A diff holds both sides, and an escaped copy of each
+/// that is the same size unless the side is not UTF-8, when it is at most four times as large. It
+/// compares only the lines between the first difference and the last, so what it costs follows the
+/// change, and a line diff over them stops at a fixed number of steps. The most a diff holds at
+/// once is bounded by this, and the lists of line slices it makes by one entry per line of the
+/// region, at most this many.
+const MAX_DIFF_BLOB: u64 = 4 << 20;
 
 /// Lines one answer carries before it is cut.
 const MAX_LINES: usize = 2000;
@@ -2269,7 +2277,7 @@ mod tests {
             (
                 format!(
                     "src/lib.rs:3:let needle = 1;\n(zz.log is {size} bytes, more than read_git \
-                     searches)\n"
+                     searches; use read_file on the working copy, or run)\n"
                 ),
                 None
             )
@@ -2688,9 +2696,16 @@ mod tests {
                 "(big is {size} bytes, more than read_git shows; use read_file on the working copy, or run)\n"
             )
         );
-        assert!(repo.text(Query::Diff, "HEAD~1 HEAD").ends_with(&format!(
-            "(not diffed: a side is {size} bytes, more than read_git diffs)\n"
-        )));
+        // A diff reads a file past that cap and prints the lines that changed. The side here is
+        // one line of `size` bytes, so what it prints is that line cut at the line width.
+        let diffed = repo.text(Query::Diff, "HEAD~1 HEAD");
+        assert!(
+            diffed.ends_with(&format!(
+                "@@ -1 +1 @@\n-x\n+{} [line cut]\n",
+                "x".repeat(crate::git::MAX_LINE_CHARS - 1)
+            )),
+            "{diffed}"
+        );
     }
 
     /// TOOL-6. The note for a file past the size cap points at `read_file` and `run` only where
@@ -2732,6 +2747,239 @@ mod tests {
             assert_eq!(
                 answer.text,
                 format!("(big is {size} bytes, more than read_git shows{said})\n"),
+                "{beside:?}"
+            );
+        }
+    }
+
+    /// A diff reads a file past the show and search cap and compares only the lines that differ, so
+    /// a changed line in a file of 140,000 lines is its hunk at the line number the file has it,
+    /// and not a note that the file was too large. The regressions it rejects are a diff that still
+    /// declines the file at the show cap, one that numbers a hunk from the first line of the region
+    /// it compared, and one that drops the lines around a change at either end of the file.
+    #[test]
+    fn a_changed_line_in_a_file_past_the_size_cap_is_diffed_at_its_own_line_numbers() {
+        let file = |changed: &[(usize, &str)]| {
+            (1..=140_000)
+                .map(|n| match changed.iter().find(|(at, _)| *at == n) {
+                    Some((_, text)) => format!("{text}\n"),
+                    None => format!("line {n:06}\n"),
+                })
+                .collect::<String>()
+        };
+        let before = file(&[]);
+        assert!(
+            before.len() as u64 > MAX_BLOB,
+            "the fixture is past the cap"
+        );
+        let after = file(&[(1, "first"), (70_000, "middle"), (140_000, "last")]);
+        let repo = Repo::new("large-diff");
+        let (old, new) = (repo.blob(&before), repo.blob(&after));
+        let first = repo.commit(repo.tree(&[("100644", "big", old)]), &[], T1, "one");
+        let second = repo.commit(
+            repo.tree(&[("100644", "big", new)]),
+            &[first],
+            T1 + DAY,
+            "two",
+        );
+        repo.point("refs/heads/main", second);
+        let hunks = concat!(
+            "--- a/big\n+++ b/big\n",
+            "@@ -1,4 +1,4 @@\n-line 000001\n+first\n line 000002\n line 000003\n line 000004\n",
+            "@@ -69997,7 +69997,7 @@\n line 069997\n line 069998\n line 069999\n-line 070000\n",
+            "+middle\n line 070001\n line 070002\n line 070003\n",
+            "@@ -139997,4 +139997,4 @@\n line 139997\n line 139998\n line 139999\n",
+            "-line 140000\n+last\n",
+        );
+        let diffed = repo
+            .ask(Query::Diff, Some("HEAD~1 HEAD"), None)
+            .expect("answered");
+        assert!(diffed.text.ends_with(hunks), "{}", diffed.text);
+        assert!(
+            !diffed.cut,
+            "a small change in a large file is not a cut answer"
+        );
+        assert_eq!(diffed.shown, vec!["big".to_owned()]);
+        assert_eq!(
+            diffed
+                .printed
+                .iter()
+                .map(|p| p.first_line)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 69_997, 69_997, 139_997, 139_997],
+            "{:?}",
+            diffed.printed
+        );
+        assert_eq!(
+            diffed.printed[2],
+            Printed {
+                path: "big".to_owned(),
+                first_line: 69_997,
+                text: "line 069997\nline 069998\nline 069999\nmiddle\nline 070001\nline 070002\n\
+                       line 070003\n"
+                    .to_owned(),
+            }
+        );
+        let shown = repo.text(Query::Show, "HEAD");
+        assert!(shown.ends_with(hunks), "{shown}");
+    }
+
+    /// A change in the middle of a large file is compared as a stretch that starts partway in, and
+    /// its hunk keeps the line numbers the file has. The regression it rejects is numbering the
+    /// hunk from the first line of that stretch, which prints `@@ -1,7 +1,7 @@`.
+    #[test]
+    fn a_change_in_the_middle_of_a_large_file_keeps_its_line_numbers() {
+        let file = |middle: &str| {
+            (1..=140_000)
+                .map(|n| match n {
+                    70_000 => format!("{middle}\n"),
+                    _ => format!("line {n:06}\n"),
+                })
+                .collect::<String>()
+        };
+        let repo = Repo::new("large-diff-middle");
+        let (old, new) = (repo.blob(&file("line 070000")), repo.blob(&file("middle")));
+        let first = repo.commit(repo.tree(&[("100644", "big", old)]), &[], T1, "one");
+        let second = repo.commit(
+            repo.tree(&[("100644", "big", new)]),
+            &[first],
+            T1 + DAY,
+            "two",
+        );
+        repo.point("refs/heads/main", second);
+        let diffed = repo.text(Query::Diff, "HEAD~1 HEAD");
+        assert!(
+            diffed.ends_with(concat!(
+                "@@ -69997,7 +69997,7 @@\n line 069997\n line 069998\n line 069999\n",
+                "-line 070000\n+middle\n line 070001\n line 070002\n line 070003\n",
+            )),
+            "{diffed}"
+        );
+    }
+
+    /// A file past the cap that is added or deleted has one empty side and is cut at the answer's
+    /// lines as a small one is, and a binary one is named and not printed. A diff that handled only
+    /// a change between two text sides would decline or mis-number these.
+    #[test]
+    fn a_large_file_added_deleted_or_binary_is_diffed_as_a_small_one_is() {
+        let text = (1..=140_000)
+            .map(|n| format!("line {n:06}\n"))
+            .collect::<String>();
+        let binary = vec![0u8; usize::try_from(MAX_BLOB).expect("fits") + 1];
+        let repo = Repo::new("large-diff-sides");
+        let (empty, text, binary) = (
+            repo.tree(&[]),
+            repo.blob(&text),
+            repo.object(Kind::Blob, &binary),
+        );
+        let with_text = repo.commit(repo.tree(&[("100644", "big", text)]), &[], T1, "text");
+        let without = repo.commit(empty, &[with_text], T1 + DAY, "none");
+        let with_binary = repo.commit(
+            repo.tree(&[("100644", "big", binary)]),
+            &[without],
+            T1 + 2 * DAY,
+            "binary",
+        );
+        repo.point("refs/heads/main", with_binary);
+        let between = |from: ObjectId, to: ObjectId| {
+            repo.ask(
+                Query::Diff,
+                Some(&format!("{} {}", from.to_hex(), to.to_hex())),
+                None,
+            )
+            .expect("answered")
+        };
+        let added = between(without, with_text);
+        assert!(
+            added
+                .text
+                .contains("\n@@ -0,0 +1,140000 @@\n+line 000001\n+line 000002\n"),
+            "{}",
+            &added.text[..added.text.len().min(400)]
+        );
+        assert!(added.cut, "the answer was not cut at its lines");
+        let deleted = between(with_text, without);
+        assert!(
+            deleted
+                .text
+                .contains("\n@@ -1,140000 +0,0 @@\n-line 000001\n-line 000002\n"),
+            "{}",
+            &deleted.text[..deleted.text.len().min(400)]
+        );
+        assert!(deleted.cut);
+        let changed = between(with_text, with_binary);
+        assert!(
+            changed
+                .text
+                .ends_with("Binary files a/big and b/big differ\n"),
+            "{}",
+            changed.text
+        );
+    }
+
+    /// TOOL-6. The note for a file past the size a diff reads and the one for a file past the size
+    /// a search reads point at `read_file` and `run` only where the turn's list holds them, as the
+    /// note of a show does. The regression they reject is a note that names both tools, or neither,
+    /// whatever the turn was offered. The blob is one byte past the diff's cap, the smallest that
+    /// still reaches the diff's note.
+    #[test]
+    fn the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds() {
+        let repo = Repo::new("large-diff-beside");
+        let size = usize::try_from(MAX_DIFF_BLOB).expect("fits") + 1;
+        let large = repo.object(Kind::Blob, &vec![b'x'; size]);
+        let small = repo.blob("x\n");
+        let first = repo.commit(repo.tree(&[("100644", "big", small)]), &[], T1, "small");
+        let second = repo.commit(
+            repo.tree(&[("100644", "big", large)]),
+            &[first],
+            T1 + DAY,
+            "big",
+        );
+        repo.point("refs/heads/main", second);
+        let pattern = compiled("x");
+        let run = crate::tools::Named::Run;
+        let read_file = crate::tools::Named::ReadFile;
+        for (beside, said) in [
+            (
+                crate::tools::Beside::every(),
+                "; use read_file on the working copy, or run",
+            ),
+            (
+                crate::tools::Beside::every().without(run),
+                "; use read_file on the working copy",
+            ),
+            (
+                crate::tools::Beside::every().without(read_file),
+                "; use run",
+            ),
+            (
+                crate::tools::Beside::every()
+                    .without(run)
+                    .without(read_file),
+                "",
+            ),
+        ] {
+            let answer = |query, revision| {
+                let mut asked = request(query, Some(revision), None);
+                asked.beside = beside;
+                if query == Query::Search {
+                    asked.pattern = Some(&pattern);
+                }
+                repo.opened()
+                    .expect("opened")
+                    .answer(&asked, &|_| false)
+                    .expect("answered")
+                    .text
+            };
+            let note =
+                format!("(not diffed: a side is {size} bytes, more than read_git diffs{said})\n");
+            let diffed = answer(Query::Diff, "HEAD~1 HEAD");
+            assert!(diffed.ends_with(&note), "{beside:?}: {diffed}");
+            let shown = answer(Query::Show, "HEAD");
+            assert!(shown.ends_with(&note), "{beside:?}: {shown}");
+            assert_eq!(
+                answer(Query::Search, "HEAD"),
+                format!("(big is {size} bytes, more than read_git searches{said})\n"),
                 "{beside:?}"
             );
         }
@@ -3886,12 +4134,7 @@ mod tests {
             commit(&repo, &[("f.txt", one)]);
             write(&repo, "f.txt", "");
             write(&repo, "mod", "a file where a submodule was\n");
-            // A socket path must fit in sun_path, which the scratch directory's path does not.
-            // nosemgrep: rust.lang.security.temp-dir.temp-dir
-            let short = std::env::temp_dir().join(format!("bb{}.sock", std::process::id()));
-            let _ = std::fs::remove_file(&short);
-            let listener = std::os::unix::net::UnixListener::bind(&short).expect("socket");
-            std::fs::rename(&short, repo.root.join("sock")).expect("socket moved");
+            let listener = crate::testutil::socket_standing_at(&repo.root.join("sock"));
             index(
                 &repo,
                 &[

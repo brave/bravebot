@@ -271,6 +271,9 @@ struct Drawn {
     description: Option<String>,
     #[serde(default)]
     arguments: Vec<Argument>,
+    /// Whether the server marks the tool read-only, as the client drew it.
+    #[serde(default)]
+    read_only: bool,
 }
 
 /// One argument of a drawn tool.
@@ -1315,6 +1318,31 @@ pub fn managed_refusal(managed: &Managed, server: bravebot_config::Server<'_>) -
     })
 }
 
+/// One sentence for each entry of the managed file's `mcp.allow` and `mcp.deny` that is neither a
+/// host nor a command, naming the file, the list and the entry as the file spelled it (SERVERS-12).
+///
+/// The entry is the administrator's own text and is drawn as a picture where it holds a control or
+/// a character that draws as nothing. Nothing is said where the file is absent or every entry is
+/// usable.
+pub fn managed_entries_unusable(managed: &Managed) -> Vec<String> {
+    let Some(path) = managed.path() else {
+        return Vec::new();
+    };
+    let path = crate::confirm::printable_spelled(&path.display().to_string());
+    managed
+        .server_entries_unusable()
+        .map(|(list, entry)| {
+            t!(
+                managed_entry_unusable,
+                path = path.as_str(),
+                list = list,
+                entry = crate::confirm::printable_spelled(entry)
+            )
+            .to_string()
+        })
+        .collect()
+}
+
 /// A managed entry as its file's author would find it again.
 pub fn entry(rule: &Rule) -> String {
     match rule {
@@ -1392,6 +1420,7 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
             name: format!("{alias}:{}", drawn.name),
             arguments: drawn.arguments.iter().map(Argument::drawn).collect(),
             description: drawn.description,
+            read_only: drawn.read_only,
         })
         .collect()
 }
@@ -1606,6 +1635,9 @@ pub struct Callable {
     pub alias: String,
     pub tool: String,
     pub arguments: Vec<CallableArgument>,
+    /// Whether the list a person vouched for marks the tool read-only, which is the server's word
+    /// and was shown to them with the tool.
+    pub read_only: bool,
 }
 
 /// One argument of a [`Callable`]: its name, its type where the list gave one, and whether the
@@ -2010,6 +2042,7 @@ impl Offer {
                         required: argument.required,
                     })
                     .collect(),
+                read_only: tool.drawn.read_only,
             })
             .collect()
     }
@@ -2044,6 +2077,7 @@ pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
                     name: tool.to_string(),
                     description: None,
                     arguments: Vec::new(),
+                    read_only: false,
                 },
             })
             .collect(),

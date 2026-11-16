@@ -290,6 +290,22 @@ fn on_one_line(text: &str) -> String {
         .join(" ")
 }
 
+/// The name `directory` lists for the person's home rules file where it is spelled other than
+/// `AGENTS.md`, for telling the person which file to rename. The state directory is the person's
+/// own and its entry names are the driver's metadata; nothing a file holds is read.
+fn spelled_as_the_home_rules(directory: Option<&std::path::Path>) -> Option<String> {
+    let entries = std::fs::read_dir(directory?).ok()?;
+    entries
+        .flatten()
+        .map(|entry| entry.file_name())
+        .find(|name| {
+            let name = name.as_encoded_bytes();
+            let agents = crate::preamble::AGENTS_FILE.as_bytes();
+            name != agents && name.eq_ignore_ascii_case(agents)
+        })
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
 /// Put a rule the planner wrote to the person, and append it to their rule file only on a yes
 /// (RECALL-3).
 ///
@@ -368,7 +384,36 @@ pub(super) fn propose_rule<S: Sink, C: Confirmer>(
         [text_label, reason_label].contains(&bravebot_core::label::Confidentiality::Private);
 
     let file = store.rules_path(scope);
-
+    // Only `AGENTS.md` spelled exactly is read as the person's rules (INSTR-1). Where the volume
+    // opens that name as a file listed under another spelling, the rule would land where no turn
+    // reads it, so nothing is asked and nothing is written. Decided from the state directory's
+    // entry names, which are the driver's own metadata.
+    if store.home_rules_spelled_otherwise(scope) {
+        let directory = file.parent().unwrap_or(&file).display().to_string();
+        let note = match spelled_as_the_home_rules(file.parent()) {
+            Some(name) => bravebot_i18n::t!(
+                agent_rule_other_spelling,
+                directory = directory.as_str(),
+                name = name.as_str()
+            )
+            .to_string(),
+            None => bravebot_i18n::t!(
+                agent_rule_other_spelling_unnamed,
+                directory = directory.as_str()
+            )
+            .to_string(),
+        };
+        return (
+            Produced::refused_with_a_note(
+                "propose_rule wrote nothing and asked nothing: the user's state directory holds \
+                 their home rules file under a spelling other than AGENTS.md, which is not read \
+                 as their rules. The user has been told. Do not retry; say the rule in your \
+                 reply if it matters.",
+                note,
+            ),
+            None,
+        );
+    }
     let series = policy.label_model_output(
         "propose_rule",
         Series::new(vec![question(&text, &file, &reason, private)]),

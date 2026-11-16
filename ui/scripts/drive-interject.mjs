@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME } from './drive-support.mjs'
+import { COMPOSER_NAME, SHOTS_DIR } from './drive-support.mjs'
 
 let waiting = []
 const t0 = Date.now()
@@ -35,7 +35,7 @@ const { service, rounds: requests } = await startModelService(async ({ messages 
 })
 
 const { project, profile, env } = makeWorld('bravebot-interject-', { service })
-const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
+const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

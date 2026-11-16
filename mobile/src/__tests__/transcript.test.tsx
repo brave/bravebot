@@ -277,3 +277,29 @@ describe('a row whose event is named like an object property', () => {
     expect(textOf(byTestId(tree, 'row-approval-1'))).toContain('A question')
   })
 })
+
+describe('rows the view no longer keeps', () => {
+  const kept = [userPrompt(258, 9, 'Keep going'), reply(259, 9, 'Done.')]
+
+  it('are counted in a note above the first row kept', async () => {
+    const tree = await render(<Transcript rows={kept} omitted={257} status="completed" decisions={new Map()} empty={null} />)
+    expect(textOf(byTestId(tree, 'omitted-rows'))).toBe('257 earlier items are no longer kept, so they are not shown.')
+    expect(allText(tree).indexOf('257 earlier items')).toBeLessThan(allText(tree).indexOf('Keep going'))
+  })
+
+  it('are counted in the singular when there is one', async () => {
+    const tree = await render(<Transcript rows={kept} omitted={1} status="completed" decisions={new Map()} empty={null} />)
+    expect(textOf(byTestId(tree, 'omitted-rows'))).toBe('1 earlier item is no longer kept, so it is not shown.')
+  })
+
+  it('leave no note when the view keeps every row', async () => {
+    const tree = await render(<Transcript rows={kept} omitted={0} status="completed" decisions={new Map()} empty={null} />)
+    expect(has(tree, 'omitted-rows')).toBe(false)
+  })
+
+  it('update the note when more are dropped while the session is open', async () => {
+    const tree = await render(<Transcript rows={kept} omitted={257} status="completed" decisions={new Map()} empty={null} />)
+    await update(tree, <Transcript rows={kept.slice(1)} omitted={258} status="completed" decisions={new Map()} empty={null} />)
+    expect(textOf(byTestId(tree, 'omitted-rows'))).toBe('258 earlier items are no longer kept, so they are not shown.')
+  })
+})

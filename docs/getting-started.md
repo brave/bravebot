@@ -222,14 +222,17 @@ you say none is needed, and the request then carries no `authorization` header:
   "provider": {
     "ollama": {
       "name": "Ollama (local)",
-      "options": { "baseURL": "http://localhost:11434/v1" }
+      "npm": "ollama-ai-provider-v2",
+      "options": { "baseURL": "http://localhost:11434/api" }
     }
   },
   "model": "ollama/qwen3-coder:30b"
 }
 ```
 
-No `models` key, so Ollama is asked what it has pulled, and `/model` lists what came back.
+`npm` names Ollama's own SDK, so each request asks Ollama for the context window the model was
+trained with rather than leaving it at the server's small default. No `models` key, so Ollama is
+asked what it has pulled, and `/model` lists what came back.
 `bravebot doctor` says a credential is not needed rather than missing.
 
 You need not write it by hand. With Ollama running and nothing else configured, a first run in a

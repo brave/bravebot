@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND, APPROVE_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 
 // Both outside the project: workspace-write and read-only read the first and refuse a write to the
 // second, strict refuses both. Both are under the real home, because a session may use the temporary directory,
@@ -38,7 +38,7 @@ const lastToolResult = (round) => (JSON.parse(round).messages ?? []).filter((mes
 
 const { root, project, profile, env } = makeWorld('bravebot-sandbox-', { service })
 
-const output = '/tmp/bravebot-ui'
+const output = SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {
@@ -61,7 +61,7 @@ try {
     await page.locator(COMPOSER_SEND).click()
     const card = page.locator('.confirm.run:not([data-folded="true"])')
     await card.waitFor()
-    await card.locator('.confirm-actions .approve:not(.always)').click()
+    await card.locator(`${APPROVE_BUTTON}:not(.always)`).click()
     await replies.nth(before).waitFor()
     await stop.waitFor({ state: 'hidden' })
     return lastToolResult(rounds.at(-1))

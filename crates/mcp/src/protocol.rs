@@ -92,6 +92,9 @@ pub(crate) struct ToolDescriptor {
     /// JSON Schema for the arguments.
     #[serde(default, rename = "inputSchema")]
     pub(crate) input_schema: Option<Value>,
+    /// What the server says of the tool's behaviour, of which only `readOnlyHint` is read.
+    #[serde(default)]
+    pub(crate) annotations: Option<Value>,
 }
 
 /// A `tools/list` result, one entry at a time: an entry that is not a tool is refused on its own
@@ -282,11 +285,26 @@ fn drawn_tool(descriptor: ToolDescriptor) -> Option<Value> {
         .as_deref()
         .map(described)
         .filter(|text| !text.is_empty());
-    Some(serde_json::json!({
+    let mut drawn = serde_json::json!({
         "name": descriptor.name,
         "description": description,
         "arguments": arguments,
-    }))
+    });
+    // The server's word that the tool changes nothing, drawn where it says so and nowhere else,
+    // so a list that says nothing of it reads as it did. It is on the list a person vouches for.
+    if read_only(descriptor.annotations.as_ref()) {
+        drawn["read_only"] = Value::Bool(true);
+    }
+    Some(drawn)
+}
+
+/// Whether a tool's annotations say it does not change its environment, as MCP's `readOnlyHint`
+/// does. Only the boolean `true` counts.
+fn read_only(annotations: Option<&Value>) -> bool {
+    annotations
+        .and_then(|annotations| annotations.get("readOnlyHint"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// A description as it may be drawn: every control character but a newline, and every character
@@ -2003,5 +2021,34 @@ mod tests {
         ] {
             assert!(!is_tools_list_changed(other), "{other}");
         }
+    }
+
+    /// A tool its server says is read-only is drawn as one, and a tool that says nothing, says
+    /// false, or says it in a form other than a boolean is drawn as it was, without the field.
+    #[test]
+    fn a_tool_its_server_marks_read_only_is_drawn_as_one_and_no_other() {
+        let raw = r#"{"tools":[
+            {"name":"look","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},
+            {"name":"change","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":false}},
+            {"name":"odd","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":"true"}},
+            {"name":"plain","inputSchema":{"type":"object"}}
+        ]}"#;
+        let list: ToolList = serde_json::from_str(raw).expect("a list");
+        let (text, offered, refused) = list.drawn("svc");
+        assert_eq!((offered, refused), (4, 0));
+        let drawn: Vec<Value> = serde_json::from_str(&text).expect("drawn");
+        let read_only: Vec<&str> = drawn
+            .iter()
+            .filter(|tool| tool.get("read_only") == Some(&Value::Bool(true)))
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(read_only, ["look"]);
+        assert!(
+            drawn
+                .iter()
+                .filter(|tool| tool["name"] != "look")
+                .all(|tool| tool.get("read_only").is_none()),
+            "{text}"
+        );
     }
 }

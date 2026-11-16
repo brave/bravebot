@@ -463,6 +463,7 @@ const bridge: BravebotApi = {
   readRecents: async () => [DIRECTORY, '/Users/example/tide-tables', '/Users/example/a-very-long-project-name-that-needs-truncation'],
   readForks: async () => FORKS(),
   readBots: async () => bots,
+  readBotsProblem: async () => null,
   writeBotModel: async (slug, model) => { bots = bots.map((bot) => bot.slug === slug ? { ...bot, model } : bot); return bots.find((bot) => bot.slug === slug) ?? null },
   readBotServers: async () => ({ servers: null, tools: true, inline: false, kind: 'default', editable: true, every: true, everyPossible: true }),
   writeBotServers: async () => ({ servers: null, tools: true, inline: false, kind: 'default', editable: true, every: true, everyPossible: true }),

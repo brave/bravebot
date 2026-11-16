@@ -422,6 +422,24 @@ export interface LanguageSaved {
   tag: string
 }
 
+/** What keeps the usage ping off where its switch cannot: `variable` is set for `environment`. */
+export interface UsagePingReason {
+  code: 'setting' | 'environment' | 'admin' | 'incognito'
+  variable?: string
+}
+
+/** `usage_ping.get`: whether the ping is on, and `reason` when the switch cannot change that. */
+export interface UsagePingReport {
+  enabled: boolean
+  changeable: boolean
+  reason: UsagePingReason | null
+}
+
+/** `usage_ping.set`: the report after the change, and whether the switch file was written. */
+export interface UsagePingSaved extends UsagePingReport {
+  saved: boolean
+}
+
 /**
  * A session begun from part of another one.
  *
@@ -822,7 +840,13 @@ export interface McpServerRequest {
 }
 
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
-export interface McpTool { name: string; arguments: string[]; description: string | null }
+export interface McpTool {
+  name: string
+  arguments: string[]
+  description: string | null
+  /** The server marks the tool read-only, as its own `readOnlyHint` says (SERVERS-8). */
+  read_only?: boolean
+}
 
 /**
  * The tools an MCP server lists, put to the person before any is offered to the model
@@ -901,6 +925,8 @@ export interface RunRequest {
   writes?: string[]
   /** `writes` with each path spelled as `ConfirmRequest.shownPath` is. Draw this and not `writes`. */
   shownWrites: string[]
+  /** Whether a file the line writes is a protected path. Nothing answers such a request but the person. */
+  protected?: boolean
   stdin?: string | null
   stages: Stage[]
   directory: string

@@ -97,7 +97,11 @@ impl SettingsRules {
         let readable = |lines: &[String]| -> Vec<String> {
             lines
                 .iter()
-                .filter(|line| !rejected.iter().any(|reject| &reject.text == *line))
+                .filter(|line| {
+                    !rejected
+                        .iter()
+                        .any(|reject| &reject.text == *line && !reject.reason.keeps_the_rule())
+                })
                 .cloned()
                 .collect()
         };
@@ -524,6 +528,22 @@ mod tests {
         );
     }
 
+    /// PERM-5, PERM-11: a deny rule with a quote never closed is still in force as written, so it
+    /// is listed as in force and also reported, where a dropped entry is only reported.
+    #[test]
+    fn a_rule_kept_as_written_is_listed_as_in_force_and_reported() {
+        let (dir, settings) = layers(
+            Some(r#"{"permissions": {"deny": ["Bash(sh -c \"rm *)"]}}"#),
+            None,
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+        assert_eq!(rules.deny, [r#"Bash(sh -c "rm *)"#]);
+        let [unreadable] = rules.unreadable.as_slice() else {
+            panic!("{:?}", rules.unreadable);
+        };
+        assert_eq!(unreadable.rule, r#"Bash(sh -c "rm *)"#);
+    }
+
     /// PERM-11: an unreadable line with surrounding space is left out of the list in force and is
     /// reported in the spelling the file used.
     #[test]
@@ -543,11 +563,10 @@ mod tests {
         assert_eq!(unreadable.rule, " Fetchh(domain:denied.test) ");
     }
 
-    /// PERM-14: a settings file the person selected may write an `allow` rule where it is outside
-    /// the workspace. One inside the workspace is the checkout's file under another name, so
-    /// its `allow` rule is proposed and not in force.
+    /// PERM-14: a settings file the person selected is their own wherever it sits, so its `allow`
+    /// rule is in force, outside the workspace and inside it alike, and nothing is proposed.
     #[test]
-    fn a_selected_file_grants_only_from_outside_the_workspace() {
+    fn a_selected_file_grants_wherever_it_sits() {
         let mut builder = tempfile::Builder::new();
         builder.prefix("bravebot-rules-selected-");
         #[cfg(unix)]
@@ -578,8 +597,8 @@ mod tests {
             &Settings::layered(Some(home), Some(&project), Some(&inside)),
             &project,
         );
-        assert_eq!(fetching(&rules, "example.com"), None);
-        assert_eq!(rules.proposed.len(), 1, "{:?}", rules.proposed);
+        assert_eq!(fetching(&rules, "example.com"), Some(Ruling::Allow));
+        assert!(rules.proposed.is_empty(), "{:?}", rules.proposed);
     }
 
     /// PERM-10: a directory a file named is reported and is not something this module opens.

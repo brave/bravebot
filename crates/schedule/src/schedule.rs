@@ -669,8 +669,11 @@ fn with_line(table: &str, id: &str, line: Option<&str>) -> String {
 /// `DBUS_SYSTEM_BUS_ADDRESS` is read only for system scope. `DBUS_STARTER_ADDRESS` and
 /// `DBUS_STARTER_BUS_TYPE` are read only by `sd_bus_default` and `sd_bus_open`, which `systemctl`
 /// does not call. `SYSTEMD_PAGER` and `PAGER` are read by `pager_open`, which none of
-/// `daemon-reload`, `enable` and `disable` calls. `SYSTEMD_LIB_DIR` is not in v255. No Linux run
-/// was made (SANDBOX-30, empty-list starts).
+/// `daemon-reload`, `enable` and `disable` calls. `SYSTEMD_LIB_DIR` is not in v255. Run on Linux
+/// (systemd 257): `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` made `systemctl --user` run the
+/// helper when `XDG_RUNTIME_DIR` was unset, and `SYSTEMD_UNIT_PATH` made a client-side `enable`
+/// (`SYSTEMD_OFFLINE=1`) link a unit file from the directory it named (SANDBOX-30, empty-list
+/// starts).
 #[cfg(unix)]
 const SYSTEMCTL_CODE_SELECTORS: [(&str, Names); 2] = [
     ("DBUS_SESSION_BUS_ADDRESS", Names::Options),
@@ -2841,7 +2844,7 @@ mod tests {
 
     /// SANDBOX-30. `systemctl --user` reads `DBUS_SESSION_BUS_ADDRESS`, which sd-bus lets name a
     /// program to run (a `unixexec:` address), and `SYSTEMD_UNIT_PATH`, directories unit files are
-    /// read from. The list is from systemd v255 source and no Linux run was made. The address is
+    /// read from. The list is from systemd v255 source and was run on Linux by the test below. The address is
     /// removed whatever it holds, because it is not a path. The unit path is removed whole when an
     /// entry is where a stage may write, and kept when every entry is not. The regression it
     /// rejects: `systemctl` started with the generic names alone; the unit path judged by its first
@@ -2918,5 +2921,89 @@ mod tests {
                 "{program}"
             );
         }
+    }
+
+    /// SANDBOX-30, run on Linux (systemd 257): with `XDG_RUNTIME_DIR` unset, `systemctl --user`
+    /// connects to the address in `DBUS_SESSION_BUS_ADDRESS`, and sd-bus runs the program a
+    /// `unixexec:` address names. The control starts the real `systemctl` with the address and must
+    /// run the helper, so the check cannot pass because `systemctl` never reads the address. Prints
+    /// `skipped` and passes where `systemctl` is not installed. The regression it rejects: the name
+    /// left out of `SYSTEMCTL_CODE_SELECTORS`, so a helper a stage wrote runs on every scheduler
+    /// call.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_unixexec_session_bus_address_runs_a_helper_through_systemctl_unless_the_start_removes_it()
+    {
+        use std::os::unix::fs::PermissionsExt;
+        const NAME: &str = "DBUS_SESSION_BUS_ADDRESS";
+        let Some(systemctl) = bravebot_sandbox::programs::find(std::ffi::OsStr::new("systemctl"))
+        else {
+            eprintln!("skipped: systemctl is not installed");
+            return;
+        };
+        let root = tempfile::tempdir().expect("a directory");
+        let root_path = root.path().canonicalize().expect("a path");
+        let marker = root_path.join("marker");
+        let helper = root_path.join("helper");
+        std::fs::write(
+            &helper,
+            format!("#!/bin/sh\n: >> '{}'\nexit 1\n", marker.display()),
+        )
+        .expect("a helper");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        let address = std::ffi::OsString::from(format!("unixexec:path={}", helper.display()));
+
+        let ran = |checked: bool| {
+            let _ = std::fs::remove_file(&marker);
+            let mut command = if checked {
+                let writable = vec![root_path.clone()];
+                let mut command = started(
+                    &systemctl,
+                    [(std::ffi::OsString::from(NAME), address.clone())],
+                    &|file: &Path| {
+                        bravebot_sandbox::programs::outside_stage_writable_with(
+                            file,
+                            &writable,
+                            &[],
+                        )
+                    },
+                );
+                // The start settles what a program inherits from this process, which holds no
+                // such variable, so the variable reaches the program unless the start removed it.
+                let removed = command
+                    .get_envs()
+                    .any(|(set, now)| set == std::ffi::OsStr::new(NAME) && now.is_none());
+                if !removed {
+                    command.env(NAME, &address);
+                }
+                command
+            } else {
+                let mut command = bravebot_sandbox::programs::start(
+                    &bravebot_sandbox::programs::Resolved::found_earlier(&systemctl),
+                    bravebot_sandbox::programs::Inherits::All,
+                    bravebot_sandbox::programs::SearchPath::Inherited,
+                    bravebot_sandbox::programs::CodeSelectors::Kept,
+                );
+                command.env(NAME, &address);
+                command
+            };
+            command
+                .args(["--user", "is-system-running"])
+                .env_remove("XDG_RUNTIME_DIR")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("runs");
+            marker.exists()
+        };
+
+        assert!(
+            ran(false),
+            "systemctl did not run the helper a unixexec address names"
+        );
+        assert!(
+            !ran(true),
+            "the checked start left the address for systemctl"
+        );
     }
 }

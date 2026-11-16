@@ -29,7 +29,7 @@ How long a turn may go on, what happens when it does not stop, and what is said 
 without producing anything or ends without checking anything. What completed requests cost survives
 a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
 into its output ceiling. What a session does when it has spent as many tokens as the person said
-it may. What a turn does when the planner asks for the same call three times running. How the reads of one
+it may. What a turn does when the planner asks for the same call three times running, which is to refuse it. How the reads of one
 round are run when the planner asks for several together. What the note under a finished turn says
 about refusals. What a turn that answers with tasks still open in the planner's list does about
 them. What the planner is told when a turn ends in a failure. What a limit a person gave a run does to it.
@@ -200,7 +200,10 @@ the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
 about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is a changed file here
 only when the workspace tree differs after it ([GROUND-1](grounding.md#GROUND-1)), and is a program
-run only when one started, so a line the person declined counts for TURN-3 and not for this. A write
+run only when one started, so a line the person declined counts for TURN-3 and not for this. For a
+line in the background, "after it" is when the turn learns the job has ended, so its change counts
+from that round. A turn that counts the write of a background job started in an earlier turn has
+run a program, since that job's program made the change. A write
 that landed in the session's own directory leaves nothing to build either: that directory is for
 the turn's own use, outside the project and gone when the session ends. The write is not counted,
 and a turn whose only writes landed there is neither asked the question nor told the closing line.
@@ -428,6 +431,17 @@ question the planner asks, and every permission mode passes it on, bypassing inc
 asks about nothing still stops here, unless the person set no limit. A new limit or going on without
 one is the session's from then on, including for a turn already running when `/limit` is typed.
 
+**A checkout cannot set the person's limit aside.** The person has set no limit only if their own
+settings file and the file `--settings` names state none. A `limit` in a project or local settings
+file is read as a limit only where it takes nothing from the person's: it states one where they
+stated none, or a smaller figure in the same unit. A checkout's `null`, zero, figure that is not a
+count, larger figure or figure in the other unit (credits for tokens, or tokens for credits) is not
+obeyed, the question stays at the figure the person wrote, and `doctor` and the desktop settings
+view name the file ([BACKEND-24](backends.md#BACKEND-24)). A person's own `null` or zero is how
+they state no limit. A question about spending is one the driver puts to a person who has to be
+there, so what sets the figure is the person's own file and no repository
+([ASK-9](tools/ask-user.md#ASK-9)).
+
 **The figure is a count and the stop depends on no content.** Tokens are the sum of the usage the
 backends reported ([BACKEND-31](backends.md#BACKEND-31), [BACKEND-40](backends.md#BACKEND-40)). A
 request that reported nothing adds nothing, so a backend that reports no usage is never stopped by
@@ -475,16 +489,23 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
 `verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
 `verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
+`verified-by: bravebot_config::settings::a_checkout_layer_may_lower_the_limit_in_the_same_unit`
+`verified-by: bravebot_config::settings::a_checkout_layer_may_state_a_limit_where_the_person_stated_none`
+`verified-by: bravebot_config::settings::the_checkout_layers_narrow_one_after_the_other`
+`verified-by: bravebot_config::settings::the_named_settings_file_decides_the_limit_as_the_home_file_does`
+`verified-by: bravebot_config::settings::a_refused_limit_is_not_an_unread_key`
+`verified-by: bravebot_config::settings::the_nearest_layer_names_the_session_limit`
 
 <a id="TURN-9"></a>
-### TURN-9: the same call three times running is held and asked about
+### TURN-9: the same call three times running is not run
 
 When the planner asks for a call whose tool name and arguments equal those of the two calls
-before it, with no different call between them, the driver does not run it. The person is asked
-one question with three answers: do not run it and tell the planner to try another approach, run
-it this once, or stop the turn. A refusal is answered to the planner in place of a result, as the
-driver's own error that names the tool and the count. Each further identical call is held in the
-same way.
+before it, with no different call between them, the driver does not run it. The planner is
+answered in place of a result with the driver's own error that names the tool and the count, and
+nobody is asked. Each further identical call is refused in the same way, with the count it has
+reached.
 
 **Arguments only.** The comparison reads the tool name and the arguments the planner wrote, with
 the keys of a JSON object in sorted order, so the same object written in another key order is the
@@ -492,34 +513,62 @@ same call. It never reads a result. A result can carry untrusted bytes, which th
 branch on, and the planner's own call is built from a context holding none ([LABEL-8](labels.md#LABEL-8)).
 
 **What it costs.** A call whose result changes between identical calls, such as polling
-`read_output` or running a test again without an edit between, is held at the third. A different
-call between two identical ones starts the count again, so a write between two runs does.
+`read_output` or running a test again without an edit between, is refused at the third. A different
+call between two identical ones starts the count again, so a write between two runs does, and so
+does any other call the planner makes before the repeat.
 
-**A yes covers one call.** It runs that call and starts the count again, so the next held call is
-the third after it. The question carries a key of its own on every ask, because an interface may
-remember an answer by key.
+**Nobody is asked, in any mode or interface.** A person who started a long task and left would
+come back to a turn waiting on a question about a call the planner can make differently. No
+permission mode, no rule and no answer lets a held call run, bypassing included, and a delegate, a
+one-shot run, a manifest run and a closed channel are refused in the same way as a session with a
+person at it. A note under the turn names the tool and the count.
 
-**No rule and no mode answers it.** Every permission mode passes the question on, bypassing
-included, for the reason [TURN-8](#TURN-8) gives. Where nobody can be asked, which is a one-shot
-run, a manifest run, a closed channel or a delegate, the call is dropped and the planner told
-([PROMPT-9](prompting.md#PROMPT-9)). The first row is the refusal, so a bare Enter is the safe
-answer, and an answer that is none of the three is a refusal.
+**A bounded wait on a running job is not refused.** A `job_output` call that names a background job
+of this turn, carries a `wait_seconds` the tool accepts, and does not ask to kill the job is a
+wait on the job, which returns when it ends, when it prints something not yet shown or when the
+seconds run out, and the same wait repeated while the job is running is not a repeat of
+the kind this clause guards against. Such a call is treated as a different call from the ones
+around it, so the count starts again, and it is never refused or recorded in the trail.
+The wait may carry `until_exit` or not. The decision reads the planner's own tool name and
+arguments, read through the same gate as any other argument of the planner's, and the driver's own
+observation that the job's process has not exited. It never reads what the job printed. Where the
+gate refuses to read the job name, because the context holds something untrusted, the call is not
+exempt and is counted. A `job_output` call with no `wait_seconds`, with a `wait_seconds` the tool
+refuses, with a `read` that is not true or false, that kills the job, or that names a job that has
+ended or is not one of this turn's is counted and refused as any other call.
+
+**The refusal says what to do instead.** The error the planner is given names the tool and the
+count. For `job_output` it also says that the end of a background job is reported in a message of
+its own, that `wait_seconds` waits for a running job, and that a shell loop that sleeps is not a
+way to wait. For any other tool it says to try a different call or carry on with the rest of the
+task. The route is chosen from the tool name the planner wrote.
+
+**The turn goes on.** The refusal does not end the turn. A planner that keeps repeating the call
+is bound only by the limits that bound any turn ([TURN-1](#TURN-1), [TURN-8](#TURN-8)).
 
 **Not a safety property,** for the reason [TURN-1](#TURN-1) gives. A call that differs by one
 argument each round is not caught, such as the glob after glob that clause describes.
 
-**Recorded.** The trail gets a line with the round, the count and the answer, which carries no
-call and no result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
+**Recorded.** The trail gets a line with the round and the count, which carries no call and no
+result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
 
-`verified-by: bravebot_agent::turn::a_third_identical_call_is_not_run_and_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_third_identical_call_is_refused_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_differing_argument_starts_the_count_again`
-`verified-by: bravebot_agent::turn::a_yes_runs_the_call_once_and_the_count_starts_again`
-`verified-by: bravebot_agent::turn::a_stop_at_the_question_ends_the_turn`
-`verified-by: bravebot_agent::turn::where_nobody_can_be_asked_the_call_is_dropped_and_the_planner_told`
-`verified-by: bravebot_agent::turn::no_permission_mode_answers_the_repeated_call_question`
-`verified-by: bravebot_agent::turn::the_trail_records_the_count_and_the_answer_and_nothing_the_call_carried`
-`verified-by: bravebot_agent::turn::two_held_calls_are_two_questions`
+`verified-by: bravebot_agent::turn::every_further_identical_call_is_refused_too`
+`verified-by: bravebot_agent::turn::no_permission_mode_runs_or_asks_about_a_repeated_call`
+`verified-by: bravebot_agent::turn::the_trail_records_the_count_and_nothing_the_call_carried`
+`verified-by: bravebot_agent::turn::a_delegates_repeated_call_is_refused_and_the_person_is_not_asked`
 `verified-by: bravebot_agent::repeated_call::the_same_arguments_in_another_key_order_are_the_same_call`
+`verified-by: bravebot_agent::repeated_call::a_call_passed_without_counting_starts_the_count_again`
+`verified-by: bravebot_agent::repeated_call::the_refusal_names_the_tool_and_the_count_and_gives_a_route`
+`verified-by: bravebot_agent::tools::tests::arguments::a_bounded_wait_on_a_running_job_is_waited_on`
+`verified-by: bravebot_agent::tools::tests::arguments::a_look_a_kill_or_a_refused_wait_is_not_waited_on`
+`verified-by: bravebot_agent::tools::tests::arguments::a_wait_on_a_job_that_has_ended_is_not_waited_on`
+`verified-by: bravebot_agent::tools::tests::arguments::a_wait_is_not_waited_on_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::turn::four_identical_waits_on_a_running_job_ask_nothing_and_all_run`
+`verified-by: bravebot_agent::turn::identical_looks_with_no_wait_are_still_held_at_the_third`
+`verified-by: bravebot_agent::turn::identical_waits_that_kill_the_job_are_still_held_at_the_third`
+`verified-by: bravebot_agent::turn::identical_waits_on_a_job_that_has_ended_are_held_at_the_third`
 
 <a id="TURN-10"></a>
 ### TURN-10: the independent reads of a round run at the same time
@@ -540,7 +589,8 @@ taken and not while it reads.
 **What joins a run.** A call joins when it is a `list_files` or `search` that this run offers, its
 arguments are JSON, the person has declared no hook for a finished call of that tool, and it would
 not be held as a third identical repeat ([TURN-9](#TURN-9)). One such call is not a run. A hook is
-left out because it can change the files the next read looks at, and a held call asks a question.
+left out because it can change the files the next read looks at, and a held call is refused and not
+read.
 
 **Each read decides as the turn would.** A read runs under a branch of the turn's policy, which
 holds the same rules, capabilities and context, shares the one file authority, and records into a
@@ -576,16 +626,16 @@ and each call in it is shown as finishing at once.
 `verified-by: bravebot_agent::turn::a_call_that_writes_separates_the_reads_before_it_from_the_reads_after`
 `verified-by: bravebot_agent::turn::a_cancel_during_the_reads_leaves_only_the_calls_before_it_in_the_trail`
 `verified-by: bravebot_agent::turn::a_run_of_reads_ends_at_a_call_that_asks_or_is_hooked_or_would_be_held`
-`verified-by: bravebot_agent::tools::reads_taken_beforehand_leave_the_trail_the_screen_and_the_answers_a_sequential_run_does`
-`verified-by: bravebot_agent::tools::the_reads_of_a_round_are_inside_their_captures_at_the_same_time`
-`verified-by: bravebot_agent::tools::no_more_reads_run_at_once_than_the_limit`
-`verified-by: bravebot_agent::tools::a_cancel_stops_the_reads_not_yet_started`
-`verified-by: bravebot_agent::tools::reads_taken_beforehand_wait_for_an_effect_entering_a_file`
-`verified-by: bravebot_agent::tools::a_read_file_does_not_wait_for_a_reader_holding_the_boundary`
-`verified-by: bravebot_agent::tools::a_read_file_waits_for_an_effect_holding_the_boundary`
-`verified-by: bravebot_agent::tools::a_read_file_emits_nothing_while_it_holds_the_boundary`
-`verified-by: bravebot_agent::tools::a_read_is_used_only_while_the_context_is_what_it_ran_under`
-`verified-by: bravebot_agent::tools::only_a_read_the_run_offers_is_taken_beforehand`
+`verified-by: bravebot_agent::tools::tests::reading_together::reads_taken_beforehand_leave_the_trail_the_screen_and_the_answers_a_sequential_run_does`
+`verified-by: bravebot_agent::tools::tests::reading_together::the_reads_of_a_round_are_inside_their_captures_at_the_same_time`
+`verified-by: bravebot_agent::tools::tests::reading_together::no_more_reads_run_at_once_than_the_limit`
+`verified-by: bravebot_agent::tools::tests::reading_together::a_cancel_stops_the_reads_not_yet_started`
+`verified-by: bravebot_agent::tools::tests::reading_together::reads_taken_beforehand_wait_for_an_effect_entering_a_file`
+`verified-by: bravebot_agent::tools::tests::reading_together::a_read_file_does_not_wait_for_a_reader_holding_the_boundary`
+`verified-by: bravebot_agent::tools::tests::reading_together::a_read_file_waits_for_an_effect_holding_the_boundary`
+`verified-by: bravebot_agent::tools::tests::reading_together::a_read_file_emits_nothing_while_it_holds_the_boundary`
+`verified-by: bravebot_agent::tools::tests::reading_together::a_read_is_used_only_while_the_context_is_what_it_ran_under`
+`verified-by: bravebot_agent::tools::tests::reading_together::only_a_read_the_run_offers_is_taken_beforehand`
 `verified-by: bravebot_core::policy::a_branch_decides_what_the_policy_it_came_from_would`
 `verified-by: bravebot_core::policy::a_branch_reads_the_file_decisions_made_after_it_began`
 `verified-by: bravebot_core::policy::what_a_branch_records_reaches_the_policy_when_it_rejoins_and_in_order`
@@ -705,9 +755,9 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::turn::a_session_that_has_met_something_untrusted_is_not_asked_about_the_list`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_the_task_list_tool_is_not_asked_about_the_list`
 `verified-by: bravebot_agent::turn::a_turn_stopped_as_it_answers_is_not_asked_about_open_tasks`
-`verified-by: bravebot_agent::tools::an_accepted_list_carries_the_count_of_its_open_tasks_at_its_own_label`
-`verified-by: bravebot_agent::tools::the_count_of_open_tasks_in_an_untrusted_list_is_refused_to_the_driver`
-`verified-by: bravebot_agent::tools::a_refused_call_carries_no_count_of_open_tasks`
+`verified-by: bravebot_agent::tools::tests::todos::an_accepted_list_carries_the_count_of_its_open_tasks_at_its_own_label`
+`verified-by: bravebot_agent::tools::tests::todos::the_count_of_open_tasks_in_an_untrusted_list_is_refused_to_the_driver`
+`verified-by: bravebot_agent::tools::tests::todos::a_refused_call_carries_no_count_of_open_tasks`
 `verified-by: bravebot_core::todo::a_task_is_open_unless_it_is_finished_or_dropped`
 
 <a id="TURN-13"></a>

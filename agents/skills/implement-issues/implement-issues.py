@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Open the implement-issues skill in the terminal client, after the steps that need no model.
 
-    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] [--force] [--bypass] -- <argument>
+    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] [--force] [--bypass] [--platform NAME] -- <argument>
 
 `make implement-issues ISSUES=<argument> [NOTES=<notes>] [FORCE=1] [BYPASS=1]` runs it. <argument> is what the skill takes:
 issue numbers, links and search queries separated by commas. The skill receives it unchanged, since the
@@ -18,15 +18,18 @@ Once the claim is written, the session is given a line that starts with `Claimed
 and the notes. It says when the script assigned the account and added the label, to which issues, and
 that those writes are this run's, so the skill does not read them as another session's work. It holds
 the account, the time and issue numbers, and nothing that GitHub returned. With `--force`, it also
-names the issues that have another assignee. A line of <argument> that starts with `Claimed:` ends the
-list as one that starts with `Notes:` does.
+names the issues that have another assignee and the issues labelled for another platform. A line of
+<argument> that starts with `Claimed:` ends the list as one that starts with `Notes:` does.
 
 Before the session opens, from the same reading of <argument> as step 1 of the skill, and with no
 model:
 
 1. every open issue is read, and the run stops with nothing changed when one is assigned to anybody
-   but the account `gh` writes as (`gh api user`), unless `--force` is given, which works those issues
-   anyway and leaves the other assignees where they are;
+   but the account `gh` writes as (`gh api user`), or when one is labelled develop-on/linux,
+   develop-on/macos or develop-on/windows and none of its develop-on labels names the platform this
+   host is (`--platform` names another, for tests), unless `--force` is given, which works those issues
+   anyway and leaves the other assignees and the labels where they are. An issue with no develop-on
+   label can be developed on any host;
 2. that account is assigned to each of them;
 3. each of them gets the label bot/in-progress.
 
@@ -53,6 +56,11 @@ from pathlib import Path
 from urllib.parse import quote
 
 LABEL = "bot/in-progress"
+# The labels triage-issues puts on an issue that can only be developed on one platform, by the name
+# sys.platform gives that host. An issue with none of them can be developed anywhere.
+DEVELOP_ON = "develop-on/"
+HOSTS = {"darwin": "macos", "linux": "linux", "win32": "windows"}
+PLATFORMS = sorted(HOSTS.values())
 SKILL = "implement-issues"
 # The client's flag for no permission prompts and no sandbox, which `--bypass` puts ahead of `-i`.
 BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
@@ -217,6 +225,27 @@ def assigned_to(issue, login):
     return login.lower() in {one.lower() for one in issue["assignees"]}
 
 
+def host_platform():
+    """The name of the platform this script runs on, as the develop-on labels spell it."""
+    return HOSTS.get(sys.platform, sys.platform)
+
+
+def elsewhere(issues, here):
+    """The develop-on labels of each issue that can only be developed on a platform other than `here`.
+
+    An issue that has a develop-on label for `here` is fine, whatever else it has, and so is one with
+    none. Only the three labels triage-issues applies count, and they are written from the constants
+    here, so no label text that GitHub returned is printed.
+    """
+    known = {DEVELOP_ON + name: DEVELOP_ON + name for name in PLATFORMS}
+    found = {}
+    for number, issue in sorted(issues.items()):
+        wanted = sorted({known[label.lower()] for label in issue["labels"] if label.lower() in known})
+        if wanted and DEVELOP_ON + here not in wanted:
+            found[number] = wanted
+    return found
+
+
 def conflicts(issues, me):
     """The logins, as printed, of everybody but `me` that each issue is assigned to, for the issues with any."""
     found = {}
@@ -280,7 +309,7 @@ def stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def claim_line(me, when, issues, assigned, labelled, forced):
+def claim_line(me, when, issues, assigned, labelled, forced, away=None):
     """The line that tells the session which assignments and labels this run wrote, and when.
 
     `pr-fix.py issue` prints the labels of an issue, and a session that finds `bot/in-progress` on an
@@ -303,6 +332,12 @@ def claim_line(me, when, issues, assigned, labelled, forced):
         said.append(
             f"The person forced this run past other assignees (FORCE=1): somebody else is also assigned to "
             f"{listed(forced)}. That is no reason to skip or stop on an item."
+        )
+    if away:
+        each = "; ".join(listed([number]) + " is labelled " + ", ".join(labels) for number, labels in away.items())
+        said.append(
+            f"The person forced this run past the platform labels (FORCE=1): {each}. "
+            "That is no reason to skip or stop on an item."
         )
     return " ".join(said)
 
@@ -381,6 +416,7 @@ def main(argv=None):
     parser.add_argument("--notes", default="", help="notes for the skill, which reads them; no issue is taken from them")
     parser.add_argument("--force", action="store_true", help="work an issue that is assigned to somebody else as well")
     parser.add_argument("--bypass", action="store_true", help=f"open the client with {BYPASS_FLAG}")
+    parser.add_argument("--platform", choices=PLATFORMS, help="the platform develop-on labels are checked against (default: this host's)")
     parser.add_argument("argument", help="what the skill takes, which it receives unchanged")
     args = parser.parse_args(argv)
     named_in, _ = split_list(args.argument)
@@ -400,18 +436,23 @@ def main(argv=None):
     if not issues:
         die("no open issue to implement. Nothing was changed.")
     taken = conflicts(issues, me)
+    here = args.platform or host_platform()
+    away = elsewhere(issues, here)
     lines = [f"#{number} is assigned to {', '.join(others)}" for number, others in taken.items()]
-    if taken and not args.force:
-        die("\n".join([*lines, "", "Nothing was changed. FORCE=1 (--force) works them anyway."]))
+    away_lines = [f"#{number} is labelled {', '.join(labels)} and this host is {here}" for number, labels in away.items()]
+    if (taken or away) and not args.force:
+        die("\n".join([*lines, *away_lines, "", "Nothing was changed. FORCE=1 (--force) works them anyway."]))
     if taken:
         print("\n".join(["working past another assignee, as asked:", *lines]), flush=True)
+    if away:
+        print("\n".join(["working past the platform labels, as asked:", *away_lines]), flush=True)
     check_repository(me)
 
     try:
         assigned, labelled = claim(issues, me)
     except RuntimeError as problem:
         die(f"{problem}\nWhat had been written was undone.")
-    prompt = prompt_for(args.argument, args.notes, claim_line(me, stamp(), issues, assigned, labelled, list(taken)))
+    prompt = prompt_for(args.argument, args.notes, claim_line(me, stamp(), issues, assigned, labelled, list(taken), away))
     print(f"issues: {listed(issues)}", flush=True)
     print(f"assigned {me}: {listed(assigned) or 'none, already theirs'}", flush=True)
     print(f"labelled {LABEL}: {listed(labelled) or 'none, already labelled'}", flush=True)

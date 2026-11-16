@@ -221,9 +221,11 @@ that carries the answer's label, so where a name is untrusted the planner never 
 names are still shaped, because a person's own tree can hold a hostile file too:
 
 - **A name is pictured, never passed on as written.** Every control character in it is replaced by
-  the Unicode picture for it, so `\n` reads as `␊`. Nothing is dropped, because a byte silently
-  removed is one nobody can tell was in the name, and a location silently removed is the false
-  negative [LSP-6](#LSP-6) exists to prevent.
+  a mark for it: U+0000 to U+001F by the Unicode picture for it, so `\n` reads as `␊`, DEL by `␡`
+  (U+2421), and each C1 control (U+0080 to U+009F) by `‹U+XXXX›`. Nothing is dropped, because a
+  byte silently removed is one nobody can tell was in the name, and a location silently removed is
+  the false negative [LSP-6](#LSP-6) exists to prevent. A name that holds the characters `‹U+0085›`
+  or `␡` itself draws the same as the control it spells.
 - **One location is one line.** A name may not end one, so a planner cannot read a name as a second
   location or as the notice [LSP-7](#LSP-7) writes.
 - **The count is capped, and the cap is said out loud** in [SEARCH-3](search.md#SEARCH-3)'s words.

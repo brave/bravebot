@@ -74,12 +74,49 @@ pub(super) fn choose_editing(
     session: &mut Session,
 ) {
     let wheel = session.wheel_rows();
-    let chosen = crate::config_prompt::choose(terminal, session.editing(), wheel, |frame| {
-        render::draw(frame, session);
-    });
+    let usage_ping = session.usage_ping();
+    let chosen =
+        crate::config_prompt::choose(terminal, session.editing(), usage_ping, wheel, |frame| {
+            render::draw(frame, session);
+        });
     session.end_a_pickers_press();
     if let Some(row) = chosen {
-        editing_picked(session, row.0);
+        config_picked(session, row);
+    }
+}
+
+/// Carry out the row picked from the panel of preferences.
+pub(super) fn config_picked(session: &mut Session, row: crate::config_prompt::Row) {
+    use crate::config_prompt::Row;
+    match row {
+        Row::Editing(editing) => editing_picked(session, editing),
+        Row::UsagePing(on) => usage_ping_picked(session, on),
+        Row::UsagePingLocked(why) => session.note(t!(
+            session_usage_ping_locked,
+            reason = crate::config_prompt::reason(why)
+        )),
+        Row::InForce { .. } => {}
+    }
+}
+
+/// Keep whether the person wants the usage ping, and say what is now in force.
+///
+/// Read back after saving rather than assumed, so a switch that was overruled while the panel was
+/// open says so instead of claiming the ping is on.
+fn usage_ping_picked(session: &mut Session, on: bool) {
+    session.choose_usage_ping(on);
+    let now = session.usage_ping();
+    if now.person_may_change() {
+        session.note(if now.is_on() {
+            t!(session_usage_ping_on)
+        } else {
+            t!(session_usage_ping_off)
+        });
+    } else {
+        session.note(t!(
+            session_usage_ping_locked,
+            reason = crate::config_prompt::reason(now)
+        ));
     }
 }
 
@@ -98,7 +135,7 @@ pub(super) fn editing_picked(session: &mut Session, editing: crate::vim::Editing
 /// Open the panel of preferences as a mode of the session, for a turn that is running.
 pub(super) fn open_editing_picker(session: &mut Session) {
     session.open_picking(crate::picking::Picking::Editing(
-        crate::config_prompt::Picker::new(session.editing()),
+        crate::config_prompt::Picker::new(session.editing(), session.usage_ping()),
     ));
 }
 

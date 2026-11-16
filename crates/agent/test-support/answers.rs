@@ -5,6 +5,7 @@ pub struct Answers {
     pub runs: Vec<RunRequest>,
     pub run: RunDecision,
     pub exposures: usize,
+    pub writes: Vec<WriteRequest>,
 }
 impl Answers {
     pub fn new(run: RunDecision) -> Self {
@@ -12,6 +13,7 @@ impl Answers {
             runs: Vec::new(),
             run,
             exposures: 0,
+            writes: Vec::new(),
         }
     }
 }
@@ -25,6 +27,7 @@ impl Confirmer for Answers {
         Decision::Approve
     }
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+        self.writes.push(request.clone());
         ApproveWrites.confirm_write(request)
     }
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {

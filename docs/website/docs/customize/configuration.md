@@ -104,6 +104,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
 | `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
 | `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
+| `~/.bravebot/sidebar` | the info panel sections turned off with `/sidebar`, one name a line |
 | `~/.bravebot/sessions-grouping` | how the [Sessions screen](../using/sessions-screen.md) lays out its list: `together`, `project`, `agent` or `model` |
 | `~/.bravebot/sessions-pinned` | the sessions pinned in the Sessions screen, one id a line |
 | `~/.bravebot/sessions-archived` | the sessions archived in the Sessions screen, each with the time it was archived |
@@ -243,7 +244,12 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | `BRAVEBOT_HOME` | the directory bravebot keeps its state in, in place of `~/.bravebot` ([below](#moving-the-state-directory)) |
 | `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](../security/sandbox.md#runscrubenv)) |
 
-Six more name an AWS account rather than this build. See
+Six more name an AWS account rather than this build, and two more state how patient a request to it is:
+`BRAVEBOT_BEDROCK_MAX_RETRIES`, how many times a request is sent again (at most 7, and `0` sends each
+request once), and `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`, how many milliseconds a reply may go quiet before
+it is given up on (at most 600000). They are the `maxRetries` and `idleTimeoutMs` of a
+[`provider` entry](providers/bedrock.md) for an account that has none. A value that is not a whole number, and a gap of `0`,
+states nothing. See
 [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock).
 
 To point a release build at a backend running locally:
@@ -252,24 +258,27 @@ To point a release build at a backend running locally:
 BRAVE_AI_CHAT_ENDPOINT=http://127.0.0.1:8000 bravebot doctor
 ```
 
-`BRAVEBOT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in any
-settings file and a choice made with `/model` both win over it, so this applies until somebody names
-one.
+`BRAVEBOT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in your own
+settings file or the file `--settings` names, and a choice made with `/model`, all win over it, so this applies until somebody names
+one. It is read from your own file and the file `--settings` names, and from no project or local file.
 
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
 
-**Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
-spelling: seven of the ten above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
+**Fifteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
+spelling: seven of the ten above, plus the six AWS ones and the two for retries and idle gap. The three exceptions are `BRAVEBOT_LOCALE`,
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB` and `BRAVEBOT_HOME`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Seventeen names are read from your own file and a `--settings` file outside the project, and from no
-project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
+Twenty names are read from your own file and the file `--settings` names, and from no
+project or local file: `BRAVEBOT_DEFAULT_MODEL`, because it chooses which of your configured
+services receives a conversation, the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
 `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
-because they choose the AWS account a conversation is sent through, and `BRAVE_AI_CHAT_ENDPOINT` and
+because they choose the AWS account a conversation is sent through, `BRAVEBOT_BEDROCK_MAX_RETRIES` and
+`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`, because a count or a gap a checkout raised would multiply the requests
+billed to your account or hold your turn on a dead connection, and `BRAVE_AI_CHAT_ENDPOINT` and
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, because they choose the host a conversation and a premium key are
 sent to. A build that carries an endpoint outranks your file, and a source build carries none.
 `bravebot doctor` reports one a project or local file names and the name decides nothing; see
@@ -310,29 +319,34 @@ one thing leaves everything else in force:
 | What | How the files combine |
 |---|---|
 | `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
-| `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
-| `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
+| `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
+| `run.scrubEnv` | your own file and the file `--settings` names, whose entries are kept together; a project or local file's list is ignored and reported, and the rest of its `run` block is read as before |
+| `permissions.allow` | your own file's entries, the file `--settings` names, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
-| `references` | your own file and a `--settings` file outside the project and its checkout; a project or local file's block, and a `--settings` file that resolves inside either, is ignored and reported, and a later file's block replaces an earlier one's |
+| `references` | your own file and the file `--settings` names; a project or local file's block is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
-| `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and a `--settings` file outside the project; a project or local file's are ignored and reported |
+| `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and the file `--settings` names; a project or local file's are ignored and reported |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
-| `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
-| `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
-| `askIdleSeconds` | your own file and a `--settings` file outside the project; a project or local file's is ignored and reported |
-| anything else | the closest file that set it wins |
+| `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and the file `--settings` names; a project or local file's are ignored and reported |
+| `git.identities` | your own file and the file `--settings` names, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
+| `askIdleSeconds`, `permissions.startInAuto` | your own file and the file `--settings` names; a project or local file's is ignored and reported, and a managed file's `permissions.startInAuto` is not read |
+| `limit` | your own file and the file `--settings` names; a project or local file may state one where you stated none, or lower yours in the same unit, and a value that removes yours, raises it or counts in the other unit is ignored and reported |
+| `updateCheck`, `deepLinks`, `suggestions`, `awaySummaryEnabled`, `tui.mouse`, `tui.contextMenu`, `deferMcpToolsAbove`, `promptCacheTtl` | your own file and the file `--settings` names decide them as they do `limit`: a project or local file may only move the key the safer way (turn the check, links, suggestions, the recap, the mouse or the menu off, lower the deferral size, ask for the `5m` cache lifetime) and a value that moves it the other way is ignored and reported |
+| anything else | the closest file that set it wins, in either direction: for example `effort`, `editorMode`, `terminalTitle`, `maxRunningDelegates`, `tui.wheelRows`, `search.maxFiles`, `run.maxOutput`, `run.maxSeconds` and `download.maxBytes` |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
 list under `permissions` as something other than an array, sets nothing there: the broader files'
 block or list stays in force. A `{"permissions": null}` in a checkout therefore cannot clear the
 `deny` and `ask` rules in your own file.
 
-The lists are the exception because an entry in one only ever takes something away: a name under
-`scrubEnv` withholds a variable from a program, and a `deny` or `ask` rule refuses or asks about
-something that was otherwise allowed. Overriding them would let a file closer to your work hand back
-what a broader one withheld, and a permission removed by a file you never opened is the outcome
-worth ruling out.
+The lists are the exception because an entry in one only ever takes something away: a `deny` or
+`ask` rule refuses or asks about something that was otherwise allowed. Overriding them would let a
+file closer to your work hand back what a broader one withheld, and a permission removed by a file
+you never opened is the outcome worth ruling out. `run.scrubEnv` is not in that group for a checkout:
+a name in it can also keep a restriction off a program, such as `npm_config_ignore_scripts` or
+`PYTHONSAFEPATH` in your environment, so only your own file and the file `--settings` names are read
+for it.
 
 `allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
 entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
@@ -341,9 +355,13 @@ write or a fetch on your behalf. Entries in those two files are instead **propos
 in the project lists them in one box with the file each came from, and only your yes puts them in
 force. The answer is kept per project in `~/.bravebot/granted/`, so you are asked once rather than at
 every launch, and a rule the project edits afterwards is asked about again. `bravebot doctor` names
-every such entry and says whether it is granted. A file `--settings` names is yours, since you typed
-the path, unless it resolves inside the project you are working in, or inside the git checkout holding it or a
-directory you moved out of, which makes it the checkout's file under another name.
+every such entry and says whether it is granted. A file `--settings` names is yours only where it sits
+outside the working directory, every directory the session has been in, and the checkout holding each
+of them (the nearest folder above with a `.git`). Inside any of those it is read as a project file, so
+its `allow` rules and its names for the keys above that only your own files may set are ignored and
+reported. A `.git` at your home directory makes everything under it a checkout, so a dotfiles
+repository there makes a `--settings` file beneath it a project file as well: keep it outside, or in
+`~/.bravebot/settings.json`.
 
 **The project files are read from the directory you started bravebot in, and from no directory above
 it.** Searching upward would make what configures a session depend on which directory you happened to
@@ -372,7 +390,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `limit` | the most tokens or premium requests a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
-| `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
+| `permissions` | which actions to refuse, and which to ask about ([below](#permissions)); `permissions.startInAuto` opens sessions in the auto mode ([below](#permissionsstartinauto)) |
 | `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([details](../security/sandbox.md#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([details](../security/sandbox.md#runnetwork)) |
@@ -400,6 +418,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `crashReports` | `false` stops crash reports being written and sent. Read from your own file only ([below](#crashreports)) |
+| `usagePing` | `false` stops the daily usage ping. Read from your own file only ([below](#usageping)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
@@ -746,9 +765,18 @@ default lifetime between turns pays to read the whole conversation again; the on
 that, and the providers charge a higher rate to write it. With the key absent, bravebot sends no
 lifetime and every service keeps its own default. Any other word names nothing and sends nothing.
 
+Your own `~/.bravebot/settings.json` and a file named with `--settings` may choose either lifetime. A
+project's `.bravebot/settings.json` or `settings.local.json` may ask for `5m` and cannot ask for
+`1h`, over your `5m` or where you chose nothing: that value is ignored and `bravebot doctor` names
+the file.
+
 A model that does not accept a lifetime refuses the request on it. That request is sent again with the
 lifetime removed and the cache breakpoints kept, and the model is not sent one again in that process.
 A model that does not accept breakpoints at all is handled as before.
+
+The lifetime also bounds one `job_output` wait. The request after a longer wait finds the cache gone, so
+the longest wait the agent may ask for is 30 seconds under the lifetime: 270 seconds where the key is
+absent or `5m`, and 10 minutes with `1h`.
 
 `/status` shows the lifetime the setting asks for under the cache figures of the last turn. It is the
 setting and not a measurement, so it reads the same after a model has refused the lifetime.
@@ -777,8 +805,12 @@ The most tokens or premium requests a session may spend before the terminal clie
 stop, to go on without a limit or to go on under a new one. A whole number of tokens, or a string with
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
 to count premium requests instead, one for each request that presents the premium key. A value that is
-none of these, and zero, sets no limit. The nearest settings file that names it wins, and
-[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
+none of these, and zero, sets no limit. In your own files the nearest file that names it wins, and
+[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. A project or
+local settings file can add a limit where you have none, or lower yours in the same unit, so a
+repository can ask for a smaller bound on its own sessions. It cannot remove your limit (with `null`,
+zero or a value that is no figure), raise it, or count in the other unit, and `bravebot doctor` names
+a file whose value was ignored. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
 
@@ -815,6 +847,11 @@ A `reader` or `checker` delegate, a delegate left with no server, and a run limi
 offered no `load_tool`.
 A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
 default. It lasts a turn, so a later turn loads again.
+
+A project's `.bravebot/settings.json` or `settings.local.json` may lower the size, or state one where
+your own `~/.bravebot/settings.json` and a file named with `--settings` state none. It cannot raise
+the size or remove it: a larger figure, or a value such as `0` or `null`, is ignored and
+`bravebot doctor` names the file.
 
 ### `retentionDays`
 
@@ -861,6 +898,10 @@ It needs a terminal that reports when it is left. `false` turns the automatic re
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
 
+A `.bravebot/settings.json` or `.bravebot/settings.local.json` in a checkout may turn the recap off,
+and cannot turn it on where your own `~/.bravebot/settings.json` turned it off. `bravebot doctor`
+names a checkout file whose `true` was ignored. The file named with `--settings` is read as your own.
+
 ### `awaySummaryIdleSeconds`
 
 ```json
@@ -888,12 +929,12 @@ The session says that a question was closed, and a question that closed is asked
 asks it again.
 
 A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves a
-question waiting. Only your own file and a `--settings` file outside the project set it: a
+question waiting. Only your own file and the file `--settings` names set it: a
 `.bravebot/settings.json` that arrived with a checkout is ignored and named by `bravebot doctor`,
 since a question closed on a clock is one you were not asked.
 
-It closes the agent's questions in the terminal interface only. A plan to approve, a spend limit and
-a repeated call always wait for you, and so do questions in a session started with `--plain`, in a
+It closes the agent's questions in the terminal interface only. A plan to approve and a spend limit
+always wait for you, and so do questions in a session started with `--plain`, in a
 background session, and in the desktop app.
 
 ### `notificationMethod` and `notificationCondition`
@@ -931,6 +972,11 @@ Any other key removes it. Each one is a request that costs tokens, charged to th
 by `/cost`. None is asked for in plan mode, in an incognito session or after a turn that failed or
 was stopped, and none is offered after an exchange that met content nobody vouched for. Only the boolean `true` turns it on.
 
+A project's `.bravebot/settings.json` or `settings.local.json` may state `false`, which keeps
+suggestions off for whoever runs bravebot in that directory. A `true` there is ignored, whether your
+own `~/.bravebot/settings.json` says `false` or says nothing, and `bravebot doctor` names the file.
+Only your own settings, or a file named with `--settings`, turn suggestions on.
+
 ### `terminalTitle`
 
 ```json
@@ -956,6 +1002,11 @@ installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` or `ins
 out, or delete `bravebot-handler.desktop` from `~/.local/share/applications` on Linux, or the
 `HKCU\Software\Classes\bravebot` registry key on Windows.
 
+A project's `.bravebot/settings.json` or `settings.local.json` may state `false`, which refuses links
+for whoever runs `--handle-uri` in that directory. A `true` there is ignored where your own
+`~/.bravebot/settings.json`, or a file named with `--settings`, says `false`, and `bravebot doctor`
+names the file.
+
 ### `tui.mouse`
 
 ```json
@@ -966,6 +1017,12 @@ out, or delete `bravebot-handler.desktop` from `~/.local/share/applications` on 
 and scrollback wheel then work as they do outside a session, and the session's own drag selection
 and wheel scrolling do not (use the keys and the scroller instead). Only the boolean `false` does
 this: `"false"` in quotes or any other value leaves capture on. Read when the session opens.
+
+A `.bravebot/settings.json` or `.bravebot/settings.local.json` in a checkout may turn capture off,
+and cannot turn it on where your own `~/.bravebot/settings.json` turned it off. `bravebot doctor`
+names a checkout file whose `true` was ignored. The file named with `--settings` is read as your
+own. The `tui` block combines key by key, so a checkout that sets only `tui.wheelRows` leaves your
+`tui.mouse` in force.
 
 While capture is on, most terminals still select natively if you hold a modifier while dragging:
 Shift on most, Option on macOS iTerm2 and Terminal.app. [The mouse](../using/transcript.md#the-mouse)
@@ -1021,6 +1078,10 @@ working, and a terminal that keeps the right click for a menu of its own, or tha
 as one, as macOS Terminal does, can then have it. Only the boolean `false` does this: `"false"` in
 quotes or any other value leaves the menu on. Read when the session opens.
 
+A checkout's settings file may turn the menu off, and cannot turn it on where your own
+`~/.bravebot/settings.json` turned it off. `bravebot doctor` names a checkout file whose `true` was
+ignored. The file named with `--settings` is read as your own.
+
 ### `tui.wheelRows`
 
 ```json
@@ -1060,6 +1121,10 @@ same, for a machine where updates are managed elsewhere, and either one is enoug
 `false` and the value `0` turn it off. It does not affect the installer's checksum and signature
 checks.
 
+A `.bravebot/settings.json` or `.bravebot/settings.local.json` in a checkout may turn the check off,
+and cannot turn it on where your own `~/.bravebot/settings.json` turned it off. `bravebot doctor`
+names a checkout file whose `true` was ignored. The file named with `--settings` is read as your own.
+
 ### `crashReports`
 
 ```json
@@ -1088,9 +1153,42 @@ sends none. The terminal says once, on the startup screen, that reports are sent
 application does not, so this page and the README are where it is said for that. See
 [Crash reports](../security/security.md#crash-reports) for what leaves the process.
 
+### `usagePing`
+
+```json
+{ "usagePing": false }
+```
+
+Once a UTC day bravebot sends Brave one request saying that a copy of it ran, so that Brave can count
+how many people use each release. It holds the operating system, the version, how bravebot was
+installed, whether the launch was the terminal, the desktop app or a command line run, the kind of
+model service it starts with, whether you hold a premium key, four flags saying whether this is the
+first ping today, this week, this month and ever, and the Monday of the week of your first ping. It
+never holds your prompts, files, keys, paths, host name, model names or an identifier. See
+[The usage ping](../security/usage-ping.md) for an example request.
+
+The ping is on, and `false` turns it off. So do any of these, and any one is enough:
+
+- the switch in `/config`, or **Settings → General → Privacy** in the desktop app, which both write
+  `~/.bravebot/usage-ping`;
+- the environment variable `BRAVEBOT_USAGE_PING=0`;
+- the environment variable `DO_NOT_TRACK` set to anything but an empty value, `0` or `false`;
+- `"usagePing": false` in the [managed file](managed-settings.md), which no person's setting overrides.
+
+Only the boolean `false` turns it off here, and nothing turns it back on over another: a `true` in
+this file does not undo the switch. Only your own `~/.bravebot/settings.json` and the managed file are
+read for this key, so a checkout's `.bravebot/settings.json` cannot turn it off or on. Nothing is sent
+before bravebot has told you about the ping once, in the terminal, on standard error for `-p`,
+`--plain` and `bravebot acp`, or in the desktop app's sidebar. A session started with `--incognito`
+sends none.
+
+`BRAVEBOT_USAGE_PING_URL` sends the ping to another server instead, so you can see exactly what is
+sent. A build from source sends nothing unless it is set.
+
 ### `run.scrubEnv`
 
-Variables to withhold from a program the agent runs. See [Sandbox settings](../security/sandbox.md#runscrubenv).
+Variables to withhold from a program the agent runs. Only your own file and the file `--settings`
+names are read for it. See [Sandbox settings](../security/sandbox.md#runscrubenv).
 
 ### `run.network`
 
@@ -1136,7 +1234,7 @@ means the key belongs to another account, and that only you choose the key. It t
 an entry and does not retry the same push.
 
 On the commands it applies to it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` of
-yours. Your own file and a `--settings` file outside the project may write it; a project or local
+yours. Your own file and the file `--settings` names may write it; a project or local
 file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and a key it would not
 lend: a path that is not a regular `*.pub` file, one inside another credential location such as
 `~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
@@ -1281,7 +1379,7 @@ a path no rule covers; these two state a standing refusal instead, and are descr
 [two refusals you do not have to enumerate](#two-refusals-you-do-not-have-to-enumerate) below.
 
 `deny` and `ask` work from any of the files. `allow` works from `~/.bravebot/settings.json` and from
-a `--settings` file outside your project; a project's own entries are proposed to you in a box when
+the file `--settings` names; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
 A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
@@ -1302,7 +1400,12 @@ step's program and arguments.
 its subdomains, and never `notexample.com`: the boundary is a label boundary. There is no URL-prefix
 form, since a rule matching a path would be answering a different question on every call. What a
 matching rule decides for a fetch, and what it does not, is
-[`fetch_url`](../reference/tools.md#fetch_url).
+[`fetch_url`](../reference/tools.md#fetch_url). A domain rule naming an address covers that address
+however it is spelled, so `WebFetch(domain:127.0.0.1)` covers `[::ffff:127.0.0.1]` and
+`2130706433`. A rule on a name with a letter outside ASCII also covers its ASCII form, so
+`WebFetch(domain:bücher.example)` covers `xn--bcher-kva.example`. A domain that is not a host, such
+as `example.com:443` or one holding a character outside ASCII that is not a letter or a digit, is
+reported as unreadable.
 
 **`deny`, then `ask`, then `allow`, and the first match decides.** Specificity does not enter into
 it: a broad deny beats a narrow allow, and a matching `ask` rule prompts even where a more specific
@@ -1394,8 +1497,9 @@ relative name means a path under the workspace. See
 
 `defaultMode` is parsed so that a file carrying it is not rejected, and **acted on by nothing**: if
 you wrote `acceptEdits` you get the prompts you would have got without it. The modes it names do
-exist. Shift-Tab and `--dangerously-skip-permissions` are what choose one. See
-[modes](../security/permission-modes.md).
+exist. Shift-Tab, `--dangerously-skip-permissions`, `--auto` and
+[`permissions.startInAuto`](#permissionsstartinauto) are what choose one, and the last chooses only
+auto. See [modes](../security/permission-modes.md).
 
 **An unreadable rule is dropped, named, and takes nothing with it.** A line that is not a rule, names
 no family, or has an anchor that cannot be resolved is reported by `doctor` and in the session where
@@ -1430,6 +1534,39 @@ nothing away from you.
 parent holds whatever was refused beside the old directory, and allowing the move back would allow
 every move outward. To work above where you are, start a session there. It is read when the session
 opens, so one that moves into a checkout asking for it is confined from the next session there.
+
+#### `permissions.startInAuto`
+
+```json
+{ "permissions": { "startInAuto": true } }
+```
+
+`true` opens every interactive session in the [auto mode](../security/permission-modes.md#auto), where
+a classifier answers a command the sandbox confines and the first fetch of a URL, and writes go
+through unasked. Without the key a session opens asking, which is also what `false` does. It applies
+to a new session, to `--resume`, `--continue`, `--fork` and `--from-pr`, to the next session after an
+in-process `/resume`, and to the desktop application's new, opened and forked sessions. It does not
+apply to a one-shot run (`-p`), `--plain`, a background session, a scheduled run, a trigger,
+`skill eval`, a session an editor opens over ACP, one a local-host client opens, or one a
+`bravebot://open` link starts, all of which open asking. A session in auto cannot be moved to the background with `/bg`: the command is
+refused until you leave the mode.
+
+**Only your own file and the file `--settings` names are read for it.** A project or local file that
+names it has the key removed and `bravebot doctor` and the desktop settings view name the file, so a
+repository you cloned cannot choose who answers your prompts. An administrator's
+[managed file](managed-settings.md) does not set it either: a copy there is not read, and `doctor`
+says so. Only the boolean `true` opens a session in auto. `"true"` in quotes, a number and `null` leave
+sessions asking, and nothing reports them.
+
+**A flag on the line wins.** `--dangerously-skip-permissions` opens the session in bypassing whatever
+the key says, and `--auto` opens it in auto when the key is `false`. `--accept-edits` is refused on a
+line that starts a session, as before.
+
+**To get back to asking,** press Shift-Tab. From auto it goes to bypassing first, where that is
+reachable, and one more press goes to asking. Where a file you can see set
+[`bypassUnreachable`](#two-refusals-you-do-not-have-to-enumerate) it goes straight to asking. In the
+desktop application the mode shortcut goes from auto to asking. To stop opening sessions in auto,
+remove the key or set it to `false`.
 
 ### `attribution`
 

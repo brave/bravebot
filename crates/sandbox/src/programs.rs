@@ -602,6 +602,70 @@ fn withhold_home_a_stage_may_write(
     }
 }
 
+/// Where Python's per-user site directory is kept when `PYTHONUSERBASE` does not move it: the
+/// variable that names the account's directory and the paths under it that hold the user base. The
+/// site is the `lib/` tree inside, where `usercustomize.py` and `.pth` files make the interpreter
+/// run code at start. A framework build on macOS uses `Library/Python` and any other build uses
+/// `.local`, so both are judged there.
+const USER_BASE_UNDER: (&str, &[&str]) = if cfg!(windows) {
+    ("APPDATA", &["Python"])
+} else if cfg!(target_os = "macos") {
+    ("HOME", &["Library/Python", ".local"])
+} else {
+    ("HOME", &[".local"])
+};
+
+/// Whether a stage may write the directory Python reads its per-user site from, judged for a
+/// program started with `held` as its environment.
+///
+/// A `PYTHONUSERBASE` that [`may_be_run`] keeps names a directory outside every directory a stage
+/// may write, and is the one used. Where it is unset, or a checked start removes it, Python uses
+/// the default under the account's directory, which is judged as `HOME` is for a shim: the
+/// directory itself and the nearest existing path under it ([`under_home_outside_stage_writable`]).
+/// An account directory the environment does not hold, or a relative one, cannot be judged and
+/// counts as writable. Only names and paths decide this ([SANDBOX-30]).
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md#SANDBOX-30
+pub fn python_user_site_may_be_written(
+    held: &[(OsString, OsString)],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    let value_of = |wanted: &str| {
+        held.iter()
+            .find(|(name, _)| is_variable(name, wanted))
+            .map(|(_, value)| Path::new(value))
+    };
+    if value_of("PYTHONUSERBASE")
+        .is_some_and(|base| may_be_run(Names::Directory, base, outside_stage_writable))
+    {
+        return false;
+    }
+    let (variable, under) = USER_BASE_UNDER;
+    let Some(account) = value_of(variable) else {
+        return true;
+    };
+    !(may_be_run(Names::Directory, account, outside_stage_writable)
+        && under_home_outside_stage_writable(account, under, outside_stage_writable))
+}
+
+/// Set `PYTHONNOUSERSITE=1` on `command` when a stage may write Python's per-user site directory
+/// ([`python_user_site_may_be_written`]), and leave the environment alone otherwise.
+///
+/// For a started program that runs Python and reads `usercustomize.py` and `.pth` files from the
+/// user site (`aws`, `gcloud`). `PYTHONNOUSERSITE` has no path to judge, so it is not a
+/// [`CODE_SELECTORS`] entry: it is set here, after [`start_against`] has settled the environment.
+/// It is not set when the directory is one no stage may write, since it also turns off packages a
+/// person installed with `pip install --user`, which an `aws` installed that way needs.
+pub fn python_user_site_off_when_writable(
+    command: &mut Command,
+    held: &[(OsString, OsString)],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) {
+    if python_user_site_may_be_written(held, outside_stage_writable) {
+        command.env("PYTHONNOUSERSITE", "1");
+    }
+}
+
 /// Whether each of the paths `under` `home` is outside the directories a stage may write.
 ///
 /// A session opened on `~/.config` or `~/.pyenv` has no row for `HOME` itself, so `HOME` alone
@@ -667,8 +731,8 @@ pub fn outside_stage_writable_with(
 
 /// What a variable that selects code to run names.
 ///
-/// The variables of one program are listed with the kind each names, and
-/// [`withhold_code_selectors`] applies [`may_be_run`] to each
+/// The variables of one program are listed with the kind each names, and a
+/// [`CodeSelectors::Checked`] start applies [`may_be_run`] to each
 /// ([PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Names {
@@ -689,6 +753,15 @@ pub enum Names {
     /// [`Names::Program`] is, alone or followed by ` %s`. An entry with another word, a quote or a
     /// character a shell reads fails the list, since it can run what a file name alone could not.
     Commands,
+    /// A D-Bus address, such as `DBUS_SESSION_BUS_ADDRESS`: entries joined with `;`, each
+    /// `transport:key=value,key=value`. An entry is accepted only as `unix:path=<absolute path>`
+    /// with the path outside every directory a stage may write, or `unix:runtime=yes`, which names
+    /// the bus under `XDG_RUNTIME_DIR`, a variable judged on its own. The `guid` key is allowed. Any
+    /// other transport or key fails the value, as does a repeated key and a `%` in a value, which a
+    /// D-Bus library unescapes into a path this check did not see. `unix:abstract=` is not on disk,
+    /// so no directory is outside it, and `tcp:` can be listened on by anyone who can reach the
+    /// host.
+    BusAddress,
     /// Options for the program or its interpreter, such as `CLOUDSDK_PYTHON_ARGS`. They name no path
     /// to check: `-c <code>` and `-m <module>` run code whatever directory they are in.
     ///
@@ -706,7 +779,10 @@ pub enum Names {
 /// made by whoever writes it first.
 ///
 /// A [`Names::Directories`] value is split on the path separator and passes only when it has an
-/// entry and every entry passes as a [`Names::Directory`]. [`Names::Options`] never passes.
+/// entry and every entry passes as a [`Names::Directory`]. A [`Names::Commands`] value passes when
+/// every entry is one program alone or with a placeholder, and a [`Names::BusAddress`] value when
+/// every entry is a socket outside the directories a stage may write. [`Names::Options`] never
+/// passes. A value that is not text never passes as commands or a bus address.
 pub fn may_be_run(
     names: Names,
     value: &Path,
@@ -744,7 +820,47 @@ pub fn may_be_run(
                         && may_be_run(Names::Program, Path::new(program), outside_stage_writable)
                 })
         }
+        Names::BusAddress => {
+            let Some(value) = value.to_str() else {
+                return false;
+            };
+            !value.is_empty()
+                && value
+                    .split(';')
+                    .all(|entry| bus_entry_is_outside(entry, outside_stage_writable))
+        }
         Names::Options => false,
+    }
+}
+
+/// Whether one `transport:key=value,...` entry of a D-Bus address is a socket outside every
+/// directory a stage may write. See [`Names::BusAddress`].
+fn bus_entry_is_outside(entry: &str, outside_stage_writable: &impl Fn(&Path) -> bool) -> bool {
+    let Some(("unix", keys)) = entry.split_once(':') else {
+        return false;
+    };
+    let mut path = None;
+    let mut runtime = false;
+    let mut seen: Vec<&str> = Vec::new();
+    for pair in keys.split(',') {
+        let Some((key, value)) = pair.split_once('=') else {
+            return false;
+        };
+        if value.contains('%') || seen.contains(&key) {
+            return false;
+        }
+        seen.push(key);
+        match key {
+            "path" => path = Some(Path::new(value)),
+            "runtime" if value == "yes" => runtime = true,
+            "guid" => {}
+            _ => return false,
+        }
+    }
+    match (path, runtime) {
+        (Some(path), false) => path.is_absolute() && outside_stage_writable(path),
+        (None, true) => true,
+        _ => false,
     }
 }
 
@@ -782,23 +898,10 @@ pub mod selectors {
     pub const QT_PLUGIN_PATH: (&str, Names) = ("QT_PLUGIN_PATH", Names::Directories);
 }
 
-/// Take each variable in `selectors` off the environment `command` is started with unless
-/// [`may_be_run`] accepts the value this process holds for it. A variable this process does not
-/// hold is left alone, and so is every name not listed.
-///
-/// For a command built by [`start`], which is what hands it the rest of the environment.
-pub fn withhold_code_selectors(command: &mut Command, selectors: &[(&str, Names)]) {
-    withhold_code_selectors_with(
-        command,
-        selectors,
-        |name| std::env::var_os(name),
-        outside_stage_writable,
-    );
-}
-
-/// [`withhold_code_selectors`] against a given environment and a given judgment of which files are
-/// outside the directories a stage may write.
-pub fn withhold_code_selectors_with(
+/// Take each variable in `selectors` off `command` unless [`may_be_run`] accepts the value `held`
+/// gives for it, judged with `outside_stage_writable`. A variable `held` gives no value for is left
+/// alone, and so is every name not listed.
+fn withhold_code_selectors_with(
     command: &mut Command,
     selectors: &[(&str, Names)],
     held: impl Fn(&str) -> Option<OsString>,
@@ -3351,6 +3454,68 @@ mod tests {
         }));
     }
 
+    /// SANDBOX-30. The regression it rejects: a D-Bus address judged as a file (a socket is not a
+    /// regular file, so every address would be removed), as options (the same), or by its text
+    /// without the path, so `unix:path=/stage/bus` is kept; or an entry the check cannot place
+    /// kept, such as an abstract socket, a `tcp:` address, a `%`-escaped path, a repeated `path` or
+    /// one entry of a `;` list that is a stage's.
+    #[cfg(unix)]
+    #[test]
+    fn a_bus_address_holds_only_when_every_entry_is_a_socket_outside_the_stage() {
+        let outside = |path: &Path| path.starts_with("/safe");
+        let judged = |value: &str| may_be_run(Names::BusAddress, Path::new(value), &outside);
+
+        assert!(judged("unix:path=/safe/run/bus"));
+        assert!(judged("unix:path=/safe/run/bus,guid=0123abcd"));
+        assert!(judged("unix:guid=0123abcd,path=/safe/run/bus"));
+        assert!(judged("unix:runtime=yes"));
+        assert!(judged("unix:path=/safe/a;unix:path=/safe/b"));
+
+        assert!(!judged("unix:path=/stage/run/bus"));
+        assert!(!judged("unix:path=/safe/a;unix:path=/stage/b"));
+        assert!(!judged("unix:path=bus"));
+        assert!(!judged("unix:path=/safe/%2e%2e/stage/bus"));
+        assert!(!judged("unix:path=/safe/a,path=/stage/b"));
+        assert!(!judged("unix:path=/safe/a,runtime=yes"));
+        assert!(!judged("unix:runtime=no"));
+        assert!(!judged("unix:abstract=/tmp/dbus-x"));
+        assert!(!judged("unix:dir=/safe/run"));
+        assert!(!judged("unix:tmpdir=/safe"));
+        assert!(!judged("tcp:host=localhost,port=1"));
+        assert!(!judged("launchd:env=DBUS_LAUNCHD_SESSION_BUS_SOCKET"));
+        assert!(!judged("unix:"));
+        assert!(!judged("unix"));
+        assert!(!judged(""));
+        assert!(!judged("unix:path=/safe/a;"));
+        assert!(!may_be_run(
+            Names::BusAddress,
+            Path::new("unix:path=/safe/a"),
+            &|_| false
+        ));
+    }
+
+    /// SANDBOX-30. The regression it rejects: a bus address that is not text judged by its lossy
+    /// rendering, so `unix:path=/safe/run/bus` followed by a byte that is not UTF-8 is read as a
+    /// path under `/safe` and kept. The same text with the replacement character written out is a
+    /// path of its own, and is kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering() {
+        use std::os::unix::ffi::OsStrExt;
+        let outside = |path: &Path| path.starts_with("/safe");
+
+        assert!(!may_be_run(
+            Names::BusAddress,
+            Path::new(OsStr::from_bytes(b"unix:path=/safe/run/bus\xff")),
+            &outside
+        ));
+        assert!(may_be_run(
+            Names::BusAddress,
+            Path::new("unix:path=/safe/run/bus\u{fffd}"),
+            &outside
+        ));
+    }
+
     /// SANDBOX-30. The regression it rejects: a `BROWSER` judged as one program name, so
     /// `firefox %s` or `a:b` is refused, or judged only by its first entry or its first word, so
     /// `firefox:/stage/x`, `firefox --new-window`, `sh -c x` or `$(x)` is kept and `xdg-open` runs
@@ -3415,5 +3580,154 @@ mod tests {
             assert!(judged("fire\u{fffd}ox"));
             assert!(judged("/safe/bin/fire\u{fffd}ox %s"));
         }
+    }
+
+    /// `python_user_site_may_be_written` for a start holding `held`, when `session` is the one
+    /// directory a stage may write.
+    #[cfg(unix)]
+    fn user_site_writable(held: &[(&str, &Path)], session: &Path) -> bool {
+        let row = session.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let held: Vec<(OsString, OsString)> = held
+            .iter()
+            .map(|(name, value)| (OsString::from(name), value.as_os_str().to_os_string()))
+            .collect();
+        python_user_site_may_be_written(&held, &|file: &Path| {
+            outside_stage_writable_with(file, rows, &[])
+        })
+    }
+
+    /// SANDBOX-30. The regression it rejects: judging only whether `HOME` itself is outside the
+    /// directories a stage may write, so a `HOME` outside them passes while `~/.local`, where Python
+    /// reads `usercustomize.py` and `.pth` files from, is a link into one. A `HOME` with no such
+    /// directory is judged by `HOME`, so one a stage may not write is not reported as writable.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_site_is_writable_when_home_or_what_it_reads_under_home_is_a_stage_directory() {
+        let session = scratch_dir("programs-usersite-home-session");
+        let safe = scratch_dir("programs-usersite-home-safe");
+        let home = scratch_dir("programs-usersite-home-home");
+
+        assert!(user_site_writable(&[("HOME", &session)], &session));
+        assert!(!user_site_writable(&[("HOME", &safe)], &session));
+        assert!(!user_site_writable(&[("HOME", &home)], &session));
+        std::fs::create_dir_all(home.join(".local")).unwrap();
+        assert!(!user_site_writable(&[("HOME", &home)], &session));
+        std::fs::remove_dir_all(home.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&session, home.join(".local")).unwrap();
+        assert!(user_site_writable(&[("HOME", &home)], &session));
+    }
+
+    /// SANDBOX-30. The regression it rejects: reading no `HOME` as a directory no stage may write,
+    /// or a relative `HOME` as one, so the interpreter's user site is left on when nothing says
+    /// where it is.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_site_is_writable_when_the_home_is_not_held_or_not_absolute() {
+        let session = scratch_dir("programs-usersite-nohome-session");
+
+        assert!(user_site_writable(&[], &session));
+        assert!(user_site_writable(&[("HOME", Path::new("home"))], &session));
+    }
+
+    /// SANDBOX-30. The regression it rejects: ignoring `PYTHONUSERBASE`, so a user base a person
+    /// moved outside every stage directory is switched off for a `HOME` a stage may write, or one a
+    /// stage may write is judged as if the start kept it, when the start removes it and Python
+    /// falls back to `~/.local`.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_base_variable_decides_only_when_a_start_keeps_it() {
+        let session = scratch_dir("programs-usersite-base-session");
+        let safe = scratch_dir("programs-usersite-base-safe");
+        let home = scratch_dir("programs-usersite-base-home");
+        let planted = session.join("base");
+
+        assert!(!user_site_writable(
+            &[("HOME", &session), ("PYTHONUSERBASE", &safe)],
+            &session
+        ));
+        assert!(user_site_writable(
+            &[("HOME", &session), ("PYTHONUSERBASE", &planted)],
+            &session
+        ));
+        assert!(!user_site_writable(
+            &[("HOME", &home), ("PYTHONUSERBASE", &planted)],
+            &session
+        ));
+        assert!(user_site_writable(
+            &[("HOME", &session), ("PYTHONUSERBASE", Path::new("base"))],
+            &session
+        ));
+    }
+
+    /// SANDBOX-30: the account's directory and `PYTHONUSERBASE` are judged by the bytes of their
+    /// values, and the directory named by a lossy rendering of a value is another one
+    /// ([PATH-003]). The stage directory's name is not text, and a directory named by its lossy
+    /// rendering is not a stage directory. The regression it rejects is judging a value through
+    /// `to_string_lossy`, which reads each stage directory below as its lookalike and each
+    /// lookalike as the stage directory.
+    ///
+    /// [PATH-003]: ../../../docs/best-practices/paths.md
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_user_site_is_judged_by_the_bytes_of_home_and_the_user_base_and_not_by_their_lossy_lookalikes()
+     {
+        use std::os::unix::ffi::OsStrExt;
+        let parent = scratch_dir("programs-usersite-bytes");
+        let session = parent.join(OsStr::from_bytes(b"w\xff"));
+        let lookalike = parent.join("w\u{FFFD}");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&lookalike).unwrap();
+
+        // `HOME` is the directory a stage may write, or the directory named by its lossy rendering.
+        assert!(user_site_writable(&[("HOME", &session)], &session));
+        assert!(!user_site_writable(&[("HOME", &lookalike)], &session));
+
+        // `HOME` is outside every stage directory and `.local`, where the user site is, leads into
+        // one, so the path under `HOME` decides. The home whose name is its lookalike has a
+        // `.local` of its own that a stage may not write.
+        let home = parent.join(OsStr::from_bytes(b"h\xff"));
+        let home_lookalike = parent.join("h\u{FFFD}");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(home_lookalike.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&session, home.join(".local")).unwrap();
+        assert!(user_site_writable(&[("HOME", &home)], &session));
+        assert!(!user_site_writable(&[("HOME", &home_lookalike)], &session));
+
+        // `PYTHONUSERBASE` with no `HOME` held: a base that is a stage directory is not kept, so
+        // the account's directory decides and, not being held, counts as writable. The base named
+        // by the lossy rendering is outside every stage directory and is kept.
+        assert!(user_site_writable(
+            &[("PYTHONUSERBASE", &session)],
+            &session
+        ));
+        assert!(!user_site_writable(
+            &[("PYTHONUSERBASE", &lookalike)],
+            &session
+        ));
+    }
+
+    /// The regression it rejects: setting `PYTHONNOUSERSITE` for every start, which turns off the
+    /// packages a person installed with `pip install --user`, or never setting it.
+    #[cfg(unix)]
+    #[test]
+    fn the_user_site_is_turned_off_only_for_a_start_whose_user_site_a_stage_may_write() {
+        let session = scratch_dir("programs-usersite-env-session");
+        let safe = scratch_dir("programs-usersite-env-safe");
+        let row = session.clone();
+        let rows = std::slice::from_ref(&row);
+        let sets_it = |home: &Path| {
+            let held = vec![(OsString::from("HOME"), home.as_os_str().to_os_string())];
+            let mut command = Command::new("/usr/bin/true");
+            python_user_site_off_when_writable(&mut command, &held, &|file: &Path| {
+                outside_stage_writable_with(file, rows, &[])
+            });
+            command
+                .get_envs()
+                .any(|(name, value)| name == "PYTHONNOUSERSITE" && value == Some(OsStr::new("1")))
+        };
+
+        assert!(sets_it(&session));
+        assert!(!sets_it(&safe));
     }
 }

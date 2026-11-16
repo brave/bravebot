@@ -225,17 +225,52 @@ impl Workspace {
     }
 
     fn confines_as(&self, path: &Path, write: Option<bool>) -> Result<(), WorkspaceError> {
-        let escapes = || WorkspaceError::Escapes {
+        let escapes = |remedy| WorkspaceError::Escapes {
             path: path.display().to_string(),
-            remedy: Remedy::Nothing,
+            remedy,
         };
-        let resolved = destination(path).ok_or_else(escapes)?;
-        if (self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write))
-            && !self.in_the_stores(&resolved)
-        {
+        let resolved = destination(path).ok_or_else(|| escapes(Remedy::Nothing))?;
+        if self.in_the_stores(&resolved) {
+            return Err(escapes(Remedy::Nothing));
+        }
+        if self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write) {
             return Ok(());
         }
-        Err(escapes())
+        Err(escapes(self.remedy_for_destination(path, &resolved)))
+    }
+
+    /// What a person can do so that `path`, which lands on `resolved` outside every opened
+    /// directory, is reached: the remedy the file tools give for an absolute path
+    /// ([`Workspace::remedy_outside`]), since the destination is tested where it lands and opening
+    /// that directory makes the same path pass (TRUST-10, CMDLINE-5).
+    ///
+    /// [`Remedy::Nothing`] where the path, with each `..` taken out of the text, is written inside
+    /// the root or an opened directory and still lands outside them: a link carries it out, and the
+    /// directory a sentence would name is not the one the path is written in. Also where a `..`
+    /// climbs off the top of the file system, which the kernel reads as the top itself, or the path
+    /// lands on a name that is not UTF-8, which a sentence cannot spell, as the file tools do.
+    /// Decided from the path the line spelled and where the file system says it leads, never from
+    /// what a file holds.
+    fn remedy_for_destination(&self, path: &Path, resolved: &Path) -> Remedy {
+        if resolved.to_str().is_none() {
+            return Remedy::Nothing;
+        }
+        let mut written = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::ParentDir => {
+                    if !written.pop() {
+                        return Remedy::Nothing;
+                    }
+                }
+                Component::CurDir => {}
+                other => written.push(other),
+            }
+        }
+        if self.lands_in_reach(&written) {
+            return Remedy::Nothing;
+        }
+        self.remedy_outside(resolved)
     }
 
     /// Other names of the file something else opens at the absolute `path`, spelled as
@@ -249,10 +284,19 @@ impl Workspace {
     /// everything is followed, as [`Workspace::confines`] tests it, which is the only name there is
     /// where a `..` leaves a link.
     pub(crate) fn names_reached(&self, path: &Path) -> Vec<String> {
+        self.paths_reached(path)
+            .iter()
+            .map(|reached| self.relative_display(reached))
+            .collect()
+    }
+
+    /// The paths [`Workspace::names_reached`] spells, before they are spelled. A caller that
+    /// decides on a name checks each with `to_str` first, since the spelling of one that is not
+    /// UTF-8 is the name of a different file (PATH-001).
+    pub(crate) fn paths_reached(&self, path: &Path) -> Vec<PathBuf> {
         self.climbed(path)
             .into_iter()
             .chain(destination(path))
-            .map(|reached| self.relative_display(&reached))
             .collect()
     }
 
@@ -360,6 +404,12 @@ impl Workspace {
         within_stores(&self.stores, resolved)
     }
 
+    /// The stores [`Self::in_the_stores`] asks about, for a mark of the tree taken after this
+    /// borrow of the workspace has ended (a background job's, GROUND-1).
+    pub(crate) fn stores(&self) -> &[std::path::PathBuf] {
+        &self.stores
+    }
+
     /// Stand in for the state directory, so a test does not depend on whose machine it runs on.
     #[cfg(test)]
     #[must_use]
@@ -409,10 +459,12 @@ impl Workspace {
     }
 
     /// Stand in for the environment's home directory, so a test does not depend on whose machine
-    /// it runs on.
-    #[cfg(test)]
+    /// it runs on. The directory set is what every leading `~` stands for, what a `~` in a shared
+    /// skill directory resolves against (INSTR-17), and what the refusal of a credential location
+    /// in `/add-dir` reads (SANDBOX-18).
+    #[doc(hidden)]
     #[must_use]
-    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
         self
     }
@@ -474,8 +526,9 @@ impl Workspace {
     ///
     /// A permission rule is written about a file (PERM-7), and a name reaches the file it lands on
     /// by more routes than its own spelling: a symbolic link, a case variant on a volume that
-    /// ignores case, an 8.3 short name. `None` where the name lands on itself, and where
-    /// [`Workspace::resolve`] refuses it. A file tool resolves the name and so refuses it on its
+    /// ignores case, an 8.3 short name. `None` where the name lands on itself, where it lands on a
+    /// name that is not text, which a lossy spelling would give the rules of its lookalike
+    /// (PATH-003), and where [`Workspace::resolve`] refuses it. A file tool resolves the name and so refuses it on its
     /// own; a path something else opens has to be held to [`Workspace::confines`] and
     /// [`Workspace::refuse_misleading`] instead.
     ///
@@ -483,7 +536,9 @@ impl Workspace {
     /// rules a second question, so the answer can add a refusal or an approval and can never
     /// remove one.
     pub(crate) fn landing(&self, named: &str) -> Option<String> {
-        let landed = self.relative_display(&self.resolve(named).ok()?);
+        let resolved = self.resolve(named).ok()?;
+        resolved.to_str()?;
+        let landed = self.relative_display(&resolved);
         let typed = Path::new(named)
             .components()
             .filter(|component| !matches!(component, Component::CurDir));

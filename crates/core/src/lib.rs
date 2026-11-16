@@ -14,11 +14,22 @@
 
 #![forbid(unsafe_code)]
 
+// Verus reads this crate as it is (docs/development/verification.md). A contract is a
+// `verus_spec` attribute behind `cfg_attr(verus_keep_ghost, ...)`, which only Verus sets, so a
+// build without Verus compiles none of it.
+#[cfg(verus_keep_ghost)]
+#[allow(
+    unused_imports,
+    reason = "Verus requires its prelude in the crate root"
+)]
+use vstd::prelude::*;
+
 pub mod ambient;
 pub mod ask;
 pub mod cancel;
 mod canonical;
 pub mod capability;
+pub mod colour_codes;
 pub mod command;
 pub mod credentials;
 pub mod delegate;
@@ -35,6 +46,7 @@ pub mod policy;
 pub mod processor;
 pub mod programs;
 pub mod protected;
+mod punycode;
 pub mod pure;
 pub mod reference;
 pub mod remembered;
@@ -43,6 +55,8 @@ pub mod selector;
 #[path = "../../ui-files/src/short_name.rs"]
 mod short_name;
 pub mod slot;
+#[cfg(verus_keep_ghost)]
+mod spec;
 pub mod spelling;
 pub mod todo;
 pub mod tool_set;

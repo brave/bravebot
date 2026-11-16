@@ -49,8 +49,10 @@ ordinary file, read only when something asks for it by name, or when the source 
 system. On a volume that does not tell upper and lower case apart, such as the default one on macOS
 and Windows, a page called `docs/agents.md` can be opened as `docs/AGENTS.md`, but it is still an
 ordinary file: it is not loaded, it adds nothing to the system prompt, and you are not told it is
-large. Rename it to `AGENTS.md` to make it instructions. The same holds for a skill: a directory
-holding `skill.md` is not a skill, and `SKILL.md` must be spelled that way.
+large. Rename it to `AGENTS.md` to make it instructions. A rule the planner proposes for every
+project is not written to a `~/.bravebot/agents.md` either ([Memory](memory.md#rules)). The same
+holds for a skill: a directory holding `skill.md` is not a skill, and `SKILL.md` must be spelled
+that way.
 
 **A project's skills are read from three directories, at the project root only.**
 `.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
@@ -241,11 +243,13 @@ run a command to learn them:
 | Working directory | The absolute path of the workspace root |
 | Is a git repository | Whether this tree or a directory above it holds a `.git` |
 | GitHub CLI (gh) on PATH | Whether `gh` is installed, looked up on `$PATH` the way a `run` would |
+| Jenkins CLI (jk) on PATH | Whether `jk` is installed, looked up the same way |
 | Platform | `macos`, `linux`, or whatever this build runs on |
 | OS version | The kernel release string on Unix, as `uname` reports it. On Windows, the three numbers a build is named by |
 | Shell | `$SHELL`, or `/bin/sh` when that is unset or empty |
 | Today's date | The current UTC date, as `YYYY-MM-DD` |
 | Scratch directory | The directory this session has to itself, on the sessions that have one |
+| Front end | One sentence naming the terminal client, the desktop app, or an editor that hosts the session, set by the program you started it from. Not stated for a one-shot or goal run |
 
 :::caution[These lines are sent to the model with every request]
 The working directory is an absolute path, so on most machines it contains your username, and the
@@ -274,7 +278,7 @@ is followed and the next turn states where the session went.
 
 ### The scratch directory
 
-The last line names a directory this session has to itself, created as the session opens in the
+The scratch directory line names a directory this session has to itself, created as the session opens in the
 system temporary directory rather than anywhere in your project. It is where a file the work needs on
 disk but nobody is asking to keep belongs: output to grep through, an archive to look inside. Written
 into the project instead, that file is one a build, a test run, a `git add -A` and a reviewer each
@@ -327,6 +331,20 @@ what to fall back to when `gh` fails for that reason.
 A [delegate](../reference/tools.md#spawn_agent) is told the fact and not this paragraph. It has no
 `fetch_url` at all, and `run` only if its kind reaches programs, so a sentence choosing between the
 two would send it after a tool it was not given.
+
+### The Jenkins CLI
+
+Where `jk` is on your `$PATH`, the block says so and adds the commands that read a Jenkins build,
+through [`run`](../reference/tools.md#run): `jk run view` for the result and the stages, `jk log`
+with `--tail`, `--grep` or `--step` for the console log, `jk test report` for the tests and
+`jk run ls` for recent builds of a job. Each returns the part you asked for, where
+[`fetch_url`](../reference/tools.md#fetch_url) fetches the page around it.
+
+Whether you have logged in with `jk` is not looked at, since that cannot be told without a request.
+Where `jk` fails for that reason the planner says so and names `jk auth login` as what signs it in. It
+does not fall back to `fetch_url`, because a Jenkins server that asks for a login refuses a fetch too.
+A [delegate](../reference/tools.md#spawn_agent) is told the fact and not this paragraph, for the
+reason given under [The GitHub CLI](#the-github-cli).
 
 ## Trust
 

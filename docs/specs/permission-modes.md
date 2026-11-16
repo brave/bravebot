@@ -46,11 +46,21 @@ answers a prompt that a rule has already permitted to exist. The two meet in MOD
 ## What a mode decides
 
 <a id="MODE-1"></a>
-### MODE-1: asking is the mode a session opens in, and the only one that puts every effect to a person
+### MODE-1: asking is the mode a session opens in unless a flag or the person's own setting says another, and the only one that puts every effect to a person
 
 A session with nothing chosen asks about a write, a run, a command's output, and a file nobody
 vouched for, exactly as one does where no mode can be chosen at all. A one-shot run is in this mode
-unless the flag in MODE-5 was given.
+unless a flag in MODE-5 was given.
+
+A session opens in another mode in two cases, and both are the person's own choice. A mode flag on
+the line opens it in that mode (MODE-5). Otherwise `permissions.startInAuto` in the home settings
+file, or in the file `--settings` names, opens in auto a session the terminal client or the desktop
+window opens ([AUTO-1](auto-mode.md#AUTO-1)). No other key, no checkout's file and no managed file
+opens a session in any mode but asking. An editor's session over ACP and a local-host client's
+session open asking whatever the setting says, and so does a session a `bravebot://open` link starts
+([LINK-2](deep-links.md#LINK-2)), and so do a one-shot run, a scheduled run, a trigger,
+`skill eval` and a background session, which never read the key. A delegate has the mode of the turn
+that spawned it (MODE-9).
 
 Asking is what the mode does, and not a promise that every one of those questions is reached. The run
 question is not put again where the person answered it earlier in the session, where a rule they wrote
@@ -69,6 +79,8 @@ decision somebody made; this one is what holds when they have made none.
 
 `verified-by: bravebot_agent::permission_mode::the_default_mode_asks_about_everything`
 `verified-by: bravebot_tui::state::a_session_starts_by_asking_about_everything`
+`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
 
 <a id="MODE-2"></a>
 ### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential or lands on a protected path
@@ -93,6 +105,16 @@ starts. The mode is not the person, so it does not answer it; where nobody is th
 write is refused ([PROMPT-9](prompting.md#PROMPT-9)). The match is on the path the planner named and
 on the path it lands on once links are followed, so a write through a link to `.git` asks. A file
 with a hard link is matched on each of its other names. The decision reads no byte of the body.
+Putting old bytes back with a rewind or `/hunks` is such a write, and this mode does not answer it
+either; only bypassing does ([SESSION-19](sessions.md#SESSION-19)).
+
+A run whose line redirects into a protected path is put to the person in the same way, in accepting
+edits, auto and plan mode alike, and refused where nobody can be asked. The question cannot be
+remembered. It reads the destinations of the plan and the file system, never what a stage wrote.
+
+`verified-by: bravebot_agent::permission_mode::only_bypassing_answers_a_run_with_a_protected_destination`
+`verified-by: bravebot_agent::turn::accepting_edits_and_ask_put_a_redirection_into_a_hook_to_the_person`
+`verified-by: bravebot_agent::turn::an_unattended_turn_refuses_a_run_into_a_protected_path_and_tells_the_planner`
 
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
@@ -117,6 +139,7 @@ mode cannot be what answers it. Bypassing is that statement (MODE-4).
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
+`verified-by: bravebot_agent::workspace::accepting_edits_does_not_answer_a_restore_onto_a_protected_name`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
 `verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
@@ -187,7 +210,10 @@ made from less than the person can see themselves.
 ### MODE-4: bypassing answers every permission question, including the ones that decide trust
 
 A write, a run, a command's output and vouching for a file nobody vouched for are all approved
-without being put to anybody, and the question a session opens with about trusting the working
+without being put to anybody, a write to a protected path and a run redirecting into one included,
+the latter also where an earlier part of the line linked the destination to a protected path
+([RUN-5](tools/run.md#RUN-5)), and
+the question a session opens with about trusting the working
 directory is not put either: the workspace is trusted, which is what answering it yes would have
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
 asked for is opened and vouched for without being put either, and so is a directory a
@@ -195,7 +221,9 @@ asked for is opened and vouched for without being put either, and so is a direct
 ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A path outside the workspace that a tool names is
 reachable to the file tools, to `run`'s `directory` and to a redirection with no call and no
 directory opened, wherever the account can reach it and outside the refusals a granted request
-has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
+has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). The file a reference to a listed or searched
+file stands for is opened under the same reach, so `vet_content` and `spawn_processor`
+are given the file where a call of `read_file` for its path would be. So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)), except a call to a server
 whose declaration says every call is asked about, which is put to the person in this mode as in every
@@ -301,6 +329,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
+`verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
+`verified-by: bravebot_agent::turn::a_reference_made_under_bypass_is_refused_once_the_mode_leaves_bypass`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
 `verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
@@ -351,6 +382,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_the_offer_to_vouch_and_no_other_mode_does`
+`verified-by: bravebot_agent::turn::bypassing_writes_through_a_link_an_earlier_part_made_to_a_protected_file`
 
 ## Choosing one
 
@@ -359,8 +391,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 
 The key walks asking, accepting edits, planning, auto and bypassing, in that order, and back to asking,
 in every session. `--dangerously-skip-permissions` does not put the mode on the ladder; it opens the
-session in it. Without the flag a session opens asking and reaches bypass by pressing the key four
-times. Nothing is asked when it gets there: the line under the input box draws the mode in colour
+session in it. Without the flag a session opens asking, unless `--auto` or `permissions.startInAuto`
+opened it in auto (MODE-1), and reaches bypass by pressing the key four times from asking and once
+from auto. Nothing is asked when it gets there: the line under the input box draws the mode in colour
 ([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice, except where auto-vetting is
 on: the step that enters bypass then adds one line to the transcript, that a read a check does not
 pass is refused and not asked about ([CHECK-11](vetting.md#CHECK-11)). A session opened in bypass
@@ -378,8 +411,19 @@ the two flags: writes go through unasked, and everything else is refused as in
 composes with `-p`, `--json` and `--settings`. It is refused together with
 `--dangerously-skip-permissions`, since a line holding both does not say which was meant, and it is
 refused where the line starts no one-shot run, since a session has the key. A `deny` rule still
-holds ([MODE-6](#MODE-6)) and an allow rule still decides nothing in a one-shot run. It is not
-bypassing, so `permissions.bypassUnreachable` does not refuse it.
+holds ([MODE-6](#MODE-6)), and an `allow` rule decides a run or a fetch here as it does in a
+one-shot run without the flag ([CLI-1](cli.md#CLI-1)). It is not bypassing, so
+`permissions.bypassUnreachable` does not refuse it.
+
+**`--auto`** opens a one-shot run in auto ([AUTO-1](auto-mode.md#AUTO-1)), and opens a session in it
+where the line starts one in the terminal: a bare `bravebot`, `-i`, `--fork`, `--from-pr`, `--resume`
+and `--continue` with no task. A session opened this way draws the mode under the input box and has
+the key. It is refused together with `--dangerously-skip-permissions` and with `--accept-edits`,
+and on a line that starts neither a one-shot run nor a session, such as `--plain`, `--bg` and
+`--handle-uri`. A bypass flag on the line wins over `permissions.startInAuto`, and `--auto` on the line
+wins over the setting set to `false`, so a session opens in the one mode the line asks for and the
+setting decides only where the line asks for none. `permissions.bypassUnreachable` has no bearing on
+`--auto`: it removes bypassing from the ladder, so the key from auto then goes to asking.
 
 **Unless a layer made the mode unreachable.** Where a settings layer in force wrote
 `permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), the mode is not on the ladder and
@@ -432,6 +476,9 @@ read and where the key is read, so the two cannot disagree about whether the mod
 `verified-by: bravebot_cli::main::the_skip_permissions_flag_is_taken_out_wherever_it_appears`
 `verified-by: bravebot_cli::main::the_flag_leaves_every_other_way_of_starting_intact`
 `verified-by: bravebot_cli::main::it_composes_with_incognito`
+`verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_where_nothing_opens_in_it`
+`verified-by: bravebot_cli::auto_start::a_mode_typed_on_the_line_beats_the_setting`
+`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 
 <a id="MODE-6"></a>
 ### MODE-6: no mode answers a question a rule already refused
@@ -558,9 +605,12 @@ said.
 <a id="MODE-10"></a>
 ### MODE-10: a mode belongs to the sitting it was chosen in
 
-A mode is not written into the session record. A resumed session opens by asking, whatever the
-session that wrote the record was doing when it ended, and `--resume` with the flag in MODE-5 opens
-in bypass because the flag was given again.
+A mode is not written into the session record. A resumed session opens asking unless the line or the
+setting below says otherwise, whatever the session that wrote the record was doing when it ended,
+and `--resume` with the flag in MODE-5 opens in bypass because the flag was given again. The same holds for `--auto`, and for the person's
+`permissions.startInAuto` ([MODE-1](#MODE-1)): a resume opens in auto because the line or the setting
+says so today, and never because the record says the earlier sitting ended there. This holds for
+`--continue`, for `--fork` and for the next session of an in-process `/resume`.
 
 **Why.** The two standing grants a resume restores, the trust map and the vouched commands, are
 decisions about the future that their owner made deliberately ([sessions.md](sessions.md) is what
@@ -571,6 +621,7 @@ at any point of the sitting, and a resume without the flag restores neither the 
 directories that sitting held, since the mode answered for them ([TRUST-6](trust-map.md#TRUST-6)).
 
 `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read`
+`verified-by: bravebot_cli::auto_start::a_resumed_session_asks_unless_the_line_or_the_setting_says_auto`
 `verified-by: bravebot_session::sessions::a_resumed_session_asks_about_writes_whatever_the_record_says`
 `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
 
@@ -582,18 +633,24 @@ The desktop window offers four of the five modes: asking, accepting edits, plann
 has no command line for the flag in MODE-5 to be given on, so a request naming it is refused rather
 than read as another mode.
 
-The mode belongs to one open session, and every session opens asking, a resumed session and a fork
-included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
-watch starts a turn that no request asked for, and that turn runs in the mode the window shows. A
-turn or a manifest run holds the session's own handle on the mode, so a change while one runs is
-accepted and applies to the rest of it (MODE-8).
+The mode belongs to one open session. A session opens asking, unless the person's
+`permissions.startInAuto` opens it in auto ([MODE-1](#MODE-1)), and that holds for `session.new`,
+`session.open` and `session.fork` alike: a resumed session and a fork included (MODE-10). The reply
+to each names the mode the session is in, read from the same handle the turn runs on, so the two
+cannot differ. A fork opens in the mode the setting gives and never in the mode its parent was in.
+The bridge holds the mode, rather than each turn's request carrying it, because a watch starts a
+turn that no request asked for, and that turn runs in the mode the window shows. A turn or a
+manifest run holds the session's own handle on the mode, so a change while one runs is accepted and
+applies to the rest of it (MODE-8).
 
 **Why.** Refusing bypass rather than reading it as asking keeps a window from drawing a mode its
-session is not in. A fork opens asking rather than taking its parent's mode for MODE-10's reason: a
-mode is an answer somebody gave while watching one piece of work, and a fork is a session begun
-again.
+session is not in. A fork opens in auto when the setting is `true` and asking otherwise, for MODE-10's reason: a mode
+is an answer somebody gave while watching one piece of work, and a fork is a session begun again. The setting is the person's own, read from the home file and from the file the window selected,
+and a checkout's copy opens nothing ([AUTO-1](auto-mode.md#AUTO-1)).
 
 `verified-by: bravebot_ui_bridge::permission_mode::every_way_of_opening_a_session_opens_asking`
+`verified-by: bravebot_ui_bridge::permission_mode::the_persons_setting_opens_a_new_session_a_fork_and_a_resume_in_auto`
+`verified-by: bravebot_ui_bridge::permission_mode::a_checkouts_copy_of_the_setting_opens_nothing_in_auto`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_cannot_choose_to_bypass_every_check`
 `verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
@@ -674,15 +731,17 @@ plan is refused rather than shown.
 **Known cost.** The prompt is a permission to change mode, not an answer to a question the planner
 invented (MODE-7), so no mode answers it for the person.
 
-`verified-by: bravebot_agent::tools::approving_a_plan_leaves_plan_mode_for_the_mode_chosen`
-`verified-by: bravebot_agent::tools::a_plan_not_approved_leaves_plan_mode_in_force`
-`verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
-`verified-by: bravebot_agent::tools::a_plan_proposed_outside_plan_mode_asks_nobody`
-`verified-by: bravebot_agent::tools::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
+`verified-by: bravebot_agent::tools::tests::questions::approving_a_plan_leaves_plan_mode_for_the_mode_chosen`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_not_approved_leaves_plan_mode_in_force`
+`verified-by: bravebot_agent::tools::tests::questions::the_same_plan_proposed_again_is_put_under_a_new_key`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_proposed_outside_plan_mode_asks_nobody`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
 `verified-by: bravebot_agent::tools::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
-`verified-by: bravebot_agent::tools::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
+`verified-by: bravebot_agent::tools::tests::questions::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
 `verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
 `verified-by: bravebot_agent::plan_approval::no_answer_selects_bypassing_or_leaves_plan_mode_without_a_choice`
+`verified-by: bravebot_tui::ask::a_long_plan_leaves_every_choice_and_the_keys_on_screen`
+`verified-by: bravebot_tui::ask::page_keys_scroll_a_long_question_to_its_last_line_and_back`
 
 ## Known costs
 
@@ -723,4 +782,14 @@ invented (MODE-7), so no mode answers it for the person.
   process.
 - **`defaultMode` in the settings file selects no mode.** The key is parsed so a file carrying it is
   not rejected, and a person who wrote `acceptEdits` there gets the prompts they would have got
-  without it. The command line and the mode key are what choose a mode.
+  without it. The command line, the mode key and `permissions.startInAuto` are what choose a mode,
+  and the last chooses only auto. It is a different key because it is read from fewer layers: a
+  checkout's file or a managed file can write `defaultMode`, and neither can choose who answers the
+  prompts ([AUTO-1](auto-mode.md#AUTO-1)).
+- **An administrator cannot stop a person's home file from opening sessions in auto.** The managed
+  file's copy of `permissions.startInAuto` is not read, and the key that would narrow the mode for a
+  layer is not built ([#3568](https://github.com/brave/bravebot/issues/3568)). A machine that must not
+  have sessions answered by a classifier has no setting that says so.
+- **A value that is not a boolean opens a session asking, and nothing says so.** `"true"` in quotes,
+  a number and `null` are read as the key being absent, as the other boolean keys read them. The
+  mistake costs the person the mode they wanted and nothing else.

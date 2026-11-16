@@ -57,6 +57,7 @@ Present whether or not an agent ever runs.
 | Containers | `~/.docker/config.json`, `~/.config/containers/auth.json`; `~/.kube/config`, `~/.kube/cache/`; `/var/run/secrets/kubernetes.io/serviceaccount/token`; `~/.config/helm/repositories.yaml` |
 | Registries | `~/.npmrc`, `~/.yarnrc.yml`; `~/.pypirc`, `~/.config/pip/pip.conf`; `~/.m2/settings.xml`, `~/.gradle/gradle.properties`; `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`; `~/.cache/huggingface/token`, `GOPRIVATE` + netrc |
 | IaC & secrets | `~/.terraformrc`, `~/.terraform.d/credentials.tfrc.json`; `~/.pulumi/credentials.json`; `~/.vault-token`; `~/.config/sops/age/keys.txt`, `*.agekey`, vault password files; `~/.gitlab-runner/config.toml`; the 1Password CLI's `~/.config/op/` |
+| CI | the Jenkins CLI's `~/Library/Application Support/jk/config.yaml` on macOS and `~/.config/jk/config.yaml` on Linux, which name the controller and the user; its token in the login keychain on macOS, the secret service or wallet on Linux, or an encrypted file in the directory `KEYRING_FILE_DIR` names; `JK_TOKEN` in the environment |
 | Databases | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf`; DBeaver `credentials-config.json` under `~/.local/share/DBeaverData/` or `~/Library/DBeaverData/`, JetBrains password safe, TablePlus, pgAdmin `~/.pgadmin/pgadmin4.db` |
 | IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history, and this agent's own `~/.bravebot/sessions/`; `~/.config/github-copilot/hosts.json` |
 | Browser | `Login Data`, `Cookies`, `Web Data`, `Local State`; `logins.json`, `key4.db`, `cookies.sqlite`; `userDataDir`, `storageState.json` outside the tree |
@@ -349,22 +350,29 @@ do. Each program the wrappers leave is read with the arguments it is given, so t
 wrapper do not decide whether a tool is spent. The wrapper table is the one that rule matches
 through, read case-insensitively and as the permission rules read a program word
 ([PERM-5](permissions.md#PERM-5)): without trailing dots and spaces, a `::$DATA` suffix and one
-`.exe`, `.com`, `.cmd` or `.bat`, on the wrapper names and on the program word alike.
+`.exe`, `.com`, `.cmd` or `.bat`, on the wrapper names and on the program word alike, with letters
+compared as a deny rule compares them, so `\u{17f}sh` is `ssh`.
 
 **Why.** A logged-in tool, a live socket and a metadata endpoint have no custody to rank and no
 bound to enforce, so placing them on the scale would put unbounded authority at the top of it. The
 one thing available before confinement is that nobody grants it thinking they granted less.
 
 `verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
+`verified-by: bravebot_core::ambient::a_line_that_starts_the_jenkins_cli_names_it`
 `verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
 `verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_named_as_it_is_without_one`
 `verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_judged_by_its_own_arguments`
 `verified-by: bravebot_core::ambient::a_wrapper_is_read_in_any_case_and_with_an_extension`
 `verified-by: bravebot_core::ambient::a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them`
+`verified-by: bravebot_core::ambient::a_program_spelled_with_a_folded_letter_is_the_program`
 `verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_signed_part_is_not_a_spelling_of_the_metadata_address`
+`verified-by: bravebot_core::ambient::an_ipv4_address_inside_ipv6_is_the_metadata_service_it_carries`
+`verified-by: bravebot_core::ambient::an_ipv6_address_carrying_another_address_is_not_the_metadata_service`
+`verified-by: bravebot_core::ambient::a_host_is_put_in_one_form_whatever_its_spelling`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_ambient_authority_a_line_reaches`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_says_what_the_metadata_service_is`
 `verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`

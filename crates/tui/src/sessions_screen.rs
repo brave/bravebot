@@ -8,6 +8,7 @@
 //! a fixed set of words (SCREEN-2). The strings among them are pictured on the way in, so a control
 //! character in a name or a model cannot reach the screen as one.
 
+mod details;
 mod worker;
 
 use crate::render::printable;
@@ -15,6 +16,7 @@ use crate::sessions_keys::SessionsKeys;
 use bravebot_session::jobs::Roster;
 use bravebot_session::listing::{Ask, Group, Grouping, Page, Reader, Task};
 use bravebot_session::search::{Corpus, Query};
+use details::DetailsScroll;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -262,6 +264,9 @@ pub enum Click {
     ShowMore,
     /// The tab at this index of [`TABS`].
     Tab(usize),
+    /// The cells of the details beside the list, which a press does nothing on and a turn of the
+    /// wheel scrolls.
+    Details,
 }
 
 /// The Sessions screen, while it is open.
@@ -321,6 +326,8 @@ pub struct SessionsScreen {
     read: bool,
     scroll: Cell<usize>,
     page_height: Cell<usize>,
+    /// Where the details of the session under the cursor are scrolled to (SCREEN-3).
+    details: DetailsScroll,
 }
 
 impl SessionsScreen {
@@ -363,6 +370,7 @@ impl SessionsScreen {
             read: false,
             scroll: Cell::new(0),
             page_height: Cell::new(0),
+            details: DetailsScroll::default(),
         }
     }
 
@@ -574,6 +582,11 @@ impl SessionsScreen {
 
     pub fn page_height(&self) -> &Cell<usize> {
         &self.page_height
+    }
+
+    /// Where the details are scrolled to, which the frame sets as it draws them.
+    pub fn details(&self) -> &DetailsScroll {
+        &self.details
     }
 
     /// Whether a line is being typed, so the letters are the line's and not the Sessions screen's.
@@ -936,6 +949,11 @@ impl SessionsScreen {
 
     /// Put the cursor on a row that is shown, after what is shown changed under it.
     fn reconcile(&mut self) {
+        self.settle_the_cursor();
+        self.follow_with_the_details();
+    }
+
+    fn settle_the_cursor(&mut self) {
         if self.selected_index().is_some() || (self.on_show_more && self.more) {
             return;
         }
@@ -1028,6 +1046,25 @@ impl SessionsScreen {
             }
             None => self.on_show_more = true,
         }
+        self.follow_with_the_details();
+    }
+
+    /// Scroll the details back to their first line where the cursor is on another session than the
+    /// one they were scrolled for (SCREEN-3).
+    fn follow_with_the_details(&self) {
+        self.details
+            .follow(self.selected_row().map(|row| row.task.id.as_str()));
+    }
+
+    /// Scroll the details `rows` lines, with the key or the wheel, and say whether they moved.
+    /// Nothing is scrolled while a line is being typed in a name, a question is up or the help is
+    /// shown, since the details are not what the keys and the wheel are for then (SCREEN-3).
+    pub fn scroll_details(&mut self, rows: usize, down: bool) -> bool {
+        self.pressed = None;
+        if self.renaming.is_some() || self.confirm.is_some() || self.help {
+            return false;
+        }
+        self.details.by(rows, down)
     }
 
     fn jump(&mut self, top: bool) {
@@ -1119,6 +1156,8 @@ impl SessionsScreen {
                 self.point_at_show_more();
                 Some(Pressed::ShowMore)
             }
+            // The details are no row: a press on them puts the cursor nowhere.
+            Click::Details => None,
         };
         let same = now.is_some() && now == self.pressed;
         self.pressed = now;
@@ -1288,6 +1327,14 @@ impl SessionsScreen {
                 KeyCode::Char('b') => self.moved(|sessions_screen| sessions_screen.page(false)),
                 KeyCode::Char('f') => self.moved(|sessions_screen| sessions_screen.page(true)),
                 _ => Outcome::Nothing,
+            };
+        }
+        // Shift with Up or Down scrolls the details a line, so the cursor stays on the session and
+        // a search or a rename, which have read their keys before this, never see them (SCREEN-7).
+        if key.modifiers == KeyModifiers::SHIFT && matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            return match self.scroll_details(1, key.code == KeyCode::Down) {
+                true => Outcome::Redraw,
+                false => Outcome::Nothing,
             };
         }
         if !plain {
@@ -1544,6 +1591,9 @@ pub(crate) mod fixtures {
             tokens: 0,
             read: 0,
             written: 0,
+            cached: None,
+            effort: None,
+            work: Default::default(),
             mode: None,
             background: false,
             live: matches!(status, Status::Working | Status::NeedsInput | Status::Ready),

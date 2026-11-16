@@ -601,6 +601,24 @@ mod tests {
         assert!(drawn.contains("credentials of the role"), "{drawn}");
     }
 
+    /// A connection to `[::ffff:169.254.169.254]` goes to the metadata address, so its prompt says
+    /// what the metadata service is as the prompt for `169.254.169.254` does. The same prompt draws
+    /// a redirect hop (FETCH-4), so a hop to that host is drawn with the warning too.
+    #[test]
+    fn a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is() {
+        for redirected_from in [None, Some("docs.example.com".to_string())] {
+            let url = "http://[::ffff:169.254.169.254]/latest/meta-data/";
+            let drawn = rendered_fetch(&FetchRequest {
+                url: url.to_string(),
+                host: bravebot_core::url::host_of(url).expect("a host"),
+                redirected_from: redirected_from.clone(),
+                classified: Default::default(),
+            });
+            assert!(drawn.contains("metadata service"), "{drawn}");
+            assert!(drawn.contains("credentials of the role"), "{drawn}");
+        }
+    }
+
     /// FETCH-4: a host a redirect led to is drawn as one, with the host that was approved beside it,
     /// and a fetch that was not redirected says nothing of the sort.
     #[test]

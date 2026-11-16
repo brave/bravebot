@@ -17,11 +17,11 @@
 // Costs nothing: it opens a stored session rather than sending a prompt. The save sheet is
 // modal and would hang the run, so `dialog.showSaveDialog` is replaced in the main process —
 // the same trick `drive-menu.mjs` plays on `Menu.prototype.popup`.
-import { checker, launch, ASSISTANT_BUBBLE } from './drive-support.mjs'
+import { checker, launch, ASSISTANT_BUBBLE, SHOTS_DIR } from './drive-support.mjs'
 import { mkdirSync, existsSync, readFileSync, statSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-const OUT = '/tmp/bravebot-ui'
+const OUT = SHOTS_DIR
 mkdirSync(OUT, { recursive: true })
 
 const { check, problems } = checker()

@@ -131,7 +131,7 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         context_tokens: None,
         conceded: Default::default(),
         backend: None,
-        retry_setting: false,
+        retry_setting: bravebot_agent::RetrySetting::None,
         cause: Box::new(BackendError::from(ChatError::Account(
             AccountFailure::Ended,
         ))),
@@ -296,10 +296,6 @@ fn a_refused_premium_key_is_sent_as_any_other_unauthorized_failure() {
     assert_eq!(marked["category"], "unauthorized", "{marked}");
     assert_eq!(marked["status"], 401, "{marked}");
     assert_eq!(marked["account"], Value::Null, "{marked}");
-
-    let unusable = failed_with(ChatError::Subscription("not held".to_string()));
-    assert_eq!(unusable["category"], "unauthorized", "{unusable}");
-    assert_eq!(unusable["accountMessage"], Value::Null, "{unusable}");
 }
 
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a

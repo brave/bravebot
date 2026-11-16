@@ -85,7 +85,7 @@ help:
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer, longest waiting first; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
-	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session and telling the session when it did [NOTES=\"<instructions for the run>\"] [FORCE=1 to work issues assigned to someone else too] [BYPASS=1 to skip permission prompts and the sandbox] [BRAVEBOT=path]"
+	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else or developed only on another platform, assigning you, and labelling bot/in-progress for the session and telling the session when it did [NOTES=\"<instructions for the run>\"] [FORCE=1 to work issues assigned to someone else or labelled develop-on for another platform too] [BYPASS=1 to skip permission prompts and the sandbox] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
@@ -180,6 +180,8 @@ check:
 	@python3 contrib/check-toolchain.py
 	@python3 contrib/check-fuzz-lints.py --selftest
 	@python3 contrib/check-fuzz-lints.py
+	@python3 contrib/check-verus-contracts.py --selftest
+	@python3 contrib/check-verus-contracts.py
 
 # Whether every call of programs::start and programs::start_against states CodeSelectors, and every
 # variable in a CODE_SELECTORS list (crates/sandbox/src/programs.rs, crates/agent/src/gcloud.rs,
@@ -308,6 +310,9 @@ write-untranslated:
 # branch changed; on workflow_dispatch it scans everything. A finding here is one the
 # bot would post, so the full scan reports plenty that predates any given branch --
 # check-reviewdog is the one to run before pushing.
+#
+# Neither target counts a finding in a file under third_party/, which is vendored upstream code;
+# docs/development/checks.md gives the reason and what the organization's check does instead.
 #
 # No model is involved, so both are deterministic.
 .PHONY: check-reviewdog
@@ -491,6 +496,47 @@ check-fuzz: fuzz-prerequisites check-fuzz-lints
 			-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target) $(call fuzz_dict,$$target); \
 	done
 
+# Verus (docs/development/verification.md). contrib/check-verus.py runs Verus on each crate that
+# carries contracts, which has to verify, and on a copy of it under each mutation in
+# verify/mutations.txt, which has to fail, so a contract a broken body also meets fails here.
+# verify/history.rs holds the fixes from the history that are not yet contracts in their crates,
+# each refused under the `before_<commit>` cfg that restores the code before the fix. Verus brings
+# its own toolchain, so this is run by name and is not part of check.
+VERUS_VERSION = 0.2026.11.02.8bf68ee
+VERUS ?= verus
+VERUS_HISTORY = before_3facf14a before_e0cd1903 before_20ce6086
+
+.PHONY: check-verus
+check-verus: check-verus-contracts
+	@python3 contrib/check-verus.py --selftest
+	@VERUS="$(VERUS)" python3 contrib/check-verus.py
+	$(VERUS) verify/history.rs
+	@set -e; for cfg in $(VERUS_HISTORY); do \
+		out=$$($(VERUS) verify/history.rs --cfg $$cfg 2>&1) && { \
+			echo "verus: verify/history.rs verified with --cfg $$cfg, which it must refuse" >&2; \
+			exit 1; \
+		}; \
+		echo "$$out" | grep -Eq '^verification results:: [0-9]+ verified, [1-9][0-9]* errors' || { \
+			echo "$$out" >&2; \
+			echo "verus: verify/history.rs --cfg $$cfg failed before verification, so nothing was refused" >&2; \
+			exit 1; \
+		}; \
+		echo "verus: verify/history.rs --cfg $$cfg refused, as it must be"; \
+	done
+
+# Whether the Verus contracts in crates/ are the ones verify/contracts.txt records. Needs no
+# toolchain, so `check` runs it, and so does `check-scripts`, which the Security job in CI runs: a
+# contract that is removed or weakened fails on every pull request, not only where Verus is
+# installed.
+.PHONY: check-verus-contracts check-verus-contracts-ledger check-verus-contracts-selftest
+check-verus-contracts: check-verus-contracts-selftest check-verus-contracts-ledger
+
+check-verus-contracts-ledger:
+	python3 contrib/check-verus-contracts.py
+
+check-verus-contracts-selftest:
+	python3 contrib/check-verus-contracts.py --selftest
+
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
 # Catches a feature that only compiles on a newer toolchain than the release build has.
@@ -578,11 +624,13 @@ review-ready:
 # written: issue numbers, links and search queries separated by commas. NOTES is the person's
 # instructions for the run, such as how to group the issues. The skill reads it, and no issue is taken
 # from it. Before the session opens, with no model, agents/skills/implement-issues/implement-issues.py
-# stops when an issue is assigned to anybody but the account gh writes as, assigns that account, and
-# adds the label bot/in-progress, which it removes when the session ends. It tells the session what it
+# stops when an issue is assigned to anybody but the account gh writes as, or is labelled develop-on/linux,
+# develop-on/macos or develop-on/windows without the label of the platform this host is, assigns that
+# account, and adds the label bot/in-progress, which it removes when the session ends. It tells the session what it
 # wrote and when, in a Claimed: line after the issues, so the session does not stop on the label or the
-# assignee it was given. FORCE=1 works the issues that are assigned to somebody else as well instead of
-# stopping, leaves those assignees, and says so in that line; any other value of FORCE is ignored.
+# assignee it was given. FORCE=1 works the issues that are assigned to somebody else or labelled for another
+# platform as well instead of stopping, leaves those assignees and labels, and says so in that line; any
+# other value of FORCE is ignored.
 # BYPASS=1 opens the client with --dangerously-bypass-approvals-and-sandbox, so the whole session runs
 # without permission prompts and without the sandbox; any other value of BYPASS is ignored.
 # ISSUES and NOTES reach the script through the environment, so no quote in them needs escaping.
@@ -629,11 +677,13 @@ check-affected-containers:
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
-	check-review-ready-selftest
+	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
+	check-verus-contracts-ledger
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
-	check-review-ready-selftest
+	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
+	check-verus-contracts-ledger
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -646,6 +696,9 @@ check-reviewdog-selftest:
 
 check-rebase-selftest:
 	python3 agents/skills/rebase/selftest.py
+
+check-clean-branches-selftest:
+	python3 agents/skills/clean-branches-and-worktrees/selftest.py
 
 check-peer-advisories-selftest:
 	python3 agents/skills/peer-advisories/selftest.py

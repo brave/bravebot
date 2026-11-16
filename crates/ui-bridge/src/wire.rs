@@ -700,13 +700,13 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
             .collect::<Vec<_>>(),
         // Each path spelled as the other front ends draw it, so a path ending in whitespace or
         // holding a character that draws as nothing is not drawn as another. The window draws
-        // this and never `writes`, as it draws `shownPath` and never `path`.
-        "shownWrites": request
-            .plan
-            .writes
-            .iter()
-            .map(|path| bravebot_agent::confirm::shown_path(path))
-            .collect::<Vec<_>>(),
+        // this and never `writes`, as it draws `shownPath` and never `path`. A destination that a
+        // link leads elsewhere carries where it lands, and a protected one says so, in the words
+        // every other front end draws.
+        "shownWrites": request.shown_writes(),
+        // Whether a destination is a protected path. A front end that answers for the person does
+        // not answer a request with this set, and `canBeRemembered` is false for it.
+        "protected": request.protected,
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),
         // The credential scopes and toolchain lists the planner asked this line to be lent, by
@@ -969,6 +969,7 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
                 "name": tool.name,
                 "arguments": tool.arguments,
                 "description": tool.description,
+                "read_only": tool.read_only,
             })
         })
         .collect();

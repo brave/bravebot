@@ -91,6 +91,11 @@ metadata warning where the host is this machine's metadata service. A URL longer
 scrolls under them ([PROMPT-4](../prompting.md#PROMPT-4)). `y` is not taken at a draw that cuts
 off the host, the warning or the keys, or that leaves the URL no row.
 
+The host is the metadata service in every spelling a connection reads as one of its addresses: in
+brackets, with a trailing dot, as a number such as `2852039166`, and as an IPv4 address inside an
+IPv6 one (`::ffff:a.b.c.d`, `64:ff9b::/96`), which [FETCH-8](#FETCH-8) classifies as the IPv4
+address.
+
 **Why the host and not the URL.** A rule is a standing statement about who may be talked to, which
 is a thing a person can hold in their head. A path is where a URL carries the particular thing being
 asked for, so a rule matching one would be answering a different question on every call.
@@ -108,6 +113,8 @@ asked for, so a rule matching one would be answering a different question on eve
 `verified-by: bravebot_tui::confirm::grants::a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_scroll_moves_from_where_the_url_was_drawn`
 `verified-by: bravebot_agent::turn::a_fetch_prompt_carries_the_host_the_url_reaches_as_its_own_field`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is`
+`verified-by: bravebot_core::ambient::an_ipv4_address_inside_ipv6_is_the_metadata_service_it_carries`
 
 <a id="FETCH-3"></a>
 ### FETCH-3: an approval is bound to the URL it was given for, and nothing is remembered
@@ -171,9 +178,12 @@ knows because it set it, and which no reply can influence.
 `verified-by: bravebot_agent::turn::a_redirect_off_the_approved_host_is_put_to_the_person_and_followed_on_a_yes`
 `verified-by: bravebot_agent::turn::a_redirect_off_the_approved_host_that_is_declined_sends_nothing_to_it`
 `verified-by: bravebot_agent::turn::a_redirect_to_a_denied_host_is_refused_without_asking`
+`verified-by: bravebot_agent::turn::a_redirect_to_another_spelling_of_a_denied_host_is_refused_without_asking`
+`verified-by: bravebot_agent::permissions::a_managed_deny_in_another_spelling_of_a_host_holds_against_the_persons_allow`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_a_fetch_but_not_a_redirect`
 `verified-by: bravebot_approval::lib::the_fetch_lines_say_where_a_redirect_was_approved_for`
 `verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_mapped_metadata_address_says_what_the_metadata_service_is`
 `verified-by: bravebot_ui_bridge::wire::a_fetch_a_redirect_led_to_names_the_host_that_was_approved`
 
 <a id="FETCH-5"></a>
@@ -300,9 +310,16 @@ that hands credentials to whoever opens the socket, with a prompt that said noth
 refusal covers every address in the answer rather than the one that would be connected to: the
 public half of a mixed answer is trusted only as far as the server that wrote the other half.
 
-**Known cost.** Behind a proxy the proxy resolves the target, and the lookup this program makes is
-for the proxy itself, so a proxied fetch is not classified here. The proxy is the one that
-connects, and what it is allowed to reach is its own configuration's.
+**Behind a proxy.** The proxy connects to the target, and the lookup the client makes through its
+resolver is for the proxy itself. So a hop a proxy carries is classified before it is sent, by one
+lookup of its host made here, and refused on the same terms as a direct one. A host `NO_PROXY` excludes
+goes direct and is classified by the client's own lookup.
+
+**Known cost.** Behind a proxy the address that was classified is not the one connected to: the proxy
+looks the host up again, so an answer that differs for the proxy is not seen here, and what the proxy is
+allowed to reach is its own configuration's. A lookup made here that fails or does not finish in time
+refuses nothing and leaves the hop to the proxy, since a network that reaches the world only through a
+proxy need not resolve the world's names.
 
 `verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
 `verified-by: bravebot_sandbox::address::a_public_address_is_public`
@@ -316,12 +333,20 @@ connects, and what it is allowed to reach is its own configuration's.
 `verified-by: bravebot_net::lib::an_approved_host_that_is_itself_an_address_is_fetched`
 `verified-by: bravebot_net::lib::a_request_that_is_not_a_fetch_may_still_resolve_to_this_machine`
 `verified-by: bravebot_net::lib::a_proxied_fetch_is_not_sent_through_the_guarded_lookup`
+`verified-by: bravebot_net::lib::a_proxied_name_resolving_to_a_non_public_address_is_refused_before_the_proxy_is_asked`
+`verified-by: bravebot_net::lib::a_proxied_name_resolving_to_a_public_address_is_sent_to_the_proxy`
+`verified-by: bravebot_net::lib::a_proxied_name_with_one_non_public_address_among_public_ones_is_refused`
+`verified-by: bravebot_net::lib::a_proxied_redirect_hop_resolving_to_a_non_public_address_is_refused`
+`verified-by: bravebot_net::lib::a_proxied_request_that_is_not_a_fetch_is_not_classified`
+`verified-by: bravebot_net::lib::a_host_excluded_from_the_proxy_is_classified_once`
 `verified-by: bravebot_net::lib::a_refused_address_is_a_failure_that_says_nothing_of_the_address_and_is_not_retried`
 `verified-by: bravebot_net::egress::a_fetched_name_that_resolves_to_this_machine_is_refused_without_a_connection`
 `verified-by: bravebot_net::egress::the_same_name_is_reached_when_no_fetch_is_in_flight`
 `verified-by: bravebot_net::egress::an_approved_address_literal_on_this_machine_is_fetched`
 `verified-by: bravebot_core::policy::a_fetch_is_in_flight_from_its_approval_until_it_finishes`
 `verified-by: bravebot_agent::turn::a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it`
+`verified-by: bravebot_core::permissions::a_domain_rule_and_a_fetched_host_are_compared_in_one_form`
+`verified-by: bravebot_core::permissions::a_rule_and_the_metadata_warning_read_a_host_the_same_way`
 
 <a id="FETCH-9"></a>
 ### FETCH-9: a fetch may ask for its body in the same result, and gets it where the mode or a check answers

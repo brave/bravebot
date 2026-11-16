@@ -63,6 +63,11 @@ and the tag characters, which write ASCII letters that a model reads. Those two 
 one out as `‹U+XXXX›`, and a tag character also with the letter it stands for. A sentence above the
 text says how many there are. The planner receives the text itself.
 
+A control character in text or a name drawn for you is replaced by a mark and never dropped. The
+characters below U+0020 become their Control Pictures (an escape reads as `␛`), DEL becomes `␡`, and
+each C1 control (U+0080 to U+009F) becomes `‹U+XXXX›`. Inside the quotes drawn around an odd name, a C1
+control is written as `\u{..}` instead. None of these draws as an ordinary character.
+
 The write question does the same for the lines a write adds or removes, and it shows every row of the
 change, kept lines included. The sentence over the rows counts the characters in the added and removed
 lines and says the file is written with them as they are, and a yes is not taken before that sentence
@@ -461,11 +466,13 @@ than inventing an answer. A plan is refused too, so a manifest run with nobody t
 first step rather than walking a program nobody read. No record of remembered lines is read, since what
 such a record answers is a prompt.
 
-A `deny` rule and an `ask` rule you wrote in advance hold there as they do
-in a session. An `allow` rule does not, since what it answers is a prompt and there is nobody to
-prompt. `--dangerously-skip-permissions` is the one thing that lifts the first half, and the one thing
-that lets an allow rule decide again, because a flag somebody typed is an instruction rather than a
-guess; it does not lift the second, since the planner's questions are not permissions. See
+The rules you wrote in advance hold there as they do in a session, read from the same layers. A `deny`
+rule refuses, an `ask` rule refuses because nobody can answer it, and an `allow` rule lets the effect
+it covers go ahead unasked. An `allow` rule a checkout's settings proposed counts only where you
+already granted it in that workspace. A question that is always put to you, such as a write to a
+protected path, is refused whatever a rule says. `--dangerously-skip-permissions` lifts the refusal of
+every effect no rule allows, because a flag somebody typed is an instruction rather than a guess; it
+does not lift the second half, since the planner's questions are not permissions. See
 [Non-interactive use](../using/headless.md#nothing-is-approved).
 
 `--vet` is the one other answer you can give in advance here, and it answers one question only: with it,

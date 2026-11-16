@@ -220,6 +220,18 @@ pub fn spelled_code(text: &str) -> Spelled {
     Spelled { text: out, hidden }
 }
 
+/// `c` as [`spelled`] writes a character out: `‹U+XXXX›`, with the letter a tag character stands
+/// for.
+///
+/// For a caller that draws one kind of character this way and picks that kind by its code point
+/// alone, such as the C1 controls in `bravebot_agent::confirm::printable`. The text around the
+/// character is not read.
+pub fn written_out(c: char) -> String {
+    let mut out = String::new();
+    write_out(&mut out, c);
+    out
+}
+
 /// `c` as `‹U+XXXX›`, with the letter a tag character stands for.
 fn write_out(out: &mut String, c: char) {
     let code = c as u32;
@@ -250,6 +262,18 @@ mod tests {
             .chars()
             .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
             .collect()
+    }
+
+    /// A character is written out as `spelled` writes it, whether or not `spelled` would write it.
+    #[test]
+    fn a_single_character_is_written_out_as_its_code_point() {
+        assert_eq!(written_out('\u{85}'), "\u{2039}U+0085\u{203a}");
+        assert_eq!(written_out('\u{9f}'), "\u{2039}U+009F\u{203a}");
+        assert_eq!(
+            written_out('\u{200B}'),
+            spelled("\u{200B}".to_string()).text
+        );
+        assert_eq!(written_out('\u{E0041}'), "\u{2039}U+E0041 A\u{203a}");
     }
 
     /// A character that draws as nothing is written out as its code point, and a tag character

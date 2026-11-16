@@ -156,14 +156,23 @@ fn command_for_with(
     // only the entries the lookup above searches (SANDBOX-30). The rest of the environment stays:
     // `AWS_PROFILE`, `AWS_REGION` and the credentials the person keeps there are what the CLI is
     // run to resolve.
-    bravebot_sandbox::programs::start_against(
+    let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let mut command = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
         bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
-        held,
+        held.iter().cloned(),
         outside_stage_writable,
-    )
+    );
+    // An `aws` that is a script runs `usercustomize.py` from Python's user site, which a stage may
+    // be able to write (SANDBOX-30).
+    bravebot_sandbox::programs::python_user_site_off_when_writable(
+        &mut command,
+        &held,
+        outside_stage_writable,
+    );
+    command
 }
 
 /// The export, as a command, so what it is handed can be read without running it.
@@ -932,10 +941,32 @@ mod tests {
     /// a copy is what stops agreeing with the original the first time either is edited, and the
     /// comparison holds on a machine that has switched the withholding off, where handing the
     /// credential over is what was asked for.
+    ///
+    /// The set is read from the start in an environment holding no variable that selects code, so
+    /// what the SANDBOX-30 check takes off for this process, such as an `LD_LIBRARY_PATH` it was
+    /// started with, is not read as a credential. Each command is then held to that start as this
+    /// process's environment makes it, so none of them is started another way.
     #[test]
     fn this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts() {
         let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
+        let mut withheld = withheld_from(&command_for_with(
+            Path::new("/usr/bin/aws"),
+            std::iter::empty(),
+            &|_: &Path| true,
+        ));
+        withheld.sort();
+        assert_eq!(
+            withheld, expected,
+            "the start was handed a different set from the one the configuration names"
+        );
+
+        let mut started = withheld_from(&aws());
+        started.sort();
+        assert!(
+            expected.iter().all(|name| started.contains(name)),
+            "the start in this environment was handed a credential: {started:?}"
+        );
         for (what, command) in [
             ("the export", export_command(None)),
             ("the export for a profile", export_command(Some("work"))),
@@ -945,10 +976,7 @@ mod tests {
         ] {
             let mut withheld = withheld_from(&command);
             withheld.sort();
-            assert_eq!(
-                withheld, expected,
-                "{what} was handed a different set from the one the configuration names"
-            );
+            assert_eq!(withheld, started, "{what} was not started as every aws is");
         }
     }
 
@@ -1228,6 +1256,49 @@ mod tests {
         command
             .get_envs()
             .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// Whether an `aws` start has `PYTHONNOUSERSITE=1`, when the person's `HOME` is `home` and
+    /// `writable` is the one directory a stage may write.
+    #[cfg(unix)]
+    fn turns_off_the_user_site(home: &Path, writable: &Path) -> bool {
+        let row = writable.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let command = command_for_with(
+            Path::new("/usr/bin/aws"),
+            [(OsString::from("HOME"), home.as_os_str().to_os_string())],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(name, value)| name == "PYTHONNOUSERSITE" && value == Some(OsStr::new("1")))
+    }
+
+    /// SANDBOX-30. An `aws` that is a Python script imports `usercustomize` from the user site under
+    /// the home when it starts. The regression it rejects: never setting `PYTHONNOUSERSITE`, so a
+    /// `usercustomize.py` a stage wrote under a `HOME` it may write runs unconfined with the person's
+    /// access to `~/.aws`, and setting it always, which also hides the packages a person installed
+    /// with `pip install --user`.
+    #[cfg(unix)]
+    #[test]
+    fn the_aws_start_turns_off_the_user_site_only_where_a_stage_may_write_it() {
+        let (session, _planted, _genuine, safe) = planted_and_genuine("credentials-user-site");
+
+        assert!(turns_off_the_user_site(&session, &session));
+        assert!(!turns_off_the_user_site(&safe, &session));
+    }
+
+    /// A link in the `HOME` the person keeps, from `.local` into a directory a stage may write,
+    /// which is where the user base is read from. The regression it rejects: judging `HOME` alone.
+    #[cfg(unix)]
+    #[test]
+    fn the_aws_start_turns_off_the_user_site_when_dot_local_leads_into_a_stage_directory() {
+        let (session, _planted, _genuine, safe) = planted_and_genuine("credentials-user-site-link");
+        let home = fresh_directory("credentials-user-site-link-home");
+        std::os::unix::fs::symlink(&session, home.join(".local")).unwrap();
+
+        assert!(turns_off_the_user_site(&home, &session));
+        assert!(!turns_off_the_user_site(&safe, &session));
     }
 
     /// A file a stage can plant, in a directory it holds, and a genuine one in a directory outside

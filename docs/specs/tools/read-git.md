@@ -58,7 +58,9 @@ count against matching its two sides line by line. That takes at most four milli
 being one comparison of two lines or one line read, and a search for a shortest edit is given up
 past a thousand edits. A file that exceeds the bound is described by a notice in place of hunks. The
 notice names the lines the sides differ between, the lines within those that could not be matched,
-and the most lines they could have removed and added. Revisions are read in git's syntax, as git
+and the most lines they could have removed and added, numbered as the files number them. A diff
+compares only the lines between the first line that differs and the last, with three lines of
+context kept at either end, so what a diff costs follows the change and not the file ([GIT-9](#GIT-9)). Revisions are read in git's syntax, as git
 resolves them: names, ids and their prefixes, `~N`, `^N`, `^{commit}` and ranges. `A...B` is what
 each side has that the other lacks: a diff compares the merge base of the two with B, as `git diff
 A...B` does, and a log lists the commits reachable from either and not from both, as `git log
@@ -170,8 +172,8 @@ one, and a tree or file named by its id alone, with no path, is refused.
 than by what it holds, a file the map distrusts would reach the planner through its history.
 
 `verified-by: bravebot_agent::turn::a_history_answer_showing_a_distrusted_path_is_quarantined`
-`verified-by: bravebot_agent::tools::the_git_refusal_names_run_only_where_the_turn_holds_it`
-`verified-by: bravebot_agent::tools::an_untrusted_git_answer_is_refused_in_the_helpers_words`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_git_refusal_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::an_untrusted_git_answer_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::workspace::a_repository_below_the_root_is_read_under_the_rules_on_its_own_path`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_a_path_it_showed_is`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_anything_under_git_is`
@@ -223,7 +225,7 @@ not a regular expression, and a list of tags given a path are each refused by na
 forms this reader knows is `HEAD^`, so it would come back as a confident answer to something else.
 A pattern or a path dropped without a word is the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
-`verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::arguments::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::read_git_lists_the_tags_a_revision_reaches_newest_version_first`
@@ -326,13 +328,21 @@ from the one git would, and the rules were held against files it did not read.
 A log lists 20 commits, a list of tags 20 tags and a search 20 lines unless the planner names a
 count, and never more than 200. An answer holds at most 2,000 lines and each line at most 2,000
 characters. A file past 1 MiB is described by its size, read from the object's header alone, and
-not searched. An answer stops at the search deadline. An answer cut
+not searched. A diff reads a file up to 4 MiB: it compares only the lines between the first line
+that differs and the last, so a one-line change in a file of 1.6 MB prints its hunk at the line
+numbers the file has. A side past 4 MiB is described by its size and not diffed. A higher cap for
+a diff only, over the region the sides differ in, was chosen over a cap of the region alone
+because finding the region reads both sides whole, so a bound on what a diff holds has to be on
+the size of a side, and 4 MiB holds the sides, their escaped copies and one entry per line of the
+region. An answer stops at the search deadline. An answer cut
 by any of these says it was cut, and one that was not makes no such claim. A status that stops at the
 deadline says it can be narrowed with a path and that `search.maxSeconds` sets the deadline, and names
 `git status` through `run` where the turn holds `run`. It does not suggest a range or a count, which a
 status does not take. The description of a file
-past the size cap names what can still read it from the tools the turn's list holds: `read_file`
-on the working copy, `run`, both, or neither ([TOOL-6](tool-surface.md#TOOL-6)).
+past the size cap, in a diff, a show of a commit and a search as in a show of a file, names what can
+still read it from the tools the turn's list holds: `read_file`
+on the working copy, `run`, both, or neither ([TOOL-6](tool-surface.md#TOOL-6)). The words depend
+on the turn's list and the size in the header, never on a byte of the file.
 
 **Why.** A repository's history is as large as the repository, and a planner handed part of it as
 though it were the whole draws conclusions from what is missing.
@@ -340,6 +350,10 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::git::a_log_that_reaches_its_count_stops_and_says_it_was_cut`
 `verified-by: bravebot_agent::git::an_answer_past_its_lines_or_a_line_past_its_width_is_cut`
 `verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_described_by_its_size`
+`verified-by: bravebot_agent::git::a_changed_line_in_a_file_past_the_size_cap_is_diffed_at_its_own_line_numbers`
+`verified-by: bravebot_agent::git::a_change_in_the_middle_of_a_large_file_keeps_its_line_numbers`
+`verified-by: bravebot_agent::git::a_large_file_added_deleted_or_binary_is_diffed_as_a_small_one_is`
+`verified-by: bravebot_agent::git::the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
 `verified-by: bravebot_agent::tools::a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
@@ -507,7 +521,8 @@ widen a tool nobody asked to widen.
 `search` prints the lines of the files at one revision, HEAD unless another is named, that
 `pattern` matches, as `git grep -n` prints them: `path:line:text`, with the text following the
 colon byte for byte, in the order git lists the tree, with a binary file that matches named
-rather than printed and a file past the size cap described by its size. A path narrows it to
+rather than printed and a file past the size cap described by its size and, where the turn holds
+`read_file` or `run`, by what can read it ([GIT-9](#GIT-9)). A path narrows it to
 that file or the files beneath it. A symbolic link and a submodule are not searched, as
 `git grep` over a tree searches neither. The pattern is written as `file_grep`'s is
 ([SEARCH-1](search.md#SEARCH-1)).

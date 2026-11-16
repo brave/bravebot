@@ -218,9 +218,13 @@ starts without a question, and one whose declaration changed is put to you again
 weather` stops the server and drops its grant for this session. Nothing is written, so the next
 session starts it as before. `/mcp remove weather` is the permanent version: it runs `bravebot mcp
 disable weather` and then `bravebot mcp remove weather` for you, so no later session starts the
-server or asks about it, and stops it in this session. The list `/mcp` prints, which is also what a
-click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the
-command waits for the turn to end.
+server or asks about it, and stops it in this session. A `*` in the name stands for any run of
+characters, so `/mcp remove brave-tabs*` does that for `brave-tabs-manage` and `brave-tabs-read`,
+and `/mcp disable brave-*` stops every server whose name starts with `brave-`. A pattern that fits
+no server changes nothing and says so. The list `/mcp` prints, which is also what a
+click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the bare
+word and `list` are carried out as you type them and answer under the turn. `reconnect`, `disable` and
+`remove` wait for the turn to end.
 
 The info panel lists a server only while its tools are offered to the model. If you answer no when
 you are asked whether to offer a server's tools, the server keeps running for the session, is left
@@ -268,8 +272,11 @@ that file, creating the file where it is missing and leaving the rest of it as i
 `bravebot mcp disable weather` takes it out of each of the three files that asks for it, and says
 which; with `-s`, out of that one. The declaration and its approval stay, so `enable` puts it back
 without asking. A file that does not parse, or whose `mcp.request` is not a list, is left as it
-was, and so is a link in the checkout: where `.bravebot` or the file in it is a link, bravebot
-does not write through it. `~/.bravebot` itself may be a link, and is written through.
+was, and so is a link that leaves the checkout: where `.bravebot` or the file in it is a link to
+somewhere outside the checkout, to its `.git` or to nothing, bravebot does not write through it. A
+link to another file in the checkout, such as `.bravebot/settings.json` pointing at
+`agents/settings.json`, is written through and stays a link. `~/.bravebot` itself may be a link, and
+is written through.
 
 `settings.local.json` is yours alone by name only: add it to the checkout's `.gitignore` to keep it
 out of a commit. On macOS and Linux a file these commands write is readable by you alone, as the
@@ -589,8 +596,9 @@ printed:
 note: weather offers no tool in this session: its list was not approved
 ```
 
-A call that would be put to you is refused, and an `allow` rule decides nothing there, as it decides
-nothing for any tool in a one-shot run. A tool you answered 2 for in this project is still called,
+A call that would be put to you is refused, unless an `allow` rule decides it, as an `allow` rule
+decides every tool in a one-shot run ([Non-interactive use](../using/headless.md#nothing-is-approved)).
+A tool you answered 2 for in this project is still called,
 since that answer was given at the question and names one tool in one project, unless something
 private was [let out of quarantine](#each-call) earlier in the session, when the call is refused.
 

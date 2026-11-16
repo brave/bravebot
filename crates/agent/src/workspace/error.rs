@@ -67,6 +67,9 @@ pub enum WorkspaceError {
     Denied(Denial),
     /// The path resolved outside the workspace root.
     Escapes { path: String, remedy: Remedy },
+    /// A restore onto a protected path (PERM-9) was not approved, either because the person said
+    /// no or because nobody could be asked. Nothing was written.
+    Protected { path: String },
     /// The path was not usable as a relative workspace path.
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
@@ -245,6 +248,9 @@ impl WorkspaceError {
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")
             }
+            Self::Protected { .. } => format!(
+                "'{named}' is a protected path and the restore was not approved, so nothing was written"
+            ),
             Self::Binary { .. } => {
                 format!("'{named}' is a binary file, so it cannot be read as text")
             }
@@ -306,6 +312,7 @@ impl WorkspaceError {
             | Self::Unreadable { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
+            | Self::Protected { path }
             | Self::Binary { path }
             | Self::NotUtf8 { path }
             | Self::TooLarge { path, .. }
@@ -327,7 +334,8 @@ pub(super) const ENDS_CHECKOUTS: &str = "while one is open no delegate is given 
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
     /// or onto a name that is not UTF-8; a link carries it out; it names a credential location,
-    /// which cannot be opened; or what was refused is a command's redirection or a rewind.
+    /// which cannot be opened; it is in the stores; or what was refused is a rewind. A command's
+    /// redirection is given the remedy a file tool's write to the same path is given.
     Nothing,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
     /// opened. It is named in some other way than relative to the root: from the top of the file
@@ -373,6 +381,31 @@ pub enum Remedy {
 }
 
 impl Remedy {
+    /// The remedy a run with nobody to ask is given in place of this one, where this one names a
+    /// route only a person can take: opening a directory with `/add-dir` or `--add-dir`, which
+    /// nobody is there to type, or dropping a file on the window (TRUST-10, CLI-1). `None` where
+    /// this remedy names no such route.
+    ///
+    /// A route that opens a directory is said as none, so a refusal that would warn the planner
+    /// about checkouts does not, since nothing opens the directory. A credential location and
+    /// `permissions.readsStayInWorkspace` keep their meaning and lose only the drop.
+    /// Decided from the remedy alone, never from anything a file or a program holds.
+    pub fn when_nobody_can_be_asked(self) -> Option<Self> {
+        match self {
+            Self::Open
+            | Self::OpenOrDrop
+            | Self::OpenEndsCheckouts
+            | Self::DropOrOpenEndsCheckouts
+            | Self::OpenItself
+            | Self::OpenItselfEndsCheckouts => Some(Self::Nothing),
+            Self::CredentialDrop => Some(Self::Credential),
+            Self::Drop => Some(Self::Kept),
+            Self::Nothing | Self::Inside | Self::InsideClimb | Self::Credential | Self::Kept => {
+                None
+            }
+        }
+    }
+
     /// The remedy as the trail records it, beside the refusal the planner was told of.
     pub fn offered(self) -> &'static str {
         match self {

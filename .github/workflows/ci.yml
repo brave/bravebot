@@ -117,19 +117,51 @@ jobs:
         with:
           tool: cargo-nextest@0.9.146
 
+      # The downloaded packages are kept for a week per runner image, so a run that finds them
+      # installs them with dpkg and never contacts the Ubuntu mirrors.
+      - name: Find the week of the apt cache
+        id: apt-week
+        run: |
+          echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the browser opener's packages
+        id: opener-apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt-opener/*.deb
+          key: apt-opener-${{ runner.os }}-${{ steps.apt-week.outputs.image }}-${{ steps.apt-week.outputs.week }}
+
       # The opener's tests run the installed `xdg-open` under generic, GNOME and KDE settings. The
       # KDE test fails on CI when `xdg-open` or `kde-open` (kde-cli-tools) is missing.
       - name: Install the browser opener's programs
         timeout-minutes: 15
         run: |
+          archives="$HOME/.cache/bravebot-apt-opener"
+          mkdir -p "$archives"
+          set -- "$archives"/*.deb
+          if [ -e "$1" ]; then
+            if sudo timeout 180 dpkg -i "$@"; then
+              exit 0
+            fi
+            echo "installing the cached packages failed, falling back to apt" >&2
+          fi
           for attempt in 1 2 3 4; do
-            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y --no-install-recommends xdg-utils libglib2.0-bin kde-cli-tools'; then
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives xdg-utils libglib2.0-bin kde-cli-tools dbus"; then
               exit 0
             fi
             echo "apt attempt $attempt failed or timed out" >&2
             sleep 5
           done
           exit 1
+
+      # Saved here and not by the cache action's post step, so a later failing step does not lose it.
+      - name: Save the browser opener's packages
+        if: ${{ steps.opener-apt-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt-opener/*.deb
+          key: apt-opener-${{ runner.os }}-${{ steps.apt-week.outputs.image }}-${{ steps.apt-week.outputs.week }}
 
       # Everything but the usability suite, which the step after next runs once with its output.
       - name: Test
@@ -150,6 +182,25 @@ jobs:
       # nextest does not run doctests.
       - name: Doctests
         run: cargo test --workspace --doc --locked
+
+      # Whether `kde-open` needs a session bus is not established (SANDBOX-30 reads the source and
+      # did not run it). The runner has none, so the Test step skips the test that runs it. This
+      # step runs it under `dbus-run-session`, so a bus exists. With BRAVEBOT_OBSERVE_KDE_OPEN set the
+      # test fails when `kde-open` is missing, when the baseline run starts no handler, and when a
+      # name that made `kde-open` run the planted handler is not one the opener removes. The names
+      # it observed are in the log as `kde-open observed:` lines. The first command prints which
+      # `kde-open` programs the package installed, so a run that ends with a baseline that started no
+      # handler shows which program was run and what it printed (the test's own message carries its
+      # exit status and stderr). The step keeps failing only when the test fails.
+      - name: Run kde-open with each name set to a marker handler
+        env:
+          BRAVEBOT_OBSERVE_KDE_OPEN: "1"
+        run: |
+          command -v kde-open kde-open5 kde-open6 || true
+          dpkg -s kde-cli-tools | grep -E '^(Package|Version):' || true
+          dpkg -L kde-cli-tools | grep -E '/bin/' || true
+          ls /etc/xdg/menus 2>&1 || true
+          dbus-run-session -- cargo test -p bravebot-tui --lib kde_open_run_with_each_name --locked -- --nocapture
 
       # Run once, with its output, to put the number of workflows skipped for want of a tool in the
       # log. Running it inside the Test step as well used to double its tens of seconds.
@@ -267,10 +318,11 @@ jobs:
         id: apt-week
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
-      # The downloaded packages are kept for a week, so a run that finds them skips the download
-      # from the runner image's mirror, which is the step that has stalled.
-      - name: Cache the cross compiler packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # The downloaded packages are kept for a week, so a run that finds them installs them with
+      # dpkg and never contacts the runner image's mirror, which is the step that has stalled.
+      - name: Restore the cross compiler packages
+        id: mingw-apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/bravebot-apt/*.deb
           key: apt-mingw-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
@@ -286,6 +338,13 @@ jobs:
         run: |
           archives="$HOME/.cache/bravebot-apt"
           mkdir -p "$archives"
+          set -- "$archives"/*.deb
+          if [ -e "$1" ]; then
+            if sudo timeout 180 dpkg -i "$@"; then
+              exit 0
+            fi
+            echo "installing the cached packages failed, falling back to apt" >&2
+          fi
           for attempt in 1 2 3 4; do
             if [ "$attempt" -ge 3 ]; then
               sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' /etc/apt/sources.list.d/*.sources
@@ -297,6 +356,14 @@ jobs:
             sleep 5
           done
           exit 1
+
+      # Saved here and not by the cache action's post step, so a later failing step does not lose it.
+      - name: Save the cross compiler packages
+        if: ${{ steps.mingw-apt-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt/*.deb
+          key: apt-mingw-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
 
       - name: Clippy
         # --locked where the two sibling clippy jobs do without it: they each run a locked
@@ -697,18 +764,50 @@ jobs:
           key: pnpm-store-ui-${{ runner.os }}-${{ hashFiles('ui/pnpm-lock.yaml') }}
           restore-keys: pnpm-store-ui-${{ runner.os }}-
 
+      # The downloaded packages are kept for a week per runner image, so a run that finds them
+      # installs them with dpkg and never contacts the Ubuntu mirrors.
+      - name: Find the week of the apt cache
+        id: apt-week
+        run: |
+          echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the desktop test packages
+        id: desktop-apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt-desktop/*.deb
+          key: apt-desktop-${{ runner.os }}-${{ steps.apt-week.outputs.image }}-${{ steps.apt-week.outputs.week }}
+
       - name: Install desktop test dependencies
         # Retried with a per-attempt limit for the reason given on the Windows lint job's apt step.
         timeout-minutes: 15
         run: |
+          archives="$HOME/.cache/bravebot-apt-desktop"
+          mkdir -p "$archives"
+          set -- "$archives"/*.deb
+          if [ -e "$1" ]; then
+            if sudo timeout 180 dpkg -i "$@"; then
+              exit 0
+            fi
+            echo "installing the cached packages failed, falling back to apt" >&2
+          fi
           for attempt in 1 2 3 4; do
-            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64'; then
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y -o Dir::Cache::archives=$archives xvfb libgtk-3-0 libnss3 libasound2t64"; then
               exit 0
             fi
             echo "apt attempt $attempt failed or timed out" >&2
             sleep 5
           done
           exit 1
+
+      # Saved here and not by the cache action's post step, so a later failing step does not lose it.
+      - name: Save the desktop test packages
+        if: ${{ steps.desktop-apt-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt-desktop/*.deb
+          key: apt-desktop-${{ runner.os }}-${{ steps.apt-week.outputs.image }}-${{ steps.apt-week.outputs.week }}
 
       - name: Build and test the desktop UI
         run: make check-ui-build
@@ -827,8 +926,12 @@ jobs:
   # and the empty Windows base rest on the code alone.
   #
   # Only the tests written for Windows run. The rest of the sandbox crate's tests use Unix paths
-  # and programs, and the agent's other confined-process tests spawn a POSIX shell. Target as in
-  # the windows job above.
+  # and programs, and the agent's other confined-process tests spawn a POSIX shell. The browser
+  # opener's three Windows tests in bravebot-tui also run (the step that follows the confine
+  # test): `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`,
+  # `a_windows_name_is_removed_in_whatever_case_it_is_set` and
+  # `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`. Target as
+  # in the windows job above.
   sandbox-windows:
     name: Sandbox on Windows
     runs-on: windows-latest
@@ -938,7 +1041,7 @@ jobs:
         run: cargo test -p bravebot-sandbox --locked --no-fail-fast --lib 'windows::'
 
       - name: Test the backend with real processes
-        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows -- --nocapture
 
       - name: Test a confined program run for a person
         # The session is granted its temporary directory, so it is a directory of its own and not
@@ -948,6 +1051,34 @@ jobs:
           export TMP="$(cygpath -w "$RUNNER_TEMP/confine")"
           export TEMP="$TMP"
           cargo test -p bravebot-agent --locked --no-fail-fast --test confine
+
+      # The browser opener's Windows start, `rundll32 url.dll,FileProtocolHandler` (#3860). The
+      # run test starts a child of the test binary with the nine names of the list set to a
+      # stage-written helper, asserts the opener's start removes them and that the helper does not
+      # run, and prints, for each name and for `PSModulePath`, whether a start with that name put
+      # back ran it. The printed record is not asserted and is kept in the step output. `3 passed`
+      # fails the step if a test was filtered out.
+      - name: Test the browser opener's Windows start
+        run: |
+          mkdir -p "$RUNNER_TEMP/opener"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/opener")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-tui --locked --lib -- --nocapture --exact \
+            opener::tests::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it \
+            opener::tests::a_windows_name_is_removed_in_whatever_case_it_is_set \
+            opener::tests::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments \
+            | tee "$RUNNER_TEMP/opener.log"
+          grep -q 'test result: ok. 3 passed' "$RUNNER_TEMP/opener.log"
+
+      # INPUT-52 on Windows: the console input records a start-up query read past its replies are
+      # handed to crossterm's event queue in order, and what is no event is counted as lost (#3846).
+      # `1 passed` fails the step if the filter matched nothing after a rename.
+      - name: Test the Windows hand-back of keys read at startup
+        run: |
+          cargo test -p bravebot-tui --locked --lib -- --exact \
+            input::tests::records_a_startup_query_read_are_handed_to_the_event_reader_in_order \
+            | tee "$RUNNER_TEMP/startup-input.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/startup-input.log"
 
   # The tests that ask the volume whether two awkward names are two files, run on the volume that
   # holds names apart that no other host does (#2869, TRUST-2). On every other host `two_files`
@@ -965,7 +1096,8 @@ jobs:
   # The job also runs the tests that pin how a `deny` or `ask` command rule folds the spellings of a
   # program that Windows ignores, and refuses an 8.3 short name (#3926). They pass on every host,
   # but a test that passes on the Linux host does not show the name handling is the same on a
-  # Windows host.
+  # Windows host. The last step asks the volume which characters it opens as an ASCII letter and
+  # whether a deny rule covers the program word spelled with each (PERM-5).
   names-windows:
     name: Awkward names on Windows
     runs-on: windows-latest
@@ -1032,6 +1164,17 @@ jobs:
           cargo test -p bravebot-core --locked --lib -- --exact "${tests[@]}" \
             | tee "$RUNNER_TEMP/rules.log"
           grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/rules.log"
+
+      - name: Test the program word against the spellings the volume opens
+        # Opens every character below U+10000 by name against a file for each ASCII letter. The first
+        # test asks a deny rule to cover each one the volume opened as the letter. The second pins the
+        # characters the rule covers for an ASCII letter and lists those the volume did not open (PERM-5).
+        run: |
+          cargo test -p bravebot-agent --locked --test program_word_fold -- --exact \
+            a_deny_rule_covers_every_spelling_the_volume_opens_as_the_program \
+            a_deny_rule_covers_exactly_the_pinned_spellings_and_the_extra_ones_are_listed \
+            --nocapture | tee "$RUNNER_TEMP/program-word.log"
+          grep -q 'test result: ok. 2 passed' "$RUNNER_TEMP/program-word.log"
 
   # The installers a release ships, built as a release builds them from the cross-built helpers,
   # and each installed on a runner of its own architecture by the job after this one. Beside each

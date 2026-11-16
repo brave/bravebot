@@ -375,7 +375,8 @@ impl Rendered {
     }
 }
 
-/// Replace the control characters in a name with the Unicode pictures for them.
+/// Replace the control characters in a name with a mark for each: the Unicode picture for a C0
+/// control, `␡` (U+2421) for DEL, and `‹U+XXXX›` for a C1 control.
 ///
 /// A path component may hold any byte but NUL and `/`, so a filename an attacker chose may hold a
 /// newline, a carriage return or an escape sequence. Those are the bytes that let a name stop being
@@ -387,26 +388,11 @@ impl Rendered {
 /// false negative [LSP-6](../../../docs/specs/tools/lsp.md) exists to prevent: a planner told
 /// nothing refers to a function deletes it, and a file with an odd name is still a reference.
 ///
-/// The two neighbours of this function are `bravebot_cli::progress::printable` and
-/// `bravebot_tui::render`, which do the same substitution for a person's screen and keep `\t`,
-/// since a tab in a file being shown is the file's own indentation. This one is over a filename
-/// rather than over file content, and a tab in a filename is not indentation: it is a column
-/// break in a list of paths, so it is pictured with the rest.
+/// This is [`crate::confirm::printable_with_tab_pictured`], the one implementation behind the
+/// screens: a tab in a filename is not indentation but a column break in a list of paths, so it is
+/// pictured with the rest. DEL is `␡` and a C1 control is `‹U+XXXX›`.
 pub(crate) fn pictured(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            // The Control Pictures block, which runs from NUL to US and then has one more for
-            // DEL. Pictured rather than dropped: a character silently removed is one nobody can
-            // tell was ever in the name.
-            '\u{0}'..='\u{1f}' => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
-            '\u{7f}' => '\u{2421}',
-            // DEL is the last one with a picture, so the C1 range above it has none and a byte
-            // there becomes the replacement character. Arithmetic past the block would land on
-            // whatever happens to live there, which is a character nobody could read back.
-            _ if c.is_control() => '\u{fffd}',
-            _ => c,
-        })
-        .collect()
+    crate::confirm::printable_with_tab_pictured(name)
 }
 
 /// Render a location against the workspace root.
@@ -1127,9 +1113,13 @@ mod tests {
         assert!(rendered.shown.contains('\u{2407}'), "{:?}", rendered.shown);
         assert!(rendered.shown.contains('\u{2409}'), "{:?}", rendered.shown);
         assert!(rendered.shown.contains('\u{2421}'), "{:?}", rendered.shown);
-        // C1 has no picture, so it becomes the replacement character rather than whatever sits at
+        // C1 has no picture, so it is written as `‹U+XXXX›` rather than as whatever sits at
         // 0x2400 plus its value, which is a character that reads as something it is not.
-        assert!(rendered.shown.contains('\u{fffd}'), "{:?}", rendered.shown);
+        assert!(
+            rendered.shown.contains("\u{2039}U+009B\u{203a}"),
+            "{:?}",
+            rendered.shown
+        );
     }
 
     /// A name inside the workspace is pictured too, and the substitution does not decide where the

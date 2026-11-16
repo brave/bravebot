@@ -137,12 +137,14 @@ PACKAGE_FILES = (
     "package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
 )
 
-# Read by nothing heavier than the checks that always run.
+# Read by nothing heavier than the checks that always run. verify/ is read by `check-scripts`,
+# which compares the contracts in crates/ with verify/contracts.txt, and by `make check-verus`,
+# which is run by name.
 QUIET = (
     "LICENSE", ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
-QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
+QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/", "verify/")
 
 # The crates the desktop app spawns, which it builds, with everything they name, before it runs.
 DESKTOP = ("ui-bridge", "ui-files")
@@ -195,7 +197,11 @@ def classify_by_area(path, desktop, fuzz):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
-    if path in ("contrib/check-lint-increase.py", "contrib/check-code-selectors.py"):
+    if path in (
+        "contrib/check-lint-increase.py",
+        "contrib/check-code-selectors.py",
+        "contrib/drive_tui.py",
+    ):
         return frozenset({"rust"})
     if path == "contrib/Dockerfile.cross":
         return frozenset({"build"})
@@ -487,6 +493,7 @@ CASES = (
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("contrib/check-lint-increase.py", {"rust"}),
     ("contrib/check-code-selectors.py", {"rust"}),
+    ("contrib/drive_tui.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("extension-trusted/manifest.json", {"rust", "ui"}),

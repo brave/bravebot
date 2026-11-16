@@ -377,6 +377,13 @@ pub(super) fn draw_tool_list(
                 width,
             ));
         }
+        if tool.read_only {
+            lines.extend(marked_rows(
+                &Span::raw("    "),
+                &[Span::styled(t!(mcp_tools_read_only).to_string(), muted)],
+                width,
+            ));
+        }
         if let Some(description) = &tool.description {
             for line in description.lines() {
                 lines.extend(marked_rows(&margin, &[Span::raw(line.to_string())], width));

@@ -36,7 +36,13 @@ backend runs to resolve a credential is withheld bravebot's own credentials and 
 a name here answers what the commands *you* ask for may see, and `AWS_PROFILE` in it would stop that
 CLI resolving the credential it is being run for.
 
-**Names only.** A list of names can only ever take something away; a list of values here would put a
+**Only your own file is read for it.** A name here is not only a restriction. A program started
+without `npm_config_ignore_scripts` or `PYTHONSAFEPATH` runs what your value of it kept from
+running, so a project's or a local settings file's `run.scrubEnv`, patterns included, is not read,
+and `bravebot doctor` names the file. Your `~/.bravebot/settings.json` and the file `--settings`
+names are read together.
+
+**Names only.** A list of names withholds variables and cannot supply a value; a list of values here would put a
 credential in front of every command the agent starts. The list is read when the process starts, so
 editing it describes your next session.
 
@@ -169,7 +175,7 @@ holding a credential location beneath it, such as the home directory, a director
 `~/.config`, is refused; a wildcard entry drops those matches and keeps the rest. Linux and macOS
 are unchanged.
 
-Your own file and a `--settings` file outside the project may write all four. A project or local file
+Your own file and the file `--settings` names may write all four. A project or local file
 may write `denyRead` and `denyWrite` and not the other two, so a repository you clone cannot widen
 what its own commands reach; `bravebot doctor` names the file that tried. A machine-level file can pin
 any list: a pinned `allowRead` or `allowWrite` replaces yours, and a pinned refusal is one nothing
@@ -202,6 +208,6 @@ A program that makes a scratch file there is refused, such as a shell heredoc, `
 compiler's intermediate files, and the planner is told so in the `run` description. A `denyWrite`
 entry naming the directory refuses it as well, and is the way to hold back one path inside it.
 
-The key is read from your own file and a `--settings` file outside the project, as `sandbox.mode`
+The key is read from your own file and the file `--settings` names, as `sandbox.mode`
 is. A project or local file that sets it is not obeyed and `bravebot doctor` reports the key as
 unread. Any value but `true` asks for nothing.

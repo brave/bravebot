@@ -138,7 +138,7 @@ export function ChatScreen({
   }, [trust !== null])
 
   const ended = view.ended === null ? null : ENDED[view.ended.reason]
-  const showEmpty = view.rows.length === 0
+  const showEmpty = view.rows.length === 0 && view.omitted === 0
   const canSuggest = showEmpty && view.status === 'idle' && view.ended === null
   const sending = state.sending
   const empty = useMemo(
@@ -157,7 +157,7 @@ export function ChatScreen({
         <TopBar title={title ?? firstPromptText(view.rows)} target={target} onMenu={onMenu} onCalls={() => setCallsOpen(true)} />
         <KeyboardAvoidingView style={styles.body} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ConversationCard keyboardOpen={keyboardOpen}>
-            <Transcript rows={view.rows} status={view.status} ended={view.ended !== null} decisions={state.decisions} empty={empty} />
+            <Transcript rows={view.rows} omitted={view.omitted} status={view.status} ended={view.ended !== null} decisions={state.decisions} empty={empty} />
             {hasQuestion && view.ended === null && (
               <View style={styles.panelWrap}>
                 <View style={styles.panel}>

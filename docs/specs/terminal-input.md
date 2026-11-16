@@ -10,6 +10,8 @@ governs:
   - crates/tui/src/app/keys.rs
   - crates/tui/src/hangup.rs
   - crates/tui/src/input.rs
+  - crates/tui/src/preview.rs
+  - crates/tui/src/theme.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/queue.rs
@@ -24,6 +26,7 @@ governs:
   - crates/tui/src/vim.rs
   - crates/tui/src/config_prompt.rs
   - crates/tui/src/list_picker.rs
+  - crates/tui/src/sidebar_prompt.rs
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
@@ -345,8 +348,8 @@ Up, then Escape, then Enter. From vi's INSERT mode that Escape is two presses (I
 
 **Why.** A chord that silently does nothing reads as a broken feature.
 
-`verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
-`verified-by: bravebot_tui::app::a_paste_clears_the_hint_that_prompted_it`
+`verified-by: bravebot_tui::app::tests::pasting::which_key_carries_a_picture_is_said_once_per_session`
+`verified-by: bravebot_tui::app::tests::pasting::a_paste_clears_the_hint_that_prompted_it`
 `verified-by: bravebot_tui::state::the_offer_is_not_made_where_ctrl_enter_cannot_arrive`
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_not_drawn_where_the_key_cannot_arrive`
 
@@ -418,7 +421,7 @@ named here and nowhere else:
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
 | Ctrl-P | does nothing, since the exchange the rewrite is asked over belongs to the turn (INPUT-48) |
-| `!` | arms a mode that changes what Enter does, over whatever the box holds when the turn ends ([shell-mode.md](shell-mode.md)) |
+| `!` | arms nothing mid-turn and is typed as a character; Enter on a line that begins with it is held in the box with a note ([shell-mode.md](shell-mode.md#SHELL-8)), and a mode armed before the turn began keeps its line waiting ([shell-mode.md](shell-mode.md#SHELL-6)) |
 | Up | takes back what is waiting before it walks the history (INPUT-18) |
 
 **What is offered beneath the box while work runs is the commands and the list of keys.** A line
@@ -463,7 +466,7 @@ attached to no press.
 `verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
 `verified-by: bravebot_tui::app::a_file_dropped_while_a_turn_is_running_is_attached`
 `verified-by: bravebot_tui::app::ctrl_j_is_not_swallowed_while_a_turn_runs`
-`verified-by: bravebot_tui::app::ctrl_v_reads_the_clipboard_during_a_turn_too`
+`verified-by: bravebot_tui::app::tests::pasting::ctrl_v_reads_the_clipboard_during_a_turn_too`
 
 <a id="INPUT-10"></a>
 ### INPUT-10: a prompt sent while a turn runs goes into that turn, at its next round boundary
@@ -524,9 +527,10 @@ are watching rather than going to the delegate. A delegate does not ask for one 
 shared and asking is taking, so a delegate that asked and then declined what it was handed would
 throw the line away, leaving the turn it was aimed at to find nothing waiting. A round a turn spends
 waiting for a delegate is a round of that turn, and the boundary it reaches when a delegate is back,
-or when the person's line is waiting, asks like any other. The turn waits for the first delegate to
-end or for a line, whichever comes first ([DELEGATE-17](delegation.md#DELEGATE-17)), so a line
-typed during the wait is read at that wake, while the other delegates still work, and not after
+or when the person's line is waiting, asks like any other. The turn waits for a `spawn_agent` call
+to have as many of its delegates end as its `wake_after` asked for, 1 where it named none, or for a
+line, whichever comes first ([DELEGATE-17](delegation.md#DELEGATE-17)), so a line
+typed during the wait is read at that wake, while the delegates still work, and not after
 the last of them has ended. A turn that answered with nothing in order to wait and then went
 straight on to its next request would put the delegate's report to the planner and nothing of what
 the person made of it.
@@ -536,7 +540,8 @@ asked for together and answering some while abandoning others leaves calls unans
 the middle of one is what the keys in INPUT-4 are for.
 
 **A `job_output` wait ends for a line.** A wait the planner asked for in `job_output` is a call that
-can last ten minutes, so the boundary after it can be that far off. The wait comes back within one
+can last as long as the prompt cache lifetime allows, so the boundary after it can be that far off.
+The wait comes back within one
 tick of a line arriving that the turn may take, with the job still running and the turn not stopped,
 and the call is answered as any wait is, so the round is whole and the line is taken at its boundary
 ([RUN-17](tools/run.md#RUN-17)). The call is not abandoned. A line that is a command, or is held
@@ -1146,12 +1151,13 @@ and readline from disagreeing about what was last taken.
   connection that has died. It costs a thread and a socket for that long, and it is the price of
   answering the person at once: the alternative is waiting for a read that cannot be interrupted.
   Nothing that thread does is visible, since it holds no policy, no workspace and no tool.
-- **Asking the terminal about itself at startup can eat what was typed into that moment.** The
-  question about the background is asked once, before the first frame, and the answer is read off
-  the tty directly. Anything typed or pasted in the window before the answer arrives is read by
-  that same call and discarded, and a terminal that answers with nothing keeps the window open for
-  its full 80 ms. It is bounded, it is once per session, and it is before there is a box to type
-  into, which is why it is a cost and not a clause.
+- **Asking the terminal about itself at startup delays the first frame.** What is typed meanwhile
+  is kept ([INPUT-52](#INPUT-52)), but it is not drawn until the questions are answered or given up
+  on: up to 80 ms for the background and 500 ms for the keys on a terminal that answers nothing,
+  once per session. On Windows the key question reads nothing and the background is not asked, so
+  the wait there is the graphics question's, which is also bounded at 500 ms. A terminal that
+  answered the key question after its 500 ms is sent no disambiguated keys for the session
+  (INPUT-33).
 - **Ctrl-S is the byte a terminal traditionally freezes its output with.** It reaches this process
   because raw mode turns that flow control off for as long as the session holds the terminal, which
   is what makes the chord bindable at all (INPUT-17). The cost is a person's muscle memory: somewhere
@@ -1468,6 +1474,11 @@ each one means and marking the one in force. Enter takes the row under the curso
 transcript; Escape leaves the style alone. Whichever style is chosen, the box comes back taking
 letters as letters, with no instruction left waiting for a key.
 
+The checklist `/sidebar` opens ([PANEL-17](info-panel.md#PANEL-17)) is the same picker with the same
+keys: Up and Down, and `j` and `k`, walk the list and stop at both ends, and Escape and Ctrl-C close
+it. Its rows are boxes, so Enter and Space both turn the row under the cursor on or off and leave the
+checklist open, with the cursor on the row. Space with Control, Alt or Shift held turns nothing.
+
 Vi editing has two modes over the same line. INSERT is the box everybody has, where a typed
 character lands at the caret. NORMAL takes a letter as an instruction, and a letter it has no
 instruction for does nothing at all rather than being typed. NORMAL opens two more for a while,
@@ -1531,6 +1542,10 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::list_picker::escape_and_ctrl_c_cancel`
 `verified-by: bravebot_tui::list_picker::the_arrows_and_vis_own_keys_walk_the_list`
 `verified-by: bravebot_tui::list_picker::enter_takes_the_row_under_the_cursor`
+`verified-by: bravebot_tui::sidebar_prompt::space_and_enter_turn_the_row_under_the_cursor_off_and_on_and_the_cursor_stays`
+`verified-by: bravebot_tui::sidebar_prompt::the_arrows_and_j_and_k_walk_the_list_and_stop_at_both_ends`
+`verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
+`verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
 `verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
@@ -2247,6 +2262,13 @@ prompts through the search (INPUT-19).
 
 `bravebot --incognito` stores nothing, so the prompts Up walks are the ones this session sent.
 
+While a stored prompt is on screen, Up and Down walk the history even where a list of what could
+be typed is open under the line: a command carried out is stored ([CMD-8](commands.md#CMD-8)), and a recalled command is
+a lone slash word that opens the list of commands, as a recalled prompt ending in `@` and a few
+letters opens the list of files. Editing the line ends the walk and gives the arrows back to the
+list, and so does Down past the newest prompt. Tab and Enter take what the list offers as they do
+for a typed line.
+
 **Why.** A person who presses Up is looking for something said before, and which session said it
 is not what they know. The walk reaches all of it by default, and the narrow scope is one chord
 away for a person who wants only this conversation's last prompts. The scope holds once chosen,
@@ -2259,6 +2281,10 @@ to remember, and the search answers to the same three scopes so that what a pers
 one carries to the other.
 
 `verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::app::tests::command_history::up_and_down_walk_past_a_recalled_command_while_the_list_is_open`
+`verified-by: bravebot_tui::app::tests::command_history::up_walks_past_a_recalled_command_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::command_history::up_walks_past_a_recalled_prompt_while_the_file_list_is_open`
+`verified-by: bravebot_tui::app::tests::command_history::the_arrows_return_to_the_list_once_a_recalled_command_is_edited`
 `verified-by: bravebot_tui::history::the_scope_cycles_everywhere_project_session_and_back`
 `verified-by: bravebot_tui::history::a_scope_switch_before_every_prompt_of_the_scope_lands_on_the_oldest`
 `verified-by: bravebot_tui::history::a_prompt_with_no_recorded_project_is_in_the_everywhere_scope_only`
@@ -2452,11 +2478,11 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
 `verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
-`verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
-`verified-by: bravebot_tui::app::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
-`verified-by: bravebot_tui::app::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
-`verified-by: bravebot_tui::app::a_letter_held_with_any_other_modifier_is_not_that_letter`
-`verified-by: bravebot_tui::app::the_keys_the_view_reads_with_a_modifier_held_still_answer`
+`verified-by: bravebot_tui::app::tests::watching::a_moved_chord_leaves_the_view_it_opened`
+`verified-by: bravebot_tui::app::tests::watching::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
+`verified-by: bravebot_tui::app::tests::watching::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
+`verified-by: bravebot_tui::app::tests::watching::a_letter_held_with_any_other_modifier_is_not_that_letter`
+`verified-by: bravebot_tui::app::tests::watching::the_keys_the_view_reads_with_a_modifier_held_still_answer`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
@@ -2882,7 +2908,10 @@ does not remove it. What the request cost is charged to the session and its trai
 not the answer was offered.
 
 Only a boolean `true` turns the setting on; a quoted `"true"` is absence, and the default is off,
-because the request spends on every turn.
+because the request spends on every turn. A project or local settings file may state `false` and
+cannot state `true`: its `true` is dropped, over the person's own `false` and over a person who
+stated nothing, and `doctor` names the file ([BACKEND-24](backends.md#BACKEND-24)). The person's own
+settings and the file `--settings` names are the only files that turn it on.
 
 **Why.** The request is the driver's own words over the planner's own context, which holds no
 untrusted content, and the answer is text a person must take and send themselves, so it decides
@@ -2894,6 +2923,10 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_agent::aside::the_suggestion_limit_counts_characters_rather_than_bytes`
 `verified-by: bravebot_agent::aside::a_suggestion_asks_its_own_question_and_leaves_the_exchange_alone`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_suggestions_on`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
+`verified-by: bravebot_tui::app::a_checkouts_suggestions_do_not_turn_the_session_on`
 `verified-by: bravebot_tui::app::tab_and_right_move_the_suggestion_into_the_box_and_send_nothing`
 `verified-by: bravebot_tui::app::a_suggestion_that_begins_with_a_slash_is_text_until_enter`
 `verified-by: bravebot_tui::app::any_other_key_removes_the_suggestion_and_still_types`
@@ -3320,3 +3353,37 @@ the machine slows with it. Sessions left behind this way add up, one core each.
 `verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
 `verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
 `verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`
+
+<a id="INPUT-52"></a>
+### INPUT-52: keys typed while the terminal is asked about itself at startup are kept, in order
+
+Before its first frame the interface that draws asks the terminal about its background, its keys
+and its graphics, and reads the answers off the tty. A byte read there that is not part of an
+answer is a key typed meanwhile. It is handed to the event reader ahead of anything still on the
+tty, so it reaches the session in the order it was typed. On Windows only the graphics question
+reads the console, and it reads input records instead of bytes; a record that is not part of an
+answer is handed to the event reader the same way. A byte that is part of no event, such
+as a sequence an answer cut short, is counted, and where any was the session says so in a note
+before the first prompt. Keys handed back in one read arrived together
+([INPUT-34](#INPUT-34)), so a `y` among them does not answer the question a session opens with;
+the row above that question's keys says they were refused, and they are carried to the box. A
+terminal that answered no question about its keys within 500 ms is not asked about its graphics,
+and the graphics question waits at most 500 ms for an answer.
+
+**Why.** A key read by these questions and not handed back is lost without a word, and on a
+terminal that answers nothing, such as a pty with nobody behind it, a driver or a slow ssh link,
+the questions hold the first frame for as long as they wait.
+
+`verified-by: bravebot_tui::input::keys_a_startup_query_read_are_handed_to_the_event_reader_in_order`
+`verified-by: bravebot_tui::input::records_a_startup_query_read_are_handed_to_the_event_reader_in_order`
+`verified-by: bravebot_tui::app::tests::startup_input::a_session_that_lost_keys_typed_at_startup_says_so_on_the_screen`
+`verified-by: bravebot_tui::theme::keys_read_around_the_background_reply_are_kept_in_order`
+`verified-by: bravebot_tui::theme::keys_read_while_no_background_reply_comes_are_kept`
+`verified-by: bravebot_tui::preview::keys_read_around_the_picker_replies_are_kept_in_order`
+`verified-by: bravebot_tui::preview::keys_read_when_no_picker_reply_comes_are_all_kept`
+`verified-by: bravebot_tui::preview::console_records_read_around_the_picker_replies_are_kept_in_order`
+`verified-by: bravebot_tui::preview::console_records_read_when_no_picker_reply_comes_are_all_kept`
+`verified-by: bravebot_tui::preview::a_terminal_that_answered_nothing_is_not_asked_about_graphics`
+`verified-by: bravebot_tui::preview::the_graphics_query_waits_no_longer_than_the_keyboard_query`
+`verified-by: bravebot_tui::trust_prompt::the_loop_says_when_it_refused_keys_that_arrived_together`
+`verified-by: bravebot_cli::startup_queries::an_unanswered_keyboard_query_is_not_waited_on_for_two_seconds`
