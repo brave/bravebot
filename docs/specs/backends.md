@@ -2469,10 +2469,11 @@ block that hands this agent's secrets to every command it runs, decided by whate
 file in a checkout.
 
 A key written twice in one object of one file, at any depth, is a mistake of the same kind and is
-read and reported the same way. JSON parsers keep the last value and say nothing, so two snippets
-pasted into one file lost the first one's `deny`. Two blocks written under one key are combined name
-by name, so a later `{}` erases nothing. A repeated list that only refuses keeps the entries of both,
-earlier first: `permissions.deny` and `permissions.ask`, `models.deny`, `mcp.deny`,
+read and reported the same way. A parser that keeps the last value says nothing, and would let a
+second snippet pasted below the first erase the first one's `deny` without a word. Two blocks
+written under one key are combined name by name, so a later `{}` erases nothing. A repeated list
+that only refuses keeps the entries of both, earlier first: `permissions.deny` and
+`permissions.ask`, `models.deny`, `mcp.deny`,
 `sandbox.filesystem.denyRead` and `denyWrite`, `sandbox.network.deniedHosts` and `run.scrubEnv`. A
 repeated `models.allow` or `mcp.allow` keeps the entries both lists name, since it bounds what may be
 requested or started and the second list must not widen what the first allowed. Any other repeated
@@ -2508,6 +2509,7 @@ The settings are still read whole: a repeat is a note and not a failure, on the 
 `verified-by: bravebot_config::settings::a_file_whose_only_fault_is_a_repeat_is_not_read_as_no_settings`
 `verified-by: bravebot_config::settings::a_rule_list_written_twice_in_one_file_keeps_every_rule`
 `verified-by: bravebot_config::settings::a_key_that_does_not_only_refuse_keeps_the_later_value_and_is_reported`
+`verified-by: bravebot_config::settings::every_list_a_repeat_unions_still_refuses_what_either_write_names`
 `verified-by: bravebot_config::settings::a_value_a_repeat_sets_aside_stays_in_the_document_to_be_cleared`
 `verified-by: bravebot_config::settings::a_deeply_nested_file_is_refused_and_an_ordinary_one_reads_as_before`
 `verified-by: bravebot_cli::running::doctor_names_a_key_written_twice_in_a_settings_file`

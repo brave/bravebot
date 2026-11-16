@@ -8185,6 +8185,153 @@ mod tests {
         assert_eq!(settings.permissions().ask, ["Edit(a)", "Edit(b)"]);
     }
 
+    /// Every list in [`REPEAT_UNIONS`] still refuses what the first of two writes of it names,
+    /// whichever order they come in, as the code that consumes the list reads it.
+    ///
+    /// The fault it rejects is an entry of the table that does not match the key its consumer
+    /// reads, whether misspelt or nested differently: the repeat then falls to the later value,
+    /// and `"denyRead": ["~/.ssh"], "denyRead": []` refuses nothing. A table row is needed for each
+    /// list, so a list added to [`REPEAT_UNIONS`] without one fails here and not in a person's
+    /// file.
+    #[test]
+    fn every_list_a_repeat_unions_still_refuses_what_either_write_names() {
+        struct Row {
+            path: &'static [&'static str],
+            /// The JSON of one entry of the list.
+            entry: &'static str,
+            /// Whether the consumer of the list refuses the entry, for a document and a scratch name.
+            refused: fn(&str, &str) -> bool,
+        }
+
+        fn written_twice(path: &[&str], first: &str, second: &str) -> String {
+            match path {
+                [] => unreachable!("a list has a name"),
+                [key] => format!(r#"{{"{key}": {first}, "{key}": {second}}}"#),
+                [key, rest @ ..] => {
+                    format!(r#"{{"{key}": {}}}"#, written_twice(rest, first, second))
+                }
+            }
+        }
+        fn settings(name: &str, text: &str) -> Settings {
+            Layers::new(&format!("repeat-unions-{name}"))
+                .global(text)
+                .read()
+        }
+
+        let rows = [
+            Row {
+                path: &["permissions", "deny"],
+                entry: r#""Read(.env)""#,
+                refused: |name, text| {
+                    let held = settings(name, text).permissions().deny.clone();
+                    held.contains(&"Read(.env)".to_string())
+                },
+            },
+            Row {
+                path: &["permissions", "ask"],
+                entry: r#""Edit(a)""#,
+                refused: |name, text| {
+                    let held = settings(name, text).permissions().ask.clone();
+                    held.contains(&"Edit(a)".to_string())
+                },
+            },
+            Row {
+                path: &["models", "deny"],
+                entry: r#""a""#,
+                refused: |name, text| {
+                    let managed = crate::managed::scratch(&format!("repeat-unions-{name}"), text);
+                    managed.models().refuses("a").is_some()
+                },
+            },
+            Row {
+                path: &["mcp", "deny"],
+                entry: r#"{"host": "a.example"}"#,
+                refused: |name, text| {
+                    let managed = crate::managed::scratch(&format!("repeat-unions-{name}"), text);
+                    managed
+                        .refuses(crate::managed::Server::Remote("https://a.example/mcp"))
+                        .is_some()
+                },
+            },
+            Row {
+                path: &["sandbox", "filesystem", "denyRead"],
+                entry: r#""/a""#,
+                refused: |name, text| {
+                    let read = settings(name, text);
+                    read.sandbox_filesystem()
+                        .deny_read
+                        .iter()
+                        .any(|entry| entry.path == "/a")
+                },
+            },
+            Row {
+                path: &["sandbox", "filesystem", "denyWrite"],
+                entry: r#""/a""#,
+                refused: |name, text| {
+                    let read = settings(name, text);
+                    read.sandbox_filesystem()
+                        .deny_write
+                        .iter()
+                        .any(|entry| entry.path == "/a")
+                },
+            },
+            Row {
+                path: &["sandbox", "network", "deniedHosts"],
+                entry: r#""a.example""#,
+                refused: |name, text| {
+                    let read = settings(name, text);
+                    read.sandbox_hosts()
+                        .denied
+                        .iter()
+                        .any(|host| host.entry == "a.example")
+                },
+            },
+            Row {
+                path: &["run", "scrubEnv"],
+                entry: r#""A_TOKEN""#,
+                refused: |name, text| settings(name, text).scrubbed().any(|var| var == "A_TOKEN"),
+            },
+        ];
+
+        for list in REPEAT_UNIONS {
+            assert!(
+                rows.iter().any(|row| row.path == *list),
+                "{list:?} has no row: write it twice and read it through what consumes it"
+            );
+        }
+        for row in &rows {
+            let shown = row.path.join(".");
+            assert!(
+                REPEAT_UNIONS.contains(&row.path),
+                "{shown} is no longer in REPEAT_UNIONS"
+            );
+            let entry = format!("[{}]", row.entry);
+            let slug = row.path.join("-");
+            // The consumer refuses the entry when it is written once, and refuses nothing for an
+            // empty list, so a consumer that always answered one way fails on the other.
+            let once = written_twice(row.path, &entry, &entry);
+            assert!(
+                (row.refused)(&format!("{slug}-once"), &once),
+                "{shown}: {once}"
+            );
+            let empty = written_twice(row.path, "[]", "[]");
+            assert!(
+                !(row.refused)(&format!("{slug}-empty"), &empty),
+                "{shown}: {empty}"
+            );
+            for (order, first, second) in [
+                ("first", entry.as_str(), "[]"),
+                ("last", "[]", entry.as_str()),
+            ] {
+                let text = written_twice(row.path, first, second);
+                assert!(
+                    (row.refused)(&format!("{slug}-{order}"), &text),
+                    "{shown}: {text}"
+                );
+            }
+        }
+    }
+
     /// Anything that does not only refuse is the later value, as before the repeat was noticed, and
     /// the repeat is still named. A rule list beside a value that is not a list is kept.
     #[test]
