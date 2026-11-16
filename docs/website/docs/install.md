@@ -27,6 +27,18 @@ curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh \
   | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
+On Linux the script also checks the signature on the checksum, which needs `gpg`. Without `gpg` it
+refuses before downloading anything, so install GnuPG first (`apt install gpg` on Debian or Ubuntu).
+Where you cannot, `BRAVEBOT_ALLOW_MISSING_GPG=1` on the `sh` side of the pipe installs on the
+checksum alone, which does not show who published the binary:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | BRAVEBOT_ALLOW_MISSING_GPG=1 sh
+```
+
+An install made this way needs the variable again at each update made while the machine has no
+`gpg`, since the update line `bravebot` prints does not carry it.
+
 To install a release other than the newest, give the script a version after `-s`. It takes three
 numbers, with or without a leading `v`, and checks that release exactly as it checks the newest:
 
@@ -132,9 +144,10 @@ again. The script needs PowerShell on Windows, since the signature check is
 
 ## Check a download by hand
 
-The installers check the binary before they write it, and refuse when it does not verify. To check
-a release yourself, download the asset for your platform from the
-[releases page](https://github.com/brave/bravebot/releases), then:
+The installers check the binary before they write it, and refuse when it does not verify. The one
+exception is `install.sh` on Linux with no `gpg` and `BRAVEBOT_ALLOW_MISSING_GPG=1` set, which
+checks only the checksum. To check a release yourself, download the asset for your platform from
+the [releases page](https://github.com/brave/bravebot/releases), then:
 
 On macOS, the binary has to be signed by Brave's Developer ID team (`KL8N8XSYF4`) and accepted by
 Gatekeeper. Both commands print nothing when they succeed:

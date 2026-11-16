@@ -305,6 +305,9 @@ pub fn reach<A: Asker + ?Sized>(
         writable: home.writable && asker.records(),
     };
     let mut notes = Vec::new();
+    // An entry of the administrator's lists that cannot be used refuses nothing, so a session says
+    // so before it starts anything (SERVERS-12).
+    notes.extend(crate::mcp::managed_entries_unusable(managed));
     let plans = settle(
         requested,
         project,
@@ -783,28 +786,20 @@ pub fn repository_holding(directory: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// A new directory under the system temporary directory, which no repository holds, for a test to
-/// declare a server's directory in. The scratch directory under `target/` is inside this checkout.
+/// A temporary directory of the host's, with its links followed, that no repository holds: the
+/// system one where it qualifies, as when `TMPDIR` is inside a checkout it does not. `None`, with
+/// why the test is skipped printed, where none qualifies.
+#[cfg(all(test, unix))]
+fn temporary_directory_in_no_repository() -> Option<PathBuf> {
+    crate::testutil::no_repository::temporary_directory_in_no_repository(repository_holding)
+}
+
+/// A new directory under a temporary directory no repository holds, for a test to declare a
+/// server's directory in. The scratch directory under `target/` is inside this checkout. `None`
+/// where no temporary directory of the host's is outside a repository.
 #[cfg(test)]
-pub(crate) fn outside_any_repository(name: &str) -> PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    // Named for this process and moment, and made with create_dir so a name another run holds is
-    // refused rather than shared.
-    // nosemgrep: rust.lang.security.temp-dir.temp-dir
-    let path = std::env::temp_dir().join(format!("bravebot-{name}-{}-{stamp}", std::process::id()));
-    std::fs::create_dir(&path).expect("a directory of its own under the temporary directory");
-    let path = path
-        .canonicalize()
-        .expect("the directory just made resolves");
-    assert_eq!(
-        repository_holding(&path),
-        None,
-        "the temporary directory is inside a repository"
-    );
-    path
+pub(crate) fn outside_any_repository(name: &str) -> Option<PathBuf> {
+    crate::testutil::no_repository::outside_any_repository(name, repository_holding)
 }
 
 /// Why a server is given no directory inside `repository`.
@@ -4396,7 +4391,9 @@ mod tests {
     /// is not, so the refusals are of the repository and not of declaring a directory.
     #[test]
     fn a_declared_directory_holding_a_repository_is_refused() {
-        let root = outside_any_repository("cli-servers-repository");
+        let Some(root) = outside_any_repository("cli-servers-repository") else {
+            return;
+        };
         let home = root.join("home");
         let project = root.join("project");
         std::fs::create_dir_all(&home).expect("home");
@@ -5814,14 +5811,15 @@ mod tests {
         assert!(view.left_out.contains(&absent), "{:?}", view.left_out);
     }
 
-    /// [`scratch`], under the temporary directory, since a server is not started in a directory a
-    /// git repository holds and the build directory is in one.
+    /// [`scratch`], under a temporary directory no repository holds, since a server is not started
+    /// in a directory a git repository holds and the build directory is in one. `None` where no
+    /// temporary directory of the host's is outside a repository.
     #[cfg(unix)]
-    fn outside_a_repository(name: &str) -> PathBuf {
-        let path = temporary_directory().join(format!("bravebot-{name}"));
+    fn outside_a_repository(name: &str) -> Option<PathBuf> {
+        let path = temporary_directory_in_no_repository()?.join(format!("bravebot-{name}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
-        path.canonicalize().expect("canonical scratch")
+        Some(path.canonicalize().expect("canonical scratch"))
     }
 
     /// A declaration for a program in `bin` that reads `key` and starts in `work`, with a `PATH`
@@ -5852,9 +5850,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_foreseen_policy_is_the_one_a_launch_hands_its_backend() {
-        let root = outside_a_repository("cli-servers-foreseen")
-            .canonicalize()
-            .expect("the scratch directory resolves");
+        let Some(root) = outside_a_repository("cli-servers-foreseen") else {
+            return;
+        };
+        let root = root.canonicalize().expect("the scratch directory resolves");
         if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
             eprintln!("SKIPPED (no confinement here)");
             return;
@@ -5944,9 +5943,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_foreseen_policy_lists_an_absent_path_as_left_out_where_the_platform_cannot_name_it() {
-        let root = outside_a_repository("cli-servers-foreseen-absent")
-            .canonicalize()
-            .expect("the scratch directory resolves");
+        let Some(root) = outside_a_repository("cli-servers-foreseen-absent") else {
+            return;
+        };
+        let root = root.canonicalize().expect("the scratch directory resolves");
         let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
             eprintln!("SKIPPED (no backend here)");
             return;
@@ -6031,9 +6031,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_foreseen_policy_holds_the_session_network_decision_and_starts_no_proxy() {
-        let root = outside_a_repository("cli-servers-foreseen-network")
-            .canonicalize()
-            .expect("the scratch directory resolves");
+        let Some(root) = outside_a_repository("cli-servers-foreseen-network") else {
+            return;
+        };
+        let root = root.canonicalize().expect("the scratch directory resolves");
         let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
             eprintln!("SKIPPED (no backend here)");
             return;
@@ -8031,6 +8032,52 @@ for line in sys.stdin:
         );
     }
 
+    /// A managed entry that is neither a host nor a command is named as a session opens, with the
+    /// file, the list and the entry as the file spelled it, and a usable entry is not (SERVERS-12).
+    ///
+    /// Rejects the silent skip, where an administrator's deny entry refuses nothing and nothing says
+    /// so, and a note for every entry, which would bury the one that matters.
+    #[test]
+    fn a_managed_entry_that_cannot_be_used_is_named_as_a_session_opens() {
+        let root = scratch("cli-servers-managed-unusable");
+        let path = root.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp": {"deny": [
+                {"host": "mcp.corp.example:443"},
+                {"command": ["evil-server", "--stdio"]},
+                {"host": "mcp.ok.example"}
+            ]}}"#,
+        )
+        .expect("managed");
+        let reached = reach(
+            &[],
+            &root,
+            &Home {
+                directory: None,
+                writable: false,
+            },
+            &Managed::at(&path),
+            Asking::Bypass,
+            &mut nobody(),
+            Stream::Null,
+        );
+        assert_eq!(reached.notes.len(), 2, "{:?}", reached.notes);
+        let file = path.display().to_string();
+        for entry in [
+            r#"{"host":"mcp.corp.example:443"}"#,
+            r#"{"command":["evil-server","--stdio"]}"#,
+        ] {
+            assert!(
+                reached.notes.iter().any(|note| note.contains(&file)
+                    && note.contains("mcp.deny")
+                    && note.contains(entry)),
+                "{entry}: {:?}",
+                reached.notes
+            );
+        }
+    }
+
     /// `list` and `get` hold a server in an image to the managed layer as one, even where it could
     /// not be planned: no allow entry names it, whatever path inside the image it runs.
     #[test]
@@ -8824,6 +8871,15 @@ done
 
         let nothing = crate::confine::hosts_for_a_server(None, Some(&[]));
         assert_eq!(allowed(&nothing), Some(Vec::new()));
+
+        // A wildcard names no address (SANDBOX-24), so an address the declaration lists under a
+        // session's wildcard is dropped and a name under it is kept.
+        let wildcard = listing(Some(&["*.216.34"]), &[]);
+        let under = crate::confine::hosts_for_a_server(
+            Some(&wildcard),
+            Some(&words(&["1.2.216.34", "a.216.34"])),
+        );
+        assert_eq!(allowed(&under), Some(words(&["a.216.34"])));
     }
 
     /// SERVERS-10: a server whose declaration lists hosts is held to the proxy though the session

@@ -15,9 +15,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
-import { SIDEBAR_TAB } from './drive-support.mjs'
+import { SIDEBAR_TAB, SHOTS_DIR } from './drive-support.mjs'
 
-const shots = process.env.SHOTS ?? '/tmp/bravebot-ui'
+const shots = process.env.SHOTS ?? SHOTS_DIR
 mkdirSync(shots, { recursive: true })
 const scratch = mkdtempSync(join(tmpdir(), 'bravebot-update-'))
 const profile = join(scratch, 'profile')

@@ -43,8 +43,9 @@
 //! the list rather than taken as a reason to fail.
 
 use bravebot_agent::conversation::Snapshot;
+use bravebot_agent::links::{LinkKind, Reference};
 use bravebot_agent::workspace::Workspace;
-use bravebot_aichat::protocol::Cached;
+use bravebot_aichat::protocol::{Cached, Effort};
 use bravebot_core::command::Spelling;
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
@@ -406,6 +407,16 @@ pub struct Record {
     /// server.
     #[serde(default)]
     pub model: Option<String>,
+    /// The reasoning effort the last turn was sent with, as the word of [`Effort::as_str`].
+    ///
+    /// The level in force when the turn ran, which is nothing where the model reads none. Kept as
+    /// the word and not as the type, so a record edited by hand to hold another word is still a
+    /// record: the list reads it through [`Effort::named`] and shows nothing for a word that names
+    /// no level.
+    ///
+    /// `None` for a record written before this was kept, or one whose last turn sent no level.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The total says what the session cost; this says which turn cost it. Reading a session back
@@ -610,6 +621,77 @@ pub struct Record {
     /// Empty for a record written before this was kept, and for a session that touched nothing.
     #[serde(default)]
     pub touched: bravebot_agent::workspace::TouchedRecord,
+    /// The issues and pull requests the session met, in the order first met, so a resume, a fork
+    /// and the next turn's save carry the list `/issues` and `/prs` print (PANEL-16).
+    ///
+    /// Each is read back through [`Reference::new`] and one that fails is dropped, so an edited
+    /// record cannot put a string with an escape in the panel. An entry whose fields do not read
+    /// as a [`StoredReference`] is dropped when the record is read, and a list that is not a list
+    /// reads as empty, so neither makes the record unreadable. Empty for a record written before
+    /// this was kept, and for a session that met nothing.
+    #[serde(default, deserialize_with = "read_stored_references")]
+    pub references: Vec<StoredReference>,
+}
+
+/// The entries of the list that read as a [`StoredReference`], in the order written.
+fn read_stored_references<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<StoredReference>, D::Error> {
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(entries) => entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value(entry).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+/// An issue or pull request the session met, as it is written down.
+///
+/// Plain strings and a number, written from a [`Reference`], which holds only what GitHub allows in
+/// each part. What is read back is checked again, since the file can be edited.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredReference {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    /// `issue` or `pull_request`. A word this build does not know drops the entry.
+    pub kind: String,
+    /// Whether the text the reference came from named its kind. Absent reads as not named, and
+    /// such an entry is dropped when the record is read.
+    #[serde(default)]
+    pub kind_named: bool,
+}
+
+impl StoredReference {
+    /// `reference` as it is written down.
+    pub fn of(reference: &Reference) -> Self {
+        Self {
+            owner: reference.owner().to_string(),
+            repo: reference.repo().to_string(),
+            number: reference.number(),
+            kind: match reference.kind() {
+                LinkKind::Issue => "issue",
+                LinkKind::PullRequest => "pull_request",
+            }
+            .to_string(),
+            kind_named: reference.kind_named(),
+        }
+    }
+
+    /// The reference this stands for, or `None` where a part is not one [`Reference::new`] allows,
+    /// or where the kind was never named. The only reader that assumes a kind was the loose word
+    /// `owner/repo#n`, which is no longer read (PANEL-16), so a record an older build wrote can
+    /// hold such an item and a resume drops it.
+    pub fn read(&self) -> Option<Reference> {
+        let kind = match self.kind.as_str() {
+            "issue" => LinkKind::Issue,
+            "pull_request" => LinkKind::PullRequest,
+            _ => return None,
+        };
+        let reference = Reference::new(&self.owner, &self.repo, self.number, kind)?;
+        self.kind_named.then_some(reference)
+    }
 }
 
 /// A kept checkout as it is written down.
@@ -915,19 +997,23 @@ pub fn failure_reason_with_model(
         );
     }
     // A rate limit ends with the settings that lengthen the wait or move the turn to another model.
-    // Which of the two sentences is chosen by whether the backend that sent the request has a
-    // `provider` entry, a fact the driver set from the variant, and nothing the service wrote is in
-    // either (BACKEND-37). A wait past the longest one the client sits through ends the call on its
-    // first request, so no `maxRetries` changes the outcome and only the other two remedies are
-    // named (BACKEND-54).
+    // Which of the three sentences is chosen by where the backend that sent the request lets a person
+    // state `maxRetries` (a `provider` entry, `BRAVEBOT_BEDROCK_MAX_RETRIES`, or nowhere), a fact the
+    // driver set from the variant, and nothing the service wrote is in any of them (BACKEND-37). A
+    // wait past the longest one the client sits through ends the call on its first request, so no
+    // `maxRetries` changes the outcome and only the other two remedies are named (BACKEND-54).
     if diagnosis.category == Category::RateLimited {
         let past_the_ceiling = diagnosis
             .retry_after
             .is_some_and(|wait| wait > bravebot_aichat::LONGEST_WAIT);
-        let next = if diagnosis.retry_setting && !past_the_ceiling {
-            t!(failure_rate_limited_entry_next)
-        } else {
-            t!(failure_rate_limited_next)
+        let next = match diagnosis.retry_setting {
+            bravebot_agent::RetrySetting::Entry if !past_the_ceiling => {
+                t!(failure_rate_limited_entry_next)
+            }
+            bravebot_agent::RetrySetting::Variable if !past_the_ceiling => {
+                t!(failure_rate_limited_variable_next)
+            }
+            _ => t!(failure_rate_limited_next),
         };
         said = t!(failure_with_next, what = said, next = next);
     }
@@ -983,19 +1069,13 @@ fn too_long_words(
 /// The name comes from the person's configuration or from `/model`, so it is not a service's
 /// words, but a settings file may hold any characters and the line is drawn in the status area,
 /// written to the session record and exported ([VIEW-4](../../../docs/specs/terminal-transcript.md#VIEW-4)).
-/// A control character becomes its Unicode picture (U+2400 and after), or U+FFFD where it has none;
-/// a character that draws as nothing is spelled by [`bravebot_core::invisible::spelled`].
+/// A control character becomes its Unicode picture (U+2400 and after), DEL `␡`, and a C1 control
+/// `‹U+XXXX›`, all as [`bravebot_agent::confirm::printable_with_tab_pictured`] draws them; a
+/// character that draws as nothing is spelled by [`bravebot_core::invisible::spelled`].
 fn model_words(model: &str) -> String {
-    bravebot_core::invisible::spelled(model.to_string())
-        .text
-        .chars()
-        .map(|c| match c {
-            '\u{7f}' => '\u{2421}',
-            c if (c as u32) < 0x20 => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
-            c if c.is_control() => '\u{fffd}',
-            c => c,
-        })
-        .collect()
+    bravebot_agent::confirm::printable_with_tab_pictured(
+        &bravebot_core::invisible::spelled(model.to_string()).text,
+    )
 }
 
 /// The words for a backend, as a failure line names it.
@@ -1425,9 +1505,11 @@ fn in_the_stores(state: &Path, path: &Path) -> bool {
     let mut spellings = vec![state.to_path_buf()];
     spellings.extend(std::fs::canonicalize(state).ok());
     // A home rules file that is a link is backed up where it lands (RECALL-5), so that file is the
-    // name a backup of it carries.
-    let linked = std::fs::symlink_metadata(state.join("AGENTS.md"))
-        .is_ok_and(|meta| meta.file_type().is_symlink())
+    // name a backup of it carries. Only a link listed as `AGENTS.md` is the person's rules
+    // (INSTR-1): a volume that folds case answers the name for an `agents.md` link too.
+    let linked = bravebot_agent::preamble::lists_entry_named(state, "AGENTS.md")
+        && std::fs::symlink_metadata(state.join("AGENTS.md"))
+            .is_ok_and(|meta| meta.file_type().is_symlink())
         && std::fs::canonicalize(state.join("AGENTS.md")).is_ok_and(|lands| path == lands);
     linked
         || spellings.iter().any(|state| {
@@ -2201,6 +2283,11 @@ pub enum Link {
     PullRequest,
 }
 
+/// The references a record holds that [`Reference::new`] still accepts, in the order written.
+fn read_references(stored: &[StoredReference]) -> Vec<Reference> {
+    stored.iter().filter_map(StoredReference::read).collect()
+}
+
 /// A link the person wrote, once it has been read as one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Url(String);
@@ -2212,6 +2299,10 @@ impl Url {
     /// zero-width character could make the row read as another link.
     pub fn read(text: &str) -> Option<Self> {
         bravebot_core::url::web_address(text).map(|text| Self(text.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -2238,9 +2329,13 @@ pub struct Handle {
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
     skill_mode: Option<String>,
+    /// The level the last turn was sent with, for the record to carry.
+    effort: Option<Effort>,
     /// What the session's file tools reached as of the last save that gave it, written again by a
     /// save that gives none (INSTR-14, INSTR-16).
     touched: bravebot_agent::workspace::TouchedRecord,
+    /// The issues and pull requests the session met, as of the last turn's save (PANEL-16).
+    references: Vec<Reference>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -2420,7 +2515,9 @@ impl Handle {
             written: Vec::new(),
             agent: None,
             skill_mode: None,
+            effort: None,
             touched: bravebot_agent::workspace::TouchedRecord::default(),
+            references: Vec::new(),
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -2495,7 +2592,9 @@ impl Handle {
             written: record.written.clone(),
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
+            effort: record.effort.as_deref().and_then(Effort::named),
             touched: record.touched.clone(),
+            references: read_references(&record.references),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -2669,6 +2768,17 @@ impl Handle {
         self.skill_mode = name;
     }
 
+    /// Record the level the last turn was sent with, or `None` where it sent none. Written with the
+    /// next save, and kept by a resume until a turn replaces it.
+    pub fn set_effort(&mut self, effort: Option<Effort>) {
+        self.effort = effort;
+    }
+
+    /// The level the last turn was sent with.
+    pub fn effort(&self) -> Option<Effort> {
+        self.effort
+    }
+
     /// Record what the session's file tools have reached, for the next save to write when it
     /// gives none of its own (INSTR-14, INSTR-16).
     pub fn set_touched(&mut self, touched: bravebot_agent::workspace::TouchedRecord) {
@@ -2750,6 +2860,16 @@ impl Handle {
     /// Take the files the session wrote, written with the record at the turn's save (OPEN-6).
     pub fn set_written(&mut self, written: &[PathBuf]) {
         self.written = written.iter().map(|path| StoredPath::of(path)).collect();
+    }
+
+    /// Take the issues and pull requests the session met, written with the record at the turn's
+    /// save (PANEL-16). Replaces the list whole.
+    pub fn set_references(&mut self, references: &[Reference]) {
+        self.references = references.to_vec();
+    }
+
+    pub fn references(&self) -> &[Reference] {
+        &self.references
     }
 
     /// Add a note a person typed, belonging to `turn`, and write it to the record at once.
@@ -2866,6 +2986,7 @@ impl Handle {
             injected_facts: self.injected_facts.clone(),
             work: self.work,
             written: self.written.clone(),
+            references: self.references.iter().map(StoredReference::of).collect(),
             title,
             started: self.started,
             updated: now(),
@@ -2875,6 +2996,7 @@ impl Handle {
             tokens: standing.tokens,
             split: standing.split,
             model: standing.model.map(str::to_string),
+            effort: self.effort.map(|level| level.as_str().to_string()),
             spend: standing.spend.clone(),
             timing: standing.timing.clone(),
             todos: standing
@@ -3013,6 +3135,7 @@ impl Handle {
         record.front = Some(self.front.recorded().to_string());
         record.agent = self.agent.clone();
         record.skill_mode = self.skill_mode.clone();
+        record.effort = self.effort.map(|level| level.as_str().to_string());
         record.touched = self.touched.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
@@ -3020,6 +3143,7 @@ impl Handle {
         record.injected_facts = self.injected_facts.clone();
         record.work = self.work;
         record.written = self.written.clone();
+        record.references = self.references.iter().map(StoredReference::of).collect();
         self.write(&directory, &mut record)
     }
 
@@ -3981,6 +4105,13 @@ pub(crate) struct Listed {
     /// What the server reported answering with, as of the last turn.
     #[serde(default)]
     pub(crate) model: Option<String>,
+    /// The word the last turn's reasoning effort was recorded as. Read as a level by the one rule
+    /// for the words, so one that names none is no effort.
+    #[serde(default)]
+    pub(crate) effort: Option<String>,
+    /// How many calls changed a file and how many ran a program, and how the last program ended.
+    #[serde(default)]
+    pub(crate) work: bravebot_agent::Work,
     #[serde(default)]
     pub(crate) turns: usize,
     #[serde(default)]
@@ -4417,15 +4548,17 @@ mod tests {
     }
 
     /// BACKEND-37: a rate-limited line ends with the next step. A request to a provider entry is
-    /// told to raise `maxRetries` in that entry and to set `fallbackModel`; a request to any
-    /// backend with no entry is told only `fallbackModel` and to try later, because there is no
-    /// `maxRetries` to raise. Other categories do not carry the sentence.
+    /// told to raise `maxRetries` in that entry and to set `fallbackModel`; a request to an AWS
+    /// account reached through the tier variables is told to raise `BRAVEBOT_BEDROCK_MAX_RETRIES`
+    /// and to set `fallbackModel`; a request to any backend with neither is told only
+    /// `fallbackModel` and to try later. Other categories do not carry the sentence.
     ///
     /// The faults this rejects: no next step, `maxRetries` named for the Brave endpoint or a
-    /// tier-variable account, and the same sentence for a rate limit and a refusal.
+    /// tier-variable account, the variable named for an entry or for the Brave endpoint, and the same
+    /// sentence for a rate limit and a refusal.
     #[test]
     fn a_rate_limit_ends_with_the_setting_that_lengthens_the_wait() {
-        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_agent::{Category, Diagnosis, RetrySetting};
 
         let rate_limited = || {
             Diagnosis::of(Category::RateLimited)
@@ -4433,23 +4566,42 @@ mod tests {
                 .after(7)
         };
 
-        let entry = failure_reason(rate_limited().with_retry_setting(), None);
+        let entry = failure_reason(rate_limited().with_retry_setting(RetrySetting::Entry), None);
         assert!(entry.contains("`maxRetries`"), "{entry}");
         assert!(entry.contains("`fallbackModel`"), "{entry}");
         assert!(entry.starts_with("error: "), "{entry}");
 
+        let variable = failure_reason(
+            rate_limited().with_retry_setting(RetrySetting::Variable),
+            None,
+        );
+        assert!(
+            variable.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable}"
+        );
+        assert!(!variable.contains("`maxRetries`"), "{variable}");
+        assert!(variable.contains("`fallbackModel`"), "{variable}");
+
         let no_entry = failure_reason(rate_limited(), None);
         assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(!no_entry.contains("MAX_RETRIES"), "{no_entry}");
         assert!(no_entry.contains("`fallbackModel`"), "{no_entry}");
         assert!(no_entry.contains("try again later"), "{no_entry}");
 
         let unavailable = failure_reason(
             Diagnosis::of(Category::Unavailable)
                 .with_status(503)
-                .with_retry_setting(),
+                .with_retry_setting(RetrySetting::Entry),
             None,
         );
         assert!(!unavailable.contains("maxRetries"), "{unavailable}");
+        let unavailable = failure_reason(
+            Diagnosis::of(Category::Unavailable)
+                .with_status(503)
+                .with_retry_setting(RetrySetting::Variable),
+            None,
+        );
+        assert!(!unavailable.contains("MAX_RETRIES"), "{unavailable}");
     }
 
     /// BACKEND-37, BACKEND-54: a 429 that asked for a wait past the longest one the client sits
@@ -4457,23 +4609,26 @@ mod tests {
     /// person to raise `maxRetries`, even for a request to a provider entry. A wait the client
     /// would sit through (the ceiling itself included) keeps the sentence that names it.
     ///
-    /// The fault this rejects: choosing the sentence from the provider entry alone, which sends a
-    /// person to raise a count that has no effect on a call that is never sent again.
+    /// The faults this rejects: choosing the sentence from the provider entry alone, which sends a
+    /// person to raise a count that has no effect on a call that is never sent again, and the same
+    /// choice from the tier variables alone, which names `BRAVEBOT_BEDROCK_MAX_RETRIES` for it.
     #[test]
     fn a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries() {
-        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_agent::{Category, Diagnosis, RetrySetting};
         use bravebot_aichat::LONGEST_WAIT;
         use std::time::Duration;
 
-        let said = |wait: Duration, entry: bool| {
+        let said_for = |wait: Duration, setting: Option<RetrySetting>| {
             let mut diagnosis = Diagnosis::of(Category::RateLimited)
                 .with_status(429)
                 .asking_for_a_wait_of(wait);
-            if entry {
-                diagnosis = diagnosis.with_retry_setting();
+            if let Some(setting) = setting {
+                diagnosis = diagnosis.with_retry_setting(setting);
             }
             failure_reason(diagnosis, None)
         };
+        let said =
+            |wait: Duration, entry: bool| said_for(wait, entry.then_some(RetrySetting::Entry));
 
         let past = said(LONGEST_WAIT + Duration::from_secs(1), true);
         assert!(!past.contains("maxRetries"), "{past}");
@@ -4491,6 +4646,25 @@ mod tests {
         let no_entry = said(LONGEST_WAIT + Duration::from_secs(1), false);
         assert!(!no_entry.contains("maxRetries"), "{no_entry}");
         assert!(no_entry.contains("try again later"), "{no_entry}");
+
+        let variable_past = said_for(
+            LONGEST_WAIT + Duration::from_secs(1),
+            Some(RetrySetting::Variable),
+        );
+        assert!(!variable_past.contains("MAX_RETRIES"), "{variable_past}");
+        assert!(variable_past.contains("`fallbackModel`"), "{variable_past}");
+        assert!(variable_past.contains("try again later"), "{variable_past}");
+
+        let variable_at = said_for(LONGEST_WAIT, Some(RetrySetting::Variable));
+        assert!(
+            variable_at.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable_at}"
+        );
+        let variable_under = said_for(Duration::from_secs(5), Some(RetrySetting::Variable));
+        assert!(
+            variable_under.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable_under}"
+        );
     }
 
     /// A refusal that names the account, with neither a status nor a wait.
@@ -4645,7 +4819,7 @@ mod tests {
                 context_tokens: None,
                 conceded: Default::default(),
                 backend: None,
-                retry_setting: false,
+                retry_setting: bravebot_agent::RetrySetting::None,
                 cause: Box::new(BackendError::from(ChatError::Account(failure))),
             };
             failure_reason(error.diagnosis(), None)
@@ -5063,7 +5237,7 @@ mod tests {
         assert!(!hostile.chars().any(char::is_control), "{hostile:?}");
         assert!(!hostile.contains('\u{200b}'), "{hostile:?}");
         assert!(
-            hostile.contains("a\u{241b}[2Jb\u{240a}c\u{2421}d\u{fffd}e"),
+            hostile.contains("a\u{241b}[2Jb\u{240a}c\u{2421}d\u{2039}U+0085\u{203a}e"),
             "{hostile:?}"
         );
     }
@@ -6324,6 +6498,70 @@ mod tests {
         assert_eq!(old.skill_mode, None);
     }
 
+    /// SESSION-11. The level the last turn was sent with is written as its word, by a save and by a
+    /// continuation, kept by a resume until a turn replaces it, carried by a fork, and read as none
+    /// from a record written before it was kept.
+    #[test]
+    fn a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-effort");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_effort(Some(Effort::Xhigh));
+        save_a_turn_session(&mut handle);
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.effort.as_deref(), Some("xhigh"));
+
+        let id = handle.id().to_string();
+        drop(handle);
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(resumed.effort(), Some(Effort::Xhigh));
+        let forked = fork(&root, &id).expect("the session forks");
+        assert_eq!(forked.effort.as_deref(), Some("xhigh"));
+
+        resumed.set_effort(Some(Effort::Low));
+        let trust = TrustStore::new(&root);
+        let snapshot = a_record().conversation;
+        assert!(resumed.save_continuation(
+            load(&root, &id).expect("written"),
+            Continuation {
+                conversation: &snapshot,
+                prompt: "next",
+                tokens: 10,
+                split: Split::of(10, 5),
+                model: "m",
+                trust: &trust,
+                begins: 0,
+                ends: 0,
+                prompt_at: None,
+                rewind: &[],
+                timing: Default::default(),
+                answered_by_mode: false,
+            },
+        ));
+        assert_eq!(
+            load(&root, &id).expect("written").effort.as_deref(),
+            Some("low"),
+            "the continuation did not write the level its turn was sent with"
+        );
+
+        resumed.set_effort(None);
+        save_a_turn_session(&mut resumed);
+        assert_eq!(
+            load(&root, &id).expect("written").effort,
+            None,
+            "a turn that sent no level left the earlier one on disk"
+        );
+
+        let mut old = serde_json::to_value(&record).expect("serialises");
+        old.as_object_mut().expect("an object").remove("effort");
+        let old: Record = serde_json::from_value(old).expect("an old record still reads");
+        assert_eq!(old.effort, None);
+    }
+
     /// ADDRESS-3. The name the driver set is written with the record, kept by the turns that follow
     /// it, a resume, a fork and a continuation, and replaced or cleared only by the driver. A
     /// record from before the name was kept reads as naming none.
@@ -6791,6 +7029,150 @@ mod tests {
         let record: Record = serde_json::from_value(written).expect("an older record reads");
         assert_eq!(record.issue, None);
         assert_eq!(record.pull_request, None);
+    }
+
+    /// A reference met in a session, as the record keeps it.
+    fn a_reference(number: u64, kind: LinkKind) -> Reference {
+        Reference::new("brave", "bravebot", number, kind).expect("a valid one")
+    }
+
+    /// Every record written before the references were kept has no such field, and it must still
+    /// resume, with none rather than with an error.
+    ///
+    /// The fault it rejects: a field with no `#[serde(default)]`, which makes every older record
+    /// unreadable.
+    #[test]
+    fn a_record_from_before_the_references_reads_as_having_none() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("references")
+            .expect("the references are written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+        assert!(record.references.is_empty());
+    }
+
+    /// The list is written with the turn's save, a resume reads it back with its order and its
+    /// kinds, and a fork carries it (SESSION-3).
+    ///
+    /// The faults it rejects: a save that leaves the list out of the record (the resume has none), a
+    /// resume that sorts the list, and a fork that starts empty.
+    #[test]
+    fn the_references_are_written_with_the_save_and_a_resume_and_a_fork_keep_them() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-references");
+        let met = [
+            a_reference(42, LinkKind::Issue),
+            a_reference(7, LinkKind::PullRequest),
+            a_reference(1, LinkKind::Issue),
+        ];
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_references(&met);
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.references.len(), 3);
+        drop(handle);
+        let resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(resumed.references(), met, "the resume changed the list");
+
+        let forked = fork(&root, resumed.id()).expect("the session forks");
+        assert_eq!(read_references(&forked.references), met);
+    }
+
+    /// An entry whose fields do not read as a reference, such as `"number": -1`, a number that is a
+    /// string or a missing owner, is dropped with the entries after it kept, and the record is still
+    /// read (SESSION-3).
+    ///
+    /// The fault it rejects: a list read as a whole, where one such entry makes the whole record
+    /// unreadable.
+    #[test]
+    fn an_entry_that_does_not_read_is_dropped_and_the_record_and_the_other_entries_are_kept() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        let entry = |owner: &str, number: serde_json::Value| serde_json::json!({"owner": owner, "repo": "bravebot", "number": number, "kind": "issue", "kind_named": true});
+        written["references"] = serde_json::json!([
+            entry("brave", 1.into()),
+            entry("brave", (-1).into()),
+            entry("brave", "7".into()),
+            {"repo": "bravebot", "number": 8, "kind": "issue", "kind_named": true},
+            "not an object",
+            entry("brave", 9.into()),
+        ]);
+        let record: Record = serde_json::from_value(written.clone()).expect("the record reads");
+        let numbers: Vec<u64> = read_references(&record.references)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(numbers, [1, 9]);
+
+        written["references"] = serde_json::json!("not a list");
+        let record: Record = serde_json::from_value(written).expect("the record reads");
+        assert!(record.references.is_empty());
+    }
+
+    /// A reference is read back through [`Reference::new`], so a record that was edited cannot put
+    /// a string with an escape, a kind this build does not know or a number with a leading zero in
+    /// the panel.
+    ///
+    /// The fault it rejects: a read that trusts the strings.
+    #[test]
+    fn a_reference_the_record_holds_that_is_not_valid_is_dropped_on_reading() {
+        let written = |owner: &str, repo: &str, number: u64, kind: &str| StoredReference {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            number,
+            kind: kind.to_string(),
+            kind_named: true,
+        };
+        let held = [
+            written("brave", "bravebot", 1, "issue"),
+            written("brave\u{1b}[31m", "bravebot", 2, "issue"),
+            written("brave", "brave/bot", 3, "issue"),
+            written("brave", "bravebot", 4, "discussion"),
+            written("brave", "bravebot", 0, "issue"),
+            written("brave", "bravebot", 1_000_000_000, "issue"),
+            written("brave", "bravebot", 5, "pull_request"),
+        ];
+        let read: Vec<u64> = read_references(&held)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(read, [1, 5]);
+    }
+
+    /// A record an older build wrote can hold an item read from the loose word `owner/repo#n`,
+    /// whose kind was assumed, and an entry with no `kind_named` reads as one. A resume drops it
+    /// and keeps one whose kind was named, which a full address, `gh` or a closing keyword gave.
+    ///
+    /// The fault it rejects: a read that keeps an assumed item whose parts are well formed, so a
+    /// path or a word an older build listed stays in the panel after a resume.
+    #[test]
+    fn an_item_whose_kind_was_never_named_is_dropped_on_reading_and_a_named_one_is_kept() {
+        let written = |number: u64, kind_named: bool| StoredReference {
+            owner: "brave".to_string(),
+            repo: "bravebot".to_string(),
+            number,
+            kind: "issue".to_string(),
+            kind_named,
+        };
+        let held = [written(12, false), written(13, true), written(14, false)];
+        let read: Vec<u64> = read_references(&held)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(read, [13]);
+
+        let without_the_flag: StoredReference = serde_json::from_str(
+            r#"{"owner":"brave","repo":"bravebot","number":9,"kind":"issue"}"#,
+        )
+        .expect("reads");
+        assert!(without_the_flag.read().is_none());
     }
 
     /// The picker searches the links, so the list has to carry them, and a record that holds
@@ -7329,6 +7711,49 @@ mod tests {
         std::fs::remove_dir_all(base).expect("clean");
     }
 
+    /// RECALL-5. A kept mark is believed for the file a home rules link lands on only where the
+    /// link is listed as `AGENTS.md`. A link the person named `agents.md` is not read as their
+    /// rules (INSTR-1), even where a volume folding case opens it under that name.
+    ///
+    /// Rejects: a look-up of the link by the name `AGENTS.md`, which a folding volume answers with
+    /// `agents.md`. On a volume that does not fold case the fault cannot be reached, so the test
+    /// adds a link spelled `AGENTS.md` to another file and checks that a kept mark on where that
+    /// link lands is believed while one on where `agents.md` lands still is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_kept_mark_on_the_file_an_agents_md_link_lands_on_is_not_believed() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let base = scratch.path();
+        let state = base.join("state");
+        let dotfiles = base.join("dotfiles");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&dotfiles).expect("dotfiles");
+        std::fs::write(dotfiles.join("rules.md"), "- mine\n").expect("rules");
+        std::os::unix::fs::symlink(dotfiles.join("rules.md"), state.join("agents.md"))
+            .expect("link");
+        let lands = std::fs::canonicalize(dotfiles.join("rules.md")).expect("canonical");
+        let folds = state.join("AGENTS.md").exists();
+        let mut cases = vec![(lands, false)];
+        if !folds {
+            std::fs::write(dotfiles.join("AGENTS.md"), "- linked\n").expect("linked rules");
+            std::os::unix::fs::symlink(dotfiles.join("AGENTS.md"), state.join("AGENTS.md"))
+                .expect("exact link");
+            let exact = std::fs::canonicalize(dotfiles.join("AGENTS.md")).expect("canonical");
+            cases.push((exact, true));
+        }
+        for (path, believed) in cases {
+            let stored = a_stored_point(vec![StoredBackup {
+                kept: true,
+                path: path.display().to_string(),
+                before: BYTES.into(),
+                bytes: Some("b3JpZ2luYWw=".into()),
+                captured_trust: Some(UNTRUSTED.into()),
+            }]);
+            let point = stored.into_point_with_state(Path::new("/work"), Some(&state));
+            assert_eq!(point.backups[0].kept, believed, "{}", path.display());
+        }
+    }
+
     /// RECALL-5, RECALL-8. The record keeps what a fact held before a save only where that fact
     /// was public, and keeps a rules file's old text as it does today. The fault this rejects is
     /// a private fact's bytes copied into a session record programs may read.
@@ -7442,6 +7867,7 @@ mod tests {
             tokens: 0,
             split: Default::default(),
             model: None,
+            effort: None,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             todos: BTreeMap::new(),
@@ -7473,6 +7899,7 @@ mod tests {
             rewind: Vec::new(),
             checkouts: Vec::new(),
             touched: Default::default(),
+            references: Vec::new(),
             agent: None,
             skill_mode: None,
         }

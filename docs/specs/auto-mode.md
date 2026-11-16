@@ -32,38 +32,94 @@ that untrusted content never reaches the driver or the planner is
 ## Clauses
 
 <a id="AUTO-1"></a>
-### AUTO-1: the key, a flag on a one-shot run and the desktop window's menu reach auto, and nothing else does
+### AUTO-1: the key, `--auto`, the person's own setting and the desktop window's menu reach auto, and nothing else does
 
 The mode key stops on auto between planning and bypassing, so the press after planning lands in auto
 and the one after that in bypassing where that is reachable ([MODE-5](permission-modes.md#MODE-5)).
 A click on the mode under the box passes it by ([MOUSE-14](mouse.md#MOUSE-14)). `--auto` opens a
-one-shot run in it, and is refused beside `--dangerously-skip-permissions` and `--accept-edits`, and
-where the line starts no one-shot run, since a session has the key. The desktop window offers it as
-an item of the Approvals group of the session controls menu, named and described there, and its
-shortcut stops on it after planning and walks on to asking, since the window has no bypassing
-([MODE-11](permission-modes.md#MODE-11)). `/plan` does not set it, a background session cannot be in
-it ([BG-7](background-sessions.md#BG-7)), no settings file selects it, and no recorded session
-restores it ([MODE-10](permission-modes.md#MODE-10)).
+one-shot run in it, and opens a session in it where the line starts one in the terminal (a bare
+`bravebot`, `-i`, `--fork`, `--from-pr`, `--resume` and `--continue` with no task). It is refused
+beside `--dangerously-skip-permissions` and `--accept-edits`, and on a line that starts neither, such
+as `--plain`, `--bg`, `--handle-uri` and a command that opens no session.
+
+`permissions.startInAuto` opens in auto every session the terminal client opens and every session
+the desktop window opens (`session.new`, `session.open` and `session.fork`), a resumed one and a fork
+included. It is read from the home settings file and from the file `--settings` names, and from no
+other layer. A project or local file that names it has the key removed, and `bravebot doctor` and the
+desktop settings view name the file. A managed file that names it decides nothing, and `doctor` says so.
+Only the boolean `true` opens a session in auto: `false`, a quoted `"true"`, a number and the key
+outside the `permissions` block leave a session asking, and none of them is reported. A mode flag on
+the line wins over the setting ([MODE-5](permission-modes.md#MODE-5)).
+
+The bridge behind an editor's ACP server and the one behind the local host open every session asking, a new
+one, an opened one and a fork, because neither client can leave auto ([ACP-7](acp.md#ACP-7), [HOST-2](local-host.md#HOST-2)).
+A session a `bravebot://open` link starts opens asking whatever the setting says, since the link
+comes from outside the person's own typing ([LINK-2](deep-links.md#LINK-2)). A one-shot run, a scheduled run, a trigger, `skill eval`, a background session, a delegate and the
+plain client do not read the setting. A behavioural test runs
+a one-shot run under the setting. For the others, a test checks by source which files call the
+getter and fails when another appears.
+
+The desktop window offers the mode as an item of the Approvals group of the session controls menu,
+named and described there, and its shortcut stops on it after planning and walks on to asking, since
+the window has no bypassing ([MODE-11](permission-modes.md#MODE-11)). `/plan` does not set it, a
+background session cannot be in it ([BG-7](background-sessions.md#BG-7)), and no recorded session
+restores it ([MODE-10](permission-modes.md#MODE-10)). No other settings key, `permissions.defaultMode`
+included, selects it.
 
 **Why.** Bypassing is on the key's ladder, and auto answers fewer questions than it does, so the key
 reaches it. A click on a control that cycles is the input a stray press can make, and the mode hands
 questions to a model, so a click there does not grant it. The window's menu shows what each item
 does before it is chosen, so choosing auto there is a choice made by name. A checkout or a file a
-person did not write must not be able to choose who answers, and every session opens asking, so none
-can.
+person did not write must not be able to choose who answers, so the setting is read only from the two
+files the person wrote or named themselves, and the default stays asking. The flag typed on the line
+is the person's choice for that session and the setting is their choice for every session, so the
+line wins.
+
+**Known cost.** An administrator cannot stop a person's home file from opening sessions in auto, since
+the managed file's copy of the key is not read and there is no key that narrows the mode for a layer
+([#3568](https://github.com/brave/bravebot/issues/3568), Not built). A person whose home file sets it
+meets the refusal of `/bg` in every new session until the mode key leaves auto
+([BG-8](background-sessions.md#BG-8)). A quoted `"true"` opens a session asking, and nothing says so. The desktop settings view does not list a managed file that names the key;
+`doctor` does.
+
+**The way back.** From auto the mode key goes to bypassing where it is reachable and to asking after
+that, and goes straight to asking where a layer wrote `permissions.bypassUnreachable`
+([MODE-5](permission-modes.md#MODE-5)). In the desktop window it goes to asking. Setting the key to
+`false`, or removing it, opens sessions asking again.
 
 `verified-by: bravebot_agent::permission_mode::the_key_reaches_auto_after_planning_and_before_bypass`
 `verified-by: bravebot_tui::app::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
 `verified-by: bravebot_ui_bridge::wire::a_window_chooses_auto_and_never_bypass`
 `verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_session::jobs::a_background_session_cannot_be_in_auto`
-`verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
+`verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_where_nothing_opens_in_it`
+`verified-by: bravebot_cli::running::the_setting_that_opens_sessions_in_auto_leaves_a_one_shot_run_asking`
+`verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
+`verified-by: bravebot_cli::auto_start::the_setting_in_the_persons_own_file_and_in_the_named_file_opens_a_session_in_auto`
+`verified-by: bravebot_cli::auto_start::a_checkouts_setting_opens_nothing_in_auto_and_doctor_names_the_file`
+`verified-by: bravebot_cli::auto_start::a_resumed_session_asks_unless_the_line_or_the_setting_says_auto`
+`verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
+`verified-by: bravebot_config::settings::only_a_boolean_true_under_permissions_opens_a_session_in_auto`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_open_sessions_in_auto`
+`verified-by: bravebot_config::settings::a_managed_file_cannot_open_sessions_in_auto`
+`verified-by: bravebot_cli::doctor::doctor_says_a_managed_file_naming_the_start_in_auto_setting_decides_nothing`
+`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::app::only_the_persons_own_files_open_a_session_in_auto`
+`verified-by: bravebot_tui::app::a_session_that_opens_in_auto_names_it_on_the_line_under_the_box`
+`verified-by: bravebot_ui_bridge::permission_mode::the_persons_setting_opens_a_new_session_a_fork_and_a_resume_in_auto`
+`verified-by: bravebot_ui_bridge::permission_mode::a_checkouts_copy_of_the_setting_opens_nothing_in_auto`
+`verified-by: bravebot_ui_bridge::permission_mode::the_file_the_window_selected_opens_a_session_in_auto`
+`verified-by: bravebot_cli::auto_start::a_session_a_link_starts_asks_where_the_setting_opens_others_in_auto`
+`verified-by: bravebot_tui::app::a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto`
+`verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_asks_where_the_setting_opens_a_windows_in_auto`
+`verified-by: bravebot_ui_bridge::host_process::a_hosts_session_asks_where_the_setting_opens_a_windows_in_auto`
 
 <a id="AUTO-2"></a>
 ### AUTO-2: auto answers a write as accepting edits does, and asks every question no other clause here gives to the classifier
 
 A write goes through unasked, except one that would create a credential and one to a protected path,
-which are put to the person ([MODE-2](permission-modes.md#MODE-2)). A deny rule still holds
+which are put to the person ([MODE-2](permission-modes.md#MODE-2)); so is a run whose line redirects
+into a protected path, which the classifier is not asked about (AUTO-3). A deny rule still holds
 ([MODE-6](permission-modes.md#MODE-6)). Every other question is put to the confirmer behind the mode,
 which is a person, or refuses where nobody can be asked ([MODE-7](permission-modes.md#MODE-7)).
 
@@ -80,10 +136,12 @@ question a person can review afterwards in a diff, so no model is needed for it.
 
 A run is put to it only where the sandbox confines the line, the line did not ask to start with no
 profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)), no standard input comes from a reference, no
-credential scope was asked for, nothing private is released, and no stage of the line is `git`, the
-program whose profile lifts the `.git` hold-back ([SANDBOX-18](sandboxing.md#SANDBOX-18)). A stage is
-recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and on
-every platform, and any stage of a pipeline counts. A fetch is put to it for
+credential scope was asked for, nothing private is released, no stage of the line is `git`, the
+program whose profile lifts the `.git` hold-back ([SANDBOX-18](sandboxing.md#SANDBOX-18)), and no
+destination of a redirection is a protected path ([PERM-9](permissions.md#PERM-9)), read as named,
+as it lands after links are followed and under each other name of a file with a hard link. A stage
+is recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and
+on every platform, and any stage of a pipeline counts. A fetch is put to it for
 `fetch_url`, for the first question about the URL, and not for `download_url`, which puts bytes into
 a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). It is consulted
 only in auto, only in a turn of a session the person has typed to, and not for a delegate, whose task
@@ -104,6 +162,12 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_run_only_on_the_classifiers_allow_word_for_a_confined_line`
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_fetch_only_on_the_classifiers_allow_word_and_not_a_redirect`
 `verified-by: bravebot_agent::turn::a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_git_config`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_git_hook`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_husky_hook`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_the_bravebot_settings`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_the_pre_commit_config`
+`verified-by: bravebot_agent::turn::a_run_into_a_protected_file_is_not_put_to_the_classifier_by_any_name_it_has`
 `verified-by: bravebot_agent::turn::no_mode_but_auto_consults_the_classifier`
 `verified-by: bravebot_agent::turn::a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier`
 `verified-by: bravebot_agent::turn::in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person`
@@ -116,9 +180,10 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 
 These stay with the person in this mode: a question the planner posed and a line the person typed
 ([MODE-7](permission-modes.md#MODE-7)), the plan prompt ([MODE-14](permission-modes.md#MODE-14)), the
-limit and repeated-call questions ([TURN-8](turns.md#TURN-8), [TURN-9](turns.md#TURN-9)), a proposed
+limit question ([TURN-8](turns.md#TURN-8)), a proposed
 rule ([RULE-3](tools/propose-rule.md#RULE-3)), a message to another session
-([MSG-3](session-messages.md#MSG-3)), a credential write and a write to a protected path, the exposing
+([MSG-3](session-messages.md#MSG-3)), a credential write, a write to a protected path and a run that
+redirects into one, the exposing
 read, the vouch, the list of a server's tools, a server's start and move, a path request, a host
 question, a language server's start, the startup trust question, and a plan. It also never answers
 reading output, a vetted read, or a case whose routing field is a reference (`path_ref`,
@@ -129,6 +194,7 @@ it or because the bytes it shows can be an attacker's. A model's word is not a p
 something ([PROMPT-9](prompting.md#PROMPT-9)).
 
 `verified-by: bravebot_agent::permission_mode::auto_puts_every_question_a_mode_may_not_answer_to_the_person`
+`verified-by: bravebot_agent::permission_mode::auto_does_not_answer_a_run_with_a_protected_destination_and_bypassing_does`
 
 <a id="AUTO-5"></a>
 ### AUTO-5: the classifier is given the person's typed lines and one rendering of the action
@@ -260,5 +326,6 @@ nothing about what the person wanted.
 - A model of its own for the classifier, read from the home layer only
   ([BACKEND-24](backends.md#BACKEND-24), [COMPACT-15](compaction.md#COMPACT-15)). It runs on the
   session's model.
-- A flag that opens an interactive session in the mode. The key reaches it.
+- A key that narrows the mode for a layer, as listed first above, which is also what would let an
+  administrator stop a person's own file from opening sessions in it (AUTO-1).
 - Instruction files as input to the classifier, which Claude Code includes.

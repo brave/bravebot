@@ -63,7 +63,7 @@ model that can call tools as `model`:
 Ollama is running at http://localhost:11434, serving models bravebot can use.
 Importing it adds these to /home/you/.bravebot/settings.json:
   model: "ollama/qwen3-coder-oc:latest"
-  provider.ollama, reached at http://localhost:11434/v1: {"name":"Ollama (local)","options":{"baseURL":"http://localhost:11434/v1"}}
+  provider.ollama, reached at http://localhost:11434/api: {"name":"Ollama (local)","npm":"ollama-ai-provider-v2","options":{"baseURL":"http://localhost:11434/api"}}
 Import this from Ollama? [y/N]
 ```
 
@@ -73,10 +73,11 @@ listing, says nothing. The request waits a few seconds at most. Where your setti
 an entry for a server on the same port, under any name, Ollama is not offered again.
 
 A second request asks which models are loaded. For the model shown, the question gives the context
-window the server loaded it with. Where that is below the 131,072 tokens bravebot otherwise budgets
-against, the question says the server drops the earliest turns beyond it and names
-`OLLAMA_CONTEXT_LENGTH`, and the entry written carries the figure as `contextWindow`, so a
-conversation is kept within it. A model that is not loaded has no line.
+window the server loaded it with. Where that is below the 65,536 tokens bravebot budgets an Ollama
+model against, the question says each request asks Ollama for the window the model was trained with,
+up to 65,536 tokens, so the model is reloaded with it rather than losing the earliest turns, and that
+`contextWindow` on the entry asks for less where memory is short. Nothing is written for it. A model
+that is not loaded has no line.
 
 **A running LM Studio or llama-server.** Each is asked once, the way Ollama is, on this machine only,
 with no key, and says nothing where it does not answer. A server that answers is offered as a block

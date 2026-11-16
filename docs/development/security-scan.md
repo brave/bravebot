@@ -47,6 +47,10 @@ Opengrep's baseline mode considers committed changes only. When tracked files ha
 uncommitted changes, the local check scans without that baseline and lets reviewdog
 filter findings to the branch and working-tree diff. Stage new files before scanning.
 
+Findings in a file under `third_party/` are not counted in either mode; the scan prints how many it
+left out. [checks.md](checks.md) gives the reason and says what the organization's `security` check
+does with the same files.
+
 Branch scans select `sveltegrep` only when the diff includes an HTML or Svelte file
 that still exists. Without those inputs, its search for extracted scripts would walk
 ignored build output and nested worktrees for no benefit. Full scans and explicit

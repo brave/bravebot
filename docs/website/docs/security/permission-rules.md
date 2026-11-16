@@ -8,11 +8,15 @@ description: Configure deny, ask and allow permission rules, understand matching
 
 The `permissions` block of `~/.bravebot/settings.json` holds three lists (`deny`, `ask` and `allow`)
 saying which actions to refuse outright and which to stop and ask you about. They are the same three
-lists Claude Code keeps, with the same spellings, so a block copied out of `~/.claude/settings.json`
-governs bravebot unedited. See
+lists Claude Code keeps, with the same spellings, so those three lists in a block copied out of
+`~/.claude/settings.json` govern bravebot unedited. A key of that block that bravebot does not read,
+such as `disableBypassPermissionsMode`, restricts nothing, and `bravebot doctor` names it. The key
+that makes the bypass mode unreachable here is `bypassUnreachable`. See
 [Configuration](../customize/configuration.md#permissions) for how a rule is written.
 
 **A rule decides whether you are asked, and whether an action happens at all. Nothing else.**
+
+## What a deny rule refuses
 
 **A deny rule refuses before the file is opened or the program is looked for.** A denied file is not
 read, not enumerated, not searched and not written, and a `Read` deny rule also stops a write to the
@@ -20,6 +24,8 @@ path it covers. A file whose contents are off limits is not protected if it can 
 Naming the path through a reference reaches the same refusal, including on the one route allowed to
 read what nobody vouched for: a processor is handed no denied file either. The planner is told the
 rule refused and that retrying is not the answer.
+
+## What a rule covers
 
 **A rule covers the file, not only the spelling used to ask for it.** A call is checked under the name
 it gave and again under the name it reaches once every link on the way is followed, so a link to a
@@ -54,22 +60,42 @@ spelling you approved.
   redirection's target, since no rule can be matched against it. A path on a drive is a full path:
   `Read(//D:/added/**)` covers `d:\added\secret`.
 - **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
-  a `WebFetch(domain:evil.example)` rule covers both.
+  a `WebFetch(domain:evil.example)` rule covers both. A domain rule naming an address covers that
+  address however it is spelled, so `WebFetch(domain:127.0.0.1)` covers `[::ffff:127.0.0.1]`,
+  `2130706433` and `127.1`. A rule on a name with a letter outside ASCII also covers its ASCII form,
+  so `WebFetch(domain:bücher.example)` covers `xn--bcher-kva.example`. A domain that is not a host,
+  such as `example.com:443` or one holding a character outside ASCII that is not a letter or a
+  digit, is reported as unreadable.
 - **Commands.** A command rule is matched against the program and each argument as the line was split,
   not against the line run together. A space in an `allow` rule covers only the gap between two words,
   so `Bash(ls *)` does not cover `"ls /x"`, a script named `ls /x`. In `deny` and `ask` a space also
   covers a space inside a word, and a `*` covers any text in every list.
   A `deny` or `ask` rule also covers the program under a leading `timeout`, `time`, `nice`, `nohup`,
   `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
+  For `env` that includes its `-i` and `-u NAME` options, an optional `--` that ends the options, and
+  every word containing `=` before the program, whatever its name (`A-B=1` and `1A=x` count), so
+  `Bash(git push *)` also refuses `env -- FOO=bar git push` and `env A-B=1 git push`. An `env` with an
+  option bravebot does not read, or with nothing left to run, is matched as written.
   An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
   through by any list.
-  On every host a program word is also read without a trailing dot or space, a `::$DATA` suffix and one
-  `.exe`, `.com`, `.cmd` or `.bat`, so `Bash(git *)` covers `git.exe.` and `git.cmd`. While a `deny` or
+  On every host a program word, and the name of a wrapper, is also read without regard to case and
+  without a trailing dot or space, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat`, so
+  `Bash(git *)` covers `GIT x`, `git.exe.` and `git.cmd`, and `Bash(git push *)` refuses
+  `TIMEOUT 30 git push`. Two letters count as the same when a Windows volume would open them as
+  one file name, so `Bash(git push *)` also covers `g` followed by a dotless `ı` and `t`, and
+  `Bash(ssh *)` covers a long `ſsh`. A spelling that is covered although your volume would not open it
+  as that program costs you a question or a refusal and lets nothing through. Arguments keep their case, an `allow` rule is matched as written and grants
+  none of these spellings, and a program given by a path such as `/usr/bin/git` is not covered by
+  `Bash(git *)`. While a `deny` or
   `ask` command rule is in force, a program written as an 8.3 short name such as `POWERS~1` is
   refused, since the rule cannot be matched against it.
 - **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
   write. It holds when the redirection reaches the file through `..`, as `config/sub/../app.env`
-  does, whether or not a link is on the path.
+  does, whether or not a link is on the path. The rules are asked again just before the line opens
+  the file, under the file the name lands on then and each other name it has, so a link or hard link
+  an earlier part of the line left at an approved name is refused like the file named directly. That
+  holds for a `<` source, for a file opened inside a `$(...)` assignment value and for a delegate's
+  `writes:` limit. The check compares names and settings and never reads the file.
 - **Files read on your behalf.** A denied `AGENTS.md`, a file it points at, a skill or an agent
   definition is left out of the turn, and you are told. A checkout cannot put a denied file into the
   system prompt by committing a link to it.
@@ -87,6 +113,8 @@ A deny rule also holds against **a workspace you trusted**, which is what makes 
 saying yes at startup trusts the whole tree, and a rule is how one file is kept out of that answer
 without declining the rest of it.
 
+## What an allow rule grants
+
 **An allow rule stops the asking and grants nothing else.** It does not make a command's output
 trusted: output carries what it would have carried. Pressing `a` at [a run prompt](permissions.md#vouching-for-a-command) grants those two together because
 you are looking at one command and can answer for both; a pattern covers commands nobody has read, so
@@ -98,10 +126,13 @@ extend reach: it cannot open a path the workspace and the directories you opened
 `.bravebot/settings.json` and `.bravebot/settings.local.json` that arrive with a repository, because
 both of those only ever take something away. `allow` is the one list that hands something back, so it
 is read from `~/.bravebot/settings.json`, and from a file you passed to `--settings` that sits outside
-the project you are working in and the one you started in. An `allow` entry in a checkout's file takes effect on nothing by
+the project you are working in, every directory the session has been in, and the checkout holding each
+of them. An `allow` entry in a checkout's file takes effect on nothing by
 itself: whoever last edited the repository would otherwise be answering an approval prompt on your
 behalf, which is a program run with your privileges, a file written without the question, or a
 redirect to a host you were never shown.
+
+## Rules a project carries
 
 **A project asks, and you grant.** When a session opens in a checkout whose settings carry `allow`
 entries, one box lists every one of them and the file each came from. Saying yes grants exactly those
@@ -123,6 +154,8 @@ starting there would. `/clear` reads the rules again for the directory you are i
 in, so neither the prompt you still get nor the one you no longer get is a mystery. Waiving a prompt
 for *every* project is still your own file, or a file passed on the command line for one run.
 
+## Prompts no rule answers
+
 **Five prompts no rule can answer.** A run that would put your private data into a program asks
 whatever the rules say, because a rule saying which commands may run is not consent to hand one your
 data. A call that would put your private data into an [MCP server's](../customize/mcp-servers.md#each-call)
@@ -135,6 +168,8 @@ program and its arguments: `Bash(git log)` matches `LD_PRELOAD=./evil.so git log
 write tells the two apart. Last, a write to a [protected path](permission-modes.md)
 asks, an `Edit` allow rule and a vouched path included, because a file there is code that runs later with
 your own rights.
+
+## Rules that cannot be read
 
 **A rule that cannot be read is dropped, named, and takes nothing with it.** A line that is not a rule,
 names no tool family, or has no anchor to resolve is skipped and the rest of the file still applies.

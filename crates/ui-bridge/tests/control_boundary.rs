@@ -1327,12 +1327,7 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
     use bravebot_core::{Pipeline, Stage};
 
     let scratch = Scratch::new("control-boundary-host");
-    let mut clients: Vec<Linked> = (0..3)
-        .map(|_| control_link::launch(cat()).expect("a client launches"))
-        .collect();
-    for client in &mut clients {
-        assert_eq!(round_trip(&mut client.channel, "up"), "up");
-    }
+    let clients = clients_over_channels();
     let hooks = Hooks::parse(
         &json!({"hooks": [{"on": "turn-started",
             "run": ["/bin/sh", "-c", format!("{} > hook-fds.txt", list_sockets_command())]}]})
@@ -1370,8 +1365,98 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
         ran.stdout
     );
 
+    stop(clients);
+}
+
+/// Three clients this process launched and holds the near end of the channel to, as a host does.
+fn clients_over_channels() -> Vec<Linked> {
+    let mut clients: Vec<Linked> = (0..3)
+        .map(|_| control_link::launch(cat()).expect("a client launches"))
+        .collect();
+    for client in &mut clients {
+        assert_eq!(round_trip(&mut client.channel, "up"), "up");
+    }
+    clients
+}
+
+fn stop(clients: Vec<Linked>) {
     for mut client in clients {
         let _ = client.child.kill();
         let _ = client.child.wait();
     }
+}
+
+/// As [`programs_a_host_starts_hold_no_end_of_the_channels_it_created`], for an MCP server started
+/// through `StdioServer::launch` under the platform's confinement, as a session starts one.
+#[test]
+fn an_mcp_server_a_host_starts_holds_no_end_of_the_channels_it_created() {
+    use bravebot_sandbox::policy::SandboxPolicy;
+    use bravebot_sandbox::{Stream, Variables};
+
+    let sandbox = match bravebot_sandbox::for_current_platform() {
+        Ok(sandbox) => sandbox,
+        Err(error) => {
+            eprintln!("SKIPPED (no confinement backend): {error}");
+            return;
+        }
+    };
+    let scratch = Scratch::new("control-boundary-mcp");
+    let clients = clients_over_channels();
+    let exe = std::env::current_exe().expect("the test binary");
+    let policy = [
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/System",
+        "/private/var/folders",
+        "/tmp",
+    ]
+    .into_iter()
+    .filter(|path| Path::new(path).exists())
+    // Network egress, as the MCP crate's own tests allow, so no network namespace is needed where
+    // the kernel refuses an unprivileged one. It does not change which descriptors are inherited.
+    .fold(
+        SandboxPolicy::strict()
+            .allow_network_egress()
+            .allow_subprocesses(),
+        SandboxPolicy::allow_read,
+    )
+    .allow_read(exe.parent().expect("the test binary's directory"))
+    .allow_write(scratch.project());
+    let listing = scratch.project().join("mcp-fds.txt");
+    let script = format!(
+        "{} > '{tmp}' && /bin/mv '{tmp}' '{done}'",
+        list_sockets_command(),
+        tmp = scratch.project().join("mcp-fds.tmp").display(),
+        done = listing.display(),
+    );
+    let server = bravebot_mcp::StdioServer::launch(
+        "lister",
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Variables::new(),
+        sandbox.as_ref(),
+        &policy,
+        Stream::Null,
+    )
+    .expect("the server starts");
+    let deadline = Instant::now() + PATIENCE;
+    let listed = loop {
+        if let Ok(listed) = std::fs::read_to_string(&listing) {
+            break listed;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the server never listed its descriptors"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    drop(server);
+    let (open, channels) = read_listing(&listed);
+    assert!(
+        open >= 3 && channels.is_empty(),
+        "an MCP server holds a control channel: {listed}"
+    );
+    stop(clients);
 }

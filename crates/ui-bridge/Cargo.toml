@@ -56,6 +56,8 @@ sha2 = { workspace = true }
 # runs the turns against it. The seams are on for a build of this crate's tests alone, and a release
 # build refuses them (CHATGPT-2).
 bravebot-config = { path = "../config", features = ["test-hosts"] }
+# The boundary test starts an MCP server the way a session does, to check it holds no channel.
+bravebot-mcp = { path = "../mcp" }
 bravebot-skus = { path = "../skus", features = ["test-hosts"] }
 # O_NONBLOCK and read(2) for the boundary test, whose value differs between Unixes.
 libc = { workspace = true }

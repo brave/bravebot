@@ -4,8 +4,13 @@
 //! message for them. Neither the driver nor the planner reads the diff. The driver reads it with the
 //! reader `read_git` uses, under a policy of its own that holds `FileRead` and the network, and hands
 //! it to a processor, which holds no tool and no conversation ([PROC-1](../../../docs/specs/processors.md)).
-//! The processor's output is labelled by taint over the diff, so a diff of files nobody vouched for
-//! gives a draft that is untrusted too.
+//! The box is sendable, so only a draft about a diff everybody vouched for is put there
+//! ([CMD-23](../../../docs/specs/commands.md), [LABEL-8](../../../docs/specs/labels.md)). A
+//! processor's own output carries no provenance vouching could promote (it is labelled by taint
+//! over its transport envelope, never by what it is about), so this is read from the diff's own
+//! label, fixed before the processor ran, and not from the draft `document` comes back as. A
+//! draft about a path nobody vouched for is held back with a note instead, the same shape
+//! [`crate::aside::ask`] offers a `/handoff` brief or an enhancement through.
 //!
 //! The draft goes one place, the person's input box, as text they read, edit and send. Nothing runs
 //! on it. What reaches the planner is the line the person sends, in the way a prompt file's text
@@ -69,8 +74,13 @@ pub fn instruction(format: Option<&str>) -> String {
 
 /// What one draft produced.
 pub struct Drafted {
-    /// The message, released for the person's input box.
-    pub message: String,
+    /// The message, released for the person's input box where the planner could have held it.
+    ///
+    /// `None` where the diff touched a path nobody has vouched for, which is a draft that has met
+    /// something untrusted (CMD-23, LABEL-8). The person still gets usage charged and a note, the
+    /// same as `/handoff` and an enhancement that met the same thing: the record does not keep it,
+    /// because a record is read back and the box is not a gate.
+    pub message: Option<String>,
     /// Whether the diff was cut at the reader's cap or ran out of time, so the message describes
     /// the part that was read.
     pub partial: bool,
@@ -221,9 +231,18 @@ pub fn draft<S: Sink>(
     let Some(document) = done.document else {
         return Err(DraftError::NoMessage);
     };
-    let proof = policy.authorise_display_release("a commit message placed in the input box");
+    // CMD-23, LABEL-8: the box is sendable, which only a draft about files everybody vouched for
+    // may go into. `trusted` is the diff's own label, fixed above before the processor ran, and
+    // a processor's output is never better than its own transport envelope, which carries no
+    // provenance a path's vouching could promote (`Policy::label_processor_output`); the diff's
+    // own label is what `/handoff` and an enhancement's answer are kept against too, read from
+    // the context the words were produced over rather than from what a processor hands back.
+    let message = trusted.then(|| {
+        let proof = policy.authorise_display_release("a commit message placed in the input box");
+        document.declassify(&proof)
+    });
     Ok(Drafted {
-        message: document.declassify(&proof),
+        message,
         partial,
         substituted: done.substituted,
         usage: done.usage,

@@ -72,6 +72,33 @@ pub fn creating_a_channel<T>(create: impl FnOnce() -> T) -> T {
     create()
 }
 
+/// Makes the process `command` starts the leader of a session of its own, and so of a process group
+/// of its own, with no controlling terminal (RUN-11).
+///
+/// A program that opens `/dev/tty` then fails with an error instead of being stopped by `SIGTTOU`
+/// or `SIGTTIN`, which a process in a background group of the terminal is. A caller that stops the
+/// process by signalling its group relies on the group this makes, and must not ask for one as
+/// well: `setsid` fails in a process that already leads a group.
+#[cfg(unix)]
+#[expect(
+    unsafe_code,
+    reason = "`pre_exec` is unsafe because its closure runs in the forked child; this one makes one system call that takes no argument and allocates nothing"
+)]
+pub fn leading_a_session(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: the closure calls `setsid`, which takes no pointers and is async-signal-safe, and
+    // builds an error from the error number without allocating.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe {
+        command.pre_exec(|| {
+            rustix::process::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
+        });
+    }
+}
+
 /// The threads that have asked for the gate and are waiting for it, so a test can see that a start
 /// has reached the gate and is held there, which a timeout cannot tell from a start that is slow.
 static WAITING: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());

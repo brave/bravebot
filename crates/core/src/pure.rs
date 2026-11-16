@@ -711,6 +711,22 @@ pub const NEVER: &[&str] = &[
 /// than the entry admits, a call without the path the entry needs, and a recursive call naming no
 /// path all answer `None`, and `None` means the caller keeps the opaque default.
 pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
+    Some(
+        read_set_positions(program, args)?
+            .into_iter()
+            .map(|at| args[at].clone())
+            .collect(),
+    )
+}
+
+/// Where in `args` the paths of [`read_set`] are: the index of each argument it counts as a path
+/// read, in order, or `None` where [`read_set`] answers `None`.
+///
+/// Every other argument is part of the instruction or names standard input: an option, an option's
+/// value, an operand the entry reads as an instruction such as grep's pattern, and a `-` the entry
+/// reads as standard input. A caller that has to know which words are read as files, and which are
+/// handed to the program as text it may print, asks this.
+pub fn read_set_positions(program: &str, args: &[String]) -> Option<Vec<usize>> {
     // A path resolves to a file name; the table names programs.
     let name = program_name(program);
 
@@ -720,7 +736,7 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
 
     let filter = FILTERS.iter().find(|f| f.program == name)?;
 
-    let mut operands: Vec<&str> = Vec::new();
+    let mut operands: Vec<(usize, &str)> = Vec::new();
     let mut recursing = false;
     // Past `--` a word is an operand however it is spelled, which is what the program itself does.
     // Reading `-i` after one as an option would leave a file the program opens out of the answer.
@@ -728,9 +744,10 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
     let mut at = 0usize;
 
     while let Some(arg) = args.get(at) {
+        let index = at;
         at += 1;
         if only_operands_left {
-            operands.push(arg);
+            operands.push((index, arg));
             continue;
         }
         let argument = recognise(filter, arg)?;
@@ -747,18 +764,18 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
             // counted as an operand, which is what would make a call naming no path look like one
             // naming a path.
             Argument::FlagTakingTheNextWord => at += 1,
-            Argument::Operand => operands.push(arg),
+            Argument::Operand => operands.push((index, arg)),
         }
     }
 
     // The first `operands` of them are part of the instruction, such as grep's pattern or tr's
     // character sets. Beyond that they are paths, except a `-` the entry says names standard input:
     // the caller's meet covers that already, and it is not a file anybody vouched for.
-    let paths: Vec<String> = operands
+    let paths: Vec<usize> = operands
         .iter()
         .skip(filter.operands)
-        .filter(|operand| !(filter.dash_is_stdin && **operand == "-"))
-        .map(|path| (*path).to_string())
+        .filter(|(_, operand)| !(filter.dash_is_stdin && *operand == "-"))
+        .map(|(index, _)| *index)
         .collect();
 
     if !paths.is_empty() && !filter.reads_files {

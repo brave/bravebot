@@ -76,7 +76,8 @@ use crate::one_shot::OneShot;
 use crate::usage::print_help;
 use crate::workspace::{
     confinement_name, current_workspace, definition_for_a_run, open_directories,
-    rules_for_a_one_shot_run, scratch_for_this_run, unattended_trust,
+    rules_for_a_one_shot_run, scratch_for_this_run, trusting_the_added_directories,
+    unattended_trust,
 };
 use bravebot_agent::Mode;
 use bravebot_agent::turn::{self, SystemPrompts, Task};
@@ -99,7 +100,8 @@ struct Settled {
     /// where `skip_permissions` is true.
     bypass_flag: &'static str,
     /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
-    /// `--auto`), or `None` where neither was given and the run asks.
+    /// `--auto`), or `None` where neither was given and the run asks. `--auto` also opens a session
+    /// in the terminal in auto, which `main` reads off this.
     starts_in: Option<bravebot_agent::PermissionMode>,
     carried: Option<String>,
     agent: Option<String>,
@@ -447,13 +449,17 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     }
 
     args.extend(foreign);
-    // Refused rather than ignored where there is no one-shot run to open in the mode: a session
-    // has the mode key, and a line that asked for a run to write unasked and was started as
-    // something that asks would leave its author believing the flag had been honoured.
+    // Refused rather than ignored where there is no one-shot run and no terminal session to open in
+    // the mode: a line that asked for a run to write unasked and was started as something that asks
+    // would leave its author believing the flag had been honoured. `--auto` opens an interactive
+    // session too (AUTO-1); `--accept-edits` does not, since a session has the key for it.
     // `schedule add` is the one command that takes the mode of a run it starts later.
+    let a_session_opens_in_it =
+        starts_in == Some(bravebot_agent::PermissionMode::Auto) && opens_a_session(args);
     if starts_in.is_some()
         && args.first().map(String::as_str) != Some("schedule")
         && !is_a_one_shot(args, continues_with_a_task(args))
+        && !a_session_opens_in_it
     {
         return Err(stopped_before_the_turn(
             as_json,
@@ -543,6 +549,9 @@ fn main() -> ExitCode {
         Ok(settled) => settled,
         Err(code) => return code,
     };
+    // Whether `--auto` was typed, for the sessions that open in the terminal. A one-shot run reads
+    // `starts_in` itself, and the setting that opens a session in auto is read by the interface.
+    let asked_for_auto = starts_in == Some(bravebot_agent::PermissionMode::Auto);
 
     match args.first().map(String::as_str) {
         Some("--version" | "-V") => {
@@ -561,13 +570,20 @@ fn main() -> ExitCode {
             agent,
             links,
             skip_permissions,
+            asked_for_auto,
             prompts,
         ),
         // The same session, with a prompt from the command line sent as its first turn (CLI-31). A
         // flag of its own because `bravebot "<task>"` is the one-shot run scripts already call.
-        Some("-i" | "--interactive") => {
-            open_on(&args[1..], as_json, agent, links, skip_permissions, prompts)
-        }
+        Some("-i" | "--interactive") => open_on(
+            &args[1..],
+            as_json,
+            agent,
+            links,
+            skip_permissions,
+            asked_for_auto,
+            prompts,
+        ),
         // What a `bravebot://open` link starts (LINK-1). Takes the link and nothing else, and none of
         // the flags that compose with other ways of starting: the line is written by the operating
         // system's registration, and a flag on it would be a way for a link to ask for more.
@@ -577,12 +593,13 @@ fn main() -> ExitCode {
             run_task(&args, skip_permissions, starts_in, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
-            Some(id) => resume_named(id, agent, links, skip_permissions, prompts),
+            Some(id) => resume_named(id, agent, links, skip_permissions, asked_for_auto, prompts),
             None => interactive(
                 bravebot_tui::app::Start::Choose,
                 agent,
                 links,
                 skip_permissions,
+                asked_for_auto,
                 prompts,
             ),
         },
@@ -595,6 +612,7 @@ fn main() -> ExitCode {
                 agent,
                 links,
                 skip_permissions,
+                asked_for_auto,
                 prompts,
             ),
             _ => fail(Ending::Argument, t!(cli_from_pr_needs_a_value)),
@@ -602,11 +620,11 @@ fn main() -> ExitCode {
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
         Some("--continue" | "-c") if !continues_with_a_task(&args) => {
-            continue_here(agent, links, skip_permissions, prompts)
+            continue_here(agent, links, skip_permissions, asked_for_auto, prompts)
         }
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
-            Some(id) => fork_named(id, agent, links, skip_permissions, prompts),
+            Some(id) => fork_named(id, agent, links, skip_permissions, asked_for_auto, prompts),
             // No result object here, and none is owed: reaching this arm means the arguments held
             // `--fork` and nothing after it, so the command line cannot also have carried `--json`.
             // `bravebot --fork --json` reads the flag as the session id and is refused by name in
@@ -716,6 +734,7 @@ fn open_on(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let (prompt, named) = match prompt_to_open_on(words) {
@@ -730,6 +749,7 @@ fn open_on(
         agent,
         links,
         skip_permissions,
+        asked_for_auto,
         prompts,
     )
 }
@@ -787,6 +807,7 @@ fn open_link(
         bravebot_tui::app::Start::Prefilling(link.prompt.unwrap_or_default(), placement.note),
         None,
         bravebot_tui::app::Links::default(),
+        false,
         false,
         prompts,
     )
@@ -901,6 +922,9 @@ struct Prepared {
     as_json: bool,
     as_stream: bool,
     trust_workspace: bool,
+    /// The directories `--add-dir` opened, as the workspace opened them, which the run trusts where
+    /// it trusts its working directory (CLI-11).
+    added: Vec<std::path::PathBuf>,
     named_on_the_command_line: bool,
     permission_mode: bravebot_agent::PermissionMode,
     goal: Option<String>,
@@ -1120,10 +1144,13 @@ fn prepare_the_run(
     // Fatal rather than said and carried on with. A session leaves the person to retype it; a
     // script that asked to reach a directory and did not gets a turn that fails somewhere further
     // in, over a file it was told it could open.
-    match open_directories(&mut workspace, &directories) {
-        Ok(notices) => say_notices(&mut std::io::stderr().lock(), &notices),
+    let added = match open_directories(&mut workspace, &directories) {
+        Ok(opened) => {
+            say_notices(&mut std::io::stderr().lock(), &opened.notices);
+            opened.directories
+        }
         Err(problem) => return Err(stopped_before_the_turn(as_json, Ending::Argument, problem)),
-    }
+    };
 
     // Found before anything is sent, so a session that is not there exits with the status for an
     // argument and costs nothing (CLI-25).
@@ -1141,9 +1168,9 @@ fn prepare_the_run(
     // stderr below, beside the rest of what this run has to say about itself.
     let (permissions, rejected) = rules_for_a_one_shot_run(
         &settings,
+        bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         workspace.root(),
-        skip_permissions,
     );
 
     // Matched here, before any server is reached, so a name matching nothing sends nothing and the
@@ -1190,10 +1217,7 @@ fn prepare_the_run(
     for problem in &rejected {
         eprintln!(
             "{}",
-            t!(
-                session_permission_rule_ignored,
-                problem = progress::described(problem)
-            )
+            bravebot_agent::permissions::said_in_a_session(problem, progress::described(problem))
         );
     }
 
@@ -1326,6 +1350,7 @@ fn prepare_the_run(
         as_json,
         as_stream,
         trust_workspace,
+        added,
         named_on_the_command_line,
         permission_mode,
         goal,
@@ -1566,6 +1591,7 @@ fn run_and_report(
         as_json,
         as_stream,
         trust_workspace,
+        added,
         named_on_the_command_line,
         permission_mode,
         goal,
@@ -1658,6 +1684,7 @@ fn run_and_report(
                     workspace,
                     task,
                     trust_workspace,
+                    added,
                     agent: agent.as_deref(),
                     goal: goal.as_deref(),
                     model,
@@ -1683,7 +1710,10 @@ fn run_and_report(
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            unattended_trust(workspace.root(), trust_workspace),
+            trusting_the_added_directories(
+                unattended_trust(workspace.root(), trust_workspace),
+                added,
+            ),
             &Cancel::new(),
         ),
     };
@@ -1970,6 +2000,9 @@ struct TurnRun<'a> {
     workspace: &'a bravebot_agent::Workspace,
     task: &'a Task,
     trust_workspace: bool,
+    /// The directories `--add-dir` opened, trusted where the map trusts the working directory
+    /// (CLI-11).
+    added: &'a [std::path::PathBuf],
     agent: Option<&'a str>,
     /// The condition the run works towards (CLI-35), and the model its rounds are asked of, which
     /// the judge is asked too unless `summaryModel` names another.
@@ -2002,6 +2035,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         workspace,
         task,
         trust_workspace,
+        added,
         agent,
         goal,
         model,
@@ -2014,22 +2048,26 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
     let permission_mode = task.permission_mode.clone();
     // What a continued session vouched for comes back with it, as it does in a session
     // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
-    // the record keeps the ones it holds.
-    let trust = match continued
-        .as_ref()
-        .and_then(|record| record.trust_map(workspace.root()))
-    {
-        Some(mut carried) => {
-            if trust_workspace {
-                carried.trust(".");
+    // the record keeps the ones it holds. Whichever map the run starts from, the directories the
+    // command line opened are trusted with the working directory (CLI-11).
+    let trust = trusting_the_added_directories(
+        match continued
+            .as_ref()
+            .and_then(|record| record.trust_map(workspace.root()))
+        {
+            Some(mut carried) => {
+                if trust_workspace {
+                    carried.trust(".");
+                }
+                carried
             }
-            carried
-        }
-        None => match carry.as_deref().and_then(Option::as_ref) {
-            Some(held) => held.trust.clone(),
-            None => unattended_trust(workspace.root(), trust_workspace),
+            None => match carry.as_deref().and_then(Option::as_ref) {
+                Some(held) => held.trust.clone(),
+                None => unattended_trust(workspace.root(), trust_workspace),
+            },
         },
-    };
+        added,
+    );
     let mut conversation = match (
         continued.as_ref(),
         carry.as_deref().and_then(Option::as_ref),
@@ -2207,9 +2245,7 @@ fn task_from_the_settings(
         .with_download_cap(settings.download_max_bytes())
         // And how long one may take, resolved here because this is where the settings were read
         // (RUN-23).
-        .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-            settings.run_deadlines(),
-        ))
+        .with_deadlines(bravebot_agent::exec::Deadlines::from_settings(settings))
         .with_confined_runs(true)
         .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
@@ -2321,6 +2357,7 @@ fn resume_named(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
@@ -2359,6 +2396,7 @@ fn resume_named(
             agent,
             links,
             skip_permissions,
+            asked_for_auto,
             prompts,
         ),
         None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
@@ -2370,6 +2408,7 @@ fn fork_named(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
@@ -2389,6 +2428,7 @@ fn fork_named(
                 agent,
                 links,
                 skip_permissions,
+                asked_for_auto,
                 prompts,
             ),
             None => fail(Ending::Argument, t!(cli_no_such_session, id = id)),
@@ -2406,6 +2446,7 @@ fn continue_here(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
@@ -2414,7 +2455,14 @@ fn continue_here(
     match bravebot_session::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
-        Some(session) => resume_named(&session.id, agent, links, skip_permissions, prompts),
+        Some(session) => resume_named(
+            &session.id,
+            agent,
+            links,
+            skip_permissions,
+            asked_for_auto,
+            prompts,
+        ),
         None => fail(Ending::Failed, t!(cli_nothing_to_continue)),
     }
 }
@@ -2424,6 +2472,7 @@ fn interactive(
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     skip_permissions: bool,
+    asked_for_auto: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
     if agent.is_some() {
@@ -2520,6 +2569,7 @@ fn interactive(
         agent,
         links,
         skip_permissions,
+        asked_for_auto,
         prompts,
         &mut moments,
     );
@@ -3220,8 +3270,8 @@ mod tests {
     }
 
     /// TRUST-26. The flag gives the run the map a yes writes: the working directory and what is
-    /// under it. A directory `--add-dir` opened sits beside it and is not covered, and neither is
-    /// anything above it.
+    /// under it. A directory beside it is not covered by that rule, and neither is anything above
+    /// it; a directory the command line opened is added to the map by a step of its own.
     #[test]
     fn a_flagged_run_trusts_its_directory_and_nothing_outside_it() {
         let scratch = Scratch::new("trust-flag-covers");
@@ -3260,6 +3310,111 @@ mod tests {
         let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
         assert!(!trust.is_trusted("."), "nothing was said and nothing kept");
         assert_eq!(notice, None);
+    }
+
+    /// CLI-11, TRUST-26. A run that trusts its working directory trusts each directory the command
+    /// line opened, as `/add-dir` does in a session: the directory and what is beneath it. A
+    /// directory beside it that nobody named and the directory holding it stay outside the rule,
+    /// and nothing is kept for a later run. Rejects trust recorded under a parent of the added
+    /// directory, a rule that reached a sibling, and a step that wrote to the store of kept answers.
+    #[test]
+    fn a_trusted_run_trusts_the_directories_the_command_line_opened_and_nothing_beside_them() {
+        let scratch = Scratch::new("trust-flag-added");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        scratch.directory("sibling");
+        let state = scratch.directory("state");
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        let opened =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let added = opened.directories.first().expect("one directory opened");
+        let holding = added.parent().expect("the scratch directory");
+        let key = |path: &Path| bravebot_agent::workspace::key_of(path);
+
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, true);
+        let trust = trusting_the_added_directories(trust, &opened.directories);
+
+        assert!(trust.is_trusted("src/lib.rs"), "the working directory");
+        assert!(
+            trust.is_trusted(&key(&added.join("notes.md"))),
+            "a file in the directory the command line opened"
+        );
+        assert!(
+            trust.is_trusted(&key(&added.join("deep/er/notes.md"))),
+            "a file beneath it"
+        );
+        assert!(
+            !trust.is_trusted(&key(&holding.join("sibling/notes.md"))),
+            "a directory beside it that nobody named"
+        );
+        assert!(
+            !trust.is_trusted(&key(&holding.join("notes.md"))),
+            "the directory holding it"
+        );
+        assert!(
+            !state.join("trusted").exists(),
+            "trusting the added directories kept an answer for later runs"
+        );
+    }
+
+    /// CLI-11. A run whose map does not trust its working directory trusts no directory the command
+    /// line opened either, so an added directory is never more trusted than the tree the run works
+    /// in. Rejects a step that vouched for the added directories whatever the map said.
+    #[test]
+    fn an_untrusted_run_trusts_no_directory_the_command_line_opened() {
+        let scratch = Scratch::new("trust-unflagged-added");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let state = scratch.directory("state");
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        let opened =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let added = opened.directories.first().expect("one directory opened");
+
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, false);
+        let trust = trusting_the_added_directories(trust, &opened.directories);
+
+        assert!(
+            !trust.is_trusted("."),
+            "nothing trusted the working directory"
+        );
+        assert!(
+            !trust.is_trusted(&bravebot_agent::workspace::key_of(&added.join("notes.md"))),
+            "an added directory was trusted by a run that trusts nothing"
+        );
+    }
+
+    /// CLI-11, TRUST-23. A kept answer about the working directory trusts the run's added
+    /// directories as the flag does, since it is the person's answer about the directory the run
+    /// works in. Rejects a step that read the flag rather than the map.
+    #[test]
+    fn a_run_trusting_a_kept_answer_trusts_the_directories_the_command_line_opened() {
+        let scratch = Scratch::new("trust-kept-added");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            // A filesystem that cannot say when a directory was made keeps no answer to read.
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7, false), "not kept");
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        let opened =
+            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let added = opened.directories.first().expect("one directory opened");
+
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(
+            trust.is_trusted("."),
+            "the kept answer trusts the directory"
+        );
+        let trust = trusting_the_added_directories(trust, &opened.directories);
+
+        assert!(
+            trust.is_trusted(&bravebot_agent::workspace::key_of(&added.join("notes.md"))),
+            "a kept answer did not trust the directory the command line opened"
+        );
     }
 
     /// RUN-5. A one-shot run starts from a kept answer, and what that answer says about confined
@@ -5494,11 +5649,13 @@ mod tests {
         let beside = scratch.directory("beside");
         let mut workspace = Workspace::new(project).expect("a workspace");
 
-        let notices =
-            open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
+        let notices = open_directories(&mut workspace, &[beside.display().to_string()])
+            .expect("opens")
+            .notices;
         assert!(notices.is_empty(), "{notices:?}");
-        let notices =
-            open_directories(&mut workspace, &[scratch.path.display().to_string()]).expect("opens");
+        let notices = open_directories(&mut workspace, &[scratch.path.display().to_string()])
+            .expect("opens")
+            .notices;
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(
             notices[0].contains("no delegate is given a checkout while it is open"),
@@ -5754,31 +5911,46 @@ mod tests {
         assert!(!said.contains("audit trail"), "got: {said}");
     }
 
-    /// Nobody is watching a one-shot run, so the list that answers a prompt in advance answers
-    /// nothing: there is no prompt for it to reach. Without the flag an allow rule decides no
-    /// more than a line nobody wrote, while the two lists that refuse and that force an ask carry
-    /// over, because those say something a run with nobody at it can still act on.
+    /// CLI-1: a one-shot run reads all three lists, as a session does. The reading this rejects
+    /// is the one that drops the allow list for want of anybody to ask, under which a write or a
+    /// program the person's rule covers is refused and only a mode flag lets it go ahead. The deny
+    /// rule over a path the allow rule also covers is what shows the order still holds (PERM-2).
     #[test]
-    fn an_allow_rule_decides_nothing_for_a_run_nobody_is_watching() {
+    fn an_allow_rule_decides_for_a_run_nobody_is_watching_as_it_does_in_a_session() {
         use bravebot_core::permissions::{Decision, Ruling, Subject};
 
         let settings = bravebot_config::Settings::parse(
             r#"{
               "permissions": {
-                "allow": ["Edit(**)"],
+                "allow": ["Edit(**)", "Bash(touch *)"],
                 "ask": ["Bash(git push *)"],
-                "deny": ["Read(./.env)"]
+                "deny": ["Read(./.env)", "Edit(secret.txt)"]
               }
             }"#,
         );
 
         let (permissions, rejected) =
-            rules_for_a_one_shot_run(&settings, None, Path::new("."), false);
-        assert!(rejected.is_empty());
+            rules_for_a_one_shot_run(&settings, None, None, Path::new("."));
+        assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
             permissions.for_path(Subject::Edit, "notes.md"),
+            Decision::Ruled(Ruling::Allow),
+            "an allow rule did not answer a write in a run nobody is watching"
+        );
+        assert_eq!(
+            permissions.for_command(&["touch", "made.txt"]),
+            Decision::Ruled(Ruling::Allow),
+            "an allow rule did not answer a program in a run nobody is watching"
+        );
+        assert_eq!(
+            permissions.for_command(&["rm", "made.txt"]),
             Decision::Unmatched,
-            "an allow rule answered a write prompt in a run with nobody to prompt"
+            "a rule for one program answered another"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "an allow rule outranked a deny rule"
         );
         assert_eq!(
             permissions.for_path(Subject::Read, ".env"),
@@ -5790,19 +5962,82 @@ mod tests {
         );
     }
 
-    /// With the flag the person answered every prompt themselves, so their file is read whole: the
-    /// list is theirs, and the run may act because they said so on the command line.
+    /// CLI-1, PERM-15: an `allow` rule a checkout's file proposed is in force in a one-shot run
+    /// only where the workspace's record holds the person's grant of it. Reading a checkout's allow
+    /// list whole would let a cloned repository approve its own effects in a run nobody is
+    /// watching; leaving the record unread would refuse what the person granted in a session.
     #[test]
-    fn the_flag_is_what_lets_an_allow_rule_decide_again() {
+    fn a_rule_a_checkout_proposed_decides_in_a_one_shot_run_only_once_it_was_granted() {
         use bravebot_core::permissions::{Decision, Ruling, Subject};
 
-        let settings =
-            bravebot_config::Settings::parse(r#"{"permissions": {"allow": ["Edit(**)"]}}"#);
+        let scratch = crate::test_support::Scratch::new("cli-one-shot-granted");
+        let home = scratch.directory("home");
+        let state = home.join(".bravebot");
+        let project = scratch.directory("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("a checkout's settings");
+        std::fs::write(
+            project.join(".bravebot/settings.json"),
+            r#"{"permissions": {"allow": ["Edit(**)"]}}"#,
+        )
+        .expect("a checkout's rule");
+        let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&project), None);
+        let edit = || {
+            rules_for_a_one_shot_run(&settings, Some(&state), Some(&home), &project)
+                .0
+                .for_path(Subject::Edit, "notes.md")
+        };
 
-        let (permissions, _) = rules_for_a_one_shot_run(&settings, None, Path::new("."), true);
         assert_eq!(
-            permissions.for_path(Subject::Edit, "notes.md"),
-            Decision::Ruled(Ruling::Allow)
+            edit(),
+            Decision::Unmatched,
+            "a rule a checkout wrote and nobody granted answered a write"
+        );
+        let proposed = bravebot_agent::permissions::proposed(&settings, Some(&home));
+        assert_eq!(
+            proposed.len(),
+            1,
+            "the checkout's rule was not proposed: {proposed:?}"
+        );
+        bravebot_agent::granted::Store::new(&state, &project).grant(&[&proposed[0]], "a-session");
+        assert_eq!(
+            edit(),
+            Decision::Ruled(Ruling::Allow),
+            "a rule the person granted did not answer in a run nobody is watching"
+        );
+    }
+
+    /// CLI-1: a settings file written for another agent names tools this program does not have
+    /// (`Glob`, `Grep`, `Agent`, `Task`, `WebSearch`). Each is reported as a line nothing can act on
+    /// (PERM-11), and the rules beside it stay in force, so one such file serves both agents.
+    #[test]
+    fn a_tool_this_program_does_not_have_leaves_the_rest_of_the_file_in_force() {
+        use bravebot_core::permissions::{Decision, Ruling, Subject};
+
+        let settings = bravebot_config::Settings::parse(
+            r#"{
+              "permissions": {
+                "allow": ["Glob", "Grep", "Agent", "Task", "Edit(//work/**)"],
+                "deny": ["WebFetch", "WebSearch"]
+              }
+            }"#,
+        );
+
+        let (permissions, rejected) =
+            rules_for_a_one_shot_run(&settings, None, None, Path::new("."));
+        let named: Vec<String> = rejected
+            .iter()
+            .map(bravebot_agent::permissions::describe)
+            .collect();
+        for unknown in ["Glob", "Grep", "Agent", "Task", "WebSearch"] {
+            assert!(
+                named.iter().any(|line| line.contains(unknown)),
+                "{unknown} was not reported: {named:?}"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/work/results.json"),
+            Decision::Ruled(Ruling::Allow),
+            "a rule beside an unknown name was dropped"
         );
     }
 

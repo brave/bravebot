@@ -160,38 +160,17 @@ fn encode(account: &Account) -> Secret {
 }
 
 fn decode(raw: &str) -> Result<Account, AccountError> {
-    // A file can exist holding nothing, if a write was interrupted partway.
-    if raw.trim().is_empty() {
-        return Err(AccountError::Malformed(Defect::Empty));
-    }
-    // Parsed into a guard, so the copy of each token the parse makes is cleared however this
-    // returns. The parse error is not repeated: it can quote the text it stopped at.
-    let document = Document::of(
-        serde_json::from_str(raw).map_err(|_| AccountError::Malformed(Defect::NotJson))?,
-    );
+    let document = oauth::versioned(raw, 1)?;
     let value = document.read();
-
-    if value.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
-        return Err(AccountError::Malformed(Defect::OtherVersion));
-    }
-    let text = |name: &str| {
-        value
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
-    };
     let (Some(access), Some(refresh), Some(client_id), Some(host_id)) = (
-        text("access_token"),
-        text("refresh_token"),
-        text("client_id"),
-        text("host_id"),
+        oauth::text(value, "access_token"),
+        oauth::text(value, "refresh_token"),
+        oauth::text(value, "client_id"),
+        oauth::text(value, "host_id"),
     ) else {
         return Err(AccountError::Malformed(Defect::MissingField));
     };
-    let Some(expires_at) = value.get("expires_at").and_then(serde_json::Value::as_u64) else {
-        return Err(AccountError::Malformed(Defect::NoExpiry));
-    };
+    let expires_at = oauth::expiry(value)?;
     Ok(Account {
         access_token: Secret::new(access),
         refresh_token: Secret::new(refresh),
@@ -323,6 +302,21 @@ mod tests {
 
         assert!(!failure.to_string().contains("a-secret-access-token"));
         assert!(!format!("{failure:?}").contains("a-secret-access-token"));
+    }
+
+    /// A file missing a field and its expiry is reported as missing the field, which is checked
+    /// first. Reading the expiry first would name the other defect for the same file.
+    #[test]
+    fn a_file_missing_a_field_and_its_expiry_is_reported_as_missing_the_field() {
+        let failure = decode(
+            "{\"version\":1,\"access_token\":\"a\",\"refresh_token\":\"r\",\"client_id\":\"c\"}",
+        )
+        .expect_err("a refusal");
+
+        assert!(
+            matches!(failure, AccountError::Malformed(Defect::MissingField)),
+            "{failure:?}"
+        );
     }
 
     /// The tokens are not in the debug form, which is where a panic or a log line would print them.

@@ -39,6 +39,33 @@ impl InternalEventReader {
         self.source.as_ref().expect("reader source not set").waker()
     }
 
+    /// The mouse buttons the source last saw held, which its next mouse record is read against.
+    #[cfg(windows)]
+    pub(crate) fn mouse_buttons_pressed(
+        &self,
+    ) -> crate::event::sys::windows::parse::MouseButtonsPressed {
+        self.source
+            .as_ref()
+            .map(|source| source.mouse_buttons_pressed())
+            .unwrap_or_default()
+    }
+
+    /// Set the mouse buttons the source reads its next mouse record against.
+    #[cfg(windows)]
+    pub(crate) fn set_mouse_buttons_pressed(
+        &mut self,
+        buttons: crate::event::sys::windows::parse::MouseButtonsPressed,
+    ) {
+        if let Some(source) = self.source.as_mut() {
+            source.set_mouse_buttons_pressed(buttons);
+        }
+    }
+
+    /// Queue an event that something other than this reader read off the tty.
+    pub(crate) fn push(&mut self, event: InternalEvent) {
+        self.events.push_back(event);
+    }
+
     pub(crate) fn poll<F>(&mut self, timeout: Option<Duration>, filter: &F) -> io::Result<bool>
     where
         F: Filter,

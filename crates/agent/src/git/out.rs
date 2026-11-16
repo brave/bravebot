@@ -76,6 +76,22 @@ impl Out<'_> {
         self.timed_out
     }
 
+    /// What can still read a file this answer declines to show, diff or search, from the tools the
+    /// turn's list holds ([TOOL-6](../../../../docs/specs/tools/tool-surface.md#TOOL-6)): the text
+    /// that goes at the end of the note, empty where the turn holds neither tool. It depends on
+    /// the turn's list alone, never on a byte of the file.
+    pub(super) fn instead(&self) -> &'static str {
+        match (
+            self.beside.holds(crate::tools::Named::ReadFile),
+            self.beside.holds(crate::tools::Named::Run),
+        ) {
+            (true, true) => "; use read_file on the working copy, or run",
+            (true, false) => "; use read_file on the working copy",
+            (false, true) => "; use run",
+            (false, false) => "",
+        }
+    }
+
     /// Whether another entry fits. One that does not is what makes a full answer a cut one.
     pub(super) fn room(&mut self) -> bool {
         if self.text.full() {

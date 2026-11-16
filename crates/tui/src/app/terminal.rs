@@ -87,6 +87,24 @@ pub(super) fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     hand_back(out, enhanced_keys(), disable_raw_mode)
 }
 
+/// Leave the interface for good: hand the terminal back, then tell herdr the run has left its pane
+/// ([HERDR-12](../../../../docs/specs/herdr.md#HERDR-12)).
+///
+/// Only the end of `run` comes here, through `end_the_run`. An editor, a viewer and a stop hand the
+/// terminal back with [`hand_back_terminal`] and take it again, and the run is still in the pane
+/// through all of them.
+///
+/// Told how to hand the terminal back, so that a test can leave without a tty. herdr is told whether
+/// or not the terminal could be handed back, since the run is leaving anyway.
+pub(super) fn leave<W: Write>(
+    out: &mut W,
+    hand_back: impl FnOnce(&mut W) -> io::Result<()>,
+) -> io::Result<()> {
+    let handed_back = hand_back(out);
+    crate::herdr::release();
+    handed_back
+}
+
 /// [`hand_back_terminal`], told whether disambiguated keys were pushed and how to leave raw mode, so
 /// that a test can read the order they happen in.
 ///
@@ -137,10 +155,34 @@ pub(super) fn give_back_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Resu
 /// Asked once and remembered, because answering means writing a query and waiting for a reply, and
 /// doing that on every handover to an editor would cost a round trip each time.
 pub(super) fn enhanced_keys() -> bool {
-    use std::sync::OnceLock;
-    static SUPPORTED: OnceLock<bool> = OnceLock::new();
-    *SUPPORTED.get_or_init(|| supports_keyboard_enhancement().unwrap_or(false))
+    keyboard_reply().unwrap_or(false)
 }
+
+/// Whether the terminal answered the keyboard query at all, which ends with the primary device
+/// attributes request. One that did not will not answer the graphics query either, since that ends
+/// with the same request, so it is not asked and its wait is not spent (#3846).
+pub(super) fn terminal_answers_queries() -> bool {
+    keyboard_reply().is_some()
+}
+
+/// The keyboard query's answer, or `None` where the terminal gave none in time.
+///
+/// The query ends with the primary device attributes request, which a terminal answers whatever it
+/// supports, and that reply ends the wait, so the bound is spent only where nothing answers: a pty
+/// with nobody behind it, a driver, or an ssh link slower than the bound. Half a second covers an
+/// ssh round trip across continents, and is a quarter of the two seconds crossterm waits, which were
+/// before the first frame (#3846). A reply later than that is read as an internal event, never as a
+/// key, and the session goes without disambiguated keys, which are asked for only where the
+/// terminal said it understands (INPUT-33).
+fn keyboard_reply() -> Option<bool> {
+    use ratatui::crossterm::terminal::supports_keyboard_enhancement_within;
+    use std::sync::OnceLock;
+    static SUPPORTED: OnceLock<Option<bool>> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| supports_keyboard_enhancement_within(KEYBOARD_QUERY_BOUND).ok())
+}
+
+/// How long the keyboard query waits for a terminal that answers nothing.
+pub(super) const KEYBOARD_QUERY_BOUND: Duration = Duration::from_millis(500);
 
 /// Hand the terminal to the user's editor, and take back whatever they saved.
 ///

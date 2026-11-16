@@ -117,7 +117,7 @@ beside the session's directories is refused by the operating system, and the sen
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
-`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
 `verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
@@ -129,7 +129,7 @@ The tool is in the set no delegate is offered, and a call naming it anyway is an
 unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
-`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
+`verified-by: bravebot_agent::tools::tests::confinement::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 
 <a id="PATHREQ-7"></a>
 ### PATHREQ-7: a yes does not reach the file tools, and the mode that answers every question reaches them with no request
@@ -174,6 +174,22 @@ reach again at each look, from the live mode, the person's rules and the trust m
 ([FSWATCH-7](../file-watches.md#FSWATCH-7)). A watch armed outside the workspace under bypass keeps
 looking while the mode is bypass and ends as out of reach at the first look after it is not.
 
+**A reference to a file.** A listing or a search makes a reference to each file it found, and the
+file is opened when a tool is given the reference: `vet_content`, `spawn_processor`,
+`run`'s `stdin_ref`, `write_file`'s `contents_ref` and a manifest step. `read_output` does not open
+one ([OUTPUT-2](read-output.md#OUTPUT-2)). Opening resolves the path the
+reference was made from, so it follows the same rule as a call of `read_file` for that path. While the
+mode is bypass, a call of `vet_content` or `spawn_processor` holds the reach for the
+tools that open a reference (`TOOLS_READING_A_REFERENCE`), and the opening of any reference is judged
+as a read, including one a call of `write_file` or `run` makes, so a path only `denyWrite` covers is
+still read. Every refusal above holds. Where the call holds no reach, which is every mode but bypass
+and every workspace the person has not trusted, the file is refused as outside the workspace and the
+refusal names `/add-dir`, as a file tool's refusal does ([TRUST-10](../trust-map.md#TRUST-10) states where
+it names none). The reference keeps the label the listing gave it, so opening it
+releases nothing to the planner that [MODE-4](../permission-modes.md#MODE-4) and
+[CHECK-12](../vetting.md#CHECK-12) did not already release. The reach is decided from the tool's
+name, the live mode and the person's rules, and never from the file.
+
 A refused path gets the refusal it always had and reaches nothing. The sandbox mode does not change
 the file tools' reach: it holds under `workspace-write`, `strict` and `off` and on every platform.
 The reach is the live mode's and is read at each call, so it ends when the mode changes
@@ -206,7 +222,10 @@ The planner cannot see the permission mode and is not told it. The tool's descri
 exception as applying where the person has turned permission prompts off, and says the file tools
 reach a path outside the workspace there with no request. A file tool's refusal names `/add-dir`
 alone and does not send the planner to `request_path`: where the mode reaches a path the refusal is
-not given, and where it does not, a request for the path is refused as well. A skill that depends on
+not given, and where it does not, a request for the path is refused as well. Where nobody can be
+asked in the run, the refusal names no `/add-dir` either ([TRUST-10](../trust-map.md#TRUST-10)). A `run` line's
+redirection refused for leaving the workspace names `/add-dir` the same way and not `request_path`,
+whose grant a redirection does not pass ([CMDLINE-5](command-line.md#CMDLINE-5)). A skill that depends on
 the exception says the same and does not branch on the mode.
 
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
@@ -228,6 +247,18 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
+`verified-by: bravebot_agent::turn::the_reads_of_one_round_beside_the_session_hold_the_reach_the_mode_gives_them`
+`verified-by: bravebot_agent::turn::under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing`
+`verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
+`verified-by: bravebot_agent::tools::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
+`verified-by: bravebot_agent::tools::a_tool_outside_the_tables_called_after_one_holding_the_reach_gets_none`
+`verified-by: bravebot_agent::turn::a_reference_made_under_bypass_is_refused_once_the_mode_leaves_bypass`
+`verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_reference_to_a_listed_file_is_opened`
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_link_into_the_credentials_is_refused`
+`verified-by: bravebot_agent::workspace::the_refusals_hold_for_a_file_a_reference_stands_for`
+`verified-by: bravebot_agent::workspace::reading_under_the_reach_judges_a_read_and_gives_the_call_its_own_reach_back`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::leaving_bypass_with_the_key_ends_the_reach_to_a_sibling_directory`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_sibling_directory_is_read_and_not_written`
@@ -236,7 +267,7 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::workspace::a_new_entry_directly_in_the_home_directory_or_a_persistence_location_is_refused`
 `verified-by: bravebot_agent::workspace::the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass`
 `verified-by: bravebot_agent::tools::every_tool_that_names_a_path_is_given_the_reach_or_says_why_not`
-`verified-by: bravebot_agent::tools::reads_taken_beforehand_hold_the_reach_the_mode_gives_them`
+`verified-by: bravebot_agent::tools::tests::reading_together::reads_taken_beforehand_hold_the_reach_the_mode_gives_them`
 `verified-by: bravebot_tui::status::the_report_lists_the_directories_bypass_took_the_file_tools_into`
 `verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`

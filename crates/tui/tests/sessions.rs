@@ -922,6 +922,7 @@ fn a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopene
         resolved: "/bin/cat".into(),
         started_as: "/bin/cat".into(),
         args: Vec::new(),
+        matched: Vec::new(),
         environment: Vec::new(),
         expansions: Vec::new(),
         routes: Vec::new(),
@@ -4143,6 +4144,7 @@ mod preserved_history {
                 ToMain::PromptRecorded(at) => session.prompt_recorded(at),
                 ToMain::Spent(spent) => session.progressed(spent),
                 ToMain::Todos(todos) => session.set_todos(todos),
+                ToMain::References(found) => session.add_references(&found),
                 ToMain::Narration(text) => session.narrate(text),
                 ToMain::Started(activity) => session.start_activity(activity),
                 ToMain::Finished(activity) => session.finish_activity(activity),
@@ -4961,6 +4963,44 @@ mod preserved_history {
         assert!(request.contains("next prompt"));
         assert!(!request.contains("SAFE_DISPLAY_DIAGNOSTIC"));
         assert!(!request.contains("DISPLAY_ONLY_PROMPT"));
+    }
+
+    /// PANEL-16: the worker hands the terminal what the planner's own call named as the call is made,
+    /// through the channel the real reporter writes to, so a turn that then fails has already
+    /// given the session the item. The command is refused (this fixture approves no run) and the
+    /// item still counts, since the planner wrote it.
+    ///
+    /// The faults it rejects: a reporter that keeps the references for the turn's outcome (a failed
+    /// turn gives none), and a terminal that leaves the message unread.
+    #[test]
+    fn a_turn_that_fails_after_naming_an_item_has_already_given_the_session_the_item() {
+        let scratch = Scratch::new("failed-turn-references");
+        let (refusing, _) = super::completed_usage::endpoint_refusing_after(vec![tool_reply(
+            "run",
+            r#"{"command":"gh pr view 123 --repo brave/bravebot"}"#,
+            10,
+        )]);
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&refusing),
+            &bravebot_agent::Task::new("look at it").keeping_links(true),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(session.finished.unwrap().failed());
+        let met: Vec<String> = session
+            .references()
+            .iter()
+            .map(|reference| reference.shorthand())
+            .collect();
+        assert_eq!(met, ["brave/bravebot#123"]);
+        assert_eq!(
+            session.references()[0].kind(),
+            bravebot_agent::links::LinkKind::PullRequest
+        );
     }
 
     /// A turn that fails after a tool call leaves the planner a note that it failed (TURN-13). The

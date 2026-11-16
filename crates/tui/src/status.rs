@@ -185,6 +185,9 @@ pub struct Facts<'a> {
     /// cache, which every backend but Bedrock currently does, and that is not the same answer as a
     /// turn whose cache missed.
     pub cached: Option<bravebot_aichat::protocol::Cached>,
+    /// Whether the model in force is recorded as refusing the cache breakpoints, so that its
+    /// requests carry none and a prefix is paid for in full on each of them (BACKEND-27).
+    pub breakpoints_given_up: bool,
     pub trust: &'a TrustStore,
     pub programs: &'a TrustedPrograms,
     /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
@@ -1021,7 +1024,9 @@ fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
     // above it. Adding the two together would report the one number that says nothing: a read is
     // charged at a fraction of a fresh token and a write above it, so a turn that saved almost the
     // whole prompt and a turn that paid a premium on it come to the same sum.
-    if let Some(cached) = facts.cached.filter(bravebot_aichat::protocol::Cached::any) {
+    if facts.breakpoints_given_up {
+        lines.push(Line::new(t!(status_cache), t!(status_cache_given_up)));
+    } else if let Some(cached) = facts.cached.filter(bravebot_aichat::protocol::Cached::any) {
         lines.push(Line::new(t!(status_cache), ""));
         for (count, note) in [
             (cached.read_tokens, t!(status_cache_read)),
@@ -1516,6 +1521,7 @@ mod tests {
             agent_by_setting: false,
             effort: None,
             model_reads_effort: true,
+            breakpoints_given_up: false,
             account_effort: None,
             // Nothing observed, which is what a session looks like before its first turn. Tests
             // about the tier and the served model set these themselves.
@@ -2483,6 +2489,7 @@ mod tests {
                 args: ["pr", "view", "12", "--repo", "brave/bravebot"]
                     .map(String::from)
                     .to_vec(),
+                matched: Vec::new(),
                 environment: Vec::new(),
                 expansions: Vec::new(),
                 routes: Vec::new(),
@@ -4146,6 +4153,30 @@ mod tests {
         );
         // The counts above this line are the session's, so the heading has to say this one is not.
         assert!(shown.contains("last turn"), "{shown}");
+    }
+
+    /// A model that has refused the cache breakpoints draws no cache figure, since its prompt is not
+    /// cached, so the report has to say the caching is off. Otherwise a session that reads its whole
+    /// prefix at the full rate on every turn looks the same as one that has not yet reported
+    /// (BACKEND-27).
+    #[test]
+    fn the_panel_says_when_the_breakpoints_were_given_up() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut given_up = facts(&config, &trust);
+        given_up.breakpoints_given_up = true;
+        let shown = rendered(&report(&given_up));
+        assert!(
+            shown.contains(&t!(status_cache_given_up).to_string()),
+            "{shown}"
+        );
+
+        let kept = facts(&config, &trust);
+        let shown = rendered(&report(&kept));
+        assert!(
+            !shown.contains(&t!(status_cache_given_up).to_string()),
+            "{shown}"
+        );
     }
 
     /// A read of zero after a pause means one thing under a five-minute lifetime and another under an

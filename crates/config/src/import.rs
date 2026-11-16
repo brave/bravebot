@@ -695,14 +695,18 @@ pub fn running(source: Source, host: &str, listed: Vec<Installed>) -> Found {
         return server_left(source, host, Reason::NoToolModel, Some(host));
     };
 
-    let endpoint = format!("{host}/v1");
+    // Ollama is reached in its own protocol, whose requests state the window the server is to
+    // allocate and whose roster says each model's (BACKEND-72, BACKEND-73), so the window it has a
+    // model loaded with now is never written down: the next request reloads the model at its own.
+    let native = source == Source::Ollama;
+    let endpoint = format!("{host}/{}", if native { "api" } else { "v1" });
     let mut options = Map::new();
     options.insert("baseURL".to_string(), Value::from(endpoint.as_str()));
     // A window above the assumed one is left unwritten: the assumed one is deliberately low, and
     // a figure read once from a loaded model goes stale when the person reloads it larger.
     if let Some(window) = chosen
         .window
-        .filter(|window| *window < crate::provider::CONTEXT_WINDOW)
+        .filter(|window| !native && *window < crate::provider::CONTEXT_WINDOW)
     {
         options.insert("contextWindow".to_string(), Value::from(window));
     }
@@ -711,6 +715,12 @@ pub fn running(source: Source, host: &str, listed: Vec<Installed>) -> Found {
         "name".to_string(),
         Value::from(format!("{} (local)", source.name())),
     );
+    if native {
+        entry.insert(
+            "npm".to_string(),
+            Value::from(crate::provider::OLLAMA_SDKS[0]),
+        );
+    }
     entry.insert("options".to_string(), Value::Object(options));
     Found {
         source,
@@ -1345,6 +1355,7 @@ fn speaks_the_protocol(id: &str, npm: Option<&str>, stated: Option<&str>) -> boo
         Some("@ai-sdk/amazon-bedrock") => id == AWS_PROVIDER_ID,
         Some("@ai-sdk/google-vertex") => id == GOOGLE_VERTEX_ID,
         Some("@ai-sdk/anthropic") => id == ANTHROPIC_ID,
+        Some(npm) if provider::OLLAMA_SDKS.contains(&npm) => id != GOOGLE_VERTEX_ID,
         Some(_) => false,
     }
 }
@@ -3752,22 +3763,32 @@ mod tests {
     /// the entry lists no models to carry it. A window at or above the assumed one, and none at all,
     /// write the documented block alone, so a figure that later grows is not held down. The
     /// regressions rejected are writing nothing, and writing every figure.
+    ///
+    /// LM Studio's, since Ollama's entry is reached in its own protocol, whose requests state the
+    /// window and whose roster reads each model's (BACKEND-72, BACKEND-73): a figure read off the
+    /// model it has loaded now is never written there, small or not.
     #[test]
     fn a_window_below_the_assumed_one_is_written_into_the_entry() {
-        let options = |window: Option<u64>| {
+        let options = |source: Source, window: Option<u64>| {
             let mut listed = three_pulled();
+            for model in &mut listed {
+                model.window = None;
+            }
             listed[0].window = window;
-            let found = running(Source::Ollama, "http://localhost:11434", listed);
-            let chosen = found.model.clone();
-            assert_eq!(chosen.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
+            let found = running(source, "http://localhost:1234", listed);
             found.gateways[0].entry["options"].clone()
         };
 
         assert_eq!(
-            options(Some(4096)),
-            serde_json::json!({"baseURL": "http://localhost:11434/v1", "contextWindow": 4096})
+            options(Source::LmStudio, Some(4096)),
+            serde_json::json!({"baseURL": "http://localhost:1234/v1", "contextWindow": 4096})
         );
-        let plain = serde_json::json!({"baseURL": "http://localhost:11434/v1"});
+        assert_eq!(
+            options(Source::Ollama, Some(4096)),
+            serde_json::json!({"baseURL": "http://localhost:1234/api"})
+        );
+        let plain = serde_json::json!({"baseURL": "http://localhost:1234/v1"});
+        let options = |window| options(Source::LmStudio, window);
         assert_eq!(options(Some(crate::provider::CONTEXT_WINDOW)), plain);
         assert_eq!(options(Some(1_000_000)), plain);
         assert_eq!(options(None), plain);
@@ -3789,14 +3810,15 @@ mod tests {
         assert_eq!(found.running_at.as_deref(), Some("http://localhost:11434"));
         assert!(found.env.is_empty() && found.left.is_empty(), "{found:?}");
         // The block under "A local Ollama, or another gateway that wants no key" in
-        // docs/website/docs/customize/configuration.md.
+        // docs/website/docs/customize/providers/openai-compatible.md and docs/getting-started.md.
         let documented: Value = serde_json::from_str(
-            r#"{"name": "Ollama (local)", "options": {"baseURL": "http://localhost:11434/v1"}}"#,
+            r#"{"name": "Ollama (local)", "npm": "ollama-ai-provider-v2",
+                "options": {"baseURL": "http://localhost:11434/api"}}"#,
         )
         .expect("json");
         let gateway = gateway(found, "ollama");
         assert_eq!(Value::Object(gateway.entry.clone()), documented);
-        assert_eq!(gateway.endpoint, "http://localhost:11434/v1");
+        assert_eq!(gateway.endpoint, "http://localhost:11434/api");
         assert!(matches!(gateway.key, Key::Named), "{:?}", gateway.key);
         assert_eq!(found.model.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
         assert_eq!(found.model_gateway.as_deref(), Some("ollama"));
@@ -3919,7 +3941,7 @@ mod tests {
             assert_eq!(found.running_at.as_deref(), Some(host), "{value:?}");
             assert_eq!(
                 gateway(found, "ollama").endpoint,
-                format!("{host}/v1"),
+                format!("{host}/api"),
                 "{value:?}"
             );
         }

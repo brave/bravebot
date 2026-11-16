@@ -149,6 +149,9 @@ impl RememberedStep {
             resolved,
             started_as,
             args,
+            // Not part of the key: the entry holds the arguments the person approved, whichever a
+            // pattern produced.
+            matched: _,
             environment,
             // Not part of the key, and not storable: an entry has no field for a value worked out
             // at spawn. `matches` refuses any step that carries one, so an entry recorded from
@@ -176,6 +179,8 @@ impl RememberedStep {
             resolved,
             started_as,
             args,
+            // An entry holds no record of which words a pattern produced, as [`Self::of`] says.
+            matched: _,
             environment,
             expansions,
             routes,
@@ -218,6 +223,7 @@ impl RememberedStep {
             resolved: self.resolved.clone(),
             started_as: self.started_as.clone(),
             args: Vec::new(),
+            matched: Vec::new(),
             environment: self.environment.clone(),
             expansions: Vec::new(),
             routes: self.routes.clone(),
@@ -597,6 +603,7 @@ pub mod scopes {
             resolved,
             started_as,
             args,
+            matched: _,
             environment,
             expansions,
             routes,
@@ -720,6 +727,7 @@ mod tests {
             resolved: PathBuf::from(format!("/usr/bin/{program}")),
             started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),
@@ -792,6 +800,7 @@ mod tests {
             resolved: PathBuf::from("/usr/bin/make"),
             started_as: PathBuf::from("/usr/bin/gmake"),
             args: vec!["check".to_string()],
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),
@@ -810,6 +819,7 @@ mod tests {
             resolved: PathBuf::from("/tmp/make"),
             started_as: PathBuf::from("/tmp/make"),
             args: vec!["check".to_string()],
+            matched: Vec::new(),
             environment: Vec::new(),
             expansions: Vec::new(),
             routes: Vec::new(),

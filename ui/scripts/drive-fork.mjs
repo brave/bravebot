@@ -15,9 +15,9 @@
 // with the click added, because here the item is the thing being tested.
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, SHOTS_DIR } from './drive-support.mjs'
 
-const OUT = '/tmp/bravebot-ui'
+const OUT = SHOTS_DIR
 mkdirSync(OUT, { recursive: true })
 
 const { check, problems } = checker()

@@ -214,7 +214,8 @@ fn a_schema_names_its_arguments_in_properties_and_each_is_a_word_a_number_a_choi
 
 /// A listing that declared the shape of a result would invite a client to read the result as data
 /// of a known kind. A result is untrusted and private whatever the tool is (MCP-1), so the listing
-/// holds a name, a description and what the call takes, and nothing about what comes back.
+/// holds a name, a description and what the call takes, and nothing about what comes back. A tool
+/// of a group that only reads says so, as MCP's `readOnlyHint` and nothing else.
 #[test]
 fn a_tool_is_listed_with_a_name_a_description_and_an_input_schema_and_no_result_shape() {
     for tool in TOOLS {
@@ -224,7 +225,16 @@ fn a_tool_is_listed_with_a_name_a_description_and_an_input_schema_and_no_result_
             .unwrap()
             .keys()
             .map(String::as_str)
+            .filter(|key| *key != "annotations")
             .collect();
+        if let Some(annotations) = listed.get("annotations") {
+            assert_eq!(
+                annotations,
+                &serde_json::json!({"readOnlyHint": true}),
+                "{}",
+                tool.name
+            );
+        }
         assert_eq!(
             keys,
             BTreeSet::from(["description", "inputSchema", "name"]),

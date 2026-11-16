@@ -35,6 +35,12 @@ asked, shown the text, the file and the reason, and only your yes writes it. You
 wording instead. Each rule is one line, `- <text> (<date>) why: <reason>`, and `/undo` takes it back.
 You can also edit either file by hand.
 
+A home rule is written only to a file spelled exactly `AGENTS.md`, the only spelling read as your
+rules. Where `~/.bravebot` holds `agents.md` or another spelling instead, what happens depends on
+the volume. On one that tells upper and lower case apart, `AGENTS.md` is made beside it and the rule
+is written there. On one that does not, such as a default macOS volume, you are not asked, nothing
+is written, and you are told to rename the file to `AGENTS.md`.
+
 A rule is never promoted from a fact. If a fact deserves to be a rule, say so, or approve the planner's
 proposal.
 

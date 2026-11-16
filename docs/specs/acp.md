@@ -22,7 +22,10 @@ The editor draws the conversation and the agent runs it. The program is a projec
 session the desktop window uses, so the turn
 engine, the trust map and every question are the ones described in [prompting.md](prompting.md),
 [trust-map.md](trust-map.md) and [layering.md](layering.md), and this spec decides only what the
-protocol adds: where each message comes from, and what an answer is allowed to grant.
+protocol adds: where each message comes from, and what an answer is allowed to grant. The one
+thing it changes about a turn is the sentence in the system prompt naming the front end: a session
+an editor hosts says the person is using an editor that hosts it over this protocol, and not the
+desktop app ([INSTR-9](instructions.md#INSTR-9)).
 
 Before it reads a line the program settles the same process-wide sandbox answers `bravebot-rpc`
 does, the network its programs keep, the lists of paths a person wrote and the hosts a stage is held
@@ -171,7 +174,14 @@ Bypassing is reachable only where the command line asked for it
 question reaches the editor is [MODE-2](permission-modes.md#MODE-2) for accepting edits and
 [MODE-3](permission-modes.md#MODE-3) for planning.
 
+A session opens asking even where the person's `permissions.startInAuto` opens a desktop window's
+sessions in auto ([AUTO-1](auto-mode.md#AUTO-1)). The editor is offered no way to leave auto, and it
+is the one that answers the questions, so the bridge an ACP server runs opens every session asking,
+and no session opens in auto and is moved.
+
 `verified-by: bravebot_ui_bridge::acp::an_editor_selects_three_modes_and_bypass_is_refused`
+`verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_asks_where_the_setting_opens_a_windows_in_auto`
+`verified-by: bravebot_ui_bridge::dispatch::a_bridge_opening_in_ask_opens_every_session_asking_where_the_setting_says_auto`
 `verified-by: bravebot_cli::acp::acp_refuses_the_flags_that_would_stop_the_editor_being_asked`
 
 <a id="ACP-9"></a>

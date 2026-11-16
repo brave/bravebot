@@ -329,6 +329,48 @@ pub(super) fn carry_out_hunks(
     }
 }
 
+/// Write the session's record as its first prompt is sent, if none is on disk yet, and give the
+/// panel the name and id it holds.
+///
+/// A first turn can run for hours, and until a record is written the session has no id for the
+/// panel to show or herdr to reopen it by (PANEL-9, HERDR-9), and nothing for a session that is
+/// killed to resume. The record holds what the session held before the prompt, titled from it, and
+/// the end of the turn writes it again as it does any other. The turn's own loop is what draws
+/// from here until the turn ends, and it does not name the id on each pass as the event loop does,
+/// so it is named here. Nothing is written once a record is on disk, and a session that is opened
+/// and abandoned without a prompt still leaves none. Whether it wrote is the answer.
+pub(super) fn open_the_record(
+    session: &mut Session,
+    conversation: &Conversation,
+    stored: &mut bravebot_session::sessions::Handle,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+    prompt: &str,
+) -> bool {
+    if stored.resumable().is_some() {
+        return false;
+    }
+    with_standing(
+        session,
+        conversation,
+        trust,
+        programs,
+        workspace,
+        |standing| stored.save(prompt, standing),
+    );
+    if stored.resumable().is_none() {
+        return false;
+    }
+    session.identify(
+        stored.title(),
+        crate::status::abbreviate(workspace.root()),
+        stored.branch(),
+    );
+    name_the_id(session, stored);
+    true
+}
+
 /// Write the session's record now, if there is one to write: nothing where no turn has been had and
 /// nothing is on disk, so a session opened and abandoned leaves none. Whether it did is the answer.
 fn save_record(

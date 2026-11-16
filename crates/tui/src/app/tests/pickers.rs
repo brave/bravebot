@@ -536,3 +536,141 @@ fn page_down_moves_the_model_picker_by_the_list_the_session_drew() {
         Some("model-0".to_string())
     );
 }
+
+/// What the info panel drew on each row of `buffer`, read from the columns beside the transcript. A
+/// row of a picker drawn over the middle of the frame is not in them.
+fn the_panels_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    let first = buffer.area.width - crate::panel::WIDTH + 1;
+    (0..buffer.area.height)
+        .map(|row| {
+            (first..buffer.area.width)
+                .map(|column| buffer[(column, row)].symbol().to_string())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .collect()
+}
+
+fn the_panel_draws(buffer: &ratatui::buffer::Buffer, heading: &str) -> bool {
+    the_panels_rows(buffer).iter().any(|row| row == heading)
+}
+
+/// PANEL-17. `/sidebar` is the bare word: it opens the checklist, starts no turn and sends nothing,
+/// and a word after it is a prompt, as for every command that takes no argument (CMD-2).
+///
+/// Rejects: a word that is not in the command table, so that it is sent to the model, and one that
+/// opens the list with an argument after it.
+#[test]
+fn the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens() {
+    let mut session = Session::new("none");
+    assert_eq!(
+        dispatch_command(&mut session, commanded(SIDEBAR_COMMAND)),
+        Action::Redraw
+    );
+    assert!(matches!(session.picking(), Some(Picking::Sidebar(_))));
+    assert!(session.take_pick().is_none());
+    assert!(!session.a_turn_is_running());
+    assert_eq!(session.panel_sections(), crate::panel::Sections::default());
+
+    let mut with_a_word = Session::new("none");
+    dispatch_command(&mut with_a_word, commanded("/sidebar foo"));
+    assert!(with_a_word.picking().is_none());
+}
+
+/// PANEL-17. Space and Enter turn the section under the cursor off and on, the panel behind the
+/// list is drawn without it and with it on the next frame, at rest and while a turn runs, and
+/// Escape closes the list and keeps what was changed.
+///
+/// Rejects: a toggle that waits for the list to close, one that changes the list and not the
+/// session, one that closes the list, an Escape that puts the sections back, and a session that
+/// holds the list differently while a turn runs.
+#[test]
+fn the_panel_follows_each_toggle_at_once_and_escape_keeps_them_at_rest_and_while_a_turn_runs() {
+    for running in [false, true] {
+        let (mut session, _) = a_session_beside_the_panel();
+        if running {
+            session.type_char('a');
+            session.submit();
+            assert!(session.a_turn_is_running());
+        }
+        let send = |session: &mut Session, code: KeyCode| {
+            if running {
+                handle_key_while_working(session, key(code));
+            } else {
+                handle_key(session, key(code));
+            }
+            drawn(session)
+        };
+        dispatch_command(&mut session, commanded(SIDEBAR_COMMAND));
+        let buffer = drawn(&mut session);
+        let context = t!(panel_context);
+        let name = t!(panel_session);
+        assert!(the_panel_draws(&buffer, name), "{running}");
+        assert!(the_panel_draws(&buffer, context), "{running}");
+
+        let buffer = send(&mut session, KeyCode::Char(' '));
+        assert!(!the_panel_draws(&buffer, name), "{running}: Space");
+        assert!(the_panel_draws(&buffer, context), "{running}: Space");
+        assert!(matches!(session.picking(), Some(Picking::Sidebar(_))));
+
+        for _ in 0..5 {
+            send(&mut session, KeyCode::Down);
+        }
+        let buffer = send(&mut session, KeyCode::Enter);
+        assert!(!the_panel_draws(&buffer, context), "{running}: Enter");
+        assert!(!the_panel_draws(&buffer, name), "{running}: Enter");
+        assert!(matches!(session.picking(), Some(Picking::Sidebar(_))));
+
+        let buffer = send(&mut session, KeyCode::Char(' '));
+        assert!(the_panel_draws(&buffer, context), "{running}: Space again");
+        let buffer = send(&mut session, KeyCode::Esc);
+        assert!(session.picking().is_none(), "{running}: Escape");
+        assert!(!the_panel_draws(&buffer, name), "{running}: after Escape");
+        assert!(
+            session
+                .panel_sections()
+                .shows(crate::panel::Section::Context)
+        );
+        assert!(
+            !session
+                .panel_sections()
+                .shows(crate::panel::Section::Session)
+        );
+    }
+}
+
+/// PANEL-17, MOUSE-15. One press on a row turns the section off, the panel behind follows, and the
+/// next press on it turns it on again; a press outside the list closes it and keeps the toggles.
+///
+/// Rejects: the two presses the other pickers need, a press whose toggle reaches the list and not
+/// the session, and a press outside that undoes what was changed.
+#[test]
+fn a_press_on_a_row_of_the_checklist_turns_its_section_off_and_a_press_outside_keeps_that() {
+    let (mut session, (outside_row, outside_column)) = a_session_beside_the_panel();
+    dispatch_command(&mut session, commanded(SIDEBAR_COMMAND));
+    drawn(&mut session);
+    let name = t!(panel_session);
+    assert!(the_panel_draws(&drawn(&mut session), name));
+
+    let (row, column) = row_of_the_picker(&session, 0);
+    press(&mut session, row, column, KeyModifiers::NONE);
+    assert!(
+        !the_panel_draws(&drawn(&mut session), name),
+        "one press did not turn the section off"
+    );
+    assert!(matches!(session.picking(), Some(Picking::Sidebar(_))));
+
+    press(&mut session, row, column, KeyModifiers::NONE);
+    assert!(the_panel_draws(&drawn(&mut session), name));
+
+    press(&mut session, row, column, KeyModifiers::NONE);
+    click(&mut session, outside_row, outside_column);
+    assert!(session.picking().is_none(), "a press outside left it open");
+    assert!(
+        !session
+            .panel_sections()
+            .shows(crate::panel::Section::Session)
+    );
+    assert!(!the_panel_draws(&drawn(&mut session), name));
+}

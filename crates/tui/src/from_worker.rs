@@ -30,6 +30,9 @@ pub(crate) fn show(session: &mut Session, message: ToMain) -> Option<ToMain> {
         ToMain::Quarantined(shown) => session.show(shown),
         ToMain::Returned(returned) => session.returned(returned),
         ToMain::Landed(landing) => session.landed(landing),
+        // Taken by the manifest run's loop as well, which a turn never needs: a message handed back
+        // from either would leave the references it named out of the list.
+        ToMain::References(found) => session.add_references(&found),
         other => return Some(other),
     }
     None
@@ -87,7 +90,8 @@ pub(crate) fn show_in_a_turn(
         | ToMain::HookFinished
         | ToMain::Quarantined(_)
         | ToMain::Returned(_)
-        | ToMain::Landed(_)) => return show(session, shown),
+        | ToMain::Landed(_)
+        | ToMain::References(_)) => return show(session, shown),
         question @ (ToMain::Write(_)
         | ToMain::Run(_)
         | ToMain::ReadOutput(_)
@@ -137,6 +141,33 @@ mod tests {
             "{handed_back:?}"
         );
         assert!(manifest.todos.is_empty());
+    }
+
+    /// What a turn reports it met is taken into the session as it arrives, by the loop that waits for
+    /// a turn and the one that waits for a manifest run alike, and is never handed back: a message
+    /// handed back reaches the arm that refuses what it does not draw, which drops it, and the
+    /// references it named would be gone from `/issues` and the panel (PANEL-16).
+    ///
+    /// The faults it rejects: a message left to the caller, and one the manifest loop hands back.
+    #[test]
+    fn the_references_a_turn_reports_are_taken_by_both_loops_and_never_handed_back() {
+        use bravebot_agent::links::{LinkKind, Reference};
+        let found = || {
+            vec![
+                Reference::new("brave", "bravebot", 4223, LinkKind::Issue).expect("valid"),
+                Reference::new("brave", "bravebot", 4224, LinkKind::PullRequest).expect("valid"),
+            ]
+        };
+
+        let mut turn = Session::new("turn");
+        let taken = show_in_a_turn(&mut turn, ToMain::References(found()), 100_000, false);
+        assert!(taken.is_none(), "{taken:?}");
+        assert_eq!(turn.references(), found());
+
+        let mut manifest = Session::new("manifest");
+        let handed_back = show(&mut manifest, ToMain::References(found()));
+        assert!(handed_back.is_none(), "{handed_back:?}");
+        assert_eq!(manifest.references(), found());
     }
 
     /// A question is handed back whole and nothing is taken of it, since the worker is blocked until

@@ -372,6 +372,10 @@ pub(crate) const RESPONSES_SDK: &str = "@ai-sdk/openai";
 /// package for a gateway that speaks it.
 const CHAT_SDK: &str = "@ai-sdk/openai-compatible";
 
+/// The SDKs an entry names to say that its endpoint takes Ollama's own API, as opencode names the
+/// packages that speak it. Both take a `baseURL` ending in `/api`.
+pub(crate) const OLLAMA_SDKS: [&str; 2] = ["ollama-ai-provider-v2", "ollama-ai-provider"];
+
 /// The publisher a model named without one is taken to belong to.
 const VERTEX_PUBLISHER: &str = "google";
 
@@ -392,6 +396,19 @@ const VERTEX_KEY_HEADER: &str = "x-goog-api-key";
 /// it for anyone who knows better.
 pub const CONTEXT_WINDOW: u64 = crate::bedrock::CONTEXT_WINDOW;
 
+/// The window an entry reached in Ollama's own protocol assumes, and the most it reads from the
+/// server. Lower than [`CONTEXT_WINDOW`] because each request has the server allocate it, and the
+/// memory a model is loaded with grows with it.
+pub const OLLAMA_WINDOW: u64 = 65_536;
+
+/// The window to ask Ollama for so that a conversation budgeted at `budget` has a quarter of it
+/// over for the reply: the inverse of [`Provider::budget_in`]. Compaction looks at the last
+/// round's prompt, so the next one passes the budget before it runs, and Ollama cuts the start of
+/// a prompt longer than the window rather than refusing it.
+pub fn ollama_window_for(budget: u64) -> u64 {
+    budget.saturating_add(budget / 4)
+}
+
 /// One model a gateway offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Model {
@@ -399,8 +416,8 @@ pub struct Model {
     pub id: String,
     /// The context window, where the file stated one.
     ///
-    /// `None` reads as [`CONTEXT_WINDOW`]. Kept distinct from a stated figure so that
-    /// `doctor` can say which models are running on the default.
+    /// `None` reads as the provider's [`Provider::assumed_window`]. Kept distinct from a stated
+    /// figure so that `doctor` can say which models are running on the default.
     pub context_window: Option<u64>,
     /// How long a reply this model may write, where the file stated it, out of the same `limit`
     /// block the window comes from and under the same rule.
@@ -512,14 +529,38 @@ impl Patience {
     ) -> Self {
         let stated = |key: &str| options.and_then(|options| options.get(key));
         Self {
-            max_retries: stated("maxRetries")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok()),
-            idle_timeout: positive(stated("idleTimeoutMs"))
-                .map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS))),
+            max_retries: Self::bounded_retries(
+                stated("maxRetries").and_then(serde_json::Value::as_u64),
+            ),
+            idle_timeout: Self::bounded_idle_timeout(positive(stated("idleTimeoutMs"))),
             retry_window: positive(stated("retryWindowMs"))
                 .map(|window| Duration::from_millis(window.min(MAX_RETRY_WINDOW_MS))),
         }
+    }
+
+    /// What the two variables of an account reached through the tier variables state
+    /// ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)): a retry count and an idle gap in
+    /// milliseconds, held to the bounds the `options` of a block are. A value that is not a whole
+    /// number, and a zero gap, states nothing, as it does in a block. No retry window has a variable,
+    /// so none is stated and the default one applies where no count is.
+    pub(crate) fn from_variables(max_retries: Option<&str>, idle_timeout_ms: Option<&str>) -> Self {
+        let whole = |value: Option<&str>| value.and_then(|text| text.trim().parse::<u64>().ok());
+        Self {
+            max_retries: Self::bounded_retries(whole(max_retries)),
+            idle_timeout: Self::bounded_idle_timeout(whole(idle_timeout_ms).filter(|gap| *gap > 0)),
+            retry_window: None,
+        }
+    }
+
+    /// A retry count held to [`MAX_RETRIES`]. Zero is a statement and a figure above the cap is the
+    /// cap.
+    fn bounded_retries(stated: Option<u64>) -> Option<u32> {
+        stated.and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok())
+    }
+
+    /// An idle gap held to [`MAX_IDLE_TIMEOUT_MS`]. `stated` is already known to be positive.
+    fn bounded_idle_timeout(stated: Option<u64>) -> Option<Duration> {
+        stated.map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS)))
     }
 
     /// How many requests are sent before a failure is the caller's: `default` where no retry count
@@ -734,6 +775,9 @@ pub enum Protocol {
     /// entry reached at OpenAI's own API
     /// ([BACKEND-61](../../../docs/specs/backends.md#BACKEND-61)).
     Responses,
+    /// Ollama's own `/api/chat`, which an entry naming one of [`OLLAMA_SDKS`] speaks
+    /// ([BACKEND-72](../../../docs/specs/backends.md#BACKEND-72)).
+    Ollama,
 }
 
 impl Provider {
@@ -1097,7 +1141,14 @@ impl Provider {
                 format!("{}/publishers/{VERTEX_PUBLISHER}/models", self.base_url)
             }
             Protocol::Responses => format!("{}/responses", self.base_url),
+            Protocol::Ollama => format!("{}/chat", self.base_url),
         }
+    }
+
+    /// The URL that describes one model of an Ollama, its window among what it says
+    /// ([BACKEND-73](../../../docs/specs/backends.md#BACKEND-73)).
+    pub fn show_url(&self) -> String {
+        format!("{}/show", self.base_url)
     }
 
     /// The URL one `generateContent` request for `model` goes to, or `None` where the model's name
@@ -1142,6 +1193,7 @@ impl Provider {
             Protocol::ChatCompletions | Protocol::Responses => format!("{}/models", self.base_url),
             Protocol::Messages => format!("{}/models?limit={ANTHROPIC_PAGE}", self.base_url),
             Protocol::GenerateContent => self.completion_url(),
+            Protocol::Ollama => format!("{}/tags", self.base_url),
         }
     }
 
@@ -1252,7 +1304,10 @@ impl Provider {
     /// both and cannot disagree about either.
     pub fn fixed_headers(&self) -> &'static [(&'static str, &'static str)] {
         match self.protocol() {
-            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
+            Protocol::ChatCompletions
+            | Protocol::GenerateContent
+            | Protocol::Responses
+            | Protocol::Ollama => &[],
             Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
         }
     }
@@ -1262,7 +1317,10 @@ impl Provider {
     /// second copy would go out beside it rather than in place of it.
     fn fixed_header_names(protocol: Protocol) -> &'static [&'static str] {
         match protocol {
-            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
+            Protocol::ChatCompletions
+            | Protocol::GenerateContent
+            | Protocol::Responses
+            | Protocol::Ollama => &[],
             Protocol::Messages => &["anthropic-version"],
         }
     }
@@ -1423,7 +1481,30 @@ impl Provider {
         model
             .context_window
             .or(self.context_window)
-            .unwrap_or(CONTEXT_WINDOW)
+            .unwrap_or(self.assumed_window())
+    }
+
+    /// The budget a conversation with `model` gets: [`Provider::window_of`], less the reply's share
+    /// where the server cuts a long prompt short rather than refusing it.
+    pub fn budget_of(&self, model: &Model) -> u64 {
+        self.budget_in(self.window_of(model))
+    }
+
+    /// The budget a conversation gets in `window`: a fifth is held back in Ollama's protocol, as
+    /// `/v1/models` holds it back from the figure it sends.
+    pub fn budget_in(&self, window: u64) -> u64 {
+        match self.protocol() {
+            Protocol::Ollama => window - window / 5,
+            _ => window,
+        }
+    }
+
+    /// The window a model nobody stated one for is budgeted against.
+    pub fn assumed_window(&self) -> u64 {
+        match self.protocol() {
+            Protocol::Ollama => OLLAMA_WINDOW,
+            _ => CONTEXT_WINDOW,
+        }
     }
 
     /// Whether a name is one of this provider's models.
@@ -1575,7 +1656,9 @@ impl fmt::Debug for Credential {
 /// `openai` entry that states a proxy's endpoint, which may speak chat completions alone. Any other
 /// SDK an entry names is not read: the id decides.
 pub(crate) fn protocol_of(id: &str, npm: Option<&str>, stated: Option<&str>) -> Protocol {
-    if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
+    if npm.is_some_and(|npm| OLLAMA_SDKS.contains(&npm)) && id != GOOGLE_VERTEX_ID {
+        Protocol::Ollama
+    } else if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
         Protocol::Responses
     } else if id == ANTHROPIC_ID && npm != Some(CHAT_SDK) {
         Protocol::Messages
@@ -2902,6 +2985,49 @@ mod tests {
         );
     }
 
+    /// BACKEND-33, BACKEND-55: the two tier variables are held to what a block's `maxRetries` and
+    /// `idleTimeoutMs` are, since both go through the same bounds. Every figure is read both ways
+    /// and has to come out the same, so a bound changed in one place and not the other fails here.
+    ///
+    /// The faults this rejects: a second copy of the bounds that disagrees with the block's, and a
+    /// window stated by a variable that has none.
+    #[test]
+    fn the_tier_variables_state_the_count_and_the_gap_as_an_entry_does() {
+        for (retries, gap) in [
+            ("0", "1"),
+            ("2", "240000"),
+            ("7", "600000"),
+            ("8", "600001"),
+            ("100", "86400000"),
+        ] {
+            let block = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                    "maxRetries": {retries}, "idleTimeoutMs": {gap}}}}}}}}}"#
+            ))
+            .patience;
+            let variables = Patience::from_variables(Some(retries), Some(gap));
+            assert_eq!(variables.max_retries, block.max_retries, "{retries}");
+            assert_eq!(variables.idle_timeout, block.idle_timeout, "{gap}");
+            assert_eq!(variables.retry_window, None);
+        }
+        assert_eq!(Patience::from_variables(None, None), Patience::default());
+        assert_eq!(
+            Patience::from_variables(Some(" 3 "), Some("0")),
+            Patience {
+                max_retries: Some(3),
+                ..Patience::default()
+            },
+            "a gap of zero states nothing and the count is trimmed"
+        );
+        for text in ["", "-1", "1.5", "two", "1e3"] {
+            assert_eq!(
+                Patience::from_variables(Some(text), Some(text)),
+                Patience::default(),
+                "{text:?} states nothing"
+            );
+        }
+    }
+
     /// A figure above the cap is the cap, as Codex reads its own. Left as written, seven doublings
     /// of a one second pause is the most that stays inside the two minutes a service's own request
     /// to wait is held to, and a hundred is a turn that sits unattended for longer than a person
@@ -3709,6 +3835,72 @@ mod tests {
                 "options": {"baseURL": "https://proxy.example.invalid/v1"}
             }}}"#);
         assert_eq!(elsewhere.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-72: an entry naming an Ollama SDK, under any id, is reached in Ollama's own protocol:
+    /// requests at `/chat`, the roster at `/tags` and each model's details at `/show`, all under the
+    /// stated `/api` base, with no header of the protocol's own and no credential where none is
+    /// named. The same server written without the SDK keeps chat completions, so a block that worked
+    /// before keeps working the same way.
+    #[test]
+    fn an_entry_naming_an_ollama_sdk_is_reached_in_ollamas_own_protocol() {
+        for npm in OLLAMA_SDKS {
+            let native = one(&format!(
+                r#"{{"provider": {{"my-ollama": {{
+                    "npm": "{npm}",
+                    "options": {{"baseURL": "http://localhost:11434/api/"}}
+                }}}}}}"#
+            ));
+            assert_eq!(native.protocol(), Protocol::Ollama, "{npm}");
+            assert_eq!(native.completion_url(), "http://localhost:11434/api/chat");
+            assert_eq!(native.models_url(), "http://localhost:11434/api/tags");
+            assert_eq!(native.show_url(), "http://localhost:11434/api/show");
+            assert!(native.fixed_headers().is_empty());
+            assert!(matches!(native.credential(|_| None), Credential::NotNeeded));
+        }
+        let compatible = one(r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1"}
+            }}}"#);
+        assert_eq!(compatible.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-73: a model an Ollama entry lists with no window of its own is budgeted against
+    /// 65,536 tokens, the window each request then has the server allocate, where the same model
+    /// at the compatible endpoint keeps the window every other gateway assumes. A stated figure
+    /// outranks either.
+    #[test]
+    fn a_model_an_ollama_entry_lists_without_a_window_is_held_to_ollamas_own_assumed_one() {
+        let block = |npm: &str, base: &str| {
+            one(&format!(
+                r#"{{"provider": {{"ollama": {{{npm}
+                    "options": {{"baseURL": "http://localhost:11434/{base}"}},
+                    "models": {{"qwen3:8b": {{}}, "pinned": {{"limit": {{"context": 200000, "output": 8192}}}}}}
+                }}}}}}"#
+            ))
+        };
+        let native = block(r#""npm": "ollama-ai-provider-v2","#, "api");
+        let compatible = block("", "v1");
+        let windows = |provider: &Provider| -> Vec<u64> {
+            provider
+                .models
+                .iter()
+                .map(|model| provider.window_of(model))
+                .collect()
+        };
+        let mut native_windows = windows(&native);
+        native_windows.sort_unstable();
+        let mut compatible_windows = windows(&compatible);
+        compatible_windows.sort_unstable();
+        assert_eq!(native_windows, [65_536, 200_000]);
+        assert_eq!(compatible_windows, [131_072, 200_000]);
+
+        // Ollama cuts a prompt longer than the window rather than refusing it, so a fifth is kept
+        // for the reply, and the window asked for is the one the budget was taken from.
+        let plain = native.model("qwen3:8b").expect("offered");
+        assert_eq!(native.budget_of(plain), 52_429);
+        assert_eq!(ollama_window_for(native.budget_of(plain)), 65_536);
+        let plain = compatible.model("qwen3:8b").expect("offered");
+        assert_eq!(compatible.budget_of(plain), 131_072);
     }
 
     /// BACKEND-61: an entry naming `@ai-sdk/openai` is reached in the Responses protocol, whatever its

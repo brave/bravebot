@@ -54,6 +54,15 @@ pub enum Hit {
     /// The track of the scrollbar beside the transcript: a press on it puts the view there or takes
     /// hold of the thumb, which [`Laid::bar`] says where it is (MOUSE-49).
     Scrollbar,
+    /// The prompt drawn above the view, which begins at this row of the transcript: a click puts that
+    /// row at the top of the view (VIEW-44, MOUSE-54).
+    Pinned(u16),
+    /// The button drawn at the bottom of the transcript while the view is held off its tail: a click
+    /// returns the view to the tail (VIEW-45, MOUSE-55).
+    ToTail,
+    /// The pixel face on the opening screen: a click makes it blink or look to the other side, the
+    /// two things it does on its own (MOUSE-56).
+    Face,
     /// The row of the list of what could be typed under the box that holds this item of what is
     /// offered: a click puts the cursor on it, and a second takes it as Tab does (MOUSE-15).
     Item(usize),
@@ -150,6 +159,10 @@ impl Hit {
             Hit::Reply(_) | Hit::Block(..) | Hit::Words(_) => {
                 beneath && session.watching().is_none() && !session.files_open()
             }
+            // Drawn over the session's own transcript only, at rest and in the scroller.
+            Hit::Pinned(_) => beneath && session.watching().is_none() && !session.files_open(),
+            // Drawn with the opening screen, which the plain frame holds and no other frame does.
+            Hit::Face => beneath && session.in_the_plain_frame() && !session.files_open(),
             Hit::Queued(_) | Hit::Discard(_) => {
                 beneath && !session.files_open() && session.in_the_plain_frame()
             }
@@ -176,6 +189,9 @@ impl Hit {
             }
             Hit::Wheel(_) => beneath && session.in_the_plain_frame() && session.files_open(),
             Hit::Scrollbar => beneath && session.in_the_plain_frame(),
+            // Drawn at rest over the session's own transcript, as the scrollbar is, and by no view
+            // that replaces the frame.
+            Hit::ToTail => beneath && session.in_the_plain_frame(),
             // The Sessions screen is the whole frame while it is open, and no other target is recorded then.
             Hit::SessionsScreen(_) => session.showing_sessions(),
             Hit::Item(_) => beneath && session.in_the_plain_frame() && session.is_completing(),

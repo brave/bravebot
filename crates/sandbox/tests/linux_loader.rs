@@ -295,6 +295,79 @@ impl Fixture {
     }
 }
 
+/// A program linked against `libneeded.so` whose only `RUNPATH` is `$ORIGIN/lib`, with no `lib`
+/// directory beside it, so the loader finds the library only where `LD_ORIGIN_PATH` points
+/// `$ORIGIN`. Each of the two directories holds its own `lib/libneeded.so`.
+fn origin_program(fixture: &Fixture) -> PathBuf {
+    for (dir, who) in [(&fixture.planted, "planted"), (&fixture.genuine, "genuine")] {
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        library(
+            fixture,
+            &dir.join("lib").join("libneeded.so"),
+            who,
+            false,
+            Some("libneeded.so"),
+        );
+    }
+    let root = fixture.marker.parent().unwrap().join("origin");
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("origin.c");
+    std::fs::write(&source, LINKED).unwrap();
+    let program = root.join("origin");
+    let library_directory = fixture.genuine.clone().into_os_string();
+    compile(&[
+        source.as_os_str(),
+        OsStr::new("-o"),
+        program.as_os_str(),
+        OsStr::new("-L"),
+        &library_directory,
+        OsStr::new("-lneeded"),
+        OsStr::new("-Wl,--enable-new-dtags"),
+        OsStr::new("-Wl,-rpath,$ORIGIN/lib"),
+    ]);
+    program
+}
+
+/// Whether `bwrap` can start a process with an empty `/proc`. Where it cannot, such as a kernel
+/// that refuses an unprivileged user namespace, the test prints that it skipped.
+fn bwrap_hides_proc() -> bool {
+    let hides = Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--tmpfs", "/proc", "true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !hides {
+        eprintln!("skipped: bwrap cannot start a process with no /proc here");
+    }
+    hides
+}
+
+/// Run `command` in a process that cannot read `/proc`, with the environment `command` would give
+/// it, and return the markers its libraries wrote. `writable` is the directory the marker is in.
+/// A loader that finds no library stops the program with a failure status, which is the expected
+/// result for a start that removed the variable, so the status is not asserted.
+fn without_proc(command: &Command, writable: &Path, marker: &Path) -> Vec<String> {
+    let _ = std::fs::remove_file(marker);
+    let mut wrapped = Command::new("bwrap");
+    wrapped
+        .args(["--ro-bind", "/", "/", "--bind"])
+        .arg(writable)
+        .arg(writable)
+        .args(["--tmpfs", "/proc"])
+        .arg(command.get_program());
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => wrapped.env(name, value),
+            None => wrapped.env_remove(name),
+        };
+    }
+    wrapped.status().unwrap();
+    std::fs::read_to_string(marker)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Whether a marker line recorded by `who` is present.
 fn loaded(markers: &[String], who: &str) -> bool {
     markers.iter().any(|marker| marker == who)
@@ -380,7 +453,8 @@ fn a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_on
 /// The regression it rejects: `LOCPATH` or `NLSPATH` left in the environment of a checked start
 /// when it names a place a stage may write, or `LOCPATH` removed when it names a directory outside
 /// every one. A process the start made reports what it was given, so this shows the environment of
-/// a real process. What a loader or locale code does with the variable was not run. The two names
+/// a real process. What a loader or locale code does with the variable is in SANDBOX-30, where
+/// the runs on glibc and musl are recorded. The two names
 /// are in the table because glibc's `unsecvars.h` lists them, and that file does not say whether
 /// they select code. `NLSPATH` is a list of templates, so it is removed whatever it holds.
 #[test]
@@ -421,10 +495,10 @@ fn locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_c
 /// outside every one. A process the start made reports what it was given, so this shows the
 /// environment of a real process.
 ///
-/// It does not show what the loader does with `LD_ORIGIN_PATH`. glibc 2.40 reads it only when it
-/// cannot read `/proc/self/exe` (`sysdeps/unix/sysv/linux/dl-origin.c`), so a run in which a
-/// library is loaded from the directory it names needs a process with no `/proc`. That run was not
-/// made. This test has not been run on a Linux host.
+/// It does not show what the loader does with `LD_ORIGIN_PATH`. glibc reads it only when it cannot
+/// read `/proc/self/exe` (`sysdeps/unix/sysv/linux/dl-origin.c`), so a run in which a library is
+/// loaded from the directory it names needs a process with no `/proc`. The test below makes that
+/// run.
 #[test]
 fn ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write()
  {
@@ -450,4 +524,45 @@ fn ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directo
             "{name} was removed though it names a directory outside every writable one"
         );
     }
+}
+
+/// The regression it rejects: `LD_ORIGIN_PATH` left in the environment of a checked start when it
+/// names a place a stage may write, so that in a process with no `/proc` the loader reads
+/// `$ORIGIN` as that directory and loads a library from it, or removed when it names a directory
+/// outside every one. The program has `RUNPATH` `$ORIGIN/lib` and no `lib` beside it, run in a
+/// process whose `/proc` is empty (`bwrap --tmpfs /proc`), which is the only case glibc reads the
+/// variable in. The control is the same start with nothing checked: it must load the planted
+/// library, so the test cannot pass because the loader ignores the variable. Where `bwrap` cannot
+/// make that process, or the control loads nothing, the test prints `skipped`.
+#[test]
+fn ld_origin_path_runs_a_library_a_stage_wrote_in_a_process_with_no_proc_unless_the_start_removes_it()
+ {
+    if !compiler_present() || !bwrap_hides_proc() {
+        return;
+    }
+    let fixture = Fixture::new("origin-proc");
+    let program = origin_program(&fixture);
+    let writable = fixture.marker.parent().unwrap();
+    let name = "LD_ORIGIN_PATH";
+    let run = |checked: bool, value: &Path| {
+        let mut command = fixture.start(&program, name, value, checked);
+        holding(&mut command, name, value);
+        without_proc(&command, writable, &fixture.marker)
+    };
+
+    let kept = run(false, &fixture.planted);
+    if !loaded(&kept, "planted") {
+        eprintln!("skipped: this loader did not read {name} with no /proc: {kept:?}");
+        return;
+    }
+    let removed = run(true, &fixture.planted);
+    assert!(
+        !loaded(&removed, "planted"),
+        "{name} loaded the planted library through a checked start: {removed:?}"
+    );
+    let safe = run(true, &fixture.genuine);
+    assert!(
+        loaded(&safe, "genuine") && !loaded(&safe, "planted"),
+        "{name} naming a directory outside every writable one did not load the genuine library: {safe:?}"
+    );
 }

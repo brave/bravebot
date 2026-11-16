@@ -226,16 +226,19 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // `run` description was written in the one the turn started in, so a change is said to the
     // planner before the next request, in words the driver wrote from the two modes.
     let sandbox = task.sandbox.get();
-    if let Some(notice) = crate::confine::change_notice(
-        task.confine_runs,
+    if let Some(notice) = crate::confine::change_notice_for(
         state.told_sandbox,
         sandbox,
-        tools::requests_are_accepted(
-            task.confine_runs,
-            sandbox,
-            tools::workspace_is_trusted(policy, workspace),
-        ),
-        plan.beside.holds(tools::Named::RequestPath),
+        crate::confine::RunStatement {
+            confine_runs: task.confine_runs,
+            requests_offered: tools::requests_are_accepted(
+                task.confine_runs,
+                sandbox,
+                tools::workspace_is_trusted(policy, workspace),
+            ) && task.permission_mode.answers_requests(),
+            request_path_listed: plan.beside.holds(tools::Named::RequestPath),
+            askable: crate::confine::Askable::nobody_when(task.permission_mode.nobody_to_ask()),
+        },
     ) {
         conversation.push_composed_from(
             Message::user(&notice),
@@ -313,16 +316,58 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
 
     // And whatever exited while it was running, for the same reason and in the same place:
     // the finish of a background job is news the turn is told rather than something the
-    // planner has to remember to ask about (CMDLINE-14).
+    // planner has to remember to ask about (CMDLINE-14). A job whose latest look asked to read
+    // has its account released as that look was (RUN-22), with the check's cost the turn's.
+    let mut stopped = None;
     collect_jobs(
         state.jobs,
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+        !task.permission_mode.get().answers_a_run_unasked(),
         read_output_is(),
         plan.beside,
         policy,
         conversation,
         reporter,
+        &mut state.worked,
+        state.steps,
+        &mut |policy, slots, reporter, slot| {
+            let mut chat = crate::processor::Chat::new(config, egress, task.account_session())
+                .spending(state.subscription.as_mut())
+                .on(state.turn_model.as_deref())
+                .stoppable_by(cancel);
+            let released = tools::read_in_the_result(
+                policy,
+                slots,
+                task.permission_mode.get(),
+                task.auto_vetting,
+                &mut *confirmer,
+                &mut chat,
+                reporter,
+                &mut state.objections,
+                slot,
+            );
+            if let Some(interval) = released.waited {
+                reporter.inference_interval(interval);
+                state.spent.inference += interval.duration();
+            }
+            state.account.add_call(released.usage, released.completed);
+            if released.stopped.is_some() {
+                stopped = released.stopped;
+            }
+            reporter.spent(crate::outcome::Spent {
+                timing: state.spent.finish(&state.account),
+                ..state.account
+            });
+            released.text
+        },
     )?;
+    // A stop during the check ends the turn once the account is in the conversation, as one
+    // during a run's release does. The slot stays quarantined and unrefused.
+    if let Some(stopped) = stopped {
+        return Err(TurnError::Cancelled {
+            attempts: stopped.attempts,
+        });
+    }
 
     show_what_running_jobs_have_printed(state.jobs, policy, reporter);
 
@@ -1087,6 +1132,7 @@ pub(super) fn limit_the_tools<R: Reporter>(
 pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
     started: Vec<(DelegateId, crate::delegate::Seeded)>,
+    wake_after: usize,
     delegates: &mut Vec<Working<'scope>>,
     servers: Option<&crate::lsp::LanguageServers>,
     confirming: &'scope crate::shared::Lent<'_, C>,
@@ -1117,6 +1163,12 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     // started, which is the one its parent was asking at the time.
     let spawning_model = turn_model.clone();
     let spawning_effort = effort;
+    // One call's delegates are one batch, named by the first of them (DELEGATE-17).
+    let size = started.len();
+    let Some(lead) = started.first().map(|(lead, _)| *lead) else {
+        return;
+    };
+    let batch = super::Batch::of_call(lead, size, wake_after);
     for (id, seeded) in started {
         let vouched = seeded.vouched.clone();
         let checkout = seeded
@@ -1184,6 +1236,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
             rounds,
             budget,
             stop,
+            batch,
             handle,
         });
     }
@@ -1819,7 +1872,10 @@ pub(super) fn close_the_rounds<S: Sink, R: Reporter>(
     // Except where the session keeps them: those are left running for the next turn to find, and
     // are ended by the session ending (RUN-15).
     if !state.jobs.is_kept() {
-        state.jobs.stop_all(policy, reporter);
+        // What the stopped jobs left is counted, as each one's end would have been (GROUND-1).
+        for _ in 0..state.jobs.stop_all(policy, reporter) {
+            state.worked.count_job_write(state.steps);
+        }
     }
     *rounds_taken = state.steps;
     *worked_out = state.worked;
@@ -1984,7 +2040,13 @@ pub(super) fn tools_for_a_call<'a>(
             }),
         delegated: task.delegate.is_some(),
         keeping_links: task.keeps_links && task.delegate.is_none(),
+        default_repository: task
+            .default_repository
+            .as_ref()
+            .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
+        found: Vec::new(),
         confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
+        offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
         jobs: &mut *state.jobs,
@@ -2002,6 +2064,41 @@ pub(super) fn tools_for_a_call<'a>(
     }
 }
 
+/// Add `found` to what the turn has named and report what was new. Appends to a list for the
+/// person to read and decides nothing.
+fn keep_references<P: Reporter + ?Sized>(
+    state: &mut State<'_>,
+    reporter: &mut P,
+    found: &[crate::links::Reference],
+) {
+    let new = crate::links::merge(&mut state.references, found, crate::links::PER_TURN);
+    if !new.is_empty() {
+        reporter.references(&new);
+    }
+}
+
+/// Take the issues and pull requests a result names, where its label says it is trusted and the
+/// turn keeps them (PANEL-16).
+///
+/// The label is asked first, and only a trusted result is handed to `read_trusted_content`, so an
+/// untrusted result adds no reference and no event to the trail. A result is never searched here
+/// after being released to the planner: the read is the gate's, on the value that is still labelled
+/// (LABEL-6). A delegate collects nothing.
+pub(super) fn collect_from_a_result<S: Sink, P: Reporter + ?Sized>(
+    policy: &mut Policy<'_, S>,
+    task: &Task,
+    state: &mut State<'_>,
+    reporter: &mut P,
+    output: &tools::Output,
+) {
+    if !task.keeps_links || task.delegate.is_some() || !output.text.label().is_trusted() {
+        return;
+    }
+    if let Ok(text) = policy.read_trusted_content("references", &output.text) {
+        keep_references(state, reporter, &crate::links::references_in_text(&text));
+    }
+}
+
 /// What a round does once a call has returned: count what it changed, tell the hooks the call
 /// finished, start the delegates it asked for, take its time and spend into the turn's figures,
 /// and keep the wakeup, watch, loaded tool and loaded skill it carried back.
@@ -2010,7 +2107,8 @@ pub(super) fn tools_for_a_call<'a>(
 /// and the pieces taken out of `output` are the ones the caller does not use again.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output"
+    clippy::too_many_lines,
+    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output; the body is the steps that follow a call, in the order a round takes them"
 )]
 pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
@@ -2048,12 +2146,18 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // gave it. Read at the end of the turn to say whether a change went out
     // unbuilt, and the round is the one the first change landed on, since before
     // that there was nothing to run.
-    state.worked.count(
-        state.steps,
-        output.changed_a_file,
-        output.ran_a_program,
-        output.command_failed,
-    );
+    // A `job_output` look is the one call with a look, and a write it reports is a job's, which a
+    // program made (TURN-4).
+    if output.look.is_some() && output.changed_a_file {
+        state.worked.count_job_write(state.steps);
+    } else {
+        state.worked.count(
+            state.steps,
+            output.changed_a_file,
+            output.ran_a_program,
+            output.command_failed,
+        );
+    }
     if (output.changed_a_file || output.started_a_program)
         && let Some(checkout) = workspace.checkout()
     {
@@ -2087,6 +2191,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     start_delegates(
         scope,
         std::mem::take(&mut output.delegate),
+        output.wake_after,
         delegates,
         state.servers.as_deref(),
         confirming,
@@ -2150,6 +2255,9 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     if let Some(set) = output.link.clone() {
         state.links.push(set);
     }
+    // What the call's arguments named, reported as they are found so the list is current while the
+    // turn runs and a turn that then fails has handed it over (PANEL-16).
+    keep_references(state, reporter, &output.references);
     // A tool the planner loaded is offered from the next request on (SERVERS-16).
     if let Some(wire) = output.tool_loaded.take()
         && let Some((offer, _)) = &mut state.mcp

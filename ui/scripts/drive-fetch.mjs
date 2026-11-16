@@ -16,7 +16,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON } from './drive-support.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 
 /** A line of the page the website serves, which is to reach no planner and no unmarked row. */
 const SENTINEL = 'SENTINEL-FETCHED-BYTES'
@@ -53,7 +53,7 @@ const toolResults = (round) => (JSON.parse(round).messages ?? []).filter((messag
 
 const { root, project, profile, env } = makeWorld('bravebot-fetch-', { service, realpath: false })
 
-const output = '/tmp/bravebot-ui'
+const output = SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

@@ -81,7 +81,8 @@ struct Open {
     /// which has no request to carry one.
     definition: Option<String>,
     /// What the next turn asks before it acts. Asking whenever a session opens, a resume or a fork
-    /// included, since a mode is never read from a record (MODE-10).
+    /// included, since a mode is never read from a record (MODE-10), unless the person's own
+    /// `permissions.startInAuto` opens it in auto (AUTO-1).
     ///
     /// Held here rather than sent with each `turn.send`, because a watch fires a turn that no
     /// request asked for, and that turn must run in the mode the window shows.
@@ -132,6 +133,13 @@ impl Open {
         }
     }
 
+    /// This session opened in `mode`, which the three ways a window opens one choose from the
+    /// person's own settings (AUTO-1).
+    fn starting_in(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = LiveMode::new(mode);
+        self
+    }
+
     /// Whether the session can take a turn or a manifest run now: the trust question is answered
     /// and nothing is running.
     fn ready_for_work(&self) -> Result<(), Failure> {
@@ -172,6 +180,12 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// Whether every session opens asking, whatever the person's `permissions.startInAuto` says. A
+    /// client that cannot leave auto, or answer from it, sets it.
+    opening_in_ask: bool,
+    /// The front end the planner is told it runs in (INSTR-9): the desktop application unless a
+    /// host that projects this bridge says otherwise, as the editor server does.
+    front_end: bravebot_agent::FrontEnd,
     /// The ChatGPT or xAI sign-in the window started, while it runs.
     sign_ins: crate::accounts::SignIns,
 }
@@ -179,6 +193,7 @@ pub struct Bridge {
 impl Bridge {
     pub fn new(emit: Listener) -> Self {
         Self {
+            front_end: bravebot_agent::FrontEnd::Desktop,
             open: HashMap::new(),
             next_handle: 0,
             settings: None,
@@ -188,6 +203,7 @@ impl Bridge {
             closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
+            opening_in_ask: false,
             sign_ins: crate::accounts::SignIns::default(),
         }
     }
@@ -199,10 +215,25 @@ impl Bridge {
         self
     }
 
+    /// Open every session asking, a new one, an opened one and a fork, where the person's own
+    /// `permissions.startInAuto` would open it in auto (AUTO-1). For a client that is offered no way
+    /// out of auto, so a session never opens in a mode it cannot leave (ACP-7, HOST-2).
+    pub fn opening_in_ask(mut self) -> Self {
+        self.opening_in_ask = true;
+        self
+    }
+
     /// Preserve the selected path even if it disappeared: future requests must fail rather
     /// than silently fall back to another destination after a process restart.
     pub fn with_settings(mut self, path: Option<PathBuf>) -> Self {
         self.settings = path;
+        self
+    }
+
+    /// Say which front end this bridge is the projection of, so the planner is told the one the
+    /// person is using (INSTR-9). Prompt-only: the front word a record carries is not changed.
+    pub fn with_front_end(mut self, front_end: bravebot_agent::FrontEnd) -> Self {
+        self.front_end = front_end;
         self
     }
 
@@ -383,6 +414,8 @@ impl Bridge {
                 Ok(json!({"kept": bravebot_session::store::load_caffeinate_confirmed()}))
             }
             "bot.define" => crate::definitions::make(request),
+            "bot.list" => crate::bots::list(request),
+            "bot.replace" => crate::bots::replace(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "bot.servers.read" => crate::definitions::servers_read(request),
@@ -563,13 +596,16 @@ impl Bridge {
         state.account = self.account_session(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
-        let handle = self.mint(Open::opened(
-            directory.clone(),
-            state,
-            opening.answered,
-            opening.keeping,
-            auto_vetting,
-        ));
+        let handle = self.mint(
+            Open::opened(
+                directory.clone(),
+                state,
+                opening.answered,
+                opening.keeping,
+                auto_vetting,
+            )
+            .starting_in(self.opening_mode(&directory)),
+        );
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
         if let Some(open) = self
@@ -672,6 +708,33 @@ impl Bridge {
         bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
+    /// The mode a session opened in `project` starts in: auto where the person's own settings say
+    /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
+    /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
+    /// read for it, and nothing a request carries chooses it, which is what `session.mode` is for
+    /// once the session is open.
+    fn opening_mode(&self, project: &std::path::Path) -> PermissionMode {
+        if self.opening_in_ask {
+            return PermissionMode::Ask;
+        }
+        match crate::settings::layers(Some(project), self.settings.as_deref()).start_in_auto() {
+            true => PermissionMode::Auto,
+            false => PermissionMode::Ask,
+        }
+    }
+
+    /// The name of the mode the session opened as `handle` is in, read off the handle a turn reads so
+    /// that what a reply says and what the session does cannot differ. A handle that is not open
+    /// names asking.
+    fn permission_mode_of(&self, handle: &str) -> &'static str {
+        wire::permission_mode_name(
+            self.open
+                .get(handle)
+                .map(|open| open.permission_mode.get())
+                .unwrap_or_default(),
+        )
+    }
+
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
         crate::settings::auto_vetting(&crate::settings::layers(
             Some(project),
@@ -743,7 +806,7 @@ impl Bridge {
                 crate::FRONT,
             ),
             "autoVetting": auto_vetting,
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(handle),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(directory, None)),
         })
     }
@@ -806,13 +869,16 @@ impl Bridge {
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
         state.directories = additional;
-        let handle = self.mint(Open::opened(
-            directory.clone(),
-            state,
-            opening.answered,
-            opening.keeping,
-            auto_vetting,
-        ));
+        let handle = self.mint(
+            Open::opened(
+                directory.clone(),
+                state,
+                opening.answered,
+                opening.keeping,
+                auto_vetting,
+            )
+            .starting_in(self.opening_mode(&directory)),
+        );
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -827,7 +893,7 @@ impl Bridge {
             "branch": branch,
             "autoVetting": auto_vetting,
             "scratch": self.scratch_report(&handle),
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(&handle),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&directory, None)),
         });
         merge(&mut made, reported);
@@ -969,32 +1035,36 @@ impl Bridge {
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
-        let child = self.mint(Open::opened(
-            project.clone(),
-            {
-                let mut forked = State::forked(
-                    begun,
-                    cut.before,
-                    opening.trust,
-                    programs,
-                    directories,
-                    ordinal,
-                    todos.clone(),
-                    first_prompt,
-                );
-                // The map is the parent's, so what the mode answered in it is still the mode's.
-                forked.answered_by_mode = by_mode;
-                forked.account = self.account_session(&project);
-                forked
-            },
-            // Inherited along with the map itself: the same person, in the same directory, in
-            // the same window, so asking again would be asking somebody to answer twice.
-            opening.answered,
-            opening.keeping,
-            // The parent's, not read again: the child's transcript is the parent's up to the cut,
-            // and the notice at its top says what the parent opened under.
-            auto_vetting,
-        ));
+        let opening_mode = self.opening_mode(&project);
+        let child = self.mint(
+            Open::opened(
+                project.clone(),
+                {
+                    let mut forked = State::forked(
+                        begun,
+                        cut.before,
+                        opening.trust,
+                        programs,
+                        directories,
+                        ordinal,
+                        todos.clone(),
+                        first_prompt,
+                    );
+                    // The map is the parent's, so what the mode answered in it is still the mode's.
+                    forked.answered_by_mode = by_mode;
+                    forked.account = self.account_session(&project);
+                    forked
+                },
+                // Inherited along with the map itself: the same person, in the same directory, in
+                // the same window, so asking again would be asking somebody to answer twice.
+                opening.answered,
+                opening.keeping,
+                // The parent's, not read again: the child's transcript is the parent's up to the cut,
+                // and the notice at its top says what the parent opened under.
+                auto_vetting,
+            )
+            .starting_in(opening_mode),
+        );
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
@@ -1025,7 +1095,7 @@ impl Bridge {
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(&child),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&project, None)),
             "settingsRules": settings_rules,
             "scratch": self.scratch_report(&child),
@@ -1532,14 +1602,12 @@ impl Bridge {
             }
         }
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // A model the machine-level layer refuses is not requested, whichever service would have
-        // answered for it and whoever asked. The roster this window draws leaves such a model out,
-        // so reaching here means the name came from somewhere else (BACKEND-48).
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let attribution = settings.attribution().clone();
         // The level the terminal's `/effort` and this window's picker record, ranked against the
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
@@ -1547,8 +1615,9 @@ impl Bridge {
         let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
-        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let auto_vetting = open.auto_vetting;
+        let front_end = self.front_end;
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
             open.sandbox,
             &settings,
@@ -1631,6 +1700,7 @@ impl Bridge {
                 download_cap,
                 deadlines,
                 auto_vetting,
+                front_end,
                 sandbox,
                 permission_mode,
                 mcp_requested,
@@ -1679,11 +1749,12 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.ready_for_work()?;
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let state = Arc::clone(&open.state);
         // Taken here, on the thread that holds the state, because a conversation is not `Clone`
         // and what crosses to the worker is the request and not the exchange.
@@ -1787,19 +1858,17 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.ready_for_work()?;
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // A model the machine-level layer refuses is not requested, whichever service would have
-        // answered for it and whoever asked. The roster this window draws leaves such a model out,
-        // so reaching here means the name came from somewhere else (BACKEND-48).
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
-        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
             open.sandbox,
             &settings,
@@ -2937,11 +3006,6 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     workspace_of(open, settings, |state| state.lock().ok())
 }
 
-/// `session_workspace` for a request answered while a turn may be running, which never waits for
-/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
-/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
-/// turn is blocked on. A turn holding it leaves out the directories the session added and its
-/// scratch directory, the same fallback a poisoned lock gets.
 /// The definitions a message from this session may be addressed to, as rows for the `@` list: the
 /// set `/agent` accepts, resolved under the session's trust and permission rules.
 ///
@@ -2979,6 +3043,11 @@ fn offered_definitions(open: &Open, settings: Option<&Path>) -> Vec<bravebot_men
     rows
 }
 
+/// `session_workspace` for a request answered while a turn may be running, which never waits for
+/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
+/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
+/// turn is blocked on. A turn holding it leaves out the directories the session added and its
+/// scratch directory, the same fallback a poisoned lock gets.
 fn session_workspace_unless_running(
     open: &Open,
     settings: &Settings,
@@ -3087,6 +3156,8 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// The front end the person is using, so the planner is told (INSTR-9).
+    front_end: bravebot_agent::FrontEnd,
     /// How far the programs this turn runs may reach, from the settings and the managed file.
     sandbox: bravebot_sandbox::SandboxMode,
     /// The session's own handle, so a change made while the turn runs reaches it.
@@ -3207,6 +3278,7 @@ fn work(work: Work) {
         download_cap,
         deadlines,
         auto_vetting,
+        front_end,
         sandbox,
         permission_mode,
         mcp_requested,
@@ -3311,6 +3383,7 @@ fn work(work: Work) {
         .with_rounds(None)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
+        .in_front_end(front_end)
         .with_model(model)
         .with_effort(effort)
         .in_account_session(state.account.clone())

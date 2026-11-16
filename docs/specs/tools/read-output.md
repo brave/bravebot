@@ -92,6 +92,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_cli::plain::every_line_of_an_output_is_shown_before_a_yes_releases_it`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_shown_every_line_of_an_output_before_a_yes_releases_it`
+`verified-by: bravebot_agent::turn::output_a_person_approves_has_its_colour_codes_taken_out_for_the_planner_only`
 
 <a id="OUTPUT-2"></a>
 ### OUTPUT-2: only output from a program can be read this way
@@ -104,9 +105,16 @@ This rule is about a file's worth and not about a slot's bytes. Promoting one sl
 has read it is a different thing, single-use, writing no rule and leaving the trust map saying
 what it said, and it is [vetting.md](../vetting.md).
 
+A reference that stands for a file a listing or a search found is not opened by this tool, so it is
+given no reach under bypass either. Opening one is `vet_content`'s or `spawn_processor`'s, which
+are given the reach a call of `read_file` for the path has
+([PATHREQ-7](request-path.md#PATHREQ-7)).
+
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
-`verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
-`verified-by: bravebot_agent::tools::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
+`verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
+`verified-by: bravebot_agent::tools::tests::arguments::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
+`verified-by: bravebot_agent::turn::under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing`
+`verified-by: bravebot_agent::tools::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer
@@ -201,8 +209,11 @@ sample says where its middle begins, so the first page can start there. A turn t
 have ([TOOL-6](tool-surface.md#TOOL-6)).
 
 The refusals of `read_output` for a reference no program printed and for a `pattern`, and the refusal
-of `job_output` for a name no run handed back, still name `run` without reading the list. They are
-not yet written from it ([TOOL-6](tool-surface.md#TOOL-6)).
+of `job_output` for a name that is no job, name `run` only where the turn's list holds it
+([TOOL-6](tool-surface.md#TOOL-6)). Without it, they say a reference to what a program printed, or a
+job name handed back, and leave out the sentence that a program can filter the output.
+
+`verified-by: bravebot_agent::tools::tests::arguments::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
 
 **Why nobody is asked.** The cap is a budget and not an authority ([RUN-21](run.md#RUN-21)). The
 label on these bytes already let the planner read them, and the only thing that kept them out of the
@@ -227,6 +238,7 @@ it, and paging hands over the part it names without running anything again.
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::a_page_of_output_the_planner_may_read_is_no_release_and_keeps_the_slots_label`
+`verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
 
 <a id="OUTPUT-5"></a>
 ### OUTPUT-5: a pattern searches output the planner may read, and is refused on output it may not
@@ -268,6 +280,7 @@ a page would not.
 `verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::tools::matching_lines_carry_the_byte_each_starts_at`
 `verified-by: bravebot_agent::tools::a_match_whose_context_is_long_is_still_held_to_the_cap`
+`verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
 
 <a id="OUTPUT-6"></a>
 ### OUTPUT-6: a name no slot holds is refused with the form a reference is written in
@@ -295,16 +308,16 @@ argument filled from a reference it lists the references that hold a choice. Eac
 is also recorded in the trail as a blocked `reference` gate naming the tool and the argument and not
 the name typed ([TRACE-2](../trace.md#TRACE-2)), so a turn that was refused is not recorded as clean.
 
-`verified-by: bravebot_agent::tools::a_name_no_slot_holds_is_refused_with_the_form_a_reference_is_written_in`
-`verified-by: bravebot_agent::tools::the_references_listed_for_an_unknown_name_are_the_ones_that_hold_output`
-`verified-by: bravebot_agent::tools::a_delegate_naming_no_slot_is_told_the_form_and_not_vet_content`
-`verified-by: bravebot_agent::tools::vet_content_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::a_processor_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::write_file_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::read_file_naming_no_slot_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::run_naming_no_slot_for_stdin_is_told_how_a_reference_is_written`
-`verified-by: bravebot_agent::tools::the_references_listed_for_an_unknown_name_are_the_latest_eight`
-`verified-by: bravebot_agent::tools::the_trail_names_the_argument_and_not_the_name_typed`
+`verified-by: bravebot_agent::tools::tests::arguments::a_name_no_slot_holds_is_refused_with_the_form_a_reference_is_written_in`
+`verified-by: bravebot_agent::tools::tests::arguments::the_references_listed_for_an_unknown_name_are_the_ones_that_hold_output`
+`verified-by: bravebot_agent::tools::tests::arguments::a_delegate_naming_no_slot_is_told_the_form_and_not_vet_content`
+`verified-by: bravebot_agent::tools::tests::arguments::vet_content_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::a_processor_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::write_file_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::read_file_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::run_naming_no_slot_for_stdin_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::tests::arguments::the_references_listed_for_an_unknown_name_are_the_latest_eight`
+`verified-by: bravebot_agent::tools::tests::arguments::the_trail_names_the_argument_and_not_the_name_typed`
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 `verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
 `verified-by: bravebot_agent::browser_group_servers::a_name_no_slot_holds_is_listed_the_choices_that_were_made`

@@ -116,6 +116,12 @@ pub struct Deadlines {
     pub default: Duration,
     /// The most a call may name for itself.
     pub ceiling: Duration,
+    /// The most one `job_output` call may wait, which is the prompt cache lifetime in force less
+    /// [`WAIT_CACHE_MARGIN`], and at most [`WAIT_CEILING`]. A wait that outlasts the lifetime makes
+    /// the next request write the whole prefix again, so the bound is held under it. Set by
+    /// [`Deadlines::waiting_under`] from the person's `promptCacheTtl` and never from anything a
+    /// job printed.
+    pub wait_ceiling: Duration,
 }
 
 impl Deadlines {
@@ -123,6 +129,7 @@ impl Deadlines {
     pub const BUILT_IN: Self = Self {
         default: LIMIT,
         ceiling: CEILING,
+        wait_ceiling: CACHE_LIFETIME_DEFAULT.saturating_sub(WAIT_CACHE_MARGIN),
     };
 
     /// The figures in force, given what a settings file named of each.
@@ -153,6 +160,31 @@ impl Deadlines {
         Self {
             default: default.unwrap_or(LIMIT).clamp(FLOOR, ceiling),
             ceiling,
+            wait_ceiling: Self::BUILT_IN.wait_ceiling,
+        }
+    }
+
+    /// The figures in force for the settings a caller read: [`Deadlines::resolve`] of the `run`
+    /// block, with the longest wait held under the `promptCacheTtl` they chose. One call for every
+    /// caller that reads a settings file, so none of them takes either setting apart.
+    pub fn from_settings(settings: &bravebot_config::Settings) -> Self {
+        Self::resolve(settings.run_deadlines()).waiting_under(settings.prompt_cache_ttl())
+    }
+
+    /// These figures with the longest single `job_output` wait held under the cache lifetime the
+    /// settings chose.
+    ///
+    /// `None` is a setting nobody wrote, and the provider keeps a prefix for five minutes then, so
+    /// it is held as `5m` is. `1h` allows the longer wait, up to [`WAIT_CEILING`]. A backend that
+    /// ignores the setting and keeps a prefix for less than the figure it names is not known here.
+    pub fn waiting_under(self, lifetime: Option<bravebot_config::CacheTtl>) -> Self {
+        let lifetime = match lifetime {
+            None | Some(bravebot_config::CacheTtl::FiveMinutes) => CACHE_LIFETIME_DEFAULT,
+            Some(bravebot_config::CacheTtl::OneHour) => Duration::from_secs(3600),
+        };
+        Self {
+            wait_ceiling: WAIT_CEILING.min(lifetime.saturating_sub(WAIT_CACHE_MARGIN)),
+            ..self
         }
     }
 
@@ -183,6 +215,13 @@ impl Deadlines {
 pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
 /// See [`WAIT_FLOOR`].
 pub const WAIT_CEILING: Duration = Duration::from_secs(600);
+
+/// How long a provider keeps a cached prompt prefix when no lifetime was chosen.
+const CACHE_LIFETIME_DEFAULT: Duration = Duration::from_secs(300);
+
+/// How much shorter than the cache lifetime one `job_output` wait is held, so that the request
+/// after it arrives while the prefix is still cached.
+pub const WAIT_CACHE_MARGIN: Duration = Duration::from_secs(30);
 
 /// A worked-out value of an assignment, which may be a secret.
 ///
@@ -282,8 +321,18 @@ pub struct Ran {
     /// Kept apart from stdout because a stage that failed usually explains itself here, and a
     /// person reading the result should be able to tell the explanation from the output.
     pub stderr: String,
-    /// The exit code of each stage, in order. `None` where a stage was killed by a signal.
+    /// The exit code of each stage, in order. `None` where a stage was ended by a signal, which
+    /// [`Ran::signals`] then names, and where its status could not be read.
     pub codes: Vec<Option<i32>>,
+    /// The signal that ended each stage, in order, where one did. `None` where a stage exited on its
+    /// own, where its status could not be read, and on a platform with no signals.
+    pub signals: Vec<Option<i32>>,
+    /// Whether each stage was ended by `SIGPIPE` because a later stage of the same pipeline had
+    /// closed its input and exited 0, which is what `producer | head` does to the producer. Such a
+    /// stage did what it was asked, so it is not a failure ([RUN-13]).
+    ///
+    /// [RUN-13]: ../../../docs/specs/tools/run.md
+    pub closed: Vec<bool>,
     /// How long the pipeline had run when the limit ran out and it was killed, or `None` if every
     /// stage exited on its own.
     ///
@@ -293,7 +342,16 @@ pub struct Ran {
     /// from one that was working exactly as asked. So the output is collected either way and the
     /// distinction is carried here, where a caller can say which happened without reading a byte
     /// of what was printed.
+    ///
+    /// Also set when a stage was found stopped by a signal and was ended for that reason, with how
+    /// long the pipeline had run by then. [`Ran::stopped_by_signal`] says which of the two it was.
     pub stopped: Option<Duration>,
+    /// The signal that had stopped a stage, where the pipeline was ended because of one (RUN-17).
+    ///
+    /// A stopped process runs nothing and exits nothing, so waiting for it is waiting for the
+    /// deadline. The state is the kernel's account of a child this module started, read without
+    /// reading a byte the child printed. `None` where no stage was found stopped.
+    pub stopped_by_signal: Option<StopSignal>,
     /// Whether the line ended well, the way its own branches decide.
     ///
     /// A pipeline is as good as its worst step, which is what [`Ran::succeeded`] says. A line with
@@ -312,8 +370,156 @@ impl Ran {
         // A pipeline that had to be killed did not succeed, whatever its stages had managed to
         // report by then. Stages still running have no code at all, so this would be false in
         // most cases anyway; it is stated rather than relied on.
-        self.stopped.is_none() && self.codes.iter().all(|code| *code == Some(0))
+        self.stopped.is_none() && self.stages_ended_well()
     }
+
+    /// Whether every stage exited 0 or was closed by the stage after it (see [`Ran::closed`]).
+    ///
+    /// Read off the codes, the signals and the layout of the pipelines, so no byte a stage printed
+    /// reaches it. Says nothing about the deadline: [`Ran::succeeded`] adds that.
+    pub fn stages_ended_well(&self) -> bool {
+        all_ended_well(&self.codes, &self.closed)
+    }
+}
+
+/// A stage found stopped by a signal, which is the state a terminal puts a background process in
+/// when it reads or configures the terminal (`SIGTTIN`, `SIGTTOU`) or is asked to stop
+/// (`SIGTSTP`, `SIGSTOP`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopSignal {
+    /// The signal's number on this system.
+    pub number: i32,
+}
+
+impl StopSignal {
+    /// The signal's name, for the signals that stop a process, and `None` for any other number.
+    #[cfg(unix)]
+    pub fn name(self) -> Option<&'static str> {
+        use rustix::process::Signal;
+        let named = Signal::from_named_raw(self.number)?;
+        [
+            (Signal::STOP, "SIGSTOP"),
+            (Signal::TSTP, "SIGTSTP"),
+            (Signal::TTIN, "SIGTTIN"),
+            (Signal::TTOU, "SIGTTOU"),
+        ]
+        .into_iter()
+        .find(|(signal, _)| *signal == named)
+        .map(|(_, name)| name)
+    }
+
+    /// There are no stop signals to name where there are no signals.
+    #[cfg(not(unix))]
+    pub fn name(self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// The name of the signal a system numbers `number`, for the signals Linux and macOS both define,
+/// and `None` for any other number.
+///
+/// The numbers differ between the two systems (`SIGUSR1` is 10 on Linux and 30 on macOS), so the
+/// lookup goes through the number the running system gives each signal and never through a table
+/// of numbers. It reads a number the kernel reported for a child this module started and no byte
+/// the child printed.
+#[cfg(unix)]
+pub fn signal_name(number: i32) -> Option<&'static str> {
+    use rustix::process::Signal;
+    let named = Signal::from_named_raw(number)?;
+    [
+        (Signal::HUP, "SIGHUP"),
+        (Signal::INT, "SIGINT"),
+        (Signal::QUIT, "SIGQUIT"),
+        (Signal::ILL, "SIGILL"),
+        (Signal::TRAP, "SIGTRAP"),
+        (Signal::ABORT, "SIGABRT"),
+        (Signal::BUS, "SIGBUS"),
+        (Signal::FPE, "SIGFPE"),
+        (Signal::KILL, "SIGKILL"),
+        (Signal::USR1, "SIGUSR1"),
+        (Signal::SEGV, "SIGSEGV"),
+        (Signal::USR2, "SIGUSR2"),
+        (Signal::PIPE, "SIGPIPE"),
+        (Signal::ALARM, "SIGALRM"),
+        (Signal::TERM, "SIGTERM"),
+        (Signal::CHILD, "SIGCHLD"),
+        (Signal::CONT, "SIGCONT"),
+        (Signal::STOP, "SIGSTOP"),
+        (Signal::TSTP, "SIGTSTP"),
+        (Signal::TTIN, "SIGTTIN"),
+        (Signal::TTOU, "SIGTTOU"),
+        (Signal::URG, "SIGURG"),
+        (Signal::XCPU, "SIGXCPU"),
+        (Signal::XFSZ, "SIGXFSZ"),
+        (Signal::VTALARM, "SIGVTALRM"),
+        (Signal::PROF, "SIGPROF"),
+        (Signal::WINCH, "SIGWINCH"),
+        (Signal::IO, "SIGIO"),
+        (Signal::SYS, "SIGSYS"),
+    ]
+    .into_iter()
+    .find(|(signal, _)| *signal == named)
+    .map(|(_, name)| name)
+}
+
+/// There are no signals to name where there are none.
+#[cfg(not(unix))]
+pub fn signal_name(number: i32) -> Option<&'static str> {
+    let _ = number;
+    None
+}
+
+/// The words that say a stage was ended by the signal numbered `number`: `signal 9 (SIGKILL)`, or
+/// `signal 64` where the number has no name here.
+///
+/// Fixed words and a number the kernel reported, so the sentence a planner reads about how a run
+/// ended is the driver's and holds nothing a program printed.
+pub fn signal_phrase(number: i32) -> String {
+    match signal_name(number) {
+        Some(name) => format!("signal {number} ({name})"),
+        None => format!("signal {number}"),
+    }
+}
+
+/// The number of `SIGPIPE` on Linux and macOS, the Unix systems this ships for.
+const SIGPIPE: i32 = 13;
+
+/// The signal that ended a stage, where one did.
+fn signal_of(status: &ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
+/// Which stages of one pipeline were ended by `SIGPIPE` with a later stage of the same pipeline
+/// having exited 0.
+///
+/// A shell reports the last stage, so `producer | head` exits 0 although the producer died writing
+/// to a closed pipe. A stage ended by `SIGPIPE` with no later stage that exited 0 is not covered,
+/// and neither is a stage ended by any other signal. Read off the codes and signals alone.
+pub fn closed_by_the_next(codes: &[Option<i32>], signals: &[Option<i32>]) -> Vec<bool> {
+    let mut closed = vec![false; codes.len()];
+    let mut later_exited_zero = false;
+    for index in (0..codes.len()).rev() {
+        closed[index] = later_exited_zero && signals.get(index) == Some(&Some(SIGPIPE));
+        later_exited_zero |= codes[index] == Some(0);
+    }
+    closed
+}
+
+/// Whether every stage exited 0 or was closed by the stage after it.
+pub fn all_ended_well(codes: &[Option<i32>], closed: &[bool]) -> bool {
+    codes
+        .iter()
+        .zip(closed)
+        .all(|(code, closed)| *closed || *code == Some(0))
 }
 
 /// What a run printed, as the one text a reader gets.
@@ -349,7 +555,11 @@ pub enum ExecError {
     ///
     /// Carries the program name, which is safe to report: argv was endorsed by a person, so it is
     /// not content an attacker chose.
-    NotStarted { program: String, detail: String },
+    NotStarted {
+        program: String,
+        detail: String,
+        before: StartedBefore,
+    },
     /// The directory the line was to run in no longer exists, so the pipeline was not started.
     ///
     /// Checked immediately before the first stage is spawned, since an approval can wait for
@@ -363,7 +573,15 @@ pub enum ExecError {
     /// never a program started without one ([SANDBOX-17]).
     ///
     /// [SANDBOX-17]: ../../../docs/specs/sandboxing.md
-    NotConfined { program: String, detail: String },
+    NotConfined {
+        program: String,
+        detail: String,
+        before: StartedBefore,
+        /// The refusal is a closed `run.network` this platform cannot deny, decided from the
+        /// session's settings and the backend's capabilities. A line with no profile would then
+        /// have the network open, which the result says where it names that route (SANDBOX-29).
+        network_closed: bool,
+    },
     /// The user asked the turn to stop while this was running, and it has been killed.
     Cancelled,
     /// The plumbing itself failed: a pipe that could not be created or read.
@@ -390,6 +608,50 @@ pub enum ExecError {
         source: String,
         failure: SubstitutionFailure,
     },
+}
+
+/// What the line had started before a program of it was refused or failed to start, read off the
+/// processes this module spawned and nothing they printed.
+///
+/// Made [`StartedBefore::Nothing`] where the error is made, and set by the run of the line, which
+/// is the one place that knows what it spawned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartedBefore {
+    /// No program of the line had been started.
+    #[default]
+    Nothing,
+    /// No stage of this program's pipeline had been started, and a part of the line before it
+    /// had: a part joined with `&&`, `||` or `;`, or a `$(...)` an assignment reads.
+    EarlierPart,
+    /// Stages before it in its pipeline had been started, and were stopped.
+    EarlierStages,
+}
+
+impl ExecError {
+    /// This error with `before` recorded, where it is one a program that did not start gives.
+    fn started_before(self, before: StartedBefore) -> Self {
+        match self {
+            Self::NotStarted {
+                program, detail, ..
+            } => Self::NotStarted {
+                program,
+                detail,
+                before,
+            },
+            Self::NotConfined {
+                program,
+                detail,
+                network_closed,
+                ..
+            } => Self::NotConfined {
+                program,
+                detail,
+                before,
+                network_closed,
+            },
+            other => other,
+        }
+    }
 }
 
 /// How a `$(source)` ended without a value.
@@ -428,11 +690,15 @@ pub enum VariableProblem {
 impl fmt::Display for ExecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotStarted { program, detail } => {
+            Self::NotStarted {
+                program, detail, ..
+            } => {
                 write!(f, "'{program}' could not be started: {detail}")
             }
             Self::DirectoryGone => f.write_str("the directory it was to run in no longer exists"),
-            Self::NotConfined { program, detail } => {
+            Self::NotConfined {
+                program, detail, ..
+            } => {
                 write!(
                     f,
                     "'{program}' was not started, since it could not be confined: {detail}"
@@ -627,7 +893,11 @@ struct Running<'a> {
     raw_stdout: Option<Vec<u8>>,
     stderr: String,
     codes: Vec<Option<i32>>,
+    signals: Vec<Option<i32>>,
+    closed: Vec<bool>,
     stopped: Option<Duration>,
+    /// The signal that stopped a stage, where the run was ended for that (see [`Ran::stopped_by_signal`]).
+    stopped_by_signal: Option<StopSignal>,
     /// The directory this session was given, where it has one.
     scratch: Option<&'a std::path::Path>,
     /// The bytes the policy layer supplied for standard input, until a step has been given them.
@@ -643,18 +913,23 @@ struct Running<'a> {
     moved: Option<Moved>,
     /// What each step is confined to, where the session asked for it.
     confinement: Option<&'a Confinement>,
+    /// Whether a program of this line, or of a `$(...)` it read, has been started.
+    started_any: bool,
 }
 
 /// Why a wait came back without an error.
 enum Ending {
     /// Every step is over, by exiting or by being stopped at the deadline.
-    Over(Vec<Option<i32>>),
+    Over(Ends),
     /// A person asked for the steps to go on without being waited for, and at least one is still
     /// running.
-    Handed {
-        codes: Vec<Option<i32>>,
-        finished: Vec<bool>,
-    },
+    Handed { ends: Ends, finished: Vec<bool> },
+}
+
+/// How each step of one pipeline ended: its exit code and the signal that ended it.
+struct Ends {
+    codes: Vec<Option<i32>>,
+    signals: Vec<Option<i32>>,
 }
 
 impl<'a> Running<'a> {
@@ -676,12 +951,16 @@ impl<'a> Running<'a> {
             raw_stdout: None,
             stderr: String::new(),
             codes: Vec::new(),
+            signals: Vec::new(),
+            closed: Vec::new(),
             stopped: None,
+            stopped_by_signal: None,
             scratch,
             stdin,
             handoff: None,
             moved: None,
             confinement: None,
+            started_any: false,
         }
     }
 
@@ -695,7 +974,10 @@ impl<'a> Running<'a> {
             stdout: self.stdout,
             stderr: self.stderr,
             codes: self.codes,
+            signals: self.signals,
+            closed: self.closed,
             stopped: self.stopped,
+            stopped_by_signal: self.stopped_by_signal,
             ended_well,
         }
     }
@@ -749,6 +1031,7 @@ impl<'a> Running<'a> {
         inner.entering = self.entering.take();
         inner.reading = self.reading.take();
         let ended = inner.run(steps);
+        self.started_any |= inner.started_any;
         self.entering = inner.entering.take();
         self.reading = inner.reading.take();
         let well = match ended {
@@ -756,13 +1039,27 @@ impl<'a> Running<'a> {
             Err(ExecError::Cancelled) => return Err(ExecError::Cancelled),
             Err(other) => return Err(failed(SubstitutionFailure::Inside(Box::new(other)))),
         };
+        if inner.stopped_by_signal.is_some() {
+            return Err(ended_in("it was stopped by a signal"));
+        }
         if inner.stopped.is_some() {
             return Err(ended_in("it ran out of time"));
         }
         if !well {
-            let detail = match inner.codes.iter().rev().find(|code| **code != Some(0)) {
-                Some(Some(code)) => format!("it exited with status {code}"),
-                Some(None) => "it was ended by a signal".to_string(),
+            let detail = match inner
+                .codes
+                .iter()
+                .zip(&inner.closed)
+                .enumerate()
+                .rev()
+                .find(|(_, (code, closed))| !**closed && **code != Some(0))
+                .map(|(at, (code, _))| (code, inner.signals.get(at).copied().flatten()))
+            {
+                Some((Some(code), _)) => format!("it exited with status {code}"),
+                Some((None, Some(signal))) => {
+                    format!("it was ended by {}", signal_phrase(signal))
+                }
+                Some((None, None)) => "it ended without an exit code".to_string(),
                 None => "it failed".to_string(),
             };
             return Err(ended_in(&detail));
@@ -812,13 +1109,29 @@ impl<'a> Running<'a> {
         }
     }
 
+    /// What the line had started before the pipeline about to start.
+    fn before_this_pipeline(&self) -> StartedBefore {
+        match self.started_any {
+            true => StartedBefore::EarlierPart,
+            false => StartedBefore::Nothing,
+        }
+    }
+
+    /// What the line had started before the next stage of a pipeline that has started `children`.
+    fn before_stage(&self, children: &[Process]) -> StartedBefore {
+        match children.is_empty() {
+            true => self.before_this_pipeline(),
+            false => StartedBefore::EarlierStages,
+        }
+    }
+
     /// Run one pipeline of steps, chained by descriptor the way a shell chains them.
     fn pipeline(&mut self, steps: &[Step]) -> Result<bool, ExecError> {
         if steps.is_empty() {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
         the_directory_exists(self.directory)?;
-        still_approved(steps)?;
+        still_approved(steps).map_err(|error| error.started_before(self.before_this_pipeline()))?;
         // Every step's assignments are worked out before anything in this pipeline starts, so a
         // variable that is unset or withheld, or a substitution that fails, refuses the pipeline
         // with nothing of it running. The values live in `expanded` and reach `command_for` and
@@ -858,7 +1171,8 @@ impl<'a> Running<'a> {
             let command = command_for(step, self.directory, self.scratch, &expanded[index]);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
-            let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
+            let launching = crate::confine::begin(self.confinement, command, step, self.directory)
+                .map_err(|error| error.started_before(self.before_stage(&children)))?;
 
             let mut into = Where::Upstream;
             let mut out = if index == last {
@@ -933,13 +1247,15 @@ impl<'a> Running<'a> {
             let child = match launch(launching, step, reading_from, writing, erring) {
                 Ok(child) => child,
                 Err(error) => {
+                    let before = self.before_stage(&children);
                     // Whatever started already is killed rather than left running behind a
                     // pipeline that will never complete.
                     stop(&mut children);
-                    return Err(error);
+                    return Err(error.started_before(before));
                 }
             };
             children.push(child);
+            self.started_any = true;
 
             // Read on threads of their own, started as each step spawns, so a program printing
             // more than a pipe holds is being drained while it is still writing. Waiting first and
@@ -956,8 +1272,8 @@ impl<'a> Running<'a> {
 
         // Offered only with a pipe for standard output, since that is the one a job reads from.
         let handoff = self.handoff.filter(|_| tail.is_some());
-        let (codes, tail) = match (self.wait(&mut children, handoff)?, tail) {
-            (Ending::Handed { codes, finished }, Some(stdout)) => {
+        let (ends, tail) = match (self.wait(&mut children, handoff)?, tail) {
+            (Ending::Handed { ends, finished }, Some(stdout)) => {
                 // Taken out of the guard in the one expression that hands them on, so there is
                 // no point at which its drop could kill them and nothing else holds them.
                 self.moved = Some(Moved {
@@ -965,7 +1281,8 @@ impl<'a> Running<'a> {
                         children: std::mem::take(&mut children.0),
                         stdout,
                         stderr: std::mem::take(&mut draining),
-                        codes,
+                        codes: ends.codes,
+                        signals: ends.signals,
                         finished,
                         started: self.started,
                         exited: None,
@@ -976,12 +1293,12 @@ impl<'a> Running<'a> {
             }
             // Not reached, since the token is offered only with a tail. Stopped as the deadline
             // stops a line, so nothing is left running behind a result that says it ended.
-            (Ending::Handed { codes, .. }, None) => {
+            (Ending::Handed { ends, .. }, None) => {
                 stop(&mut children.0);
                 self.stopped = Some(self.started.elapsed());
-                (codes, None)
+                (ends, None)
             }
-            (Ending::Over(codes), tail) => (codes, tail),
+            (Ending::Over(ends), tail) => (ends, tail),
         };
 
         // Collected once the steps are over, whether they ended on their own or were killed. The
@@ -1004,9 +1321,15 @@ impl<'a> Running<'a> {
         for drain in &draining {
             self.stderr.push_str(&drain.text());
         }
-        self.codes.extend(codes.iter().copied());
+        // Decided per pipeline, so a stage of one pipeline is never closed by a stage of another
+        // line part (`a | b ; c | d`).
+        let closed = closed_by_the_next(&ends.codes, &ends.signals);
+        let well = all_ended_well(&ends.codes, &closed);
+        self.codes.extend(ends.codes);
+        self.signals.extend(ends.signals);
+        self.closed.extend(closed);
 
-        Ok(self.stopped.is_none() && codes.iter().all(|code| *code == Some(0)))
+        Ok(self.stopped.is_none() && well)
     }
 
     /// Wait for every child, until they are done, the user says stop, the user says to stop
@@ -1017,6 +1340,7 @@ impl<'a> Running<'a> {
         handoff: Option<&Handoff>,
     ) -> Result<Ending, ExecError> {
         let mut codes = vec![None; children.len()];
+        let mut signals = vec![None; children.len()];
         let mut finished = vec![false; children.len()];
 
         loop {
@@ -1027,6 +1351,7 @@ impl<'a> Running<'a> {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         codes[index] = status.code();
+                        signals[index] = signal_of(&status);
                         finished[index] = true;
                     }
                     Ok(None) => {}
@@ -1036,7 +1361,20 @@ impl<'a> Running<'a> {
             }
 
             if finished.iter().all(|done| *done) {
-                return Ok(Ending::Over(codes));
+                return Ok(Ending::Over(Ends { codes, signals }));
+            }
+
+            // A stage the kernel reports as stopped will not exit, so the wait would last until the
+            // deadline (RUN-17). It is ended now, as the deadline ends it, and the signal is kept.
+            let held = children
+                .iter()
+                .zip(&finished)
+                .find_map(|(child, done)| if *done { None } else { child.stopped_by() });
+            if let Some(signal) = held {
+                stop(children);
+                self.stopped = Some(self.started.elapsed());
+                self.stopped_by_signal = Some(signal);
+                return Ok(Ending::Over(Ends { codes, signals }));
             }
 
             // Both of these kill. Something still running is an effect in progress, and neither a
@@ -1048,13 +1386,16 @@ impl<'a> Running<'a> {
             // Before the deadline, so a press that arrived in time is not lost to a pass that
             // happens to land after it.
             if handoff.is_some_and(Handoff::is_requested) {
-                return Ok(Ending::Handed { codes, finished });
+                return Ok(Ending::Handed {
+                    ends: Ends { codes, signals },
+                    finished,
+                });
             }
             let waited = self.started.elapsed();
             if waited >= self.limit {
                 stop(children);
                 self.stopped = Some(waited);
-                return Ok(Ending::Over(codes));
+                return Ok(Ending::Over(Ends { codes, signals }));
             }
 
             std::thread::sleep(TICK);
@@ -1116,8 +1457,9 @@ fn from_upstream(upstream: &mut Option<Handle>) -> Result<Handle, ExecError> {
 
 /// A started step: an ordinary child, or on Windows a process in a container.
 enum Process {
-    /// On Unix the child leads a process group of its own (see [`crate::confine::begin`]), so its
-    /// number is also the number of the group everything it started belongs to.
+    /// On Unix the child leads a session of its own and so a process group of its own (see
+    /// [`crate::confine::begin`]), so its number is also the number of the group everything it
+    /// started belongs to.
     Plain {
         child: Child,
         /// Whether the child has been waited for. Its number is free to be given to another
@@ -1153,6 +1495,40 @@ impl Process {
             self.waited_for();
         }
         status
+    }
+
+    /// The signal the stage is stopped by, while it is stopped and has not been waited for.
+    ///
+    /// Asked of the kernel with `waitid` for a stop alone, without waiting and without collecting
+    /// anything, so the stage's exit is still there for [`Process::try_wait`] to find.
+    /// `Child::try_wait` does not report a stop. The stage's own number is used, never a group's,
+    /// and none is used once the stage has been waited for (see [`Process::Plain`]). A program in
+    /// the stage's group that is stopped while the stage runs on is not a stop of the stage.
+    #[cfg(unix)]
+    fn stopped_by(&self) -> Option<StopSignal> {
+        use rustix::process::{WaitId, WaitIdOptions};
+        let Self::Plain { child, reaped } = self;
+        if *reaped {
+            return None;
+        }
+        let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).ok()?)?;
+        let status = rustix::process::waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::STOPPED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )
+        .ok()??;
+        if !status.stopped() {
+            return None;
+        }
+        Some(StopSignal {
+            number: status.stopping_signal()?,
+        })
+    }
+
+    /// No process of this platform is reported stopped.
+    #[cfg(not(unix))]
+    fn stopped_by(&self) -> Option<StopSignal> {
+        None
     }
 
     #[cfg(unix)]
@@ -1247,6 +1623,7 @@ fn launch(
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
                     detail: e.to_string(),
+                    before: StartedBefore::Nothing,
                 })
         }
         #[cfg(windows)]
@@ -1552,6 +1929,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             resolved,
             started_as,
             args: _,
+            matched: _,
             environment: _,
             expansions: _,
             routes: _,
@@ -1560,6 +1938,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             return Err(ExecError::NotStarted {
                 program: program.clone(),
                 detail: "it no longer leads to the program that was approved".to_string(),
+                before: StartedBefore::Nothing,
             });
         }
     }
@@ -1586,6 +1965,8 @@ pub struct Background {
     stderr: Vec<Drain>,
     /// The exit code of each step, filled in as they are collected.
     codes: Vec<Option<i32>>,
+    /// The signal that ended each step, filled in with `codes`.
+    signals: Vec<Option<i32>>,
     finished: Vec<bool>,
     started: Instant,
     /// When every step was first seen to have exited, which bounds the wait for the pipes.
@@ -1631,6 +2012,7 @@ impl Background {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     self.codes[index] = status.code();
+                    self.signals[index] = signal_of(&status);
                     self.finished[index] = true;
                 }
                 Ok(None) => {}
@@ -1639,6 +2021,18 @@ impl Background {
             }
         }
         self.finished.iter().all(|done| *done)
+    }
+
+    /// The signal a step that has not exited is stopped by, if one is.
+    ///
+    /// Read from the kernel's account of the first such step (see [`StopSignal`]) and never from
+    /// anything the job printed. Only a step that has not been collected is asked, so a stage
+    /// whose number was given up is never addressed.
+    pub fn stopped_by_signal(&self) -> Option<StopSignal> {
+        self.children
+            .iter()
+            .zip(&self.finished)
+            .find_map(|(child, done)| if *done { None } else { child.stopped_by() })
     }
 
     /// Whether every pipe has reached its end, so nothing more of the output is to come.
@@ -1728,6 +2122,17 @@ impl Background {
         &self.codes
     }
 
+    /// The signals that ended the steps collected so far, in step order.
+    pub fn signals(&self) -> &[Option<i32>] {
+        &self.signals
+    }
+
+    /// Which steps were ended by `SIGPIPE` after a later step of the job exited 0 (see
+    /// [`Ran::closed`]).
+    pub fn closed(&self) -> Vec<bool> {
+        closed_by_the_next(&self.codes, &self.signals)
+    }
+
     /// Kill every step, and keep what it printed.
     pub fn kill(&mut self) {
         stop(&mut self.children);
@@ -1746,9 +2151,10 @@ impl Background {
         );
     }
 
-    /// Wait for something to happen, and return at the first of six things.
+    /// Wait for something to happen, and return at the first of seven things.
     ///
-    /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
+    /// Output past `seen` being there, every step having exited, a step being found stopped by a
+    /// signal (RUN-17), `bound` running out, `cancel`
     /// being set, one of `stops` being set, and `arrival` reporting a line the turn may take.
     /// `seen` is where the caller's last look left off, so output that arrived after that look and
     /// before this call ends the wait at once. Which it was is not reported, because the caller
@@ -1782,9 +2188,9 @@ impl Background {
         self.wait(Some(seen), bound, cancel, stops, arrival);
     }
 
-    /// Wait for the job to end, and return at the first of five things.
+    /// Wait for the job to end, and return at the first of six things.
     ///
-    /// Every step having exited, `bound` running out, `cancel` being set, one of `stops` being
+    /// Every step having exited, a step being found stopped by a signal, `bound` running out, `cancel` being set, one of `stops` being
     /// set, and `arrival` reporting a line the turn may take. Output arriving ends none of it,
     /// whether it arrives during the wait or was already there, unseen, when the wait began: that is
     /// the difference from [`Background::wait_for_more`], whose caller gets back at the next line
@@ -1827,6 +2233,7 @@ impl Background {
                 || arrival.is_waiting()
                 || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
+                || self.stopped_by_signal().is_some()
             {
                 return;
             }
@@ -1874,6 +2281,7 @@ fn command_for(
         resolved: _,
         started_as,
         args: _,
+        matched: _,
         environment: _,
         // Their values are `expanded`, worked out by the caller for the whole pipeline before its
         // first step starts.
@@ -1934,29 +2342,11 @@ fn command_for(
 /// it is in the foreground, and so is the session's own directory: a program left running is one
 /// with more reason to want somewhere to write, not less.
 ///
-/// For a caller with no turn behind it: a substitution in a step's assignments runs under the
-/// built-in [`LIMIT`] and a token nobody holds. The `run` tool calls [`start_steps_within`].
-pub fn start_steps(
-    steps: &[Step],
-    directory: &std::path::Path,
-    scratch: Option<&std::path::Path>,
-    confinement: Option<&Confinement>,
-) -> Result<Background, ExecError> {
-    start_steps_within(
-        steps,
-        directory,
-        scratch,
-        confinement,
-        &Cancel::new(),
-        LIMIT,
-    )
-}
-
-/// [`start_steps`] with the call's own cancellation and deadline for the substitutions in the
-/// steps' assignments, which are run before the first step starts and so while the call is still
-/// in progress. A cancelled call ends the substitution and starts nothing; one that outlasts
-/// `limit` is refused with its source and no output. The job that is started is not bound by
-/// `limit`: it outlives the call.
+/// The call's own cancellation and deadline hold the substitutions in the steps' assignments,
+/// which are run before the first step starts and so while the call is still in progress. A
+/// cancelled call ends the substitution and starts nothing; one that outlasts `limit` is refused
+/// with its source and no output. The job that is started is not bound by `limit`: it outlives the
+/// call.
 pub fn start_steps_within(
     steps: &[Step],
     directory: &std::path::Path,
@@ -1986,8 +2376,9 @@ pub fn start_steps_within(
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {
+                let before = resolving.before_stage(&children);
                 stop(&mut children);
-                return Err(error);
+                return Err(error.started_before(before));
             }
         };
 
@@ -2007,8 +2398,9 @@ pub fn start_steps_within(
         }) {
             Ok(child) => child,
             Err(error) => {
+                let before = resolving.before_stage(&children);
                 stop(&mut children);
-                return Err(error);
+                return Err(error.started_before(before));
             }
         };
         children.push(child);
@@ -2030,6 +2422,7 @@ pub fn start_steps_within(
         stdout: tail.expect("the last step's output is always collected"),
         stderr: draining,
         codes: vec![None; steps],
+        signals: vec![None; steps],
         finished: vec![false; steps],
         started: Instant::now(),
         exited: None,

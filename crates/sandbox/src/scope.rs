@@ -56,7 +56,7 @@ pub enum Requested {
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 13] = [
+    pub const MENU: [&'static str; 15] = [
         "remote",
         "signing",
         "aws",
@@ -68,6 +68,8 @@ impl Requested {
         "go",
         "maven",
         "gradle",
+        "gh",
+        "jk",
         Self::LOOPBACK,
         Self::SSH_KEY,
     ];
@@ -1070,12 +1072,14 @@ mod tests {
             Toolchain::Go,
             Toolchain::Maven,
             Toolchain::Gradle,
+            Toolchain::Gh,
+            Toolchain::Jk,
         ] {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
         assert_eq!(Requested::named("loopback"), Some(Requested::Loopback));
         assert_eq!(Requested::named("ssh-key"), Some(Requested::SshKey));
-        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1 + 1);
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 8 + 1 + 1);
     }
 
     const GIT: &str = "/usr/bin/git";

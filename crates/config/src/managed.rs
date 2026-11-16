@@ -260,6 +260,10 @@ impl Models {
 /// Not comparable, because a gateway it pinned may carry a token and [`crate::Secret`] refuses
 /// equality. What a test wants of one of these is a field of it rather than the whole.
 #[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the independent things the file said about keys it may not set: one flag for each"
+)]
 pub struct Managed {
     /// The pinnable variables the file set, blank ones left out.
     pins: BTreeMap<String, String>,
@@ -277,6 +281,13 @@ pub struct Managed {
     allowed: Option<Vec<Rule>>,
     /// The servers it denies, which no allow entry brings back.
     denied: Vec<Rule>,
+    /// The entries of `mcp.allow` and `mcp.deny` that are neither form, each with the name of the
+    /// list it was written in and spelled as the file spelled it, for `doctor` and the start of a
+    /// session to report (SERVERS-12).
+    ///
+    /// Reported rather than dropped in silence, as an unreadable permission rule is (PERM-11): an
+    /// administrator whose deny entry is skipped believes a server is refused that starts.
+    server_entries_unusable: Vec<(&'static str, String)>,
     /// Which models a machine may request (BACKEND-48).
     ///
     /// Read from this layer for the reason the server lists are: a list of models can only refuse
@@ -297,6 +308,12 @@ pub struct Managed {
     /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
     /// out the pin does nothing.
     narrowing_unreadable: Vec<&'static str>,
+    /// Whether the file wrote `permissions.startInAuto` as `true`, which is not read from this
+    /// layer and so decides nothing, for `doctor` to say so (AUTO-1).
+    ///
+    /// Kept apart from [`Managed::pinned`], since nothing is pinned: an administrator who wrote it
+    /// believing it binds would otherwise find no word that it does not.
+    start_in_auto_named: bool,
     /// The `deny` and `ask` rules it wrote (PERM-19).
     ///
     /// Read from this layer for the reason the keys above are: a rule in either list only narrows,
@@ -347,8 +364,15 @@ pub struct Managed {
     /// choosing for them, and turning retrieval off sends nothing anywhere. Only `false` is a pin.
     /// `true` is not read, since this layer cannot turn on what the person turned off, and
     /// retrieval on would send a person's conversation to another service on a choice that is not
-    /// theirs. A value that is not a boolean is absence, as it is in the person's own file.
+    /// theirs. A value that is not a boolean is absence, as it is in the person's own file, and
+    /// `retrieval_unreadable` carries it to `doctor`.
     turned_off: Vec<&'static str>,
+    /// Whether `retrieval` was written as something that cannot hold the pin, for `doctor` to report
+    /// for the reason `narrowing_unreadable` is (RETRIEVE-23).
+    ///
+    /// That is a value that is not a block, or a block whose `enabled` is not a boolean. A block
+    /// with no `enabled` is not this: it says nothing about the switch.
+    retrieval_unreadable: bool,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -399,6 +423,14 @@ impl Managed {
                 crate::settings::ListStated::Unreadable => filesystem_unreadable.push(list),
             }
         }
+        let mut server_entries_unusable = Vec::new();
+        let mut read_server_list = |key: &str, name: &'static str| {
+            let (kept, skipped) = rules(server_list(&root, key)?);
+            server_entries_unusable.extend(skipped.into_iter().map(|entry| (name, entry)));
+            Some(kept)
+        };
+        let allowed = read_server_list("allow", SERVER_ALLOW);
+        let denied = read_server_list("deny", SERVER_DENY).unwrap_or_default();
         let mut hosts = crate::sandbox_network::Hosts::default();
         let mut hosts_unreadable = Vec::new();
         {
@@ -409,6 +441,7 @@ impl Managed {
         Self {
             narrowing,
             narrowing_unreadable,
+            start_in_auto_named: layer.start_in_auto(),
             turned_off: [
                 (CRASH_REPORTS_KEY, root.get(CRASH_REPORTS_KEY)),
                 (
@@ -420,6 +453,13 @@ impl Managed {
             .filter(|(_, value)| *value == Some(&serde_json::Value::Bool(false)))
             .map(|(key, _)| key)
             .collect(),
+            retrieval_unreadable: match root.get("retrieval") {
+                None => false,
+                Some(serde_json::Value::Object(block)) => block
+                    .get("enabled")
+                    .is_some_and(|enabled| !enabled.is_boolean()),
+                Some(_) => true,
+            },
             rules: crate::settings::managed_rules(&root),
             hosts,
             hosts_unreadable,
@@ -450,8 +490,9 @@ impl Managed {
             // gateway on the machine on the strength of a stray `null`.
             gateways: matches!(root.get(PROVIDER_BLOCK), Some(serde_json::Value::Object(_)))
                 .then(|| approved(layer.providers())),
-            allowed: server_list(&root, "allow").map(rules),
-            denied: server_list(&root, "deny").map(rules).unwrap_or_default(),
+            allowed,
+            denied,
+            server_entries_unusable,
             models: Models {
                 allowed: named_list(&root, "allow").map(names),
                 denied: named_list(&root, "deny").map(names).unwrap_or_default(),
@@ -558,6 +599,18 @@ impl Managed {
         self.turned_off.contains(&RETRIEVAL_KEY)
     }
 
+    /// Whether the file wrote `retrieval` as something other than a block holding a boolean
+    /// `enabled`, which pins nothing (RETRIEVE-23).
+    pub fn retrieval_unreadable(&self) -> bool {
+        self.retrieval_unreadable
+    }
+
+    /// Whether the file named `permissions.startInAuto`, which a managed file cannot set: which
+    /// sessions open in auto is the person's to say (AUTO-1).
+    pub fn names_start_in_auto(&self) -> bool {
+        self.start_in_auto_named
+    }
+
     /// The keys it named as something other than a boolean, which are absence.
     pub fn narrowing_unreadable(&self) -> impl Iterator<Item = &str> {
         self.narrowing_unreadable.iter().copied()
@@ -599,6 +652,17 @@ impl Managed {
         self.hosts_unreadable.iter().copied()
     }
 
+    /// The entries of `mcp.allow` and `mcp.deny` that are neither a host nor a command, each with
+    /// the list it was written in and as the file spelled it (SERVERS-12).
+    ///
+    /// They allow and refuse nothing. A deny list holding one is named by [`Managed::pinned`] all
+    /// the same, since the administrator wrote it as a pin.
+    pub fn server_entries_unusable(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        self.server_entries_unusable
+            .iter()
+            .map(|(list, entry)| (*list, entry.as_str()))
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -610,7 +674,14 @@ impl Managed {
             .map(String::as_str)
             .chain(self.gateways.is_some().then_some(PROVIDER_BLOCK))
             .chain(self.allowed.is_some().then_some(SERVER_ALLOW))
-            .chain((!self.denied.is_empty()).then_some(SERVER_DENY))
+            .chain(
+                (!self.denied.is_empty()
+                    || self
+                        .server_entries_unusable
+                        .iter()
+                        .any(|(list, _)| *list == SERVER_DENY))
+                .then_some(SERVER_DENY),
+            )
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
@@ -705,33 +776,46 @@ fn names(entries: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-/// The entries of a list that are one of the two forms, and nothing else.
+/// The entries of a list that are one of the two forms, and then the ones that are neither, spelled
+/// as the file spelled them.
 ///
 /// An entry is an object with one key, `host` or `command`. Any other is skipped rather than
-/// spoiling the list: in an allow list that allows less, and in a deny list it denies nothing, so
-/// a deny list of nothing else is not reported as a pin that does nothing.
-fn rules(entries: &[serde_json::Value]) -> Vec<Rule> {
-    entries
-        .iter()
-        .filter_map(|entry| {
-            let entry = entry.as_object().filter(|entry| entry.len() == 1)?;
-            match (entry.get("host"), entry.get("command")) {
+/// spoiling the list: in an allow list that allows less, and in a deny list it denies nothing. The
+/// skipped ones are returned so that they are reported (SERVERS-12).
+fn rules(entries: &[serde_json::Value]) -> (Vec<Rule>, Vec<String>) {
+    let mut kept = Vec::new();
+    let mut skipped = Vec::new();
+    for entry in entries {
+        let rule = entry
+            .as_object()
+            .filter(|entry| entry.len() == 1)
+            .and_then(|object| match (object.get("host"), object.get("command")) {
                 (Some(serde_json::Value::String(host)), None) => host_rule(host).map(Rule::Host),
                 (None, Some(serde_json::Value::Array(argv))) => {
                     command_rule(argv).map(Rule::Command)
                 }
                 _ => None,
-            }
-        })
-        .collect()
+            });
+        match rule {
+            Some(rule) => kept.push(rule),
+            None => skipped.push(entry.to_string()),
+        }
+    }
+    (kept, skipped)
 }
 
 /// A host entry, where it is a plain host whose first label may be `*`.
 ///
 /// `*` is a whole label and only the first one: an entry that could match inside a label would be
 /// one a person could satisfy with a name they registered.
+///
+/// An IPv6 address written without brackets is read as the bracketed one, since a url spells it no
+/// other way and an unbracketed address can mean nothing else.
 fn host_rule(written: &str) -> Option<String> {
     let written = written.trim();
+    if written.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Some(format!("[{}]", written.to_ascii_lowercase()));
+    }
     match written.strip_prefix("*.") {
         Some(rest) => plain(rest)
             .filter(|name| !name.starts_with('['))
@@ -1035,7 +1119,9 @@ mod tests {
     }
 
     /// RETRIEVE-23: `retrieval.enabled: false` is a pin and is named among them. `true` and a value
-    /// that is not a boolean pin nothing, so the layer can only turn retrieval off.
+    /// that is not a boolean pin nothing, so the layer can only turn retrieval off. A value that
+    /// cannot be the pin is carried out to be reported, and one that can be, or that names nothing
+    /// about the switch, is not.
     #[test]
     fn a_managed_retrieval_false_is_a_pin_and_nothing_else_is() {
         let off = scratch(
@@ -1043,16 +1129,20 @@ mod tests {
             r#"{"retrieval": {"enabled": false}}"#,
         );
         assert!(off.retrieval_off());
+        assert!(!off.retrieval_unreadable());
         assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["retrieval.enabled"]);
-        for (name, text) in [
-            ("on", r#"{"retrieval": {"enabled": true}}"#),
-            ("quoted", r#"{"retrieval": {"enabled": "false"}}"#),
-            ("bare", r#"{"retrieval": false}"#),
-            ("absent", "{}"),
+        for (name, text, unreadable) in [
+            ("on", r#"{"retrieval": {"enabled": true}}"#, false),
+            ("quoted", r#"{"retrieval": {"enabled": "false"}}"#, true),
+            ("null", r#"{"retrieval": {"enabled": null}}"#, true),
+            ("bare", r#"{"retrieval": false}"#, true),
+            ("blockless", r#"{"retrieval": {}}"#, false),
+            ("absent", "{}", false),
         ] {
             let managed = scratch(&format!("managed-retrieval-{name}"), text);
             assert!(!managed.retrieval_off(), "{text}");
             assert!(managed.is_empty(), "{text}");
+            assert_eq!(managed.retrieval_unreadable(), unreadable, "{text}");
         }
     }
 
@@ -1483,11 +1573,15 @@ mod tests {
         }
     }
 
-    /// An entry that is neither form is skipped. In a deny list that denies nothing, so a list of
-    /// nothing else is not reported; in an allow list it allows nothing, so the list still stands
-    /// and allows less. An alias is one of them: the person declaring a server chooses it.
+    /// An entry that is neither form matches no server and is named, as an unreadable permission rule
+    /// is (PERM-11). In a deny list that means a list of nothing else still reads as pinned, so
+    /// `doctor` shows it; in an allow list the list stands and allows less. An alias is one of them:
+    /// the person declaring a server chooses it.
+    ///
+    /// Rejects skipping such an entry in silence, which leaves an administrator believing a server
+    /// is refused that starts.
     #[test]
-    fn an_entry_in_neither_form_is_skipped() {
+    fn an_entry_in_neither_form_is_skipped_and_named() {
         let malformed = r#"[
             "weather",
             {"alias": "weather"},
@@ -1497,7 +1591,11 @@ mod tests {
             {"host": "*.[::1]"},
             {"host": ""},
             {"host": "mcp.corp.example/path"},
+            {"host": "https://mcp.corp.example"},
+            {"host": "mcp.corp.example:443"},
+            {"host": "bücher.example"},
             {"command": ["approved-server", "--stdio"]},
+            {"command": ["evil-server", "--stdio"]},
             {"command": []},
             {"command": ["/usr/local/bin/approved-server", 3]},
             {"host": "mcp.corp.example", "command": ["/usr/local/bin/approved-server"]},
@@ -1509,7 +1607,27 @@ mod tests {
             "managed-deny-malformed",
             &format!(r#"{{"mcp": {{"deny": {malformed}}}}}"#),
         );
-        assert!(denying.is_empty(), "a deny list of nothing was reported");
+        assert_eq!(
+            denying.pinned().collect::<Vec<_>>(),
+            vec![SERVER_DENY],
+            "a deny list the reader cannot use was not reported as written"
+        );
+        let named: Vec<(&str, &str)> = denying.server_entries_unusable().collect();
+        assert_eq!(named.len(), 17, "{named:?}");
+        assert!(named.iter().all(|(list, _)| *list == SERVER_DENY));
+        // Each is the file's own spelling and not a summary of it.
+        for spelled in [
+            r#""weather""#,
+            r#"{"host":"https://mcp.corp.example"}"#,
+            r#"{"host":"mcp.corp.example:443"}"#,
+            r#"{"host":"bücher.example"}"#,
+            r#"{"command":["evil-server","--stdio"]}"#,
+        ] {
+            assert!(
+                named.iter().any(|(_, entry)| *entry == spelled),
+                "{spelled}: {named:?}"
+            );
+        }
         assert_eq!(refusal(&denying, remote), None);
         assert_eq!(refusal(&denying, Server::Local(&program)), None);
         let allowing = scratch(
@@ -1521,11 +1639,70 @@ mod tests {
             refusal(&allowing, Server::Local(&program)),
             Some(Refusal::NotAllowed)
         );
+        assert!(
+            allowing
+                .server_entries_unusable()
+                .all(|(list, _)| list == SERVER_ALLOW),
+            "an allow entry was named as a deny entry"
+        );
+        assert_eq!(allowing.server_entries_unusable().count(), 17);
         let spaced = scratch(
             "managed-deny-spaced",
             r#"{"mcp": {"deny": [{"host": "  MCP.corp.example  "}]}}"#,
         );
         assert!(refusal(&spaced, remote).is_some());
+        assert_eq!(spaced.server_entries_unusable().count(), 0);
+        let usable = scratch(
+            "managed-deny-usable",
+            r#"{"mcp": {"deny": [{"command": ["/opt/bad"]}]}}"#,
+        );
+        assert_eq!(
+            usable.server_entries_unusable().count(),
+            0,
+            "a usable entry was named"
+        );
+    }
+
+    /// An IPv6 address written without brackets can mean nothing but the address, so it matches the
+    /// url that spells it with them, in any case and in both lists.
+    ///
+    /// Rejects reading the unbracketed spelling as no host, which refuses nothing.
+    #[test]
+    fn an_ipv6_address_without_brackets_names_the_bracketed_host() {
+        let denying = scratch(
+            "managed-deny-unbracketed",
+            r#"{"mcp": {"deny": [{"host": "FD00::1"}, {"host": "::ffff:10.0.0.1"}]}}"#,
+        );
+        assert_eq!(denying.server_entries_unusable().count(), 0);
+        for url in ["http://[fd00::1]/mcp", "http://[FD00::1]:8080/mcp"] {
+            assert_eq!(
+                refusal(&denying, Server::Remote(url)),
+                Some(Refusal::Denied(&Rule::Host("[fd00::1]".into()))),
+                "{url}"
+            );
+        }
+        assert!(matches!(
+            refusal(&denying, Server::Remote("http://[::ffff:10.0.0.1]/")),
+            Some(Refusal::Denied(_))
+        ));
+        // A neighbouring address is another host, so the entry is not a prefix match.
+        assert_eq!(refusal(&denying, Server::Remote("http://[fd00::2]/")), None);
+        assert_eq!(
+            refusal(&denying, Server::Remote("http://[fd00::10]/")),
+            None
+        );
+        let allowing = scratch(
+            "managed-allow-unbracketed",
+            r#"{"mcp": {"allow": [{"host": "fd00::1"}]}}"#,
+        );
+        assert_eq!(
+            refusal(&allowing, Server::Remote("http://[fd00::1]/")),
+            None
+        );
+        assert_eq!(
+            refusal(&allowing, Server::Remote("http://[fd00::2]/")),
+            Some(Refusal::NotAllowed)
+        );
     }
 
     /// The layer may keep a server from starting and never add one. [`Managed`] has nowhere to

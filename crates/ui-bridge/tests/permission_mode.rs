@@ -430,6 +430,117 @@ fn every_way_of_opening_a_session_opens_asking() {
     assert_eq!(front.ask(resumed), "ask", "a resume took a mode");
 }
 
+/// AUTO-1, MODE-10: where the person's own settings file says `permissions.startInAuto`, a new
+/// session, a fork and a resumed session all open in auto, whatever the session they came from had
+/// chosen, and each reply names the mode the session's turns then run in. The faults it rejects
+/// are a reply that says asking while the turn runs in auto (or the reverse), a setting read for
+/// one of the three ways of opening and not the others, and a fork or a resume that takes the mode
+/// of the session it came from.
+#[test]
+fn the_persons_setting_opens_a_new_session_a_fork_and_a_resume_in_auto() {
+    let scratch = Scratch::new("bridge-mode-start-in-auto");
+    std::fs::write(
+        scratch.home().join(".bravebot/settings.json"),
+        r#"{"permissions": {"startInAuto": true}}"#,
+    )
+    .expect("a home layer");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+
+    let (session, made) = front.session(&scratch, true);
+    assert_eq!(made["permissionMode"], "auto", "{made}");
+    front.mode(&session, "plan");
+    assert_eq!(front.ask(&session), "plan", "the window's own choice");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+
+    let forked = front.call(
+        "session.fork",
+        json!({"session": session, "prompt": ended["data"]["prompt"], "text": "do the work"}),
+    );
+    assert_eq!(forked["permissionMode"], "auto", "{forked}");
+    let child = forked["session"].as_str().expect("a handle");
+    assert_eq!(front.ask(child), "auto", "a fork took its parent's mode");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    front.call("session.close", json!({"session": session}));
+    front.call("session.close", json!({"session": child}));
+    let listed = front.call(
+        "session.list",
+        json!({"directory": scratch.project().display().to_string()}),
+    );
+    let id = listed["sessions"][0]["id"].as_str().expect("the record");
+    let opened = front.call(
+        "session.open",
+        json!({"directory": scratch.project().display().to_string(), "id": id}),
+    );
+    assert_eq!(opened["permissionMode"], "auto", "{opened}");
+    let resumed = opened["session"].as_str().expect("a handle");
+    assert_eq!(front.ask(resumed), "auto", "a resume took a mode");
+}
+
+/// AUTO-1, MODE-11: the file the window selected with `settings.select`, which is the window's
+/// `--settings`, opens a session in auto where the home file says nothing and where it says
+/// `false`, and clearing the selection returns to the home file. The faults it rejects are a
+/// session opened without reading the selected file (the first reply asks), and a selected file
+/// that does not outrank the home file (the second).
+#[test]
+fn the_file_the_window_selected_opens_a_session_in_auto() {
+    let scratch = Scratch::new("bridge-mode-start-in-auto-selected");
+    let home_file = scratch.home().join(".bravebot/settings.json");
+    let named = scratch.home().join("named.json");
+    std::fs::write(&named, r#"{"permissions": {"startInAuto": true}}"#).expect("a named file");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let selected = |front: &mut FrontEnd, path: serde_json::Value| {
+        front.call("settings.select", json!({"path": path}));
+    };
+
+    selected(&mut front, json!(named.display().to_string()));
+    let (session, made) = front.session(&scratch, true);
+    assert_eq!(made["permissionMode"], "auto", "{made}");
+    assert_eq!(front.ask(&session), "auto", "the turn did not run in auto");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    std::fs::write(&home_file, r#"{"permissions": {"startInAuto": false}}"#).expect("a home layer");
+    // The directory was vouched for by the first session, so no trust question comes again.
+    let again = json!({"directory": scratch.project().display().to_string()});
+    let made = front.call("session.new", again.clone());
+    assert_eq!(made["permissionMode"], "auto", "{made}");
+    front.call("session.close", json!({"session": made["session"]}));
+
+    selected(&mut front, json!(null));
+    let made = front.call("session.new", again);
+    assert_eq!(made["permissionMode"], "ask", "{made}");
+    front.call("session.close", json!({"session": made["session"]}));
+}
+
+/// AUTO-1: a project's `settings.json` and `settings.local.json` arrive with a clone, so a window's
+/// session opened in a checkout that carries `permissions.startInAuto` still opens asking, and the
+/// settings view lists each file as ignored. The fault it rejects is the key read from a layer a
+/// checkout writes, which would let a clone decide who answers a person's questions.
+#[test]
+fn a_checkouts_copy_of_the_setting_opens_nothing_in_auto() {
+    let scratch = Scratch::new("bridge-mode-start-in-auto-checkout");
+    let on = r#"{"permissions": {"startInAuto": true}}"#;
+    std::fs::create_dir_all(scratch.project().join(".bravebot")).expect("a project layer");
+    std::fs::write(scratch.project().join(".bravebot/settings.json"), on).expect("a project layer");
+    std::fs::write(scratch.project().join(".bravebot/settings.local.json"), on)
+        .expect("a local layer");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+
+    let (session, made) = front.session(&scratch, true);
+    assert_eq!(made["permissionMode"], "ask", "{made}");
+    assert_eq!(front.ask(&session), "ask");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+    let inspected = front.call("settings.inspect", json!({"session": session}));
+    assert!(
+        inspected.to_string().contains("permissions.startInAuto"),
+        "the settings view did not name the key a checkout carried: {inspected}"
+    );
+}
+
 /// MODE-5: a window has no command line, so bypassing is refused, as is any word that names no
 /// mode. The session is left in the mode it was in.
 #[test]
@@ -683,4 +794,67 @@ fn planning_chosen_while_a_turn_runs_refuses_the_rest_of_that_turn() {
         sent.last().is_some_and(|last| last.contains("Plan mode.")),
         "the planner was not told plan mode began"
     );
+}
+
+/// RUN-5: a command vouched for in one turn runs unasked in the turns after it, and once the
+/// grant is revoked between turns the next run of it is asked about again. The failures this
+/// rejects are a vouch that lasts one turn, a vouched command refused without a question, and a
+/// revocation the next turn does not see. The command prints `vouched-ran`, which its arguments do
+/// not contain, so only a run that happened puts it in the tool result.
+#[test]
+fn a_command_vouched_for_holds_for_later_turns_until_it_is_revoked() {
+    let scratch = Scratch::new("bridge-mode-command-grant");
+    let (endpoint, rounds) = a_planner(|_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({"command": "/usr/bin/printf vouched%sran -"})))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+
+    front.ask(&session);
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "run.request", "{question}");
+    front.call(
+        "run.reply",
+        json!({"session": session, "request": question["data"]["request"],
+            "decision": "approve", "remember": true}),
+    );
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    front.ask(&session);
+    let ended = front.question_or_the_end();
+    assert_eq!(
+        ended["event"], "turn.done",
+        "the vouched command was asked about: {ended}"
+    );
+    let sent: Vec<String> = rounds.try_iter().collect();
+    let told = tool_results(sent.last().expect("a round of the second turn"));
+    assert!(
+        told.matches("vouched-ran").count() == 2,
+        "the vouched command did not run in the second turn: {told}"
+    );
+
+    let listed = front.call("permissions.list", json!({"session": session}));
+    let command = listed["commands"][0].clone();
+    assert!(
+        command["display"]
+            .as_str()
+            .is_some_and(|display| display.starts_with("/usr/bin/printf")),
+        "{listed}"
+    );
+    front.call(
+        "permissions.revoke",
+        json!({"session": session, "kind": "command", "command": {
+            "program": command["program"], "startedAs": command["startedAs"],
+            "args": command["args"],
+        }}),
+    );
+
+    front.ask(&session);
+    let question = front.question_or_the_end();
+    assert_eq!(
+        question["event"], "run.request",
+        "the revoked command ran unasked: {question}"
+    );
+    front.reply("run.reply", &session, &question, "reject");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
 }

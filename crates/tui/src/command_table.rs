@@ -143,6 +143,13 @@ pub(crate) const NOTE_COMMAND: &str = "/note";
 pub(crate) const ISSUE_COMMAND: &str = "/issue";
 pub(crate) const PR_COMMAND: &str = "/pr";
 
+/// The lines that list the issues and the pull requests the session has named, taking no argument.
+///
+/// Carried out by the driver from the list the session holds and start no turn (CMD-31). Longer
+/// words than `/issue` and `/pr`, which are not the same commands with an argument.
+pub(crate) const ISSUES_COMMAND: &str = "/issues";
+pub(crate) const PRS_COMMAND: &str = "/prs";
+
 /// The line that asks a question beside the work, taking the question as its argument.
 pub(crate) const BTW_COMMAND: &str = "/btw";
 
@@ -184,6 +191,9 @@ pub(crate) const SESSIONS_COMMAND: &str = "/sessions";
 
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
+
+/// The line that opens the checklist of the info panel's sections (PANEL-17).
+pub(crate) const SIDEBAR_COMMAND: &str = "/sidebar";
 
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const DIFF_COMMAND: &str = "/diff";
@@ -388,7 +398,9 @@ pub enum MidTurn {
     /// turn runs, so the turn's own questions are still drawn over it.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
-    /// would start something: a loop or a goal armed mid-turn needs a look of its own.
+    /// would start something: a loop or a goal armed mid-turn needs a look of its own. `/mcp` is
+    /// carried out where it only lists, and waits where it would start a server, turn one off or
+    /// remove one, which take the terminal or change the tools the turn offers.
     RunsUnlessItStarts,
     /// Carried out as it is typed when no line waiting ahead of it could change what it acts on. It
     /// changes only what the session keeps for itself or keeps for a later session, which the turn
@@ -643,6 +655,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: SIDEBAR_COMMAND,
+            argument: "",
+            description: t!(command_sidebar),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: DIFF_COMMAND,
             argument: "",
             description: t!(command_diff),
@@ -677,6 +695,18 @@ pub fn commands() -> Vec<Command> {
             argument: "[<url> | clear]",
             description: t!(command_issue),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: PRS_COMMAND,
+            argument: "",
+            description: t!(command_prs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: ISSUES_COMMAND,
+            argument: "",
+            description: t!(command_issues),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: CHECKOUTS_COMMAND,
@@ -782,9 +812,9 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: MCP_COMMAND,
-            argument: "[reconnect | disable | remove]",
+            argument: "[list | reconnect | disable | remove]",
             description: t!(command_mcp),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::RunsUnlessItStarts,
         },
         Command {
             name: LSP_COMMAND,
@@ -930,11 +960,26 @@ fn row_typed(line: &str) -> Option<Command> {
         })
 }
 
+/// Whether the line is a command that takes no argument, followed by words.
+///
+/// Such a line is a prompt (CMD-2): the table gives the command no argument, so what follows it is
+/// the person's own words and not something to carry out. Read off the table's argument column, the
+/// way [`command_typed`] reads it, so a command added there is covered without anybody having to
+/// remember to. The bare command is the command and a longer word is another word, so neither is
+/// this. Only the first word decides, and it decides only which note is drawn while the turn runs.
+pub(crate) fn is_a_command_given_words(line: &str) -> bool {
+    commands().into_iter().any(|command| {
+        command.argument.is_empty()
+            && argument_to(line, command.name).is_some_and(|words| !words.is_empty())
+    })
+}
+
 /// Whether the command a line is gets carried out as it is typed while a turn runs (CMD-8).
 ///
-/// Read off the table's column, and for the two words that both read and start, off the form the
+/// Read off the table's column, and for the words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work.
+/// a loop while the turn in flight is still the session's work. `/mcp` and `/mcp list` read the
+/// servers, and every other word after `/mcp` waits. Only the words the person typed are read.
 pub(crate) fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
         return false;
@@ -952,6 +997,7 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
                     !matches!(crate::goals::parse(argument), crate::goals::Asked::Set(_))
                 }
                 SCHEDULE_COMMAND => bravebot_schedule::words::reads_only(argument),
+                MCP_COMMAND => crate::mcp_command::only_lists(argument),
                 _ => false,
             }
         }
@@ -1280,12 +1326,28 @@ pub(crate) fn named(goes: Bound, line: &str) -> String {
     }
 }
 
+/// The words a mark names a waiting command by: the command word, and for `/mcp` also the first
+/// word typed after it. `/mcp` both lists, which runs, and starts or changes servers, which waits,
+/// so the mark says which form waits (`/mcp reconnect`). Only words the person typed are read.
+fn form_typed(word: &str, line: &str) -> String {
+    if word != MCP_COMMAND {
+        return word.to_string();
+    }
+    let first = argument_to(line, word)
+        .and_then(|argument| argument.split_whitespace().next())
+        .map(|form| crate::render::printable(&crate::render::head_of(form, 24)));
+    match first {
+        Some(form) => format!("{word} {form}"),
+        None => word.to_string(),
+    }
+}
+
 /// What is said under the turn when a command typed while it runs is queued, so the line does not
 /// wait without a reason (CMD-8). Read before the line is taken off the box, and from the same
 /// facts [`runs_while_working`] and [`held_back_by`] decided it with.
 pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     let command = row_typed(line)?;
-    let word = command.name;
+    let word = &form_typed(command.name, line);
     // A command the person typed is running and no turn is, so the line waits for that.
     if session.status == Status::Running {
         return Some(t!(command_waits_for_the_command, command = word).to_string());
@@ -1338,6 +1400,30 @@ mod tests {
                     "{command} completes {word}"
                 );
             }
+        }
+    }
+
+    /// The hint drawn for `/mcp` names every subcommand the command takes, in the order the usage
+    /// message lists them. The regression it rejects is a subcommand left out of the hint, which
+    /// leaves `list` undiscoverable from the slash menu, or a hint that drifts from the usage
+    /// message.
+    #[test]
+    fn the_mcp_hint_names_every_subcommand_the_usage_message_names() {
+        let command = commands()
+            .iter()
+            .find(|candidate| candidate.name == MCP_COMMAND)
+            .copied()
+            .expect("/mcp is in the table");
+        assert_eq!(command.argument, "[list | reconnect | disable | remove]");
+        assert_eq!(command.typed_hint(), command.argument);
+        let usage = t!(mcp_command_usage);
+        let mut after = 0;
+        for word in ["list", "reconnect", "disable", "remove"] {
+            assert!(command.argument.contains(word), "the hint names {word}");
+            let at = usage[after..]
+                .find(word)
+                .unwrap_or_else(|| panic!("the usage message names {word} after byte {after}"));
+            after += at + word.len();
         }
     }
 

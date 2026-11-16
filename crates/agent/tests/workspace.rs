@@ -2870,6 +2870,169 @@ fn a_listing_past_the_cap_reports_truncation() {
     assert_eq!(listing.files.len(), 2_000, "the cap was not applied");
 }
 
+/// LIST-5: a bounded listing takes at most a fixed number of files from any one directory, so a
+/// directory of thousands of files that sorts first does not spend the whole cap and hide every
+/// directory after it. A walk that took files depth-first until the global cap, as it used to,
+/// lists only `.aaa` and nothing from `docs`, `src` or `tests`.
+#[test]
+fn a_bounded_listing_shares_its_cap_across_directories() {
+    let scratch = Scratch::new("list-fair-cap");
+    let crowded = scratch.path.join(".aaa");
+    std::fs::create_dir_all(&crowded).unwrap();
+    for n in 0..2_001 {
+        std::fs::write(crowded.join(format!("l{n:05}.lock")), "x").unwrap();
+    }
+    for dir in ["docs", "src", "tests"] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+    }
+    std::fs::write(scratch.path.join("docs/a.md"), "a").unwrap();
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::write(scratch.path.join("tests/t.rs"), "t").unwrap();
+    std::fs::write(scratch.path.join("README.md"), "readme").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(".".to_string()),
+            None,
+            Some(2),
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    let listing = listing.declassify(&proof);
+
+    for later in ["README.md", "docs/a.md", "src/main.rs", "tests/t.rs"] {
+        assert!(
+            listing.files.iter().any(|f| f == later),
+            "{later} was crowded out by one directory"
+        );
+    }
+    let crowded_files = listing
+        .files
+        .iter()
+        .filter(|f| f.starts_with(".aaa/"))
+        .count();
+    assert_eq!(
+        crowded_files, 200,
+        "one directory took more than its share of the cap"
+    );
+    assert!(
+        listing.files.len() + listing.directories.len() < 300,
+        "the listing was not cut down to a few hundred entries"
+    );
+    assert_eq!(
+        listing.partly_listed,
+        vec![(".aaa".to_string(), 1_801)],
+        "the directory that was cut was not named with how many files it left out"
+    );
+    assert!(listing.truncated, "a per-directory cut was not reported");
+}
+
+/// LIST-5: a cut directory is named by where the walk found it. The walk root is `.` when it is
+/// the workspace root and its own relative name when the call named a subdirectory, and a
+/// subdirectory the walk cut is its relative name. The regressions it rejects: the workspace root
+/// reported under an empty name, and a walk root or a subdirectory reported as `.`.
+#[test]
+fn a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name() {
+    let scratch = Scratch::new("list-cut-root");
+    let sub = scratch.path.join("sub");
+    let deeper = sub.join("deeper");
+    std::fs::create_dir_all(&deeper).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("r{n:03}.txt")), "x").unwrap();
+        std::fs::write(sub.join(format!("s{n:03}.txt")), "x").unwrap();
+        std::fs::write(deeper.join(format!("d{n:03}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let proof = policy.authorise_content_release("test", "paths");
+    let from_the_root = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(".".to_string()),
+            None,
+            Some(2),
+        )
+        .expect("list succeeds")
+        .declassify(&proof);
+    assert_eq!(
+        from_the_root.partly_listed,
+        vec![(".".to_string(), 1), ("sub".to_string(), 1)],
+        "the workspace root was not named `.` or a subdirectory was not named by its name"
+    );
+
+    let from_a_subdirectory = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted("sub".to_string()),
+            None,
+            Some(2),
+        )
+        .expect("list succeeds")
+        .declassify(&proof);
+    assert_eq!(
+        from_a_subdirectory.partly_listed,
+        vec![("sub".to_string(), 1), ("sub/deeper".to_string(), 1)],
+        "a walk root that is not the workspace root was not named by its relative name"
+    );
+}
+
+/// LIST-5: the per-directory cap is for a bounded listing. An unbounded one asked for every file,
+/// so it keeps the single cap over the whole walk, and a directory of a thousand files is listed
+/// whole.
+#[test]
+fn an_unbounded_listing_takes_every_file_of_a_large_directory() {
+    let scratch = Scratch::new("list-unbounded-large-dir");
+    let crowded = scratch.path.join("many");
+    std::fs::create_dir_all(&crowded).unwrap();
+    for n in 0..1_000 {
+        std::fs::write(crowded.join(format!("f{n:05}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let listing = workspace
+        .list(&mut policy, &Labelled::trusted(".".to_string()), None, None)
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    let listing = listing.declassify(&proof);
+
+    assert_eq!(
+        listing.files.len(),
+        1_000,
+        "an unbounded listing was cut per directory"
+    );
+    assert!(listing.partly_listed.is_empty());
+    assert!(!listing.truncated);
+}
+
 /// A search that stopped before it had opened every file has not answered the question it was
 /// asked, and the empty result is the dangerous one: nothing found reads as nothing there.
 ///
@@ -14697,6 +14860,78 @@ fn a_path_a_request_would_be_refused_is_not_reached_under_bypass() {
     );
 }
 
+/// PATHREQ-7: the refusals hold for the file a reference stands for, read under the reach the call
+/// holds. Each path the direct read refuses is refused through `reading_under_the_reach`, for a
+/// call that reads and a call that writes, and so are the person's `denyRead` and the setting that
+/// keeps reads inside. A deferred read that was given the reach without its refusals, or one that
+/// judged the spelling and not where the path leads, would read a row.
+#[cfg(unix)]
+#[test]
+fn the_refusals_hold_for_a_file_a_reference_stands_for() {
+    let places = BypassPlaces::new("deferred-refused");
+    std::fs::write(places.home.join(".ssh/id_ed25519"), "KEY").unwrap();
+    std::fs::write(places.home.join(".bravebot/secret"), "SECRET").unwrap();
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).unwrap();
+    let spelled = |tail: &str| PathBuf::from(format!("{}{tail}", places.beside.display()));
+    let read_denied = places.beside.join("read-denied");
+    std::fs::create_dir_all(&read_denied).unwrap();
+    std::fs::write(read_denied.join("f.txt"), "F").unwrap();
+    let lists = || Lists {
+        deny_read: vec![Entry {
+            path: read_denied.display().to_string(),
+            by: None,
+            pinned: false,
+        }],
+        ..Lists::default()
+    };
+    let cases = [
+        ("root", PathBuf::from("/")),
+        ("home", places.home.clone()),
+        ("ssh key", places.home.join(".ssh/id_ed25519")),
+        ("state directory", places.home.join(".bravebot/secret")),
+        ("a link into ~/.ssh", link.join("id_ed25519")),
+        ("a wildcard", spelled("/*.txt")),
+        ("a control character", spelled("/no\ntes.txt")),
+        ("a denyRead path", read_denied.join("f.txt")),
+    ];
+    for (tool, write) in [("vet_content", false), ("write_file", true)] {
+        places.workspace.hold_bypass_reach(Some(places.reach_with(
+            tool,
+            write,
+            lists(),
+            Vec::new(),
+        )));
+        for (what, path) in &cases {
+            escapes_the_workspace(
+                places
+                    .workspace
+                    .reading_under_the_reach(|| places.read(path)),
+                &format!("{what} through {tool}"),
+            );
+        }
+        // The control: the same reach is held and a path beside is read.
+        assert_eq!(
+            places
+                .workspace
+                .reading_under_the_reach(|| places.read(&places.beside.join("notes.txt")))
+                .unwrap(),
+            "NOTES",
+            "{tool}"
+        );
+    }
+
+    let mut kept = BypassPlaces::new("deferred-kept-inside");
+    kept.workspace = kept.workspace.clone().with_reads_kept_inside(true);
+    kept.workspace
+        .hold_bypass_reach(Some(kept.reach("vet_content", false)));
+    escapes_the_workspace(
+        kept.workspace
+            .reading_under_the_reach(|| kept.read(&kept.beside.join("notes.txt"))),
+        "readsStayInWorkspace through a reference",
+    );
+}
+
 /// A write makes what it names, so a new entry is judged by the directory it lands in: directly
 /// in the home directory it is refused, and in a directory below it it is made. A persistence
 /// location is refused for a write and read as before.
@@ -14792,6 +15027,55 @@ fn the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass() {
     .expect("policy");
     let named = Labelled::trusted(kept.beside.join("notes.txt").display().to_string());
     escapes_the_workspace(workspace.read(&mut policy, &named), "readsStayInWorkspace");
+}
+
+/// A file a reference stands for is read under the reach the call holds, judged as a read, and the
+/// call's own reach is held again after. A call that writes (`write_file` with `contents_ref`) holds
+/// a reach judged as a write, so a path only `denyWrite` covers is read through it; where no reach
+/// is held nothing is added. A deferred read that kept the call's write judgment refuses the
+/// first, one that dropped the reach after would refuse the call's own write, and one that made a
+/// reach where none was held would read the last.
+#[test]
+fn reading_under_the_reach_judges_a_read_and_gives_the_call_its_own_reach_back() {
+    let places = BypassPlaces::new("deferred-read");
+    let write_denied = places.beside.join("write-denied");
+    std::fs::create_dir_all(&write_denied).unwrap();
+    std::fs::write(write_denied.join("f.txt"), "F").unwrap();
+    let denied = Entry {
+        path: write_denied.display().to_string(),
+        by: None,
+        pinned: false,
+    };
+    places.workspace.hold_bypass_reach(Some(places.reach_with(
+        "write_file",
+        true,
+        Lists {
+            deny_write: vec![denied],
+            ..Lists::default()
+        },
+        Vec::new(),
+    )));
+    escapes_the_workspace(
+        places.write(&write_denied.join("g.txt")),
+        "denyWrite for the call's write",
+    );
+    let read = places
+        .workspace
+        .reading_under_the_reach(|| places.read(&write_denied.join("f.txt")));
+    assert_eq!(read.expect("a read under a write call's reach"), "F");
+    escapes_the_workspace(
+        places.write(&write_denied.join("g.txt")),
+        "denyWrite after the deferred read",
+    );
+    places
+        .write(&places.beside.join("ok.txt"))
+        .expect("the call's own reach after the deferred read");
+
+    places.workspace.hold_bypass_reach(None);
+    let none_held = places
+        .workspace
+        .reading_under_the_reach(|| places.read(&places.beside.join("notes.txt")));
+    escapes_the_workspace(none_held, "no reach held");
 }
 
 /// A delegate in a checkout reaches neither the working directory nor another checkout, whatever

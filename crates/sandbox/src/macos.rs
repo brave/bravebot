@@ -599,6 +599,9 @@ impl Sandbox for SeatbeltSandbox {
     ) -> Result<Command, SandboxError> {
         let mut wrapped = Self::wrapping(program, args, policy, environment)?;
         crate::process::apply_environment(&mut wrapped, environment);
+        // The same property the Linux backend gives with `setsid` in its pre-exec: `sandbox-exec`
+        // and the program it runs are one process, so the session is the program's (RUN-11).
+        crate::process::leading_a_session(&mut wrapped);
         Ok(wrapped)
     }
 }
@@ -3893,6 +3896,164 @@ int main(int argc, char **argv) {
                 not_written.display()
             );
         }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// gh's list as the kernel holds it: `gh run view --log-failed` writes the log it downloads
+    /// into `~/.cache/gh`, and nothing in gh's configuration directory, where its login is, is
+    /// written. The regression it rejects is a gh list whose row the profile does not apply,
+    /// which is the permission denied the command failed with.
+    #[test]
+    fn a_gh_stage_writes_its_cache_and_not_its_login() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-gh-stage");
+        let cache = home.join(".cache").join("gh");
+        let configuration = home.join(".config").join("gh");
+        std::fs::create_dir_all(&cache).expect("the scratch cache is creatable");
+        std::fs::create_dir_all(&configuration).expect("the scratch configuration is creatable");
+        std::fs::write(configuration.join("hosts.yml"), "github.com:\n")
+            .expect("the scratch home is writable");
+        let keychains = home.join("Library").join("Keychains");
+        std::fs::create_dir_all(&keychains).expect("the scratch keychains are creatable");
+        std::fs::write(keychains.join("login.keychain-db"), "a keychain")
+            .expect("the scratch home is writable");
+        let policy = crate::toolchain::Toolchain::Gh.grant(
+            crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
+            crate::base::Prelude::MacOs,
+            &home,
+            None,
+        );
+        let at = |path: PathBuf| path.display().to_string();
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(&policy, a_stage_for(&home), program, &[&at(path)])
+        };
+
+        assert_eq!(
+            code("/usr/bin/touch", cache.join("run-log-1-2.zip")),
+            Some(0),
+            "gh's cache was not written"
+        );
+        for not_written in [
+            configuration.join("hosts.yml"),
+            configuration.join("config.yml"),
+            keychains.join("login.keychain-db"),
+            keychains.join("another.keychain-db"),
+            home.join(".cache").join("another-program"),
+        ] {
+            assert_eq!(
+                code("/usr/bin/touch", not_written.clone()),
+                Some(TOUCH_FAILED),
+                "{} was written",
+                not_written.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// jk's list as the kernel holds it: jk opens `~/.config/jk/keychain.lock` for writing before
+    /// it reads its token from the login keychain, and fails with `operation not permitted` where
+    /// it cannot. The context file beside it and the file store the token is kept in where the
+    /// keychain is not used are not written. The regression it rejects is a list whose row the
+    /// profile does not apply, which is the failure `jk run view` ended with, or one widened to the
+    /// directory, which lets any jk stage replace the context file with a controller of its own.
+    #[test]
+    fn a_jk_stage_writes_its_lock_file_and_not_its_context_or_token_store() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-jk-stage");
+        let configuration = home.join(".config").join("jk");
+        let support = home.join("Library").join("Application Support").join("jk");
+        std::fs::create_dir_all(&configuration).expect("the scratch configuration is creatable");
+        std::fs::create_dir_all(&support).expect("the scratch support directory is creatable");
+        std::fs::write(support.join("config.yaml"), "contexts: {}\n")
+            .expect("the scratch home is writable");
+        let policy = crate::toolchain::Toolchain::Jk.grant(
+            crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
+            crate::base::Prelude::MacOs,
+            &home,
+            None,
+        );
+        let at = |path: PathBuf| path.display().to_string();
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(&policy, a_stage_for(&home), program, &[&at(path)])
+        };
+
+        assert_eq!(
+            code("/usr/bin/touch", configuration.join("keychain.lock")),
+            Some(0),
+            "jk's lock file was not written"
+        );
+        for not_written in [
+            support.join("config.yaml"),
+            configuration.join("config.yaml"),
+            configuration.join("another.lock"),
+            home.join(".config").join("another-program"),
+        ] {
+            assert_eq!(
+                code("/usr/bin/touch", not_written.clone()),
+                Some(TOUCH_FAILED),
+                "{} was written",
+                not_written.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// SANDBOX-11 creates no cache ahead of time, so on a machine where gh has never run its
+    /// first stage creates `~/.cache/gh` itself, as a cargo stage creates `~/.cargo/registry`.
+    /// Each is created when the directory holding it is there, and neither creates that directory
+    /// when it is not, since `~/.cache` and `~/.cargo` are never written. The regression it
+    /// rejects is a gh row widened to `~/.cache` so that gh can create its cache anywhere, which
+    /// is every other program's cache written by every gh stage.
+    #[test]
+    fn a_gh_stage_creates_its_cache_where_the_directory_holding_it_is_there_as_cargo_does() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-gh-stage-creates");
+        let base = || crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home));
+        let prelude = crate::base::Prelude::MacOs;
+        let gh = crate::toolchain::Toolchain::Gh.grant(base(), prelude, &home, None);
+        let cargo = crate::toolchain::Toolchain::Cargo.grant(base(), prelude, &home, None);
+        let created = |policy: &SandboxPolicy, path: PathBuf| {
+            exit_code_under(
+                policy,
+                a_stage_for(&home),
+                "/bin/mkdir",
+                &["-p", &path.display().to_string()],
+            )
+        };
+        const MKDIR_FAILED: i32 = 1;
+
+        assert_eq!(
+            created(&gh, home.join(".cache").join("gh").join("0a")),
+            Some(MKDIR_FAILED),
+            "gh's cache was created with no `~/.cache` to hold it"
+        );
+        assert_eq!(
+            created(&cargo, home.join(".cargo").join("registry").join("index")),
+            Some(MKDIR_FAILED),
+            "cargo's registry was created with no `~/.cargo` to hold it"
+        );
+        assert!(!home.join(".cache").exists() && !home.join(".cargo").exists());
+
+        std::fs::create_dir_all(home.join(".cache")).expect("the scratch home is writable");
+        std::fs::create_dir_all(home.join(".cargo")).expect("the scratch home is writable");
+        assert_eq!(
+            created(&gh, home.join(".cache").join("gh").join("0a")),
+            Some(0),
+            "gh's cache was not created in `~/.cache`"
+        );
+        assert_eq!(
+            created(&cargo, home.join(".cargo").join("registry").join("index")),
+            Some(0),
+            "cargo's registry was not created in `~/.cargo`"
+        );
+        assert_eq!(
+            created(&gh, home.join(".cache").join("another-program")),
+            Some(MKDIR_FAILED),
+            "a directory beside gh's cache was created"
+        );
 
         let _ = std::fs::remove_dir_all(&scratch);
     }

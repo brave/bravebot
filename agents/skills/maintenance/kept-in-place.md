@@ -35,3 +35,15 @@ checks the reply against the output schema and picks the exit status from the re
 dispatch `match` in `main()` stays, because it is a table. The tests stay in `main.rs`'s
 `mod tests`, because the specs cite them by path in `verified-by:`. Reason: no decision about
 labelled content moves, and messages, endings and exit statuses stay as they were.
+
+## ui/src/renderer/App.tsx
+
+Issue #3249. `showSession`, `create`, `forkFrom`, `closeSession` and the sidebar callbacks stay in
+`App.tsx`. Reason: `run-record.test.mjs` reads `showSession` from `App.tsx`, and the others share
+`liveRef` and `openedLives` with the JSX.
+
+## agents/skills/security-audit/security-audit.py
+
+Issue #3241. The checks that enforce the labelling rule stay in `security-audit.py`: the label,
+gate and key-site checks and the registers. Only the workflow and supply-chain checks moved, to
+`workflow_checks.py`. The issue gives no reason beyond naming them.

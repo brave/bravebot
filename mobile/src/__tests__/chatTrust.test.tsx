@@ -3,7 +3,8 @@ import { AccessibilityInfo, FlatList } from 'react-native'
 import type { Status } from '@brave/agent-client'
 import { ChatScreen } from '../screens/ChatScreen'
 import { SessionController } from '../session/controller'
-import { allText, byTestId, has, render } from './helpers'
+import { allText, byTestId, has, render, textOf } from './helpers'
+import { prompt } from './support/builders'
 import { FakeSession } from './support/fake'
 
 function screen(status: Status, trust: Record<string, unknown> | null) {
@@ -104,5 +105,23 @@ describe('a trust question that cannot be read', () => {
     expect(has(tree, 'unanswerable-card')).toBe(true)
     expect(allText(tree)).toContain('start a new session')
     expect(allText(tree)).not.toContain('Cancel the turn')
+  })
+})
+
+describe('a session whose earliest rows the view no longer keeps', () => {
+  function opened(initial: ConstructorParameters<typeof FakeSession>[0]['initial']) {
+    const session = new FakeSession({ id: 's', initial })
+    return render(<ChatScreen controller={new SessionController(session, () => undefined)} target="Test" title={null} suggestions={[]} workspaceName="work" onMenu={() => undefined} />)
+  }
+
+  it('says how many are not shown', async () => {
+    const tree = await opened({ turn: 2, target: 2, status: 'completed', rows: [prompt(5, 2, 'Again')], omitted: 4 })
+    expect(textOf(byTestId(tree, 'omitted-rows'))).toContain('4 earlier items')
+  })
+
+  it('is not shown as a new session when none of its rows are kept', async () => {
+    const tree = await opened({ turn: 2, target: 2, status: 'idle', rows: [], omitted: 300 })
+    expect(has(tree, 'empty-session')).toBe(false)
+    expect(textOf(byTestId(tree, 'omitted-rows'))).toContain('300 earlier items')
   })
 })

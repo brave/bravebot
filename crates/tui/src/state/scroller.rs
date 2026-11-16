@@ -77,6 +77,12 @@ pub struct Laid {
     /// Where the thumb of the scrollbar the frame drew beside the transcript is, where it drew one
     /// (VIEW-39, MOUSE-49). The track is a target of its own.
     pub bar: Option<Bar>,
+    /// The row of the pane a prompt was drawn in above the view, where the frame drew one (VIEW-44).
+    /// It is no row of the transcript, so a selection does not begin in it.
+    pub pinned: Option<ratatui::layout::Rect>,
+    /// The row at the bottom of the pane the frame drew the button that returns to the tail in, where
+    /// it drew one (VIEW-45). It is no row of the transcript, so a selection does not reach it.
+    pub jump: Option<ratatui::layout::Rect>,
 }
 
 impl Laid {
@@ -323,6 +329,7 @@ impl Session {
                 self.picking = None;
                 self.picked = Some(picked);
             }
+            crate::picking::Step::Changed(sections) => self.set_panel_sections(sections),
         }
     }
 
@@ -537,6 +544,7 @@ impl Session {
                 self.pick_click = None;
                 self.picked = Some(picked);
             }
+            crate::picking::Step::Changed(sections) => self.set_panel_sections(sections),
         }
     }
 
@@ -756,7 +764,14 @@ impl Session {
         if self.scrolling() || self.scroll > 0 {
             let top = placed.unwrap_or_else(|| self.top_row());
             let furthest = laid.rows.saturating_sub(laid.height);
-            self.scroll = furthest.saturating_sub(top);
+            // A view at the last row that the frame drew at its last row is still there, though the
+            // row of a prompt drawn above it took a row from its view, which puts the last row a row
+            // further down than the row at the top of the frame before says (VIEW-44).
+            let at_the_end =
+                self.scroll == 0 && laid.window.is_some_and(|window| window.top == furthest);
+            if !at_the_end {
+                self.scroll = furthest.saturating_sub(top);
+            }
         }
         self.keep_selection_within(&laid);
         self.laid = laid;
@@ -933,6 +948,20 @@ impl Session {
         }
     }
 
+    /// Return the view to the tail, where it follows what arrives again. The key `ctrl-end` asks for
+    /// it, and so does a click on the hint that names it and on the button drawn above the box
+    /// (VIEW-1, VIEW-45, MOUSE-55).
+    pub fn return_to_the_tail(&mut self) {
+        self.scroll_down(u16::MAX);
+    }
+
+    /// Put the prompt drawn above the view at the top of it, which a click on that row asks for
+    /// (MOUSE-54). `row` is where the last frame's layout says the prompt begins, so the view goes
+    /// to the prompt that was drawn and to nothing a later frame put there.
+    pub fn go_to_the_pinned_prompt(&mut self, row: u16) {
+        self.scroller_to_row(row);
+    }
+
     /// Move `times` prompts back, or to the first row past the earliest.
     ///
     /// Where these land is settled by what the person typed and by nothing read out of the
@@ -1097,6 +1126,7 @@ impl Session {
             at: self.asides.len() + place,
             listing: false,
             on_session: false,
+            from_list: false,
         });
         true
     }

@@ -153,7 +153,7 @@ fn tell(to: &mut impl Write, line: impl std::fmt::Display) {
 }
 
 fn refused(err: &mut impl Write, ending: Ending, message: impl std::fmt::Display) -> Ending {
-    ending.say(err, message);
+    tell(err, ending.told(message));
     ending
 }
 

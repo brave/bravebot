@@ -47,7 +47,7 @@ test('a delete forgets the one record the window named, once the agent confirms 
 
 test('the request handler forgets the preferences, the fork, the bot link and the summons of each, after the answer', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
-  const loop = /for \(const \{ directory, id \} of deletedConversations\(method, params, ok\)\) \{\s*removeConversation\(conversationKey\(directory, id\)\)\s*forgetFork\(\{ directory, id \}\)\s*forgetBotConversation\(directory, id\)\s*forgetSummons\(\{ directory, id \}\)\s*\}/.exec(index)
+  const loop = /for \(const \{ directory, id \} of deletedConversations\(method, params, ok\)\) \{\s*removeConversation\(conversationKey\(directory, id\)\)\s*forgetFork\(\{ directory, id \}\)\s*await forgetBotConversation\(directory, id\)\.catch\(noteBotsFailure\)\s*forgetSummons\(\{ directory, id \}\)\s*\}/.exec(index)
   assert.ok(loop, 'each deleted conversation is forgotten in all four places')
   assert.ok(index.lastIndexOf('bridge.request(method', loop.index) > 0, 'and only once the agent has answered')
 })

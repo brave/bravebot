@@ -211,7 +211,7 @@ cli-auto-not-with-bypass =
 cli-auto-not-with-accept-edits =
     --auto is refused with --accept-edits: auto also answers a write the way accepting edits does, so give only --auto
 cli-auto-needs-a-run =
-    --auto is for a one-shot run, such as -p "task". A session has the mode key
+    --auto is for a one-shot run, such as -p "task", or a session that opens in the terminal. This line starts neither
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -229,9 +229,11 @@ cli-option-accept-edits =
     For a one-shot run, write files without asking. Commands, fetches and a write that would
     create a credential are still refused
 cli-option-auto =
-    For a one-shot run, let a classifier answer a command the sandbox confines and the first fetch of
-    a URL, and write files without asking. Anything the classifier does not allow is refused, and so
-    is a write that would create a credential
+    Let a classifier answer a command the sandbox confines and the first fetch of a URL, and write
+    files without asking. In a one-shot run, anything the classifier does not allow is refused, and
+    so is a write that would create a credential. A session opens in this mode and puts those
+    questions to you. The mode key leaves it, and permissions.startInAuto in ~/.bravebot/settings.json
+    opens sessions in it without the flag
 cli-option-help = Show this message
 cli-option-version = Show the version
 
@@ -765,6 +767,8 @@ doctor-region-source-managed = AWS_REGION pinned by the machine-level file
 doctor-region-source-provider-entry = options.region of the amazon-bedrock entry under provider
 doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-default-model-ignored =
+    { $name } in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =
@@ -791,6 +795,15 @@ doctor-settings-retrieval-ignored =
     retrieval in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-ask-idle-ignored =
     askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# Which sessions open in auto decides who answers a command and a fetch, so a checkout's file or the
+# managed file cannot choose it. The managed file is named here as well, since an administrator who
+# wrote it there believes it binds.
+doctor-settings-start-in-auto-ignored =
+    permissions.startInAuto in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# A name in run.scrubEnv can keep a restriction off a program as well as a secret from it, so a
+# checkout's list is not read and the names in it withhold nothing.
+doctor-settings-scrub-env-ignored =
+    run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -803,6 +816,49 @@ doctor-settings-retention-ignored =
 # reported before its words are written.
 doctor-settings-home-only-ignored =
     { $key } in { $path } is not obeyed: it is read from the person's own settings only
+# The spend limit is the one key a checkout may state, and only to lower it. A value that removes the
+# person's limit, raises it or counts in another unit is dropped, so the question about spending is
+# still put at the figure the person wrote.
+doctor-settings-limit-ignored =
+    limit in { $path } is not obeyed: it may lower the limit in ~/.bravebot/settings.json and cannot remove it, raise it or count it in another unit
+# A checkout may turn the startup check for a newer release off and not on, so a `true` over the
+# person's `false` is dropped and the check stays off.
+doctor-settings-update-check-ignored =
+    updateCheck in { $path } is not obeyed: it may turn the update check off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may switch `bravebot://` links off and not on, so a `true` over the person's `false` is
+# dropped and links stay refused.
+doctor-settings-deep-links-ignored =
+    deepLinks in { $path } is not obeyed: it may switch links off and cannot switch them back on once ~/.bravebot/settings.json, the file --settings names or the project file has switched them off
+# A checkout may leave follow-up suggestions off and not turn them on, so a `true` is dropped and no
+# request for a suggestion is made after a turn, whether the person's own settings state `false` or
+# state nothing.
+doctor-settings-suggestions-ignored =
+    suggestions in { $path } is not obeyed: it may leave suggestions off and cannot turn them on, which only ~/.bravebot/settings.json and the file --settings names can
+# A checkout may turn the automatic recap of an away session off and not on, so a `true` over the
+# person's `false` is dropped and no recap is requested when the terminal is focused again.
+doctor-settings-away-summary-ignored =
+    awaySummaryEnabled in { $path } is not obeyed: it may turn the automatic recap off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may turn the capture of the mouse off and not on, so a `true` over the person's `false`
+# is dropped and the terminal keeps its own selection and wheel.
+doctor-settings-tui-mouse-ignored =
+    tui.mouse in { $path } is not obeyed: it may turn mouse capture off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may turn the right-click menu off and not on, so a `true` over the person's `false` is
+# dropped and a right click opens no menu.
+doctor-settings-tui-context-menu-ignored =
+    tui.contextMenu in { $path } is not obeyed: it may turn the right-click menu off and cannot turn it back on once ~/.bravebot/settings.json, the file --settings names or the project file has turned it off
+# A checkout may lower the size past which a server's tools are offered by name, and may not raise it
+# or state a value that reads as no size, so a figure that does is dropped and the person's own size
+# stays in force.
+doctor-settings-defer-mcp-tools-ignored =
+    deferMcpToolsAbove in { $path } is not obeyed: it may lower the size in ~/.bravebot/settings.json and cannot raise it or remove it
+# The longer cache lifetime is charged at a higher write rate, so a checkout may ask for 5m and not
+# for 1h, which only the person's own settings and the file --settings names may choose.
+doctor-settings-prompt-cache-ttl-ignored =
+    promptCacheTtl in { $path } is not obeyed: it may ask for 5m and cannot ask for 1h, which only ~/.bravebot/settings.json and the file --settings names can ask for
+# A key a checkout may only narrow that has no message of its own above, so a key added to the table
+# is reported before its words are written.
+doctor-settings-narrowed-ignored =
+    { $key } in { $path } is not obeyed: it may only narrow what the person's own settings state, and this value does not
 # The sweep that removes old session records, language server indexes and findings waits while the
 # period it was asked for cannot be determined, and removes nothing, so a person who set a period
 # is not swept on the built-in one instead.
@@ -821,6 +877,10 @@ doctor-settings-network-unreadable =
     run.network in { $path } is neither open nor closed, so it is read as absent
 doctor-managed-network-unreadable =
     run.network in { $path } is neither open nor closed, so the network is closed
+# The managed file's retrieval pin is a block whose enabled is false. Anything else there is read
+# as absent, so retrieval is left to the person's own file and nothing else would say so.
+doctor-managed-retrieval-unreadable =
+    retrieval in { $path } is not a block with a boolean enabled, so it is read as absent and pins nothing
 doctor-sandbox-filesystem = sandbox filesystem
 # The key is allowRead, denyRead, allowWrite or denyWrite, the path is as written, and the source is
 # the file that wrote it or the command line.
@@ -853,6 +913,7 @@ sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
 sandbox-rule-state-directory = no list adds reach to the state directory, where the gateway keys are (~/.bravebot, or the directory BRAVEBOT_HOME names instead), except to read its sessions directory
 sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or the state directory
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
+sandbox-rule-names-a-variable = it starts with a variable, and no variable is expanded in a path, so it would be read as a relative path under the session's directory; write the path out, or start it with ~/
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
@@ -872,6 +933,11 @@ doctor-settings-allow-granted =
 doctor-settings-unread = unread key
 doctor-settings-unread-key =
     { $key } in { $path } is not read by this build: it configures nothing and restricts nothing
+# Claude Code's switch for the mode that asks about nothing. It reads as a restriction in force to
+# whoever pasted it, and the key this build reads for the same purpose is named so it can be written.
+doctor-settings-unread-bypass =
+    { $key } in { $path } is not read by this build, so the bypass mode stays reachable: the key that
+    makes it unreachable is permissions.bypassUnreachable
 # A settings layer that tried to declare an MCP server. Named by key and file only, since the entry
 # may hold an argv and the values of variables.
 doctor-settings-mcp-declared =
@@ -1006,9 +1072,13 @@ permission-rule-unknown-family = names no family of tools this agent has; use Re
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
 permission-rule-empty-quoted-name = has double quotes around nothing, and no file has an empty name; drop the brackets to mean every use, or put the file's name between the quotes
 permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or put the whole path in double quotes to mean the name as written
+permission-rule-unclosed-quote = has a quote that is never closed, so it is matched only as its characters are written, not as a typed line; close the quote, or write a quote that is part of a word as \' or \"
+permission-rule-trailing-backslash = ends in a backslash with nothing after it, so it is matched only as its characters are written, not as a typed line; remove it, or write \\ for a backslash
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
+permission-rule-climbs = holds .. in a place it cannot be resolved: it climbs above the top of the file system, or follows a segment holding a *; write the path without it
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
+permission-rule-not-a-host = has a port, scheme, path or other text that is not a host after 'domain:'; write a host name or an address alone, as WebFetch(domain:example.com) or WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
 # A permissions block, or its deny, ask or allow list, written as something other than a list.
 # The rules another settings file wrote still apply, which is what "removes none" says.
@@ -1060,13 +1130,7 @@ spend-limit-stopped = stopped at the session limit: { $spent } { $unit } spent a
 # What a run says when a limit its person gave it ended it, before the round or request it would have made.
 run-limit-rounds = stopped at the limit on rounds of tool calls ({ $most }): the planner asked for another and it was not run
 run-limit-tokens = stopped at the limit on tokens ({ $most }): { $spent } were spent and the next request was not sent
-repeated-call-header = Repeated call
-repeated-call-reached = The planner has made the same { $tool } call { $count } times in a row. It was not run. Run it again, or choose another way forward.
-repeated-call-refuse = Do not run it, and tell the planner to try another approach
-repeated-call-run-it = Run it this once
-repeated-call-stop = Stop the turn
 repeated-call-refused = { $tool } was not run: the same call { $count } times in a row
-repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
 # The same where the failure was the ChatGPT account's, which is said in its own sentence.
@@ -1108,9 +1172,9 @@ import-found-keys =
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 # Under the model, where the running server stated the window it holds that model loaded with.
 import-window = the server has it loaded with a context window of { $window } tokens
-# Said where that window is below the one a conversation is otherwise budgeted against. The entry
-# listed below it carries the figure as contextWindow, so a conversation is kept within it.
-import-ollama-window-small = Ollama drops the earliest turns beyond that window, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
+# Said where that window is below the one a conversation is otherwise budgeted against. Nothing is
+# written for it: each request names the window it needs, and Ollama reloads the model with it.
+import-ollama-window-small = Every request asks Ollama for the window the model was trained with, up to { $assumed } tokens, so it reloads the model with that window rather than dropping the earliest turns. A larger window takes more memory: set contextWindow on the entry below to ask for less.
 import-lm-studio-window-small = A conversation longer than that window does not fit the model as LM Studio has loaded it, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Load the model with a longer context length in LM Studio to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
@@ -1775,6 +1839,10 @@ managed-denied =
 managed-host-unread =
     { $path }, which this machine's administrator manages, denies servers by host, and this url
     spells its host in a way no entry can be compared with
+# The list is mcp.allow or mcp.deny, and the entry is the file's own text for it.
+managed-entry-unusable =
+    { $path }, which this machine's administrator manages, has an entry in its { $list } that is
+    neither a host nor a command this build can match, so it matches no server: { $entry }
 servers-nobody-in-a-one-shot =
     { $alias } was not started: a one-shot run asks nobody, so run bravebot mcp approve { $alias }
     at a terminal
@@ -1874,6 +1942,8 @@ mcp-tools-withheld =
         [one] one tool was withheld by the server's allow or deny list
        *[other] { $count } tools were withheld by the server's allow or deny list
     }
+# Under a tool its server marks read-only. The server's word, not something bravebot checked.
+mcp-tools-read-only = read-only, as the server says
 # How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
 # the server's JSON Schema words and stay as it wrote them.
 mcp-tools-argument-list-of = { $kind } of { $items }
@@ -1936,7 +2006,7 @@ mcp-record-not-read = it could not be read as text, so it was left as it is
 mcp-move-title = declare this server where its reply points?
 mcp-start-title = start { $alias }?
 command-mcp = List MCP servers, start one again, turn one off, or remove one
-mcp-command-usage = /mcp takes list, reconnect [alias], disable <alias> or remove <alias>
+mcp-command-usage = /mcp takes list, reconnect [alias], disable <alias> or remove <alias>. A * in the alias of disable or remove stands for any run of characters
 mcp-command-none = No MCP server is requested here, and none is running
 mcp-command-running = MCP servers running:
 mcp-command-not-running = MCP servers requested here and not running:
@@ -1950,8 +2020,9 @@ mcp-command-disabled = { $alias } is turned off for this session. Nothing was wr
 mcp-command-already-off = { $alias } is already turned off
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-command-not-an-alias = { $alias } is not the name of an MCP server
+mcp-command-no-match = No MCP server is named by { $pattern }. Nothing was changed
 mcp-command-no-state-directory = There is no state directory, so no MCP server is declared and none can be removed
-mcp-command-remove-hint = /mcp remove <alias> deletes a server's declaration and approval and takes it out of the settings files that ask for it, so no session starts it
+mcp-command-remove-hint = /mcp remove <alias> deletes a server's declaration and approval and takes it out of the settings files that ask for it, so no session starts it. A * in the alias, as in brave-*, names every server it fits
 mcp-move-declared = { $alias } is declared at { $url }
 mcp-move-destination = and its reply points to { $url }
 mcp-move-reaching = reaching { $authority }
@@ -2087,6 +2158,9 @@ trust-directory-not-remembered =
 # together, which is when y is not taken. What y does comes first, so a narrow terminal that cuts the
 # line off keeps it.
 trust-directory-remember-unseen = ↑↓ y trusts nothing yet: what it keeps is not shown yet
+# Said in the row above the keys after keys that arrived together were refused as answers, such as
+# keys typed while bravebot started (PROMPT-7). They are put in the box once the question is answered.
+trust-question-keys-together = keys that came together are not an answer: press one alone
 # The same where those lines are taller than the box, so no scroll shows them together.
 trust-directory-remember-too-small = y trusts nothing: what it keeps is taller than this box
 quit = quit
@@ -2164,6 +2238,9 @@ config-picker-title = editor mode
 config-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
 config-editing-hint-ordinary = arrows and the readline chords
 config-editing-hint-vi = modal editing, with hjkl and the operators
+# Choosing which sections the info panel draws. The names of the sections are the panel's headings.
+sidebar-picker-title = info panel
+sidebar-picker-keys = ↑↓ move · Space toggle · Esc close
 picker-premium = premium
 # The heading over the models Brave's own endpoint serves. Named rather than left blank, because a
 # list whose other sections name a service reads as though the unlabelled rows came from nowhere.
@@ -2334,6 +2411,8 @@ watching-output-live-more = { $count ->
     }
 run-line-sent = the model wrote:
 run-writes = it writes these files:
+run-write-lands-on = { $written } (lands on { $landing })
+run-write-protected = { $path } (protected path: something runs this file later)
 run-is-fed = it is fed the contents of:
 run-not-sandboxed = this is not sandboxed: it runs with the access your own shell has
 # Said instead of the line above where the turn confines what a run starts, and followed by the
@@ -2893,6 +2972,10 @@ status-cache-lifetime = lifetime asked of the service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 hour
 status-cache-lifetime-service-default = none, the service's own
+# Shown in place of the figures when the model has refused the cache breakpoints on two requests, so
+# that requests to it carry none and the whole prompt is read at the full rate every turn. Nothing
+# else says so: a prompt that is not cached draws no figure.
+status-cache-given-up = off for this model, which refused it
 # The latest turn's cache read as a share of its prompt tokens, on the footer.
 hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust
@@ -3048,6 +3131,8 @@ turn-failed = turn { $turn } failed
 # terminal was left. Fixed: it never carries a command, a path or any part of a reply.
 notice-turn-finished = bravebot: turn finished
 notice-waiting = bravebot: waiting for an answer
+# What herdr shows beside a session that is waiting on the person. Fixed, like the notice above.
+herdr-waiting = waiting for an answer
 # Said of a turn the person stopped themselves, which is neither of the above.
 turn-cancelled = turn { $turn } cancelled
 
@@ -3080,7 +3165,16 @@ ask-title = the agent is asking
 ask-title-numbered = the agent is asking ({ $at } of { $total })
 ask-own-words = Answer in my own words
 ask-more-options = … { $count } more, use the arrow keys
+ask-more-question = { $count ->
+    [one] … { $count } more line below, use PgUp/PgDn
+   *[other] … { $count } more lines below, use PgUp/PgDn
+    }
+ask-question-end = { $count ->
+    [one] … end, { $count } line above, use PgUp
+   *[other] … end, { $count } lines above, use PgUp
+    }
 ask-key-move = move
+ask-key-scroll = more
 ask-key-pick-any = pick any
 ask-key-pick-one = pick
 ask-key-answer = answer
@@ -3252,6 +3346,17 @@ lsp-started = { $count ->
    *[other] { $count } language servers have started in this session:
     }
 lsp-server-running = { $program }: runs with your own access until this session ends
+# What /issues and /prs print above the list, and the one line they print when the session has met none.
+references-heading-issues = { $count ->
+    [one] 1 issue named in this session:
+   *[other] { $count } issues named in this session:
+    }
+references-heading-prs = { $count ->
+    [one] 1 pull request named in this session:
+   *[other] { $count } pull requests named in this session:
+    }
+references-none-issues = No issue has been named in this session yet.
+references-none-prs = No pull request has been named in this session yet.
 # What /open says: a line, then a line for each link of the latest reply that has any, numbered as a
 # number given back to /open names it. A link is as it was drawn, which is text the assistant wrote.
 open-listed = { $count ->
@@ -3302,10 +3407,10 @@ panel-context = Context
 panel-language-servers = Language servers
 panel-mcp-servers = MCP servers
 panel-plan = Plan
-panel-links = Links
-# The rows of the info panel's Links section, each followed by the link.
-panel-pull-request = Pull request
-panel-issue = Issue
+panel-pull-requests = Pull requests
+panel-issues = Issues
+# The last row of a section of the info panel that was cut to the room: how many rows it left out.
+panel-more-references = +{ $count } more
 # Left in the transcript when a click on the session's name in the info panel finds the line in
 # use, so /rename was not put in it.
 panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
@@ -3315,6 +3420,8 @@ panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
+# The model in force refused the cache breakpoints twice, so its prompt is read in full each turn.
+panel-cache-given-up = cache off, model refused it
 # Where the info panel has no room for the whole plan, a row after the rows it draws says how many
 # rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
 # The forms of the other two are the same in English and differ in other languages.
@@ -3438,10 +3545,27 @@ held-hint = { $count ->
     [one] held, { $count } row below  ·  { $chord } to return
    *[other] held, { $count } rows below  ·  { $chord } to return
     }
+# The button at the bottom of the transcript while the view is held off its tail (VIEW-45): its
+# words with how many rows lie below the view, and its words alone where the room has none for the
+# count.
+jump-to-bottom = ↓ Jump to bottom
+jump-to-bottom-rows = { $count ->
+    [one] ↓ Jump to bottom  ·  { $count } row below
+   *[other] ↓ Jump to bottom  ·  { $count } rows below
+    }
 # Said on the bottom line while a background job runs, and gone once the last one ends.
 jobs-hint = { $count ->
     [one] 1 in the background
    *[other] { $count } in the background
+    }
+# The row above the box once a turn is over, while something goes on with nobody typing: a loop, a
+# line held by /after, a file watch or a background job. The label opens the row, and the pointer
+# closes it where there is room for the whole of it.
+standing-label = still active
+standing-pointer = /status for the list
+standing-watches = { $count ->
+    [one] watching 1 file
+   *[other] watching { $count } files
     }
 # Where a background job is, in the view a row opens and in /status. How long is this end's clock,
 # counted from when the line started.
@@ -3507,6 +3631,8 @@ command-resume = Pick up another session of this directory, by id or from a list
 command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
+command-issues = List the issues this session has named
+command-prs = List the pull requests this session has named
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-recap = Recap where this session stands, without putting it in the conversation
@@ -3520,6 +3646,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-sessions = Open the Sessions screen: every session and what each is doing
 command-panel = Show or hide the info panel beside the transcript
+command-sidebar = Choose which sections the info panel draws
 command-diff = List the files the session wrote and show every edit to the one highlighted
 command-todos = Print the whole plan, every task with its status
 command-unfinished = List what this session left open, and whose move each is
@@ -3788,6 +3915,7 @@ session-bg-incognito = /bg is refused in an incognito session, which writes no r
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
+session-permission-rule-partly-read = a permission rule in settings.json is in force as written: { $problem }
 session-model-pick-set-aside = ignoring { $model }, picked with /model, because no configured service serves it
 # The other way a pick is set aside: the machine-level layer does not request it. The configured
 # model answers and the record is left as it is, for the reason the line above leaves one.
@@ -3812,6 +3940,10 @@ session-permission-allow-granted-before =
 session-permissions-skipped =
     --dangerously-skip-permissions: nothing will be asked before a write, a command, or reading a
     file nobody vouched for. shift-tab to change
+# Said once, at the start of a session, when something typed while the terminal was being asked
+# about itself was read with the answer and could not be kept. Keys typed then are kept; this is
+# for the rest, such as a sequence the terminal cut in half.
+session-startup-input-lost = Some of what was typed while bravebot started was not kept. Type it again.
 session-directory-not-added = could not add { $directory }: { $problem }
 # The reason given for a name relative to a working directory whose own name is not text. Nothing
 # written as text names that directory, so no path is made from it.
@@ -4050,8 +4182,11 @@ failure-with-next = { $what }. { $next }
 failure-unauthorized-next = Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint
 failure-premium-key-next = Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout brave` to send requests to the free endpoint instead. `bravebot auth status` shows the key in use
 # Said last after a rate limit. The first is for a request to a provider entry, which can state
-# `maxRetries` in its options, and the second for every backend that has no entry to state it in.
+# `maxRetries` in its options, the second for an AWS account reached through the tier variables, which
+# states the count in `BRAVEBOT_BEDROCK_MAX_RETRIES`, and the third for every backend that has no
+# place to state it.
 failure-rate-limited-entry-next = Raise `maxRetries` in the options of this provider entry to wait longer, or set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model
+failure-rate-limited-variable-next = Raise `BRAVEBOT_BEDROCK_MAX_RETRIES` to wait longer, or set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model
 failure-rate-limited-next = Set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model, or try again later
 # A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
 # reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
@@ -4517,6 +4652,9 @@ paste-files-refused =
     a copied file's name is not text or holds a line break, so none of the files were pasted
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
+# Said when Enter is pressed mid-turn on a line that begins with `!`. The line stays in the box.
+shell-mode-idle-only =
+    shell mode is available at an idle prompt only, so this line was not sent: it stays in the box
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
 suspend-not-pressed =
@@ -4528,6 +4666,13 @@ suspend-failed = could not suspend the session: { $reason }
 # are fitted to the room it leaves: kept short enough that any one permission mode name still fits
 # beside it on a row eighty columns wide.
 leave-word-sent = Sent as a prompt; ctrl-c stops it, /exit leaves
+# Said under the box while the turn runs that began on a command typed with words after it where the
+# command takes no argument, such as /model followed by a model name. Those words make the line a
+# prompt, so it went to the model and the command did not run; the bare command is what runs it.
+# Drawn at the right of the hint row like leave-word-sent, and kept about as wide as it so the vi
+# mode and any one permission mode name still fit beside it on a row eighty columns wide. The bare
+# word is the command typed alone, which is what runs it.
+command-sent-as-prompt = Prompt sent; ctrl-c stops it; bare word runs it
 prompt-file-unreadable =
     /{ $name } is a prompt file that could not be read as text, so the line was not sent: { $path }
 prompt-file-too-large =
@@ -4611,6 +4756,7 @@ commit-message-ready = the draft is in the box. Edit it, then Enter sends it to 
 commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
 commit-message-failed = the commit message could not be drafted: { $problem }
 commit-message-stopped = the commit message was stopped
+commit-message-untrusted = the draft was not offered: the diff touched a path nobody has vouched for, so the message would not be words the planner could have held
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote
@@ -5296,11 +5442,17 @@ sessions-screen-details-interrupted = The process ended in the middle of a turn.
 sessions-screen-details-elsewhere = Open in another terminal.
 sessions-screen-details-here = This is the session you are in.
 sessions-screen-details-manifest = A manifest run, which can be read but not continued.
+sessions-screen-details-started = Started: { $age }
+sessions-screen-details-last-active = Last active: { $age }
 sessions-screen-details-model = Model: { $model }
+sessions-screen-details-reasoning = Reasoning: { $effort }
 sessions-screen-details-mode = Mode: { $mode }
 sessions-screen-details-turns = Turns: { $turns }
 sessions-screen-details-tokens-split = Tokens: { $read } in · { $written } out
 sessions-screen-details-tokens-total = Tokens: { $total }
+sessions-screen-details-cache = Cache: { $percent }% of input read from cache
+sessions-screen-details-changes = Edits: { $edits } · Commands: { $commands }
+sessions-screen-details-last-command-failed = The last command failed.
 sessions-screen-details-project = Project
 sessions-screen-details-branch = Branch
 sessions-screen-details-prompt = Prompt
@@ -5310,6 +5462,9 @@ sessions-screen-details-pull-request = Pull request
 sessions-screen-details-handed-off = Handed off from
 sessions-screen-details-size = Size
 sessions-screen-details-id = Session id
+sessions-screen-details-more-above = ↑ more above
+sessions-screen-details-more-below = ↓ more below
+sessions-screen-details-more-both = ↑↓ more above and below
 sessions-screen-keys-no-such-action = sessionsKeys: { $name } is not a key of the Sessions screen
 sessions-screen-keys-unreadable = sessionsKeys.{ $name }: "{ $spelling }" is not a key the screen can read, so { $name } stays on { $key }
 sessions-screen-keys-kept = sessionsKeys.{ $name }: "{ $spelling }" is a key the screen keeps, so { $name } stays on { $key }
@@ -5318,6 +5473,7 @@ sessions-screen-keys-more = and { $count } more keys refused
 sessions-screen-hint-help = help
 sessions-screen-hint-back = back
 sessions-screen-hint-move = move
+sessions-screen-hint-scroll-details = scroll details
 sessions-screen-hint-open = open
 sessions-screen-hint-open-first = open first match
 sessions-screen-hint-new = new
@@ -5333,6 +5489,7 @@ sessions-screen-help-down = Down
 sessions-screen-help-open = Open
 sessions-screen-help-page-up = Page up
 sessions-screen-help-page-down = Page down
+sessions-screen-help-scroll-details = Scroll the details
 sessions-screen-help-quit = Quit
 sessions-screen-help-new = New
 sessions-screen-help-fork = Fork
@@ -5585,6 +5742,9 @@ hover-footer-cancel-shell = click to leave shell mode
 hover-footer-paste = click to paste the picture
 hover-item = click to choose this one, click again to take it
 hover-scrollbar = click to move the view here, drag the thumb to scroll
+hover-pinned = click to go to this prompt
+hover-to-tail = click to return to the latest rows
+hover-face = click to make it blink or look around
 
 # The small menu a right click opens over a reply, a delegate's block or a held selection. One word
 # or short phrase to an item, and each item does what the command or the click it stands for does.
@@ -5605,6 +5765,10 @@ agent-rule-approval-refuse = Don't keep it
 # that lists the choices and reads a line (RECALL-3). Comma-separated, matched ignoring case.
 agent-rule-approval-yes-words = y, yes, keep, keep it
 agent-rule-approval-no-words = n, no, refuse, don't, do not keep it
+# The state directory holds the person's home rules file spelled other than AGENTS.md, so no rule
+# was written or asked about (RECALL-3). $directory is that directory and $name the file's name.
+agent-rule-other-spelling = { $directory } holds { $name }, which is not read as your rules because only AGENTS.md is, so the proposed rule was not written. Rename it to AGENTS.md to keep rules there.
+agent-rule-other-spelling-unnamed = { $directory } holds your rules file under a spelling other than AGENTS.md, which is not read as your rules, so the proposed rule was not written. Rename it to AGENTS.md to keep rules there.
 
 ## What each catalog calls itself, in a list to choose it from
 

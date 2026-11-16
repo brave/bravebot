@@ -95,7 +95,7 @@ fn a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool() {
     let drafted = done.expect("a draft");
     assert_eq!(
         drafted.message,
-        "Rename old to renamed\n\nThe name said less than it should."
+        Some("Rename old to renamed\n\nThe name said less than it should.".to_string())
     );
     let body = received.recv().expect("the processor's request");
     assert!(
@@ -165,7 +165,10 @@ fn the_staged_source_is_drafted_from_the_index_and_not_the_working_tree() {
         vec![reply],
     );
 
-    assert_eq!(done.expect("a draft").message, "Stage a rename");
+    assert_eq!(
+        done.expect("a draft").message,
+        Some("Stage a rename".to_string())
+    );
     let body = received.recv().expect("the processor's request");
     assert!(
         body.contains("-pub fn renamed() {}") && body.contains("+pub fn staged() {}"),
@@ -294,6 +297,40 @@ fn an_untrusted_diff_holding_a_credential_is_not_sent() {
     assert!(
         received.try_recv().is_err(),
         "a credential was sent to a model"
+    );
+}
+
+/// CMD-23, LABEL-8: a diff of a path nobody vouched for still drafts a message, the same as a
+/// credential-free diff does, but the message is not offered for the box, since the box is
+/// sendable and only words the planner could have held may go there. Without this, Enter on the
+/// draft would send a model's words about an unvouched file to the planner as the person's own
+/// typed line.
+#[test]
+fn a_diff_of_an_unvouched_path_gives_no_sendable_draft() {
+    let scratch = two_commits("commit-message-unvouched");
+    let reply = the_model_says(&format!(
+        "It renames a function.\n{MARKER}\nRename old to renamed"
+    ));
+    let (done, received) = draft(
+        &scratch,
+        |w| {
+            let mut trust = trust_of(w, false);
+            trust.distrust("src/lib.rs");
+            trust
+        },
+        &Source::Range("HEAD~1..HEAD".to_string()),
+        None,
+        vec![reply],
+    );
+
+    let drafted = done.expect("a draft, held back rather than refused");
+    assert_eq!(
+        drafted.message, None,
+        "a draft about an unvouched path was offered for the box"
+    );
+    assert!(
+        received.recv().is_ok(),
+        "the diff still reached the processor; only the box is held back"
     );
 }
 

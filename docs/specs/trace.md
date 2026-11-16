@@ -30,7 +30,10 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise. A path inside the workspace that is refused for not being named
+reference, the path otherwise. A `run` line's redirection refused for leaving the workspace is
+recorded the same way, with the remedy the planner was told, which is none where nobody can be asked
+in the run ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). The same holds for every file tool's
+refusal for leaving the workspace ([TRUST-10](trust-map.md#TRUST-10)). A path inside the workspace that is refused for not being named
 relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
 relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
 write call the permission mode refuses before the tool runs
@@ -143,22 +146,23 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_picture_refused_for_leaving_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::every_file_tool_records_a_path_refused_for_leaving_the_workspace`
 `verified-by: bravebot_agent::turn::an_edit_whose_file_leaves_the_workspace_while_asked_is_recorded_as_a_refusal`
-`verified-by: bravebot_agent::tools::a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
-`verified-by: bravebot_agent::tools::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
-`verified-by: bravebot_agent::tools::a_directory_inside_the_workspace_is_refused_as_inside_it`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
+`verified-by: bravebot_agent::tools::tests::confinement::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::tests::confinement::a_directory_inside_the_workspace_is_refused_as_inside_it`
 `verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
-`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
-`verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
+`verified-by: bravebot_agent::tools::tests::watching::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
 `verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::manifest::a_plan_refused_by_plan_mode_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
 `verified-by: bravebot_agent::turn::under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs`
 `verified-by: bravebot_core::policy::a_refused_run_request_names_its_argument_and_every_cause_that_held`
-`verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
-`verified-by: bravebot_agent::tools::a_refused_scope_request_is_recorded_with_each_cause_that_held`
-`verified-by: bravebot_agent::tools::an_accepted_request_for_reach_leaves_no_sandbox_refusal`
-`verified-by: bravebot_agent::tools::pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_scope_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::tests::confinement::an_accepted_request_for_reach_leaves_no_sandbox_refusal`
+`verified-by: bravebot_agent::tools::tests::confinement::pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it`
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::a_scope_request_is_accepted_only_where_the_session_confines_and_trusts`
 `verified-by: bravebot_agent::turn::a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause`
@@ -330,7 +334,12 @@ policy decides a command or a write is to be put to the person, a second entry u
 says what answered: the mode that answered in their place and so drew nothing, or no mode, which
 leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
 in "asking" say what the policy decided, and they read as a person having been asked. A write that
-is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
+is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)). A run that redirects into a
+protected path ([PERM-9](permissions.md#PERM-9)) is never answered by a mode short of bypassing, so its
+entry names no mode and the trail has no "answered by auto mode, nobody was asked" for it, and no
+`auto_mode` entry, since the classifier is not asked.
+
+`verified-by: bravebot_agent::turn::a_run_into_a_protected_file_is_not_put_to_the_classifier_by_any_name_it_has`
 
 A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
 `approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
@@ -397,8 +406,9 @@ ok      delegate: d2: ended after 1559.0s and 37 of 120 rounds: it did not finis
 The cause comes from which way the result came back, the run's round count and the failure's
 category. None of it is text a service or a tool produced, so the entry holds no content (TRACE-2).
 The note the person sees when the delegate finishes names the same cause. The planner is told only
-that the delegate did not finish, except for a rate-limited or unavailable ending, which it is told
-by name and with the sentence that starting the same delegate again meets the same limit
+that the delegate did not finish, except for a rate-limited, unavailable, transport or incomplete
+ending, which it is told by name and with the sentence that starting the same delegate again meets
+the same limit, silence or stop
 ([BACKEND-37](backends.md#BACKEND-37), [DELEGATE-26](delegation.md#DELEGATE-26)).
 
 **Why.** Without it, a delegate that ran for 26 minutes and then did not finish leaves the reader of
@@ -410,7 +420,7 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
 `verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
-`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
 
 <a id="TRACE-9"></a>
 ### TRACE-9: `/request` shows the request already built, each span with where its words came from
@@ -552,13 +562,19 @@ them:
   its test directory, which names no path either.
 
 The line breaks those sentences run over are kept and every other control character is pictured.
+A control character is drawn as `bravebot_agent::confirm::printable` draws it: U+0000 to U+001F as
+the Control Pictures U+2400 to U+241F, DEL as `␡` (U+2421), and each C1 control (U+0080 to U+009F),
+which has no picture, as `‹U+XXXX›`. Two different controls do not draw alike, and none draws as
+one of the enclosed alphanumerics U+2480 to U+249F; a text that holds the characters `‹U+0085›` or
+`␡` itself draws the same as the control it spells.
 The `bravebot` command line draws with `progress::printable`, which also spells a bidirectional
 control and a zero-width character as `‹U+XXXX›`, so every existing caller of it draws them that
-way as well as the control characters. The terminal client draws only control characters in notes;
-that is tracked in brave/bravebot#3829. The trail Ctrl-T shows in the terminal and the audit
+way as well as the control characters. The terminal client draws with its `render::printable`,
+which spells the same characters the same way. The trail Ctrl-T shows in the terminal and the audit
 inspector in the desktop window draw the same text the same way, so a control character is shown as
-a picture and is not dropped by the screen or the page. The desktop bridge sends, beside each audit
-event, the words `bravebot_agent::confirm::printable` makes of each string field of the event, and the
+a picture and is not dropped by the screen or the page, and a bidirectional control or a zero-width
+character is written out in both. The desktop bridge sends, beside each audit event, the words
+`bravebot_agent::confirm::printable_spelled` makes of each string field of the event, and the
 inspector draws the sentence from those words, so the window holds no list of the characters to
 picture. The inspector leaves the recorded evidence beside it as the audit file holds it.
 
@@ -567,7 +583,12 @@ That does not make its text safe for a terminal: a file name in a clone can hold
 that sets the terminal's title or colour. The replacement is a change of characters and the sink
 still branches on none of them ([TRACE-5](#TRACE-5)).
 
+`verified-by: bravebot_agent::confirm::a_control_character_is_drawn_as_a_mark_for_it_and_other_text_is_unchanged`
+`verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
+`verified-by: bravebot_core::invisible::a_single_character_is_written_out_as_its_code_point`
+`verified-by: bravebot_cli::progress::a_c1_control_is_drawn_once_as_its_code_point_by_the_command_line`
 `verified-by: bravebot_cli::main::a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures`
+`verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters`
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
@@ -611,6 +632,7 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
 `verified-by: bravebot_ui_bridge::audit::the_live_audit_event_carries_each_string_field_drawn_by_printable`
+`verified-by: bravebot_ui_bridge::audit::the_live_audit_event_writes_out_a_bidirectional_control_in_a_field`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with the words the bridge sent for a name holding an escape and a bell and asserts the sentence is those words, and that a field with no words is drawn as nothing; make check-ui runs it)`
 
 ## Known costs

@@ -131,14 +131,17 @@ Apply one only on evidence in the tree, cited in the report:
   `cfg(windows)`, the Linux sandbox backend, the macOS Seatbelt profile, the Windows installer or
   signing path), and nothing shared has to change;
 - the fix cannot be checked on another host, for example because it needs a Linux container
-  runtime, the Windows registry or macOS keychain.
+  runtime, the Windows registry or macOS keychain, or because what the issue asks for is an
+  observation on that platform (a run on a Windows host, a real GNOME or KDE session) that no
+  container or cross-compile gives.
 
 Do not apply one because the report came from that platform, because the defect shows there first,
 or because the issue mentions the platform. A defect in shared code that only appears on Windows is
 developed on any host, since `make check-linux` and the other Docker checks cover the other
 platforms. An issue that needs two platforms gets both labels. A label a person set stays, and one
 that the verdict made wrong (a STALE issue whose surviving ask is shared code) is removed, with the
-reason in the comment.
+reason in the comment. A label an earlier triage run applied is not a person's: one the evidence no
+longer supports is removed the same way.
 
 The labels must exist. If `gh label list --repo brave/bravebot --search develop-on` lacks one, skip
 that label, say so in the report and give the creation command from
@@ -181,8 +184,15 @@ One subagent per group of related issues, grouped by subsystem so each reads one
 the tree. Launch them in a single message. Give each the verdict table, the method notes
 below, and this instruction: **read-only, do not edit, close, or comment on anything.**
 
-Ask for at most 120 words per issue: verdict, evidence as file:line or SHA, and for a
-stale one, exactly which sentences of the body are now false.
+Ask for at most 120 words per issue: verdict, evidence as file:line or SHA, for a
+stale one exactly which sentences of the body are now false, and the platform the work can be
+done on. That last is `any`, or one or more of `linux`, `macos` and `windows` with the gated
+path or the host-only check that makes it so, judged by
+[Issues that can only be developed on one platform](#issues-that-can-only-be-developed-on-one-platform),
+which goes to the subagent with the verdict table. Ask it for every issue, including one that
+already carries a `develop-on` label, so a label applied on weaker evidence is found. A report
+with no platform line is incomplete, and the issue's label is left as it is and named in the
+report.
 
 ### Step 4: verify every FIXED verdict yourself
 
@@ -242,6 +252,29 @@ Each line is a number and its `[importance, urgency, size]` counts, so a `0` is 
 the run never reached and a `2` is a replacement that added a value without removing the
 old one. A run that stopped early is caught here rather than found in a query a week
 later.
+
+Then compare the `develop-on` labels GitHub holds with the platform each subagent reported:
+
+```bash
+gh issue list --state open --limit 200 --json number,labels \
+  -q '.[] | [.labels[].name | select(startswith("develop-on/"))] as $d
+      | select($d | length > 0) | "#\(.number) \($d | join(","))"'
+```
+
+The `develop-on` labels an issue carries must be the set of platforms its subagent reported, and
+`any` is the empty set. Each platform reported and not labelled is an `--add-label` Step 5 missed.
+Each label on an issue that names a platform not reported (a `windows` label on an issue judged
+`linux`, or the `linux` of `linux,windows` on one judged `windows`) is a missed `--remove-label`
+only where an earlier triage run set it or the verdict made it wrong. Where a person set it, the
+label stays, and the issue is listed in the report for a human decision with the evidence for the
+reported set. The latest `labeled` event for that label names who set it, since a person can re-add
+a label a run removed:
+
+```bash
+gh api --paginate repos/brave/bravebot/issues/N/events \
+  -q '.[] | select(.event == "labeled" and .label.name == "develop-on/linux")
+      | "\(.created_at) \(.actor.login)"' | sort | tail -n 1
+```
 
 ---
 

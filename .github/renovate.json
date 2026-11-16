@@ -6,7 +6,15 @@
   "ignorePaths": [
     "ui/scripts/demo/project/**"
   ],
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["ratatui-image"],
+      "enabled": false
+    }
+  ],
   "description": [
-    "The projects under ui/scripts/demo/project are stage sets rather than software: the demo film opens them, and ui/scripts/demo/world.mjs and the scenes are the only things that read them. They have no lockfiles and are never installed, so a version bump there fixes nothing and changes what the film shows on screen."
+    "The projects under ui/scripts/demo/project are stage sets rather than software: the demo film opens them, and ui/scripts/demo/world.mjs and the scenes are the only things that read them. They have no lockfiles and are never installed, so a version bump there fixes nothing and changes what the film shows on screen.",
+    "ratatui-image is kept in third_party/ratatui-image with the tmux it started by bare name removed (SANDBOX-30). Root Cargo.toml still states a version for it, and a release that version does not allow would make cargo ignore the patch and take the published crate with the start. A raise is made by hand, as third_party/README.md says."
   ]
 }

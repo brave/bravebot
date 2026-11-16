@@ -14,9 +14,9 @@
 // that step is in the manual pass.
 import { mkdirSync, symlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, openFirstSession, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -34,13 +34,7 @@ for (const side of ['left', 'right']) {
   }
 }
 
-if ((await page.locator('.session').count()) === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
-await page.locator('.session').first().click()
-await page.waitForTimeout(1600)
+await openFirstSession(app, page, { settle: 1600 })
 
 // The file tree lives on the Files tab of the context column, which opens on Overview, so the
 // run brings the tab forward. After the session is opened, because the tabs belong to a column
@@ -125,7 +119,7 @@ if (item === null) {
       `a child is indented (${Math.round(outerText.x)} → ${Math.round(childText.x)}) without narrowing the row`,
     )
   }
-  await page.screenshot({ path: '/tmp/bravebot-ui/11-tree.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/11-tree.png` })
   await folder.click()
   await page.waitForTimeout(500)
   check((await item.getAttribute('aria-expanded')) === 'false', 'clicking it again shuts it')
@@ -221,4 +215,4 @@ if (problems.length > 0) {
   console.log(`\nRESULT: ${problems.length} failed`)
   process.exit(1)
 }
-console.log('\nRESULT: ok — shot in /tmp/bravebot-ui/11-tree.png')
+console.log(`\nRESULT: ok — shot in ${SHOTS_DIR}/11-tree.png`)

@@ -97,7 +97,7 @@ opens idle. `/bg` typed while a turn is running waits for the turn to end ([CMD-
 since the record is written then. Both start the session in the working directory they ran in, and
 `/bg` keeps the permission mode the foreground session was in ([BG-8](#BG-8)).
 
-`/bg` is refused, and the foreground session carries on, in bypass ([BG-8](#BG-8)), in an incognito
+`/bg` is refused, and the foreground session carries on, in bypass or auto ([BG-8](#BG-8)), in an incognito
 session or one with no record yet, after an option that `--bg` refuses (such as `--no-shell` or
 `--settings`) was given at the command line, after `/sandbox` moved the session to a sandbox mode
 other than the one start-up chose, and while a loop, a goal or a watch is running, because the
@@ -156,7 +156,7 @@ a supervisor that can read a conversation can be made to act on one.
 
 `verified-by: bravebot_session::jobs::the_facts_a_supervisor_reads_are_the_state_the_directory_and_whether_it_is_alive`
 `verified-by: bravebot_cli::supervisor::a_process_that_ends_in_a_turn_or_a_question_is_not_started_again`
-`verified-by: bravebot_cli::supervisor::a_process_is_started_again_in_its_directory_in_the_mode_every_session_opens_in`
+`verified-by: bravebot_cli::supervisor::a_process_is_started_again_in_its_directory_asking`
 
 <a id="BG-4"></a>
 ### BG-4: the roster is a closed set of fields in the person's own state directory
@@ -281,14 +281,17 @@ releases in front of the person without either.
 <a id="BG-8"></a>
 ### BG-8: the mode is fixed for the process, bypass is refused, and a rule that allows does not answer
 
-A background session runs in one mode for as long as its process runs. `--bg` starts in the mode
-every session opens in, which asks about everything. `/bg` starts in the mode the foreground session
-was in, asking, accepting edits or planning. Attaching offers no key to change it, and the mode is
+A background session runs in one mode for as long as its process runs. `--bg` starts asking about
+everything, and never reads `permissions.startInAuto` ([AUTO-1](auto-mode.md#AUTO-1)). `/bg` starts
+in the mode the foreground session was in, asking, accepting edits or planning. Attaching offers no key to change it, and the mode is
 shown to the person attached.
 
 `--dangerously-skip-permissions` with `--bg` is refused, and so is `/bg` from a session in bypass.
 The refusal says that a session nobody is watching does not run in a mode that answers every
-question, and names a one-shot run as the way to ask for that.
+question, and names a one-shot run as the way to ask for that. `/bg` from a session in auto is
+refused too, since a session nobody is watching has no one to put a question to when the classifier
+does not allow it. A person whose `permissions.startInAuto` is `true` meets that refusal in every new
+session until the mode key leaves auto ([AUTO-1](auto-mode.md#AUTO-1)).
 `--dangerously-bypass-approvals-and-sandbox` with `--bg` is refused too, naming the flag as one the
 background session does not receive.
 
@@ -297,8 +300,12 @@ answer a prompt in a background session. A prompt either would have answered is 
 other is. A rule that refuses, or that forces a prompt, holds here as it does anywhere. Only the
 mode the person chose answers in their absence.
 
-A process the supervisor starts again, after it was stopped or after it exited, opens in the mode
-every session opens in, whatever it was running in before.
+A process the supervisor starts again, after it was stopped or after it exited, opens asking,
+whatever it was running in before.
+
+That `--bg` never reads the setting is checked by source: the last test above lists the files that
+call the getter, and fails when another appears. No test starts a background session under the
+setting and reads its mode.
 
 **Why.** A mode is an answer somebody gave while watching one piece of work, so it belongs to the
 sitting it was chosen in. A restart is a new sitting with nobody present. An allow rule is a
@@ -311,6 +318,9 @@ warned about for.
 `verified-by: bravebot_cli::background::the_mode_line_names_each_mode_a_background_session_runs_in`
 `verified-by: bravebot_cli::plain::a_standing_vetting_answer_does_not_reach_a_hosted_session`
 `verified-by: bravebot_cli::running::an_allow_rule_does_not_answer_a_write_a_background_session_holds`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_in_auto`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
+`verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
 
 <a id="BG-9"></a>
 ### BG-9: attaching draws the session as a foreground one, and detaching leaves it running
@@ -319,8 +329,8 @@ warned about for.
 transcript, the held prompt if there is one, and the input box as a foreground session does, and
 every prompt it puts is answered by the person there. A line the terminal sends as soon as it has
 drawn a prompt or a question is taken, because the session is waiting for the line before what asks
-for it is written. A session that is `stopped` or `interrupted` is started again in the mode every
-session opens in and attached to.
+for it is written. A session that is `stopped` or `interrupted` is started again asking and
+attached to.
 
 One terminal is attached at a time. A second `attach` is refused and names the session. Closing the
 terminal, losing its connection or typing `/detach` ends the attachment and nothing
@@ -398,7 +408,7 @@ stays after its last session is a standing process the person did not ask for.
 ### BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 
 A process that ends while the state it last wrote is `idle` is started again by the supervisor, at
-most three times in an hour, in the mode every session opens in. After that it is left, and its state
+most three times in an hour, asking. After that it is left, and its state
 reads `stopped` ([BG-6](#BG-6)). A process that ends while that state is `working` or `needs input`
 is not started again: its state reads `interrupted`, the turn it was running is not run again, and
 the prompt it held is gone. A process that a person stopped, or that ended itself and wrote

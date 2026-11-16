@@ -563,7 +563,7 @@ fn tell(to: &mut impl Write, line: impl Display) {
 }
 
 fn refused(err: &mut impl Write, ending: Ending, message: impl Display) -> Ending {
-    ending.say(err, message);
+    tell(err, ending.told(message));
     ending
 }
 

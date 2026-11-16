@@ -248,22 +248,54 @@ fn functions_of_the_code() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// The steps `event_loop` takes in functions of their own: what it settles before each frame and
+/// the action it takes at rest. They are read with `event_loop`, since each is a part of the one
+/// loop and none answers the mouse alone.
+const STEPS_OF_THE_LOOP_AT_REST: [&str; 2] = ["settle_between_frames", "next_idle_action"];
+
 /// The loops that answer a mouse report, among `functions`: the one at rest through `idle_action`,
-/// and those while work runs through `answer_mouse`.
+/// and those while work runs through `answer_mouse`. The loop at rest is `event_loop` with the text
+/// of its steps in `STEPS_OF_THE_LOOP_AT_REST`.
 fn the_loops_that_answer_the_mouse(
     functions: &[(&'static str, &'static str)],
-) -> Vec<(&'static str, &'static str)> {
+) -> Vec<(&'static str, String)> {
+    let event_loop = functions
+        .iter()
+        .find(|(name, _)| *name == "event_loop")
+        .map(|(_, text)| *text)
+        .unwrap_or_else(|| panic!("event_loop is not found"));
+    let mut at_rest = String::new();
+    for step in STEPS_OF_THE_LOOP_AT_REST {
+        assert!(
+            event_loop.contains(&format!("{step}(")),
+            "event_loop does not call {step}, so its text is not read as part of the loop"
+        );
+        let (_, text) = functions
+            .iter()
+            .find(|(name, _)| *name == step)
+            .unwrap_or_else(|| {
+                panic!("{step} is not found, and so not read as part of event_loop")
+            });
+        at_rest.push_str(text);
+    }
     let loops: Vec<_> = functions
         .iter()
+        .filter(|(name, _)| !STEPS_OF_THE_LOOP_AT_REST.contains(name))
+        .map(|(name, text)| {
+            if *name == "event_loop" {
+                (*name, format!("{text}{at_rest}"))
+            } else {
+                (*name, (*text).to_string())
+            }
+        })
         .filter(|(name, text)| {
             *name != "answer_mouse"
                 && *name != "idle_action"
                 && (text.contains("answer_mouse(") || text.contains("idle_action("))
         })
-        .copied()
         .collect();
     let names: Vec<&str> = loops.iter().map(|(name, _)| *name).collect();
-    for expected in ["pump_terminal", "run_command"] {
+    for expected in ["event_loop", "pump_terminal", "run_command"] {
         assert!(
             names.contains(&expected),
             "{expected} is not read as a loop: {names:?}"
@@ -761,7 +793,10 @@ fn a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_se
     let buffer = drawn_at(&mut session, 120, 24);
     let pane = the_transcript_pane(&session);
     let (row, column) = find_cell(&buffer, "row 60");
-    swept(&mut session, (row, column), (pane.bottom(), 8));
+    // The row under the one the button is drawn in, which is below the transcript at the tail as
+    // well (VIEW-45).
+    let below = pane.bottom() + 1;
+    swept(&mut session, (row, column), (below, 8));
 
     let start = Instant::now();
     let mut steps = 0;
@@ -779,7 +814,7 @@ fn a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_se
         session.selection.is_some(),
         "the next words of the reply put the selection away at the tail"
     );
-    let copied = handed_at_the_release(&mut session, pane.bottom(), 8);
+    let copied = handed_at_the_release(&mut session, below, 8);
     assert!(copied.starts_with("row 60 of the reply\n"), "{copied:?}");
     assert!(
         copied.ends_with("\n  row 80 of the reply and more"),

@@ -4,14 +4,15 @@ import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { bot, folderOf, keepingMemoryMark, memory, memoryPath, unwrapMemoryNote } from './bots'
 import { replaceProjectMemory } from './project-files'
+import { isSlug } from '../shared/bots'
 
 export interface MemoryRevision { at: number; text: string; source: 'agent' | 'user' }
 /** One history per folder, because a bot keeps one memory per folder it works in. */
 const historyFile = (slug: string, directory: string) =>
   join(app.getPath('userData'), 'bots', slug, `memory-history-${createHash('sha256').update(directory).digest('hex').slice(0, 16)}.json`)
 
-export function memoryHistory(slug: unknown, directory: unknown): MemoryRevision[] {
-  const held = bot(slug)
+export async function memoryHistory(slug: unknown, directory: unknown): Promise<MemoryRevision[]> {
+  const held = await bot(slug)
   const folder = held ? folderOf(held, directory) : null
   if (!held || !folder) return []
   try {
@@ -20,14 +21,14 @@ export function memoryHistory(slug: unknown, directory: unknown): MemoryRevision
   } catch { return [] }
 }
 
-export function snapshotMemory(slug: string, directory: string, source: MemoryRevision['source'] = 'agent'): void {
-  const text = memory(slug, directory)
+export async function snapshotMemory(slug: string, directory: string, source: MemoryRevision['source'] = 'agent'): Promise<void> {
+  const text = await memory(slug, directory)
   if (text === null) return
-  recordMemory(slug, directory, text, source)
+  await recordMemory(slug, directory, text, source)
 }
 
-function recordMemory(slug: string, directory: string, text: string, source: MemoryRevision['source']): void {
-  const history = memoryHistory(slug, directory)
+async function recordMemory(slug: string, directory: string, text: string, source: MemoryRevision['source']): Promise<void> {
+  const history = await memoryHistory(slug, directory)
   if (history.at(-1)?.text === text) return
   history.push({ at: Date.now(), text, source })
   mkdirSync(join(app.getPath('userData'), 'bots', slug), { recursive: true })
@@ -42,22 +43,21 @@ function recordMemory(slug: string, directory: string, text: string, source: Mem
  * before it could rename one into place. Naming the files left that last one behind, holding the
  * bot's name and purpose after the bot was deleted.
  */
-export function removeMemoryHistory(slug: unknown): void {
-  const held = bot(slug)
-  if (!held) return
-  rmSync(join(app.getPath('userData'), 'bots', held.slug), { recursive: true, force: true })
+export async function removeMemoryHistory(slug: unknown): Promise<void> {
+  if (!isSlug(slug)) return
+  rmSync(join(app.getPath('userData'), 'bots', slug), { recursive: true, force: true })
 }
 
 /** Compare before replacing, so a memory edit cannot overwrite a concurrent agent update. */
-export function editMemory(slug: unknown, directory: unknown, text: unknown, expected: unknown): string {
-  const held = bot(slug)
+export async function editMemory(slug: unknown, directory: unknown, text: unknown, expected: unknown): Promise<string> {
+  const held = await bot(slug)
   const folder = held ? folderOf(held, directory) : null
   if (!held || !folder) throw new Error('That bot has not worked in this folder.')
   if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 64 * 1024 || text.includes('\0')) throw new Error('Memory must be text under 64 KB.')
   if (expected !== null && typeof expected !== 'string') throw new Error('Invalid expected memory')
   const previous = replaceProjectMemory(folder, memoryPath(held), text, expected)
-  if (previous !== null) recordMemory(held.slug, folder, previous, 'agent')
-  recordMemory(held.slug, folder, text, 'user')
+  if (previous !== null) await recordMemory(held.slug, folder, previous, 'agent')
+  await recordMemory(held.slug, folder, text, 'user')
   return text
 }
 
@@ -68,17 +68,17 @@ export function editMemory(slug: unknown, directory: unknown, text: unknown, exp
  * was read, so a bot writing at the same moment wins, and the version it replaces stays in history.
  * A file that cannot be written now is left as it is and looked at again on the next read.
  */
-export function tidyMemory(slug: unknown, directory: unknown): void {
-  const held = bot(slug)
+export async function tidyMemory(slug: unknown, directory: unknown): Promise<void> {
+  const held = await bot(slug)
   const folder = held ? folderOf(held, directory) : null
   if (!held || !folder || held.definition !== null) return
-  const text = memory(held.slug, folder)
+  const text = await memory(held.slug, folder)
   const tidy = text === null ? null : unwrapMemoryNote(text)
   if (text === null || tidy === null) return
   try {
-    keepingMemoryMark(held.slug, folder, () => {
+    await keepingMemoryMark(held.slug, folder, () => {
       replaceProjectMemory(folder, memoryPath(held), tidy, text)
-      recordMemory(held.slug, folder, text, 'agent')
     })
+    await recordMemory(held.slug, folder, text, 'agent')
   } catch { /* changed since it was read, or not writable */ }
 }

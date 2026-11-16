@@ -19,8 +19,8 @@ carries an `expects`. The other two come with a read the planner made for its ow
 [read-output.md](read-output.md) and the vouch offer in [trust-map.md](../trust-map.md#TRUST-8).
 [CHECK-10](../vetting.md#CHECK-10) covers all three.
 
-A call to `fetch_url` or to a server's tool may also ask for this release in its own result, with
-`read: true`, so that the round a `vet_content` call would take is not spent
+A call to `fetch_url`, `search`, `list_files` or a server's tool may also ask for this release in its
+own result, with `read: true`, so that the round a `vet_content` call would take is not spent
 ([VET-6](#VET-6)).
 
 ## Clauses
@@ -91,7 +91,7 @@ and not left to a task ([AGENT-1](spawn-agent.md#AGENT-1)).
 `verified-by: bravebot_core::policy::a_reference_names_vet_content_exactly_when_the_run_is_offered_it`
 `verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_vetting_names_no_vet_content_and_keeps_the_other_moves`
 `verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
-`verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
+`verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
 `verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
@@ -365,19 +365,27 @@ never in a result, which a planner could aim at.
 `verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
 
 <a id="VET-6"></a>
-### VET-6: a fetch or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
+### VET-6: a fetch, a search, a listing or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
 
-`read: true` on a `fetch_url` call, or on a call to a server's tool, asks for what the call returned
-in the result that returned it. It is offered only on a list that holds `vet_content`, so a delegate
-and a definition that leaves the tool out are not offered it. A `read` given to `fetch_url` there is
-still checked to be a boolean and releases nothing, and one given to a server's tool is sent as
+`read: true` on a `fetch_url`, `search` or `list_files` call, or on a call to a server's tool, asks
+for what the call returned in the result that returned it. For `search` and `list_files` that is a
+result quarantined because the walk reached a path nobody vouched for
+([SEARCH-2](search.md#SEARCH-2), [LIST-2](list-files.md#LIST-2)); a result the planner may already
+read is shown as it would be without the argument. It is offered only on a list that holds `vet_content`, so a delegate
+and a definition that leaves the tool out are not offered it. A `read` given to `fetch_url`, `search` or `list_files` there
+is still checked to be a boolean and releases nothing, and one given to a server's tool is sent as
 written, since this process did not offer it. A server's tool is offered it only where the server
 lists no argument named `read` itself ([MCP-16](../mcp.md#MCP-16)).
 
-The content is quarantined as [FETCH-1](fetch-url.md#FETCH-1) or [MCP-1](../mcp.md#MCP-1) has it and
-then released by this tool's own path: the same check, where one is made, the same release of the
+The content is quarantined as [FETCH-1](fetch-url.md#FETCH-1), [SEARCH-2](search.md#SEARCH-2),
+[LIST-2](list-files.md#LIST-2) or [MCP-1](../mcp.md#MCP-1) has it and then released by this tool's
+own path: the same check, where one is made, the same release of the
 slot and the same promotion, so the label is the one a `vet_content` call on that slot gives it. The
-slot keeps its name and the result gives it beside the text. The trail entry is the one
+slot keeps its name and the result gives it beside the text. A listing that asks to read, where the
+mode or a check answers, is held as one slot with the listing as the planner would read it, rather
+than one reference per entry, so that one release covers it; where that release is not made the
+planner is given that one reference. Where a person answers `vet_content` the listing is handed over
+one reference per entry, as without `read`. The trail entry is the one
 [VET-3](#VET-3)'s release writes, crediting the mode where permissions are bypassed with no screening
 asked for ([MODE-4](../permission-modes.md#MODE-4)) and the check where auto-vetting is on and its
 word is `safe` ([CHECK-12](../vetting.md#CHECK-12)). The check is a model call like the one a
@@ -412,6 +420,16 @@ without it, and one that is neither `true` nor `false` is refused before the cal
 [RUN-22](run.md#RUN-22) refuses one. A result a server marked as a failure is released in the same
 way as one it did not, since the flag is the server's word and decides nothing here.
 
+A `search` or `list_files` call that did not ask to read, and whose result came back quarantined
+where the mode or a check answers `vet_content`, carries a sentence saying that repeating the same
+call with `read: true` returns the result in the result that returns it. The sentence is left out
+where a person answers `vet_content`, since `read` changes nothing there, from a call that already
+asked, from a result whose stated size is 0 or past the task's output cap, which a repeat would keep
+back again, and from a delegate, which is not offered `read`. A listing handed over one reference
+per entry has no stated size and carries it whenever the mode or a check answers. It is decided from
+the planner's own argument, the mode, the tool's name and the size the reference states, and names
+no mode and no check.
+
 **Why.** Where permissions are bypassed with no screening, `vet_content` has one answer, and where a
 check answers it is made either way, so a round spent on the call buys nothing but the round: a model
 call, and the whole conversation sent again. A prompt is not drawn at the call because the planner has
@@ -427,6 +445,15 @@ may call it on any reference it holds, so asking with `read` gives it nothing it
 have. The manifest path ([MANIFEST-15](../manifest.md#MANIFEST-15)) never presents a result to the
 planner and takes no `read`.
 
+A reference that stands for a file a listing or a search found is opened when `vet_content` is given
+it. Under bypass the file is opened with the reach a call of `read_file` for its path has, so a file
+in a directory beside the workspace is opened without a request, and in any other mode it is refused
+as outside the workspace ([PATHREQ-7](request-path.md#PATHREQ-7)). The reference keeps its label.
+
+`verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
+`verified-by: bravebot_agent::turn::under_bypass_opening_a_listed_file_releases_nothing_the_check_did_not`
+`verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
+
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result`
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_where_the_check_finds_nothing_is_answered_in_the_same_result`
@@ -439,6 +466,19 @@ planner and takes no `read`.
 `verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_is_handed_the_page_where_the_check_finds_nothing`
 `verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_does_not_say_safe`
 `verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot_be_made`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_search_or_listing_that_does_not_ask_to_read_stays_quarantined_in_bypass`
+`verified-by: bravebot_agent::turn::a_screened_search_or_listing_that_asks_to_read_is_handed_it_where_the_check_finds_nothing`
+`verified-by: bravebot_agent::turn::asking_to_read_a_search_or_listing_changes_nothing_where_a_person_answers_for_it`
+`verified-by: bravebot_agent::turn::a_search_or_listing_whose_read_is_not_a_boolean_is_refused`
+`verified-by: bravebot_agent::turn::a_quarantined_search_or_listing_names_read_true_where_read_would_release_it`
+`verified-by: bravebot_agent::turn::a_walk_kept_back_after_asking_to_read_is_not_told_to_ask_again`
+`verified-by: bravebot_agent::turn::a_search_too_large_for_a_result_is_not_told_to_repeat_with_read_true`
+`verified-by: bravebot_agent::turn::sentences::a_walk_that_did_not_ask_to_read_is_told_read_true_would_release_it`
+`verified-by: bravebot_agent::turn::sentences::nothing_is_said_of_read_true_where_it_would_release_nothing`
+`verified-by: bravebot_agent::turn::a_search_or_listing_that_finds_nothing_and_asks_to_read_is_handed_the_sentence_saying_so`
+`verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_notes`
+`verified-by: bravebot_agent::turn::a_search_or_listing_that_asks_to_read_more_than_one_result_may_hold_keeps_it_back`
 `verified-by: bravebot_agent::turn::asking_to_read_a_fetched_page_changes_nothing_where_a_person_still_answers_for_it`
 `verified-by: bravebot_agent::turn::a_fetch_asked_to_read_in_a_turn_without_vet_content_stays_a_reference`
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why`

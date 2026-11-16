@@ -457,7 +457,9 @@ fn connect_target(head: &[u8]) -> Option<(String, u16)> {
 /// an address that is not public and that no entry covers is refused as not public rather than as
 /// not listed, so it is never put to the person. The address is read from the host as the list
 /// compares it, since a trailing dot or a space would otherwise leave the request not listed and
-/// recorded as the bare address, and a yes to that would list it.
+/// recorded as the bare address, and a yes to that would list it. An answer holding an address a
+/// denied entry covers is refused as denied, so a name the resolver reads as an address, such as
+/// `0x5d.0xb8.216.34`, gets the verdict the address gets.
 fn decide(
     config: &ProxyConfig,
     host: &str,
@@ -476,10 +478,16 @@ fn decide(
         }
         Verdict::Allowed(_) if !config.ports.contains(&port) => refused(Refusal::Port),
         Verdict::Allowed(rule) => match resolve(host, port) {
-            Ok(addresses) if !addresses.iter().all(|address| admitted(address.ip())) => {
-                refused(Refusal::NotPublic)
-            }
-            Ok(addresses) => (Verdict::Allowed(rule), addresses),
+            Ok(addresses) => match addresses
+                .iter()
+                .find_map(|address| config.list.denying(address.ip()))
+            {
+                Some(denied) => refused(Refusal::Denied(denied.clone())),
+                None if !addresses.iter().all(|address| admitted(address.ip())) => {
+                    refused(Refusal::NotPublic)
+                }
+                None => (Verdict::Allowed(rule), addresses),
+            },
             Err(_) => (Verdict::Allowed(rule), Vec::new()),
         },
         verdict => (verdict, Vec::new()),
@@ -767,6 +775,148 @@ mod tests {
         let proxy = proxy_for(&["127.0.0.1"], &["127.0.0.1"], vec![server.port()]);
         let (status, _) = connect(&proxy, &format!("127.0.0.1:{}", server.port()));
         assert!(status.starts_with("HTTP/1.1 403"), "{status}");
+    }
+
+    /// A denied address is refused however the `CONNECT` line spells it: plainly, with a trailing
+    /// dot, or inside an IPv4-mapped or a NAT64 IPv6 address in either notation, under a wildcard
+    /// allowed entry whose domain ends its text and under an exact one. Nothing is resolved. The
+    /// regressions it rejects: the lists compared with the address as the program spelled it, so
+    /// the mapped spelling passes a denied entry, and a wildcard allowed entry matched against an
+    /// address.
+    #[test]
+    fn a_denied_address_is_refused_however_the_request_spells_it() {
+        let unasked = |_: &str, _: u16| -> io::Result<Vec<SocketAddr>> {
+            panic!("a refused host was resolved")
+        };
+        for allowed in ["*.216.34", "93.184.216.34"] {
+            let (list, invalid) = HostList::parse([allowed], ["93.184.216.34"]);
+            assert!(invalid.is_empty());
+            let config = ProxyConfig::new(list);
+            for line in [
+                "CONNECT 93.184.216.34:443 HTTP/1.1\r\n\r\n",
+                "CONNECT 93.184.216.34.:443 HTTP/1.1\r\n\r\n",
+                "CONNECT [::ffff:93.184.216.34]:443 HTTP/1.1\r\n\r\n",
+                "CONNECT [::FFFF:93.184.216.34]:443 HTTP/1.1\r\n\r\n",
+                "CONNECT [::ffff:5db8:d822]:443 HTTP/1.1\r\n\r\n",
+                "CONNECT [64:ff9b::93.184.216.34]:443 HTTP/1.1\r\n\r\n",
+                "CONNECT [64:ff9b::5db8:d822]:443 HTTP/1.1\r\n\r\n",
+            ] {
+                let (host, port) = connect_target(line.as_bytes()).expect("a CONNECT line");
+                let (verdict, addresses) = decide(&config, &host, port, unasked);
+                assert_eq!(
+                    verdict,
+                    Verdict::Refused(Refusal::Denied(
+                        crate::hosts::HostRule::parse("93.184.216.34").unwrap()
+                    )),
+                    "{allowed} {line:?}"
+                );
+                assert!(addresses.is_empty());
+            }
+        }
+    }
+
+    /// A public address that only a wildcard's domain matches the end of is not listed, in either
+    /// spelling, and an exact entry lists it in both. The regression it rejects is a wildcard
+    /// allowed entry matched against the text of an address, which lets `*.216.34` list
+    /// `1.2.216.34`.
+    #[test]
+    fn a_public_address_is_listed_by_an_exact_entry_and_not_by_a_wildcard() {
+        let unasked = |_: &str, _: u16| -> io::Result<Vec<SocketAddr>> {
+            panic!("a refused host was resolved")
+        };
+        let wildcard = config_for(&["*.216.34"]);
+        for host in ["1.2.216.34", "::ffff:1.2.216.34"] {
+            assert_eq!(
+                decide(&wildcard, host, 443, unasked),
+                (Verdict::Refused(Refusal::NotListed), Vec::new()),
+                "{host}"
+            );
+        }
+        let exact = config_for(&["1.2.216.34"]);
+        for host in ["1.2.216.34", "::ffff:1.2.216.34"] {
+            assert!(
+                decide(&exact, host, 443, answering(&["1.2.216.34:443"]))
+                    .0
+                    .is_allowed(),
+                "{host}"
+            );
+        }
+    }
+
+    /// A name the resolver reads as an address, such as `0x5d.0xb8.216.34`, is a name to the list,
+    /// so a wildcard allowed entry can cover it, and an answer holding a denied address refuses it
+    /// as denied, which is the verdict the address gets spelled plainly. So does an answer with a
+    /// denied address among others, or inside an IPv4-mapped or a NAT64 one. The regression it
+    /// rejects is a denied entry read against the request line alone, which a spelling the resolver
+    /// turns into the denied address passes.
+    #[test]
+    fn a_name_that_resolves_to_a_denied_address_is_refused_as_denied() {
+        let (list, invalid) = HostList::parse(["*.216.34", "a.example"], ["93.184.216.34"]);
+        assert!(invalid.is_empty());
+        let config = ProxyConfig {
+            list,
+            ports: vec![443],
+        };
+        let denied = Verdict::Refused(Refusal::Denied(
+            crate::hosts::HostRule::parse("93.184.216.34").unwrap(),
+        ));
+        for (host, answer) in [
+            ("0x5d.0xb8.216.34", &["93.184.216.34:443"][..]),
+            ("0135.0270.216.34", &["93.184.216.34:443"][..]),
+            ("a.example", &["[::ffff:93.184.216.34]:443"][..]),
+            ("a.example", &["[64:ff9b::5db8:d822]:443"][..]),
+            (
+                "a.example",
+                &["185.199.108.153:443", "93.184.216.34:443"][..],
+            ),
+        ] {
+            assert_eq!(
+                decide(&config, host, 443, answering(answer)),
+                (denied.clone(), Vec::new()),
+                "{host} {answer:?}"
+            );
+        }
+        assert!(
+            decide(&config, "a.example", 443, answering(&["93.184.216.35:443"]))
+                .0
+                .is_allowed()
+        );
+    }
+
+    /// The trail records the host as the request line spelled it, normalised, beside the entry that
+    /// decided, and not the address the list compared or the resolver answered. The regression it
+    /// rejects is a record that rewrites the host to its IPv4 form or to the address connected to,
+    /// which hides that the program asked for `0x5d.0xb8.216.34` or a mapped spelling and puts in
+    /// the trail a host the program never named.
+    #[test]
+    fn the_trail_records_the_host_as_the_request_spelled_it() {
+        let denied = Verdict::Refused(Refusal::Denied(
+            crate::hosts::HostRule::parse("93.184.216.34").unwrap(),
+        ));
+        for (target, recorded) in [
+            ("0x5d.0xb8.216.34:443", "0x5d.0xb8.216.34"),
+            ("[::ffff:93.184.216.34]:443", "::ffff:93.184.216.34"),
+            ("[64:ff9b::5db8:d822]:443", "64:ff9b::5db8:d822"),
+            ("0X5D.0XB8.216.34.:443", "0x5d.0xb8.216.34"),
+        ] {
+            let (list, invalid) = HostList::parse(["*.216.34"], ["93.184.216.34"]);
+            assert!(invalid.is_empty());
+            let config = ProxyConfig {
+                list,
+                ports: vec![443],
+            };
+            let (status, _, decisions) =
+                serve_resolving(config, target, answering(&["93.184.216.34:443"]));
+            assert!(status.starts_with("HTTP/1.1 403"), "{target} {status}");
+            assert_eq!(
+                decisions,
+                [Decision {
+                    host: Some(recorded.to_string()),
+                    verdict: denied.clone(),
+                }],
+                "{target}"
+            );
+        }
     }
 
     fn config_for(allowed: &[&str]) -> ProxyConfig {

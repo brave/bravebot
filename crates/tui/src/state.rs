@@ -22,6 +22,7 @@ mod hover;
 mod menu;
 mod open_loops;
 mod queue;
+mod references;
 mod scheduling;
 mod scroller;
 mod sessions_screen;
@@ -547,6 +548,8 @@ pub struct Session {
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
+    /// The sections of the info panel the person turned off with `/sidebar` (PANEL-17).
+    panel_sections: crate::panel::Sections,
     /// Whether a drag that began on the panel's border is still held (PANEL-6).
     panel_drag: bool,
     /// Where on the thumb the scrollbar was taken hold of, while a drag that began on it is held.
@@ -863,6 +866,12 @@ pub struct Session {
     /// own line by the two calls that take one from the box or the queue, and cleared by every turn
     /// that begins, so the next one is judged on its own. Read only while the turn runs.
     pub leave_word_sent: bool,
+    /// Whether the turn in flight began on a line the person typed that is a command which takes no
+    /// argument, followed by words (CMD-2).
+    ///
+    /// Such a line is a prompt, and the row under the box says so, since the person may have meant
+    /// the command. Set and cleared in the same places as `leave_word_sent`, from the same line.
+    pub command_sent_as_prompt: bool,
     /// Whether the key being answered arrived on its own rather than in a run with others.
     ///
     /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
@@ -937,6 +946,8 @@ pub struct Session {
     /// The links the last `/open` listed, in the order it numbered them, so a number typed after it
     /// names the link it was read beside (CMD-30).
     pub(crate) links_listed: Option<Vec<crate::text_links::Target>>,
+    /// The issues and pull requests the session has met, in the order first met (PANEL-16).
+    references: Vec<bravebot_agent::links::Reference>,
     /// What starts the browser for an address a click or `/open` named, which says whether it was
     /// started. A test names one that starts nothing.
     pub(crate) opens_an_address: fn(&str) -> bool,
@@ -1202,6 +1213,9 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// Whether the model in force is recorded as refusing the cache breakpoints, so that its
+    /// requests carry none (BACKEND-27). Noted at the end of each turn and run, and on a pick.
+    breakpoints_given_up: bool,
     /// The lookup that settles the budget of the model the session opened on, while its answer is
     /// still on the way (BACKEND-64).
     awaited_listing: Option<accounts::AwaitedListing>,
@@ -1419,6 +1433,7 @@ impl Session {
             panel: false,
             files: None,
             panel_width: crate::panel::WIDTH,
+            panel_sections: crate::panel::Sections::default(),
             panel_drag: false,
             bar_drag: None,
             words_held: None,
@@ -1501,6 +1516,7 @@ impl Session {
             expandable_lines: 0,
             offered_to_leave: false,
             leave_word_sent: false,
+            command_sent_as_prompt: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
@@ -1538,6 +1554,12 @@ impl Session {
             rewind: Default::default(),
             hunks_listed: None,
             links_listed: None,
+            references: Vec::new(),
+            // A unit test that clicks a link must not start the tester's browser; it names an
+            // opener of its own to see the address.
+            #[cfg(test)]
+            opens_an_address: |_| false,
+            #[cfg(not(test))]
             opens_an_address: crate::opener::open_address,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -1561,6 +1583,7 @@ impl Session {
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
+            breakpoints_given_up: false,
             awaited_listing: None,
             model_is_account: false,
             account: bravebot_agent::chatgpt::AccountSession::begin(),
@@ -1906,6 +1929,8 @@ impl Session {
         self.hunks_listed = None;
         // The replies it listed were in the transcript that is gone.
         self.links_listed = None;
+        // A new session has met nothing (SESSION-3).
+        self.forget_references();
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
@@ -3189,6 +3214,9 @@ impl Session {
     /// What is written is the line with its markers settled, because the session that recalls it
     /// staged none of them.
     fn remember(&mut self, prompt: &str) -> crate::history::Ticket {
+        // The one place every line the box sends reaches, so a prompt, a command, a shell line and
+        // a line that waits for the turn are each read once (PANEL-16).
+        self.note_typed(prompt);
         let project = self.project();
         let stored = self.history.push(self.recallable(prompt), project).cloned();
         if let (true, Some(entry)) = (self.persist, stored) {
@@ -3388,6 +3416,7 @@ impl Session {
         // Read from the line as the box held it, which the person typed, and it decides only whether
         // the row under the box says the word went to the model (CMD-2).
         self.leave_word_sent = crate::command_table::is_a_lone_leave_word(&typed);
+        self.command_sent_as_prompt = crate::command_table::is_a_command_given_words(&typed);
         Some(begun)
     }
 
@@ -4106,6 +4135,7 @@ impl Session {
         // a goal sending the work back and a command's own prompt are not a lone word the person
         // typed, so the mark left by the last turn must not describe them.
         self.leave_word_sent = false;
+        self.command_sent_as_prompt = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -4603,14 +4633,14 @@ fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
 /// The most characters of a value a file supplied that one note shows.
 const SHOWN_AT_MOST: usize = 120;
 
-/// A value read out of a file, as one safe line: control characters drawn as pictures and a long
-/// value cut short.
+/// A value read out of a file, as one safe line: control characters and characters that draw as
+/// nothing written out, and a value cut short where what is drawn runs past [`SHOWN_AT_MOST`].
+///
+/// Measured as drawn, since one character can be written out as several.
 fn shown(text: &str) -> String {
-    let mut out: String = crate::render::printable(text)
-        .chars()
-        .take(SHOWN_AT_MOST)
-        .collect();
-    if text.chars().count() > SHOWN_AT_MOST {
+    let drawn = crate::render::printable(text);
+    let mut out: String = drawn.chars().take(SHOWN_AT_MOST).collect();
+    if drawn.chars().count() > SHOWN_AT_MOST {
         out.push('\u{2026}');
     }
     out
@@ -4618,6 +4648,27 @@ fn shown(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A value a file supplied is cut by what is drawn of it, so a short value of characters that
+    /// draw as nothing, each written out as several, is cut with an ellipsis that says so. Rejects:
+    /// deciding the ellipsis by the raw text's length, which drops it for 40 characters written out
+    /// as 320 and cut at 120, so a cut value reads as whole.
+    #[test]
+    fn a_value_written_out_past_the_most_a_note_shows_is_cut_with_an_ellipsis() {
+        let value = "\u{202e}".repeat(40);
+        let drawn = shown(&value);
+        assert_eq!(drawn.chars().count(), SHOWN_AT_MOST + 1, "{drawn:?}");
+        assert!(drawn.ends_with('\u{2026}'), "{drawn:?}");
+        assert!(drawn.starts_with("\u{2039}U+202E\u{203a}"), "{drawn:?}");
+        assert!(
+            !drawn
+                .chars()
+                .any(bravebot_core::invisible::draws_as_nothing),
+            "{drawn:?}"
+        );
+        // A value whose drawing fits is shown whole, with no ellipsis.
+        assert_eq!(shown("a\u{200b}b"), "a\u{2039}U+200B\u{203a}b");
+    }
+
     /// INSTR-12. The project's styles are read once each time a line starts with `/style`, not on
     /// every pass and not while a turn runs, and the names stay held after the line goes.
     #[test]
@@ -7690,8 +7741,8 @@ mod tests {
         );
     }
 
-    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan, a spend
-    /// limit and a repeated call are the driver's own, so they wait for the person with the setting
+    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan and a spend
+    /// limit are the driver's own, so they wait for the person with the setting
     /// in force. Rejects: the time applied to every question the interface puts.
     #[test]
     fn only_the_planners_own_questions_are_closed_on_the_clock() {
@@ -10285,6 +10336,146 @@ mod tests {
             s.send_queued().expect("the hurried prompts were not sent");
 
             assert_eq!(s.leave_word_sent, marked, "{lines:?}");
+        }
+    }
+
+    /// CMD-2. A line that is a command the table gives no argument, with words after it, is a prompt
+    /// and the turn it begins is marked, so the row under the box can say so. The bare command, a
+    /// command that takes an argument, a longer word and a prompt that only mentions a command are
+    /// not: a mark taken from any of them shows the note on a line that was never mistaken for a
+    /// command.
+    #[test]
+    fn a_turn_begun_on_a_command_given_words_is_marked_and_one_on_any_other_line_is_not() {
+        for line in ["/model gpt-5", "/undo the last change", "  /lsp  all  "] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line.trim()));
+            assert!(
+                s.command_sent_as_prompt,
+                "{line:?} began a turn with no mark"
+            );
+            assert!(!s.leave_word_sent, "{line:?} was marked as a leave word");
+        }
+        for line in [
+            "/model",
+            "/rename foo",
+            "/theme nord",
+            "/models gpt-5",
+            "/undone",
+            "why is /model slow",
+            "exit",
+        ] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line));
+            assert!(
+                !s.command_sent_as_prompt,
+                "{line:?} began a turn with a mark"
+            );
+        }
+    }
+
+    /// The mark belongs to the turn the line began, so the prompt after it is judged on its own.
+    #[test]
+    fn the_prompt_after_a_command_marked_turn_does_not_inherit_the_mark() {
+        let mut s = session();
+        for c in "/model gpt-5".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.command_sent_as_prompt, "the line was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        for c in "list the files".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+
+        assert!(
+            !s.command_sent_as_prompt,
+            "the next prompt inherited the mark"
+        );
+    }
+
+    /// A tick starts a turn on a prompt nobody typed in the box, so the mark from the turn before
+    /// is not about it.
+    #[test]
+    fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_command_mark() {
+        let mut s = session();
+        s.looping.start(a_loop_that_is_due());
+        for c in "/undo the last change".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.command_sent_as_prompt, "the line was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        assert!(s.loop_tick().is_some(), "the due tick was not sent");
+
+        assert!(
+            !s.command_sent_as_prompt,
+            "the tick's turn kept the line's mark"
+        );
+    }
+
+    /// A line typed while a turn runs is queued and sent when that turn ends, with nobody pressing
+    /// Enter for it, and its author is owed the same note as one who sent it at rest. It is not owed
+    /// one while the turn it waits behind is the one running. A command given words is queued as the
+    /// prompt it is (`command_typed` is `None` for it), not as a command.
+    #[test]
+    fn a_command_given_words_that_waited_in_the_queue_is_marked_when_its_turn_begins() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_prompts(&mut s, &["/model gpt-5"]);
+        assert!(
+            !s.command_sent_as_prompt,
+            "the running turn took the mark of a waiting line"
+        );
+        s.complete("done", Vec::new(), 0);
+
+        assert_eq!(s.send_queued().as_deref(), Some("/model gpt-5"));
+
+        assert!(
+            s.command_sent_as_prompt,
+            "the queued line began a turn with no mark"
+        );
+    }
+
+    /// Hurried prompts go as one turn, one to a line, so two lines sent together are a line that
+    /// holds more than the command and a note about one command would misdescribe it. A single
+    /// hurried line is still the line.
+    #[test]
+    fn command_lines_hurried_together_are_not_marked_and_one_hurried_alone_is() {
+        for (lines, marked) in [
+            (&["/model gpt-5", "/undo it"][..], false),
+            (&["/model gpt-5", "and then list the files"][..], false),
+            (&["/model gpt-5"][..], true),
+        ] {
+            let mut s = session();
+            s.type_char('a');
+            s.submit().expect("submitted");
+            queue_prompts(&mut s, lines);
+            assert!(s.hurry(), "there was a turn to stop and something waiting");
+            stop(&mut s, "a");
+
+            s.send_queued().expect("the hurried prompts were not sent");
+
+            assert_eq!(s.command_sent_as_prompt, marked, "{lines:?}");
+        }
+    }
+
+    /// Queue each line in `lines` behind a turn already running, as a prompt whatever it begins with.
+    fn queue_prompts(s: &mut Session, lines: &[&str]) {
+        for line in lines {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert!(s.queue(), "{line} was not queued");
         }
     }
 

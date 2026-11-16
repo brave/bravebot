@@ -32,7 +32,7 @@ import { About, type AboutInfo } from './components/About'
 import { BugReport } from './components/BugReport'
 import { UpdateBanner } from './components/UpdateBanner'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
-import { conversationModel, rememberModel } from './models'
+import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkedSessions } from '../shared/forks'
@@ -141,8 +141,10 @@ export function App(): React.JSX.Element {
     if (current) setConversation(liveKey(current), { draft: text })
   }, [])
   useEffect(() => {
-    if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
-  }, [live?.summary.id, live?.summary.directory, live?.model])
+    // Only a pick: a default the backend supplied is not the person's choice, and storing it
+    // would keep requesting that model after the settings that named it stopped applying.
+    if (live?.summary.id) rememberPickedModel(live.summary.directory, live.summary.id, live)
+  }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
   const { answerTrust, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
@@ -281,9 +283,10 @@ export function App(): React.JSX.Element {
         id: summary.id,
       })
       if (bot) setConversation(conversationKey(summary.directory, summary.id), { botSlug: bot.slug })
+      const picked = bot ? null : pickedModel(summary.directory, summary.id)
       setLive(newLive({
         handle: opened.session,
-        model: bot?.model ?? conversationModel(summary.directory, summary.id, opened.model),
+        ...reopenedModel(bot?.model, picked, opened.model),
         summary: {
           id: summary.id,
           title: opened.record.title,
@@ -435,7 +438,7 @@ export function App(): React.JSX.Element {
         if (!saved) throw new Error('Could not save the bot’s model.')
         await readBots()
       }
-      setLive((old) => old?.handle === current.handle && !old.running ? { ...old, model } : old)
+      setLive((old) => old?.handle === current.handle && !old.running ? pickModel(old, model) : old)
     } catch (error) { setProblem(String(error)) }
   }, [readBots])
 
@@ -642,15 +645,25 @@ export function App(): React.JSX.Element {
   /**
    * Close a session named by a right-click.
    *
-   * Only the open one can actually be closed — the others have no handle, because this build
-   * opens one at a time. Closing a row that is not the open one is therefore nothing rather
-   * than an error, and the menu item is the same item either way.
+   * A row's id is the record's id, or the draft's id while the chat has no record yet. Every
+   * session this window opened for that id is closed: the one on screen the way File > Close Chat
+   * closes it, and each one opened earlier and still running behind it by telling the agent, which
+   * cancels its turn and refuses what it waits on, and then dropping it from the open sessions.
+   * A row with no session open has nothing to close.
    */
   const closeNamed = useCallback(
-    (id: string) => {
-      if (live?.summary.id === id) void closeSession()
+    async (id: string) => {
+      const held = [...openedLives.current.values()].filter((item) => (item.summary.id ?? item.draftId) === id)
+      for (const item of held) {
+        if (item.handle === handleRef.current) await closeSession()
+        else {
+          await call('session.close', { session: item.handle }).catch(() => undefined)
+          openedLives.current.delete(item.handle)
+          refreshLives((n) => n + 1)
+        }
+      }
     },
-    [live, closeSession],
+    [closeSession],
   )
 
   const copyProjectPath = useCallback(
@@ -702,6 +715,7 @@ export function App(): React.JSX.Element {
         setLive(newLive({
           handle: forked.session,
           model: live.model,
+          modelPicked: live.modelPicked,
           summary: {
             id: forked.id,
             // What a fork is called is decided by the agent from the history it kept, and it
@@ -829,10 +843,11 @@ export function App(): React.JSX.Element {
       if (first) void showSession(first)
       return
     }
+    void readBots({ asked: true })
     if (open?.bot) return
     const first = activeBots(botsRef.current)[0]
     if (first) openBot(first)
-  }, [showSession, openBot])
+  }, [showSession, openBot, readBots])
 
   /**
    * Move a chat nothing has been said in to another folder.
