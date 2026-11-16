@@ -4438,10 +4438,18 @@ where
                     .as_deref()
                     .map(|note| format!(" {note}"))
                     .unwrap_or_default();
+                // A listing that did not ask to read, where `read: true` would have handed it
+                // over in one result in place of these references.
+                let read_instead = sentences::read_would_release(
+                    &output.tool,
+                    output.read_asked,
+                    setup::vet_content_is(task, plan.offers_vet_content),
+                    true,
+                );
                 let listed = |described: &str| {
                     format!(
                         "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}{unmatched}\n\n{described}",
+             quarantined, one reference each.{capped}{linked}{unmatched}{read_instead}\n\n{described}",
                         output.tool,
                         references.len(),
                     )
@@ -5109,9 +5117,21 @@ where
                             }
                             _ => String::new(),
                         };
+                        // A search that did not ask to read, where `read: true` would have
+                        // returned it: said so the planner does not spend a `vet_content` call
+                        // and a round on a result one repeated call releases. Decided from the
+                        // argument, the mode and the size the reference states.
+                        let read_instead = sentences::read_would_release(
+                            &output.tool,
+                            output.read_asked,
+                            setup::vet_content_is(task, plan.offers_vet_content),
+                            reference
+                                .bytes
+                                .is_some_and(|bytes| bytes != 0 && bytes <= output_cap),
+                        );
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{history}",
                                 output.tool,
                             )
                         };

@@ -99361,6 +99361,100 @@ fn a_search_or_listing_that_does_not_ask_to_read_stays_quarantined_in_bypass() {
     }
 }
 
+/// VET-6: a quarantined search or listing that did not ask to read says that repeating the call
+/// with `read: true` returns it, in the modes where `read` has a release to make, and says nothing
+/// of the kind where a person answers `vet_content`, since `read` changes nothing there.
+///
+/// A wrong implementation leaves the result naming `vet_content` alone, which costs the planner a
+/// `vet_content` call and a further round for each walk, or names `read: true` where a person is
+/// asked anyway and sends the planner to an argument that releases nothing.
+#[test]
+fn a_quarantined_search_or_listing_names_read_true_where_read_would_release_it() {
+    for (tool, arguments) in [
+        ("search", r#"{"pattern":"needle","directory":"."}"#),
+        ("list_files", r#"{"directory":"."}"#),
+    ] {
+        let advice = format!("repeat this {tool} call with read: true");
+        for (mode, auto_vetting, checks, named) in [
+            (
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+                Some(a_safe_check()),
+                true,
+            ),
+            (
+                bravebot_agent::PermissionMode::Ask,
+                true,
+                Some(a_safe_check()),
+                true,
+            ),
+            (bravebot_agent::PermissionMode::Ask, false, None, false),
+        ] {
+            let walked = walk_asking_to_read(mode, auto_vetting, checks, tool, arguments);
+            let after = walked.after_the_fetch();
+            assert_eq!(
+                after.contains(&advice),
+                named,
+                "{mode:?} auto-vetting {auto_vetting} {tool}: {after}"
+            );
+            assert!(
+                !after.contains("SENTINEL-SEARCH-HIT"),
+                "{mode:?} {tool}: the result reached the planner: {after}"
+            );
+        }
+    }
+}
+
+/// VET-6: a call that already asked to read is not told to ask again.
+///
+/// A wrong implementation words the advice from the tool alone, so a planner that passed
+/// `read: true` and was kept back is told to repeat what it just did.
+#[test]
+fn a_walk_kept_back_after_asking_to_read_is_not_told_to_ask_again() {
+    for (tool, arguments) in [
+        ("search", A_SEARCH_ASKING_TO_READ),
+        ("list_files", A_LISTING_ASKING_TO_READ),
+    ] {
+        let walked = walk_asking_to_read_within(
+            bravebot_agent::PermissionMode::Ask,
+            true,
+            Some(vec![reply_with(r#"{"verdict": "unsafe", "reason": "no"}"#)]),
+            tool,
+            arguments,
+            None,
+            false,
+        );
+        let after = walked.after_the_fetch();
+        assert!(
+            !after.contains("repeat this"),
+            "{tool}: told to repeat a call that already asked to read: {after}"
+        );
+    }
+}
+
+/// VET-6: a quarantined search past the task's output cap is not told to repeat with `read: true`,
+/// since the repeat would be kept back for the same size.
+///
+/// A wrong implementation words the advice without the size the reference states, and sends the
+/// planner into a second call that returns the same reference.
+#[test]
+fn a_search_too_large_for_a_result_is_not_told_to_repeat_with_read_true() {
+    let walked = walk_asking_to_read_within(
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        Some(a_safe_check()),
+        "search",
+        r#"{"pattern":"needle","directory":"."}"#,
+        Some(8),
+        false,
+    );
+    let after = walked.after_the_fetch();
+    assert!(
+        after.contains("quarantined") && !after.contains("repeat this search call"),
+        "{after}"
+    );
+}
+
 /// VET-6's other branch (R10 of #3995): with auto-vetting on, a check that answers `safe` releases
 /// the walk's result in the same result and the trail credits the check.
 ///
