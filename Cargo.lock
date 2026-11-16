@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-usage-ping"
-version = "0.21.0"
+version = "0.23.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-config",
