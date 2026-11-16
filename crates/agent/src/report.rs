@@ -651,6 +651,15 @@ pub enum Outcome {
     },
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
+    /// It outstayed the longest deadline a call may name and was stopped, with what it had run for
+    /// by then.
+    ///
+    /// Separate from [`Outcome::Stopped`] because a longer deadline is not available: a planner
+    /// told only that its run was stopped asks for more time and is held to the same ceiling, so
+    /// the sentence names the way past it, which is a run in the background. Chosen from the
+    /// deadline the run was given and the ceiling in force, both of which are figures a person
+    /// set, and from nothing the program printed.
+    StoppedAtTheCeiling(std::time::Duration),
     /// A background job the person asked to stop, with what it had run for by then.
     ///
     /// Separate from [`Outcome::Stopped`] because the planner did not ask for it and no limit was
@@ -740,6 +749,14 @@ impl Outcome {
                  printed by then and not the whole of what it would print. {WHAT_A_STOP_LEAVES}",
                 after.as_secs()
             ),
+            Self::StoppedAtTheCeiling(after) => format!(
+                "It was still running after {} and was stopped, so this is what it had printed by \
+                 then and not the whole of what it would print. That deadline was the longest a \
+                 call may name, so a longer one cannot be asked for. Start the line again with \
+                 background: true, which is not stopped at a deadline, and you are told when it \
+                 ends. {WHAT_A_STOP_LEAVES}",
+                seconds(*after)
+            ),
             Self::StoppedByTheUser(after) => format!(
                 "The user stopped it after {}, so this is what it had printed by then and not the \
                  whole of what it would print. {WHAT_A_STOP_LEAVES} Do not start it again unless \
@@ -789,6 +806,11 @@ impl Outcome {
             Self::Stopped(after) => format!(
                 "still running after {} seconds, so it was stopped; what it printed first is here",
                 after.as_secs()
+            ),
+            Self::StoppedAtTheCeiling(after) => format!(
+                "still running after {}, the longest deadline, so it was stopped; what it printed \
+                 first is here",
+                seconds(*after)
             ),
             Self::StoppedByTheUser(after) => format!("stopped by you after {}", seconds(*after)),
             Self::StoppedBySignal { ran_for, signal } => format!(
@@ -1743,6 +1765,10 @@ mod tests {
                 "at the deadline",
             ),
             (
+                Outcome::StoppedAtTheCeiling(std::time::Duration::from_secs(600)).describe(),
+                "at the ceiling",
+            ),
+            (
                 Outcome::StoppedByTheUser(std::time::Duration::from_secs(40)).describe(),
                 "by the person",
             ),
@@ -1765,6 +1791,40 @@ mod tests {
         assert!(
             !going.contains("lock files"),
             "a run nothing stopped is warned about the effects of a stop: {going}"
+        );
+    }
+
+    /// A run stopped at the longest deadline a call may name is told that a longer one cannot be
+    /// asked for and that the line starts again with `background: true`. A planner told only that
+    /// the run was stopped asks for more time and is held to the same ceiling, so the whole run
+    /// is repeated in the foreground. A run stopped at a deadline below the ceiling is not sent to
+    /// the background, because a longer deadline is still available to it.
+    #[test]
+    fn a_run_stopped_at_the_ceiling_is_sent_to_the_background_and_one_below_it_is_not() {
+        let at_the_ceiling = Outcome::StoppedAtTheCeiling(std::time::Duration::from_secs(600));
+        let said = at_the_ceiling.describe();
+        assert!(
+            said.contains("background: true"),
+            "a run stopped at the ceiling is not told about the background: {said}"
+        );
+        assert!(
+            said.contains("longest a call may name"),
+            "a run stopped at the ceiling is not told a longer deadline cannot be asked for: {said}"
+        );
+        assert!(
+            said.contains("after 600 seconds"),
+            "a run stopped at the ceiling is not told how long it ran: {said}"
+        );
+        assert!(
+            at_the_ceiling.summary().contains("longest deadline"),
+            "the person's line does not say the ceiling was reached: {}",
+            at_the_ceiling.summary()
+        );
+
+        let below = Outcome::Stopped(std::time::Duration::from_secs(300)).describe();
+        assert!(
+            !below.contains("background"),
+            "a run stopped below the ceiling is sent to the background: {below}"
         );
     }
 

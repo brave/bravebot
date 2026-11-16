@@ -71552,6 +71552,47 @@ fn a_configured_deadline_is_what_a_run_that_names_none_is_stopped_at() {
     );
 }
 
+/// CMDLINE-13: a run stopped at the longest deadline in force is reported as stopped at the ceiling,
+/// and one stopped at a shorter deadline is not.
+///
+/// Both runs sleep five seconds and are stopped after one, so the only difference between them is the
+/// ceiling the turn holds. A driver that reports every stop the same way fails the first assertion,
+/// and one that reports every stop as the ceiling, or compares against the built-in 600 and not the
+/// ceiling in force, fails the second: the first turn names the deadline it was given and a ceiling
+/// of one second, and the second names the same deadline under a ceiling of three.
+#[test]
+fn a_run_stopped_at_the_ceiling_in_force_is_told_so_and_one_below_it_is_not() {
+    let scratch = Scratch::new("cmdline-13-ceiling");
+    let at_the_ceiling = the_outcome_of_a_run_under(
+        &scratch,
+        r#"{"command":"sleep 5","deadline_seconds":1}"#,
+        bravebot_agent::exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: None,
+            ceiling: Some(std::time::Duration::from_secs(1)),
+        }),
+    );
+    assert!(
+        matches!(
+            at_the_ceiling,
+            bravebot_agent::report::Outcome::StoppedAtTheCeiling(_)
+        ),
+        "a run stopped at the ceiling in force was not told so: {at_the_ceiling:?}"
+    );
+
+    let below = the_outcome_of_a_run_under(
+        &scratch,
+        r#"{"command":"sleep 5","deadline_seconds":1}"#,
+        bravebot_agent::exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: None,
+            ceiling: Some(std::time::Duration::from_secs(3)),
+        }),
+    );
+    assert!(
+        matches!(below, bravebot_agent::report::Outcome::Stopped(_)),
+        "a run stopped below the ceiling in force was sent to the background: {below:?}"
+    );
+}
+
 /// RUN-23: the planner is told the figures in force, so a raised ceiling is one it can actually ask
 /// for.
 ///

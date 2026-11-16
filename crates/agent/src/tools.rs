@@ -12650,7 +12650,14 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     signal: signal.name(),
                 }
             } else if let Some(after) = ran.stopped {
-                crate::report::Outcome::Stopped(after)
+                // Told apart by the deadline the run was given and the ceiling in force, two
+                // figures a person set, and not by anything the program printed. At the ceiling a
+                // longer deadline cannot be asked for, so the planner is sent to the background.
+                if limit >= tools.deadlines.ceiling {
+                    crate::report::Outcome::StoppedAtTheCeiling(after)
+                } else {
+                    crate::report::Outcome::Stopped(after)
+                }
             } else {
                 // The codes and not `ended_well`: that is the verdict of the part that ran last, so
                 // `make test ; echo done` would be told it exited 0 with the failed stage unnamed
@@ -21224,6 +21231,32 @@ mod tests {
             deadline_from(&json!({}), lowered).unwrap(),
             Duration::from_secs(60),
             "a ceiling below the built-in default left the default above it"
+        );
+    }
+
+    /// A planner that runs a build or test gate in the foreground at the ceiling is stopped at it and
+    /// repeats the whole run in the background, so the description of `run` says up front that a gate
+    /// which may outlast the ceiling starts in the background. The sentence is checked on the tool's
+    /// own prose, which is where the planner reads it before its first call.
+    #[test]
+    fn the_run_tool_says_a_gate_that_may_outlast_the_ceiling_starts_in_the_background() {
+        let prose = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|tool| tool.function.name == "run")
+        .expect("run is offered")
+        .function
+        .description;
+        assert!(
+            prose.contains(
+                "A build or test gate that may take longer than the ceiling also starts with \
+                 background: true"
+            ),
+            "the run description does not send a long gate to the background: {prose}"
         );
     }
 
