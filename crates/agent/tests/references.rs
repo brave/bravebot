@@ -113,18 +113,19 @@ fn a_turn_that_fails_after_a_call_has_still_reported_what_the_call_named() {
 }
 
 /// The regression it rejects: a report for every sighting, which sends the same item again for
-/// each call that names it, and a later report that leaves out the kind a later call settled.
+/// each call that names it, and a later call that names the same item as another kind and
+/// replaces the first.
 #[test]
-fn an_item_is_reported_once_and_again_only_when_a_later_call_settles_its_kind() {
+fn an_item_is_reported_once_however_many_calls_name_it() {
     let scratch = Scratch::new("references-once");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let turned = a_turn(
         &workspace,
-        &Task::new("work on o/r#5").keeping_links(true),
+        &Task::new("work on https://github.com/o/r/issues/5").keeping_links(true),
         mock_model::trust_of(&workspace, false),
         vec![
-            naming("git log o/r#5"),
-            naming("git log o/r#5 again"),
+            naming("git log https://github.com/o/r/issues/5"),
+            naming("git log https://github.com/o/r/issues/5 again"),
             naming("gh pr view 5 --repo o/r"),
             naming("gh pr view 5 --repo o/r --json title"),
             reply_with("done"),
@@ -138,10 +139,7 @@ fn an_item_is_reported_once_and_again_only_when_a_later_call_settles_its_kind() 
             .iter()
             .map(|reference| (reference.shorthand(), reference.kind()))
             .collect::<Vec<_>>(),
-        [
-            ("o/r#5".to_string(), LinkKind::Issue),
-            ("o/r#5".to_string(), LinkKind::PullRequest)
-        ]
+        [("o/r#5".to_string(), LinkKind::Issue)]
     );
 }
 
@@ -176,7 +174,11 @@ fn a_bare_number_in_a_planners_command_takes_the_repository_the_task_names() {
 #[test]
 fn a_turn_whose_front_end_keeps_no_links_reports_nothing() {
     let scratch = Scratch::new("references-not-kept");
-    std::fs::write(scratch.path.join("notes.txt"), "see brave/brave-core#42\n").unwrap();
+    std::fs::write(
+        scratch.path.join("notes.txt"),
+        "see https://github.com/brave/brave-core/issues/42\n",
+    )
+    .unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let turned = a_turn(
         &workspace,
@@ -199,7 +201,7 @@ fn what_a_vouched_file_names_is_listed() {
     let scratch = Scratch::new("references-vouched-file");
     std::fs::write(
         scratch.path.join("notes.txt"),
-        "see brave/brave-core#42 and https://github.com/brave/bravebot/pull/7\n",
+        "see https://github.com/brave/brave-core/issues/42 and https://github.com/brave/bravebot/pull/7\n",
     )
     .unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");

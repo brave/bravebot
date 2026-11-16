@@ -31,7 +31,7 @@ impl Session {
     ///
     /// Called with what the turn reported, which may name something the list already holds: the
     /// next turn starts its own list and so reports an item again. An item already held keeps its
-    /// place and its spelling, and a later sighting that names its kind settles a guessed one.
+    /// place and its spelling, and a later sighting that names its kind settles an assumed one.
     pub fn add_references(&mut self, found: &[Reference]) {
         links::merge(&mut self.references, found, PER_SESSION);
     }
@@ -141,8 +141,8 @@ mod tests {
     }
 
     /// PANEL-16. A prompt, a line that waits for the turn, a command and a shell line each reach the
-    /// list, because each of them leaves the box through `remember`, and a bare number names no
-    /// repository so it reads as none.
+    /// list, because each of them leaves the box through `remember`, and a bare number and the
+    /// word `owner/repo#n` read as none.
     ///
     /// The fault it rejects: reading in `submit` alone, which leaves a queued line, a command and a
     /// shell line unread.
@@ -150,7 +150,10 @@ mod tests {
     fn every_line_the_box_sends_is_read_for_what_it_names() {
         let mut session = Session::new("none");
 
-        type_line(&mut session, "look at brave/bravebot#10 and fix #99");
+        type_line(
+            &mut session,
+            "look at https://github.com/brave/bravebot/issues/10, o/r#77 and fix #99",
+        );
         session.submit().expect("sent");
         assert_eq!(shorthands(session.references()), ["brave/bravebot#10"]);
 
@@ -167,7 +170,10 @@ mod tests {
         assert_eq!(commanded.line, "/issue https://github.com/o/r/issues/12");
 
         session.shell = true;
-        type_line(&mut session, "echo brave/bravebot#13");
+        type_line(
+            &mut session,
+            "echo https://github.com/brave/bravebot/issues/13",
+        );
         session.submit_command().expect("run");
 
         assert_eq!(
@@ -181,22 +187,23 @@ mod tests {
         );
         assert_eq!(session.references()[1].kind(), LinkKind::PullRequest);
         assert!(session.references()[1].kind_named());
-        assert!(!session.references()[0].kind_named());
+        assert!(session.references()[0].kind_named());
     }
 
-    /// PANEL-16. An item met again is the same item, in the place it first had, and a later address
-    /// that names its kind settles the kind the first reading guessed. A line sent a second time
-    /// adds nothing.
+    /// PANEL-16. An item met again is the same item, in the place and with the spelling it first
+    /// had, and a later address that names its kind settles the kind of an item whose kind was
+    /// never named, as one an older record holds. A line sent a second time adds nothing.
     ///
     /// The faults it rejects: a list that appends each sighting, one that compares the text and not
-    /// the item, and one that keeps the guess.
+    /// the item, and one that keeps the assumed kind.
     #[test]
-    fn an_item_met_again_keeps_its_place_and_a_named_kind_settles_a_guess() {
+    fn an_item_met_again_keeps_its_place_and_a_named_kind_settles_an_assumed_one() {
         let mut session = Session::new("none");
+        session.add_references(&[Reference::new("Brave", "Bravebot", 10, LinkKind::Issue)
+            .expect("valid")
+            .assumed()]);
         for line in [
-            "see Brave/Bravebot#10",
-            "and brave/bravebot#20",
-            "see Brave/Bravebot#10",
+            "and https://github.com/brave/bravebot/issues/20",
             "the address is https://github.com/brave/bravebot/pull/10/files",
             "the address is https://github.com/brave/bravebot/pull/10/files",
         ] {

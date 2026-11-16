@@ -85,8 +85,8 @@ pub struct Reference {
     number: u64,
     kind: LinkKind,
     /// Whether the text the reference was read from said which kind it is: an address with
-    /// `issues` or `pull` in it, `gh pr` or `gh issue`, or a closing keyword. A bare
-    /// `owner/repo#n` does not say, and is read as an issue.
+    /// `issues` or `pull` in it, `gh pr` or `gh issue`, or a closing keyword. Every reader here
+    /// names it, and an item whose kind was not named is one an older build wrote.
     kind_named: bool,
 }
 
@@ -173,8 +173,7 @@ impl Reference {
 /// new, and each that gained a kind its text named.
 ///
 /// A reference already in the list keeps its place and its spelling. Its kind changes only from an
-/// assumed one to a named one, so a later `/pull/` address settles what `owner/repo#n` left open,
-/// and a named kind is never replaced by another. Where the list holds `cap` references a new one
+/// assumed one to a named one, and a named kind is never replaced by another. Where the list holds `cap` references a new one
 /// is dropped, so the first met are the ones kept.
 pub fn merge(list: &mut Vec<Reference>, found: &[Reference], cap: usize) -> Vec<Reference> {
     let mut changed = Vec::new();
@@ -225,53 +224,21 @@ fn bounded(text: &str) -> &str {
     }
 }
 
-/// The extensions of the files a path such as `src/main.rs#12` ends in. A repository whose name ends
-/// in one is read as a file, so the shorthand `{owner}/{repo}#{n}` is not read of it.
-///
-/// `js` and `io` are left out: `next.js`, `socket.io` and `three.js` are repositories.
-const FILE_EXTENSIONS: [&str; 29] = [
-    "rs", "md", "py", "ts", "tsx", "jsx", "mjs", "cjs", "toml", "json", "yaml", "yml", "txt", "sh",
-    "c", "h", "cc", "cpp", "hpp", "go", "java", "kt", "swift", "rb", "css", "html", "lock", "ftl",
-    "rst",
-];
-
-/// Whether `repo` ends in the extension of a source or document file, with no regard to case, so
-/// that `main.rs` is a file name and `next.js` is not.
-///
-/// This looks at the characters of one name and nothing else. The shorthand reader and the read of
-/// a stored item use it to leave a path out of the list (PANEL-16), and a full address is not
-/// held to it.
-pub fn names_a_file(repo: &str) -> bool {
-    repo.rsplit_once('.').is_some_and(|(stem, extension)| {
-        !stem.is_empty()
-            && FILE_EXTENSIONS
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(extension))
-    })
-}
-
-/// The reference one word is, where it is one: a full address, or `owner/repo#n` where the
-/// repository is not named like a file.
+/// The reference one word is, where it is one: a full `https://github.com/{owner}/{repo}/issues/{n}`
+/// or `/pull/{n}` address. Whatever follows the number is dropped, so the reference is the item
+/// and never a page under it.
 fn reference_in(word: &str) -> Option<Reference> {
-    if let Some(path) = word.strip_prefix("https://github.com/") {
-        let mut parts = path.split('/');
-        let (owner, repo, kind, number) =
-            (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
-        let kind = match kind {
-            "issues" => LinkKind::Issue,
-            "pull" => LinkKind::PullRequest,
-            _ => return None,
-        };
-        // Whatever follows the number in the address, a fragment or a query, is not the number.
-        let number = number.split(['#', '?']).next()?;
-        return Reference::new(owner, repo, number_of(number)?, kind);
-    }
-    let (name, number) = word.split_once('#')?;
-    let (owner, repo) = name.split_once('/')?;
-    if names_a_file(repo) {
-        return None;
-    }
-    Reference::new(owner, repo, number_of(number)?, LinkKind::Issue).map(Reference::assumed)
+    let path = word.strip_prefix("https://github.com/")?;
+    let mut parts = path.split('/');
+    let (owner, repo, kind, number) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    let kind = match kind {
+        "issues" => LinkKind::Issue,
+        "pull" => LinkKind::PullRequest,
+        _ => return None,
+    };
+    // Whatever follows the number in the address, a fragment or a query, is not the number.
+    let number = number.split(['#', '?']).next()?;
+    Reference::new(owner, repo, number_of(number)?, kind)
 }
 
 /// The words of `text`: split at white space and at the brackets and quotes a sentence puts around
@@ -283,10 +250,10 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 }
 
 /// The references a string holds: a full `https://github.com/{owner}/{repo}/issues/{n}` or
-/// `/pull/{n}` address, and an `owner/repo#n` word, in the order met.
+/// `/pull/{n}` address, in the order met.
 ///
-/// The kind is the one the address says. A word `owner/repo#n` says none, and is read as an issue
-/// with [`Reference::kind_named`] false. A bare `#n` names no repository and gives nothing.
+/// The kind is the one the address says, and what follows the number is dropped. The word
+/// `owner/repo#n` and a bare `#n` give nothing.
 ///
 /// This reads the string and returns what it found. It calls no model, no network and no `gh`,
 /// touches no file, and nothing in the driver may take a decision from its result: it is for the
@@ -367,8 +334,8 @@ fn number_after(words: &[&str]) -> Option<u64> {
 }
 
 /// The references a command line holds: those [`references_in_text`] finds, the item of
-/// `gh pr <subcommand> <n>` and `gh issue <subcommand> <n>`, and the issue a closing keyword
-/// followed by `#n` names, as in a commit message.
+/// `gh pr <subcommand> <n>` and `gh issue <subcommand> <n>`, and the item a closing keyword
+/// followed by `#n` or a full address names, as in a commit message.
 ///
 /// The command is cut into segments at `&&`, `||`, `;`, `|` and a new line, and a number takes its
 /// repository from the segment it is in: `--repo`, `--repo=`, `-R` or `GH_REPO=`, else
@@ -429,10 +396,7 @@ pub fn references_in_command(
                     segment_found.extend(Reference::new(owner, repo, number, LinkKind::Issue));
                 }
             } else if let Some(reference) = reference_in(item) {
-                segment_found.push(Reference {
-                    kind_named: true,
-                    ..reference
-                });
+                segment_found.push(reference);
             }
         }
         merge(&mut found, &segment_found, PER_STRING);
@@ -570,16 +534,6 @@ mod tests {
         );
     }
 
-    /// The regression it rejects: a word `owner/repo#n` that claims a kind it was not told, which
-    /// would stop a later `/pull/` address from settling it.
-    #[test]
-    fn an_owner_repository_number_word_is_read_as_an_issue_whose_kind_was_not_named() {
-        assert_eq!(
-            items(&references_in_text("fix brave/brave-core#42 first")),
-            ["brave/brave-core#42 Issue named=false"]
-        );
-    }
-
     /// The regression it rejects: a reader that takes any `#n`, or any word with a slash and a
     /// hash, so every number in prose and every path with a fragment becomes a reference.
     #[test]
@@ -603,6 +557,7 @@ mod tests {
             "o/r#0",
             "o/r#",
             "o//r#5",
+            "owner/repo#12",
         ] {
             assert!(
                 references_in_text(text).is_empty(),
@@ -612,101 +567,41 @@ mod tests {
         }
     }
 
-    /// The regression it rejects: a path with a line number after a hash, such as `src/main.rs#12`,
-    /// listed as an issue of a repository named `main.rs`, in a typed line and after a closing
-    /// keyword alike.
+    /// The regression it rejects: a reader of the loose word `owner/repo#n`, which lists the path
+    /// `src/main.rs#12` as an issue of a repository named `main.rs`, and a reader of an address
+    /// that keeps what follows the number, which lists a page under the item.
     #[test]
-    fn a_path_with_a_source_extension_and_a_hash_is_not_a_reference() {
+    fn only_a_full_address_is_read_and_it_gives_the_base_item() {
         for text in [
             "src/main.rs#12",
-            "see src/main.rs#12",
-            "docs/README.MD#3",
-            "a/b.py#1",
-            "a/b.ts#1",
-            "a/b.tsx#1",
-            "a/b.jsx#1",
-            "a/b.mjs#1",
-            "a/b.cjs#1",
-            "a/Cargo.toml#1",
-            "a/b.json#1",
-            "a/b.yaml#1",
-            "a/b.yml#1",
-            "a/b.txt#1",
-            "a/b.sh#1",
-            "a/b.c#1",
-            "a/b.h#1",
-            "a/b.cc#1",
-            "a/b.cpp#1",
-            "a/b.hpp#1",
-            "a/b.go#1",
-            "a/b.java#1",
-            "a/b.kt#1",
-            "a/b.swift#1",
-            "a/b.rb#1",
-            "a/b.css#1",
-            "a/b.html#1",
-            "a/Cargo.lock#1",
-            "a/b.ftl#1",
-            "a/b.rst#1",
-            "a/b.test.rs#1",
+            "o/r#5",
+            "fix lib/util.js#12",
+            "vercel/next.js#5",
         ] {
             assert!(
                 references_in_text(text).is_empty(),
                 "{text:?} gave {:?}",
                 references_in_text(text)
             );
-            let closing = format!(
-                "git commit -m \"Closes {}\"",
-                text.rsplit(' ').next().unwrap()
-            );
-            assert!(command(&closing, None).is_empty(), "{closing}");
-            assert!(
-                command(&closing, Some(("brave", "bravebot"))).is_empty(),
-                "{closing}"
-            );
         }
-    }
-
-    /// The regression it rejects: a file-name check that drops a repository whose name ends in
-    /// `.js` or `.io`, or any address, so a real reference is lost.
-    #[test]
-    fn a_repository_named_like_a_file_is_still_read_by_a_full_address_and_a_name_without_an_extension_in_the_list()
-     {
-        assert_eq!(
-            items(&references_in_text(
-                "vercel/next.js#5 socket-io/socket.io#6 mrdoob/three.js#7 a/b.rs.bak#8 a/rs#9 a/.rs#1"
-            )),
-            [
-                "vercel/next.js#5 Issue named=false",
-                "socket-io/socket.io#6 Issue named=false",
-                "mrdoob/three.js#7 Issue named=false",
-                "a/b.rs.bak#8 Issue named=false",
-                "a/rs#9 Issue named=false",
-                "a/.rs#1 Issue named=false",
-            ]
-        );
-        assert_eq!(
-            items(&references_in_text(
-                "https://github.com/src/main.rs/issues/12 https://github.com/src/main.rs/pull/13"
-            )),
-            [
-                "src/main.rs#12 Issue named=true",
-                "src/main.rs#13 PullRequest named=true"
-            ]
-        );
-        assert_eq!(
-            command("git commit -m \"Closes vercel/next.js#5\"", None),
-            ["vercel/next.js#5 Issue named=true"]
-        );
+        for kind in ["issues", "pull"] {
+            let base = format!("https://github.com/o/r/{kind}/5");
+            for tail in ["", "/files", "?x=1", "#issuecomment-1", "/files?x=1#a"] {
+                let found = references_in_text(&format!("see {base}{tail} now"));
+                assert_eq!(found.len(), 1, "{base}{tail}");
+                assert_eq!(found[0].address(), base, "{base}{tail}");
+            }
+        }
     }
 
     /// The regression it rejects: a reader that takes a word whole, so a reference in brackets, in
     /// a markdown link, in quotes or before a colon or a full stop is missed.
     #[test]
     fn what_a_sentence_puts_around_a_reference_is_taken_off() {
-        let found = references_in_text(
-            "(o/r#1) \"o/r#2\", [#3](https://github.com/o/r/pull/3). o/r#4: o/r#5! `o/r#6`,",
-        );
+        let a = "https://github.com/o/r/issues";
+        let found = references_in_text(&format!(
+            "({a}/1) \"{a}/2\", [#3](https://github.com/o/r/pull/3). {a}/4: {a}/5! `{a}/6`,"
+        ));
         assert_eq!(
             found.iter().map(Reference::number).collect::<Vec<_>>(),
             [1, 2, 3, 4, 5, 6]
@@ -718,33 +613,42 @@ mod tests {
     /// inside a character, which panics on a pasted log of non-ASCII text.
     #[test]
     fn only_the_first_part_of_a_long_string_is_read_and_the_cut_falls_on_a_character() {
-        let tail = format!("{} o/r#7", "x ".repeat(SCANNED_BYTES));
+        let tail = format!("{} {AN_ITEM}", "x ".repeat(SCANNED_BYTES));
         assert!(references_in_text(&tail).is_empty());
-        let head = format!("o/r#7 {}", "x ".repeat(SCANNED_BYTES));
+        let head = format!("{AN_ITEM} {}", "x ".repeat(SCANNED_BYTES));
         assert_eq!(references_in_text(&head).len(), 1);
         // `\u{e9}` is two bytes, and the bound falls between them.
-        let wide = format!("{}\u{e9} o/r#7", "a".repeat(SCANNED_BYTES - 1));
+        let wide = format!("{}\u{e9} {AN_ITEM}", "a".repeat(SCANNED_BYTES - 1));
         assert!(references_in_text(&wide).is_empty());
         assert!(references_in_command(&wide, None).is_empty());
     }
 
-    /// The regression it rejects: a cut inside a number, which lists `o/r#1` for `o/r#123456`, a
+    const AN_ITEM: &str = "https://github.com/o/r/issues/7";
+    const AN_ISSUES_PATH: &str = "https://github.com/o/r/issues/";
+
+    /// The regression it rejects: a cut inside a number, which lists issue 1 for issue 123456, a
     /// different item.
     #[test]
     fn a_word_the_cut_falls_inside_is_dropped_and_not_shortened() {
-        let inside = format!("{} o/r#123456", "x ".repeat(32765));
+        // The bound falls after the first digit of the number.
+        let pad = SCANNED_BYTES - AN_ISSUES_PATH.len() - 1;
+        let inside = format!("{} {AN_ISSUES_PATH}123456", "x".repeat(pad - 1));
         assert!(inside.len() > SCANNED_BYTES);
         assert!(references_in_text(&inside).is_empty());
         assert!(references_in_command(&inside, None).is_empty());
         // The same word ending exactly at the bound is whole, and is read.
-        let filler = "x ".repeat((SCANNED_BYTES - " o/r#12".len()) / 2);
-        let whole = format!("{filler}  o/r#12 o/r#34");
+        let whole_word = format!("{AN_ISSUES_PATH}12");
+        let pad = SCANNED_BYTES - whole_word.len() - 1;
+        let whole = format!("{} {whole_word} {AN_ISSUES_PATH}34", "x".repeat(pad));
         assert!(whole.len() > SCANNED_BYTES);
         let found = references_in_text(&whole);
         assert_eq!(found.len(), 1, "{whole:.0}");
         assert_eq!(found[0].number(), 12);
         // A line with no white space at all is cut at a separator and not inside a word.
-        let packed = format!("{}o/r#7;o/r#123456", ";".repeat(SCANNED_BYTES - 6));
+        let packed = format!(
+            "{}{AN_ITEM};{AN_ISSUES_PATH}123456",
+            ";".repeat(SCANNED_BYTES - AN_ITEM.len() - 1 - AN_ISSUES_PATH.len() - 1)
+        );
         assert!(packed.len() > SCANNED_BYTES);
         assert_eq!(
             references_in_command(&packed, None)
@@ -759,7 +663,9 @@ mod tests {
     /// of numbers fill the session's list.
     #[test]
     fn one_string_adds_at_most_sixty_four_references_and_the_first_are_kept() {
-        let many: String = (1..=100).map(|n| format!("o/r#{n} ")).collect();
+        let many: String = (1..=100)
+            .map(|n| format!("https://github.com/o/r/issues/{n} "))
+            .collect();
         let found = references_in_text(&many);
         assert_eq!(found.len(), PER_STRING);
         assert_eq!(found[0].number(), 1);
@@ -771,10 +677,16 @@ mod tests {
     #[test]
     fn a_list_holds_each_item_once_and_a_named_kind_settles_an_assumed_one_only() {
         let mut list = Vec::new();
-        let assumed = references_in_text("o/r#5");
+        let assumed: Vec<Reference> = references_in_text("https://github.com/o/r/issues/5")
+            .into_iter()
+            .map(Reference::assumed)
+            .collect();
         let pull = references_in_text("https://github.com/O/R/pull/5");
         let issue = references_in_text("https://github.com/o/r/issues/5");
-        let other = references_in_text("o/r#6");
+        let other: Vec<Reference> = references_in_text("https://github.com/o/r/issues/6")
+            .into_iter()
+            .map(Reference::assumed)
+            .collect();
 
         let changed = merge(&mut list, &assumed, 10);
         assert_eq!(items(&changed), ["o/r#5 Issue named=false"]);
@@ -794,8 +706,13 @@ mod tests {
     #[test]
     fn a_full_list_keeps_what_it_holds_and_drops_the_rest() {
         let mut list = Vec::new();
-        merge(&mut list, &references_in_text("o/r#1 o/r#2"), 2);
-        let changed = merge(&mut list, &references_in_text("o/r#3"), 2);
+        let a = "https://github.com/o/r/issues";
+        let assumed: Vec<Reference> = references_in_text(&format!("{a}/1 {a}/2"))
+            .into_iter()
+            .map(Reference::assumed)
+            .collect();
+        merge(&mut list, &assumed, 2);
+        let changed = merge(&mut list, &references_in_text(&format!("{a}/3")), 2);
         assert!(changed.is_empty());
         assert_eq!(
             list.iter().map(Reference::number).collect::<Vec<_>>(),
@@ -929,7 +846,8 @@ mod tests {
     }
 
     /// The regression it rejects: reading every `#n` of a commit message, which lists each number
-    /// a person types, and not reading the keyword forms GitHub closes an issue by.
+    /// a person types, reading the loose word `owner/repo#n` after a keyword, and not reading the
+    /// forms GitHub closes an issue by.
     #[test]
     fn a_closing_keyword_names_an_issue_and_a_number_with_no_keyword_names_nothing() {
         let default = Some(("brave", "bravebot"));
@@ -942,9 +860,14 @@ mod tests {
             ["brave/bravebot#13 Issue named=true"]
         );
         assert_eq!(
-            command("git commit -m \"Closes brave/brave-core#77\"", None),
+            command(
+                "git commit -m \"Closes https://github.com/brave/brave-core/issues/77\"",
+                None
+            ),
             ["brave/brave-core#77 Issue named=true"]
         );
+        assert!(command("git commit -m \"Closes o/r#5\"", None).is_empty());
+        assert!(command("git commit -m \"Closes o/r#5\"", default).is_empty());
         assert!(command("git commit -m \"Closes #12\"", None).is_empty());
         assert!(command("git commit -m \"Add the thing (#12)\"", default).is_empty());
         assert!(command("git commit -m \"see #12 and #13\"", default).is_empty());
@@ -969,7 +892,10 @@ mod tests {
     #[test]
     fn a_command_that_names_an_item_in_two_forms_lists_it_once_with_the_named_kind() {
         assert_eq!(
-            command("gh pr view o/r#5; gh pr view 5 --repo o/r", None),
+            command(
+                "gh pr view https://github.com/o/r/pull/5; gh pr view 5 --repo o/r",
+                None
+            ),
             ["o/r#5 PullRequest named=true"]
         );
     }
