@@ -1031,7 +1031,7 @@ in case, hyphens and underscores, the turn says so when the definition is discov
 named and never its value, the delegate is not restricted by it, and the definition's `tools:` line
 and its kind are what decide what the delegate may call. The definition still loads. A restriction
 that is dropped without a word leaves its author with a delegate they believe cannot run programs
-or write files, which is the one wrong belief about a delegate that costs something.
+or write files.
 
 `verified-by: bravebot_agent::agents::a_definition_carries_a_name_a_description_a_kind_and_a_body`
 `verified-by: bravebot_agent::agents::a_kind_nobody_enumerated_is_not_a_definition`

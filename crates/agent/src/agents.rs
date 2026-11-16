@@ -1903,8 +1903,9 @@ mod tests {
         assert!(said.is_empty(), "a harmless key was reported: {said:?}");
     }
 
-    /// A key the file holds that is not a restriction is said nowhere at read time, and a value
-    /// written after the key is never repeated.
+    /// A value written after the key is text from a checked-in file, so it is never repeated. Only
+    /// the key, which `is_a_restriction_nothing_applies` holds to letters, hyphens and
+    /// underscores, may reach the screen.
     #[test]
     fn the_notice_repeats_a_key_and_never_its_value() {
         let (_, said) = notices_for(
