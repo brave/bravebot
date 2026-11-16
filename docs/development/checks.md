@@ -367,8 +367,9 @@ literals repeated across files, files and functions past a length, functions nes
 several booleans, files that use many other modules, public functions no test names, files holding
 a lot of shared mutable state, commented-out code, and functions returning string errors. rustc
 warns about none of the first kind in a library crate, and no check compares one file with another.
-The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It is the
-deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
+The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It leaves out
+`third_party/`, whose crates are kept close to their release
+([third_party/README.md](../../third_party/README.md)). It is the deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
 reviewers read each candidate and draft an issue for the ones worth fixing. The skill also runs
 clippy's opinionated lints over the code that ships, which `make check-maintenance` does not, since
 it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches
