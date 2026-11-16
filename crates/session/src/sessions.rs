@@ -657,8 +657,8 @@ pub struct StoredReference {
     pub number: u64,
     /// `issue` or `pull_request`. A word this build does not know drops the entry.
     pub kind: String,
-    /// Whether the text the reference came from named its kind. Absent reads as a guess, which a
-    /// later sighting that names the kind then settles.
+    /// Whether the text the reference came from named its kind. Absent reads as not named, and
+    /// such an entry is dropped when the record is read.
     #[serde(default)]
     pub kind_named: bool,
 }
@@ -680,7 +680,9 @@ impl StoredReference {
     }
 
     /// The reference this stands for, or `None` where a part is not one [`Reference::new`] allows,
-    /// or where the kind was assumed and the repository is named like a file.
+    /// or where the kind was never named. The only reader that assumes a kind was the loose word
+    /// `owner/repo#n`, which is no longer read (PANEL-16), so a record an older build wrote can
+    /// hold such an item and a resume drops it.
     pub fn read(&self) -> Option<Reference> {
         let kind = match self.kind.as_str() {
             "issue" => LinkKind::Issue,
@@ -688,15 +690,7 @@ impl StoredReference {
             _ => return None,
         };
         let reference = Reference::new(&self.owner, &self.repo, self.number, kind)?;
-        if self.kind_named {
-            return Some(reference);
-        }
-        // An assumed item came from the shorthand, which does not read a file name (PANEL-16).
-        // A record an older build wrote can hold one.
-        match bravebot_agent::links::names_a_file(&self.repo) {
-            true => None,
-            false => Some(reference.assumed()),
-        }
+        self.kind_named.then_some(reference)
     }
 }
 
@@ -7038,12 +7032,8 @@ mod tests {
     }
 
     /// A reference met in a session, as the record keeps it.
-    fn a_reference(number: u64, kind: LinkKind, named: bool) -> Reference {
-        let reference = Reference::new("brave", "bravebot", number, kind).expect("a valid one");
-        match named {
-            true => reference,
-            false => reference.assumed(),
-        }
+    fn a_reference(number: u64, kind: LinkKind) -> Reference {
+        Reference::new("brave", "bravebot", number, kind).expect("a valid one")
     }
 
     /// Every record written before the references were kept has no such field, and it must still
@@ -7064,11 +7054,11 @@ mod tests {
         assert!(record.references.is_empty());
     }
 
-    /// The list is written with the turn's save, a resume reads it back with its order and with
-    /// whether each kind was named, and a fork carries it (SESSION-3).
+    /// The list is written with the turn's save, a resume reads it back with its order and its
+    /// kinds, and a fork carries it (SESSION-3).
     ///
     /// The faults it rejects: a save that leaves the list out of the record (the resume has none), a
-    /// resume that sorts the list or reads every kind as named, and a fork that starts empty.
+    /// resume that sorts the list, and a fork that starts empty.
     #[test]
     fn the_references_are_written_with_the_save_and_a_resume_and_a_fork_keep_them() {
         if !in_isolated_profile() {
@@ -7076,9 +7066,9 @@ mod tests {
         }
         let root = an_empty_project("bravebot-session-references");
         let met = [
-            a_reference(42, LinkKind::Issue, false),
-            a_reference(7, LinkKind::PullRequest, true),
-            a_reference(1, LinkKind::Issue, true),
+            a_reference(42, LinkKind::Issue),
+            a_reference(7, LinkKind::PullRequest),
+            a_reference(1, LinkKind::Issue),
         ];
 
         let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
@@ -7105,12 +7095,12 @@ mod tests {
     #[test]
     fn an_entry_that_does_not_read_is_dropped_and_the_record_and_the_other_entries_are_kept() {
         let mut written = serde_json::to_value(a_record()).expect("serialises");
-        let entry = |owner: &str, number: serde_json::Value| serde_json::json!({"owner": owner, "repo": "bravebot", "number": number, "kind": "issue"});
+        let entry = |owner: &str, number: serde_json::Value| serde_json::json!({"owner": owner, "repo": "bravebot", "number": number, "kind": "issue", "kind_named": true});
         written["references"] = serde_json::json!([
             entry("brave", 1.into()),
             entry("brave", (-1).into()),
             entry("brave", "7".into()),
-            {"repo": "bravebot", "number": 8, "kind": "issue"},
+            {"repo": "bravebot", "number": 8, "kind": "issue", "kind_named": true},
             "not an object",
             entry("brave", 9.into()),
         ]);
@@ -7128,10 +7118,9 @@ mod tests {
 
     /// A reference is read back through [`Reference::new`], so a record that was edited cannot put
     /// a string with an escape, a kind this build does not know or a number with a leading zero in
-    /// the panel, and a record with no `kind_named` reads each kind as a guess.
+    /// the panel.
     ///
-    /// The faults it rejects: a read that trusts the strings, and one that reads an absent
-    /// `kind_named` as named.
+    /// The fault it rejects: a read that trusts the strings.
     #[test]
     fn a_reference_the_record_holds_that_is_not_valid_is_dropped_on_reading() {
         let written = |owner: &str, repo: &str, number: u64, kind: &str| StoredReference {
@@ -7155,40 +7144,35 @@ mod tests {
             .map(Reference::number)
             .collect();
         assert_eq!(read, [1, 5]);
+    }
+
+    /// A record an older build wrote can hold an item read from the loose word `owner/repo#n`,
+    /// whose kind was assumed, and an entry with no `kind_named` reads as one. A resume drops it
+    /// and keeps one whose kind was named, which a full address, `gh` or a closing keyword gave.
+    ///
+    /// The fault it rejects: a read that keeps an assumed item whose parts are well formed, so a
+    /// path or a word an older build listed stays in the panel after a resume.
+    #[test]
+    fn an_item_whose_kind_was_never_named_is_dropped_on_reading_and_a_named_one_is_kept() {
+        let written = |number: u64, kind_named: bool| StoredReference {
+            owner: "brave".to_string(),
+            repo: "bravebot".to_string(),
+            number,
+            kind: "issue".to_string(),
+            kind_named,
+        };
+        let held = [written(12, false), written(13, true), written(14, false)];
+        let read: Vec<u64> = read_references(&held)
+            .iter()
+            .map(Reference::number)
+            .collect();
+        assert_eq!(read, [13]);
 
         let without_the_flag: StoredReference = serde_json::from_str(
             r#"{"owner":"brave","repo":"bravebot","number":9,"kind":"issue"}"#,
         )
         .expect("reads");
-        let reference = without_the_flag.read().expect("valid");
-        assert!(!reference.kind_named());
-    }
-
-    /// A record written before the reader skipped file names can hold `src/main.rs#12` as an assumed
-    /// issue. A resume drops it, and keeps one whose kind was named, which a full address gave.
-    ///
-    /// The fault it rejects: a read that keeps every assumed item whose parts are well formed, so a
-    /// path listed by an older build stays in the panel after a resume.
-    #[test]
-    fn an_assumed_item_whose_repository_names_a_file_is_dropped_on_reading() {
-        let written = |owner: &str, repo: &str, number: u64, kind_named: bool| StoredReference {
-            owner: owner.to_string(),
-            repo: repo.to_string(),
-            number,
-            kind: "issue".to_string(),
-            kind_named,
-        };
-        let held = [
-            written("src", "main.rs", 12, false),
-            written("src", "main.rs", 13, true),
-            written("vercel", "next.js", 14, false),
-            written("brave", "bravebot", 15, false),
-        ];
-        let read: Vec<u64> = read_references(&held)
-            .iter()
-            .map(Reference::number)
-            .collect();
-        assert_eq!(read, [13, 14, 15]);
+        assert!(without_the_flag.read().is_none());
     }
 
     /// The picker searches the links, so the list has to carry them, and a record that holds

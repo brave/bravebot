@@ -566,31 +566,31 @@ case), the repository and the number agree, and the list keeps the order they we
 first spelling.
 
 One reader takes items out of a string. It calls no model, no network and no `gh`, and touches no
-file. It finds a full `https://github.com/{owner}/{repo}/issues/{n}` or `/pull/{n}` address, which
-names its kind, and a word `{owner}/{repo}#{n}`, which names none and is listed as an issue until a
-later sighting names it. A full address is read whatever the repository is called. The word is not read where the
-repository is a non-empty name, a dot, and then one of `rs`, `md`, `py`, `ts`, `tsx`, `jsx`, `mjs`,
-`cjs`, `toml`, `json`, `yaml`, `yml`, `txt`, `sh`, `c`, `h`, `cc`, `cpp`, `hpp`, `go`, `java`, `kt`,
-`swift`, `rb`, `css`, `html`, `lock`, `ftl` or `rst`. The extension is what follows the last dot, with
-no regard to case. So `src/main.rs#12` is a path and is not listed, while `a/rs#9` (no dot), `a/.rs#1`
-(no name before the dot) and `a/b.rs.bak#8` (the last extension is `bak`) are still read. `js` and
-`io` are left out on purpose, because `next.js` and `socket.io` are repositories, so `vercel/next.js#5`
-is still read. The same rule applies to the word after `Closes` and its other forms. A record a resume
-reads drops an item whose kind was not named and whose repository fits that rule, and keeps one whose
-kind was named. In a command it also finds the number a `gh pr` or `gh issue` subcommand works
-on (`view`, `comment`, `checkout`, `diff`, `checks`, `merge`, `review`, `close`, `reopen`, `edit`,
-`ready`, `develop`, `lock`, `unlock`, `pin`, `unpin`, `transfer`). That number is the first word after
-the subcommand, or the first one after only `-R {repo}`, `--repo {repo}`, `--repo={repo}` or `-R{repo}`,
-so the `30` in `gh pr checks --interval 30` is not an item, as no number is read once any other word
-comes first. The reader also finds the number after `Closes`,
-`Fixes` or `Resolves` and their other forms, as `#n` or `{owner}/{repo}#n`. A number alone takes its
-repository from `--repo`, `--repo=`, `-R` or `GH_REPO=` in the same segment of the command, a segment
-ending at a newline, `;`, `|` or `&`, and otherwise from the repository of the session's own pull
-request link, or failing that its issue link, when that is a GitHub address. A repository that is on
-another host or is not well formed names nothing, and a number with no repository names nothing. A bare
-`#n` in prose, a number in `gh pr list` or `gh api`, and a title such as `Add x (#12)` name nothing.
-A string is read up to its first 64 KiB, cut at the end of a word, so a word the cut falls inside is
-dropped and never shortened to a different number, and it gives at most 64 items.
+file. Items come from three places:
+
+- A full `https://github.com/{owner}/{repo}/issues/{n}` or `/pull/{n}` address, whatever the
+  repository is called. The item is always the base `/issues/{n}` or `/pull/{n}` link, and anything
+  after the number, such as `/files`, `?x=1` or `#issuecomment-1`, is dropped.
+- In a command, the number a `gh pr` or `gh issue` subcommand works on (`view`, `comment`,
+  `checkout`, `diff`, `checks`, `merge`, `review`, `close`, `reopen`, `edit`, `ready`, `develop`,
+  `lock`, `unlock`, `pin`, `unpin`, `transfer`). That number is the first word after the subcommand,
+  or the first one after only `-R {repo}`, `--repo {repo}`, `--repo={repo}` or `-R{repo}`, so the
+  `30` in `gh pr checks --interval 30` is not an item, as no number is read once any other word
+  comes first.
+- The word after `Closes`, `Fixes` or `Resolves` and their other forms, as `#n` or as a full address.
+
+The word `{owner}/{repo}#{n}` is not read, so `src/main.rs#12`, `o/r#5` and `vercel/next.js#5` name
+nothing, and `Closes o/r#5` names nothing. Every item names its kind. A resume drops a saved item
+whose kind was never named, which only an older build wrote, and keeps one whose kind was named.
+
+A number alone takes its repository from `--repo`, `--repo=`, `-R` or `GH_REPO=` in the same segment
+of the command, a segment ending at a newline, `;`, `|` or `&`, and otherwise from the repository of
+the session's own pull request link, or failing that its issue link, when that is a GitHub address.
+A repository that is on another host or is not well formed names nothing, and a number with no
+repository names nothing. A bare `#n` in prose, a number in `gh pr list` or `gh api`, and a title
+such as `Add x (#12)` name nothing. A string is read up to its first 64 KiB, cut at the end of a
+word, so a word the cut falls inside is dropped and never shortened to a different number, and it
+gives at most 64 items.
 
 There are three sources, and only these.
 
@@ -632,11 +632,9 @@ reads cannot decide anything.
 `verified-by: bravebot_agent::links::a_reference_writes_its_shorthand_and_the_address_of_its_kind`
 `verified-by: bravebot_agent::links::two_references_are_the_same_item_by_owner_repository_and_number`
 `verified-by: bravebot_agent::links::a_full_address_gives_the_kind_its_path_names_and_what_follows_the_number_is_ignored`
-`verified-by: bravebot_agent::links::an_owner_repository_number_word_is_read_as_an_issue_whose_kind_was_not_named`
 `verified-by: bravebot_agent::links::a_word_that_is_not_a_reference_gives_nothing`
-`verified-by: bravebot_agent::links::a_path_with_a_source_extension_and_a_hash_is_not_a_reference`
-`verified-by: bravebot_agent::links::a_repository_named_like_a_file_is_still_read_by_a_full_address_and_a_name_without_an_extension_in_the_list`
-`verified-by: bravebot_session::sessions::an_assumed_item_whose_repository_names_a_file_is_dropped_on_reading`
+`verified-by: bravebot_agent::links::only_a_full_address_is_read_and_it_gives_the_base_item`
+`verified-by: bravebot_session::sessions::an_item_whose_kind_was_never_named_is_dropped_on_reading_and_a_named_one_is_kept`
 `verified-by: bravebot_agent::links::what_a_sentence_puts_around_a_reference_is_taken_off`
 `verified-by: bravebot_agent::links::only_the_first_part_of_a_long_string_is_read_and_the_cut_falls_on_a_character`
 `verified-by: bravebot_agent::links::a_word_the_cut_falls_inside_is_dropped_and_not_shortened`
@@ -658,13 +656,13 @@ reads cannot decide anything.
 `verified-by: bravebot_agent::tools::tests::references::a_turn_that_keeps_no_links_collects_nothing`
 `verified-by: bravebot_agent::tools::tests::references::what_a_call_names_leaves_dispatch_in_its_output`
 `verified-by: bravebot_agent::references::a_turn_that_fails_after_a_call_has_still_reported_what_the_call_named`
-`verified-by: bravebot_agent::references::an_item_is_reported_once_and_again_only_when_a_later_call_settles_its_kind`
+`verified-by: bravebot_agent::references::an_item_is_reported_once_however_many_calls_name_it`
 `verified-by: bravebot_agent::references::a_bare_number_in_a_planners_command_takes_the_repository_the_task_names`
 `verified-by: bravebot_agent::references::a_turn_whose_front_end_keeps_no_links_reports_nothing`
 `verified-by: bravebot_agent::references::what_a_vouched_file_names_is_listed`
 `verified-by: bravebot_agent::references::what_a_program_printed_is_not_listed_and_adds_nothing_to_the_trail`
 `verified-by: bravebot_tui::state::references::every_line_the_box_sends_is_read_for_what_it_names`
-`verified-by: bravebot_tui::state::references::an_item_met_again_keeps_its_place_and_a_named_kind_settles_a_guess`
+`verified-by: bravebot_tui::state::references::an_item_met_again_keeps_its_place_and_a_named_kind_settles_an_assumed_one`
 `verified-by: bravebot_tui::state::references::the_session_keeps_the_first_five_hundred_it_met_in_order`
 `verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
 `verified-by: bravebot_tui::app::the_addresses_the_command_line_gave_are_in_the_list_when_the_session_opens`
@@ -772,11 +770,6 @@ migration.
   ([PANEL-16](#PANEL-16)).** The address `gh issue create` prints is a program's output and is never
   read, so the list does not hold it until something the person or the planner wrote names it.
 
-- **A word shaped like `owner/repo#n` is read as a reference ([PANEL-16](#PANEL-16)).** A path with a
-  number after a hash whose last part does not end in one of the listed extensions, such as
-  `lib/util.cfg#12` or `a/b.js#12`, has a valid owner and repository by GitHub's rules, so it is listed
-  as an issue. The list is for the person to look at and nothing acts on it.
-
 - **A command a rule then refuses still counts ([PANEL-16](#PANEL-16)).** The command is read where
   the planner's argument is read, before the checks that refuse it, so the items it names are listed
   though it did not run.
@@ -790,9 +783,6 @@ migration.
   keeps links so that a turn collects, and the window draws no such list, so each turn there reads the
   planner's `run` and fetch arguments and the trusted results for a list nobody sees. The trail of a
   desktop turn gains one `allow` event for each trusted result read, as the terminal's does.
-
-- **A pull request met as `owner/repo#n` is listed under Issues until something names it
-  ([PANEL-16](#PANEL-16)).** An address with `/pull/` or a `gh pr` command settles its kind.
 
 - **An own link that is not on GitHub is drawn as written and is not a reference
   ([PANEL-12](#PANEL-12)).** It is not in `/issues` or `/prs` either.

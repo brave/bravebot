@@ -325,7 +325,7 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
 - the goal, while one stands,
 - a Pull requests section and an Issues section, each left out while it has nothing to list. Each
   starts with the pull request or the issue you gave with `/pr` or `/issue`, and goes on with the ones
-  the session has met: addresses and `owner/repo#12` words you typed, and the ones the model's own
+  the session has met: full GitHub addresses you typed, and the ones the model's own
   `gh`, `run` and fetch calls name. A row is `owner/repo#12` as a link to the item, cut from the left
   where it is long so the number at the end stays in view. A link of yours that is not a GitHub address
   is drawn as you wrote it and is not a link. Where the screen has no room, a section ends with
@@ -430,7 +430,7 @@ never recorded. The link is held to the same check, replaces the one of its kind
 the session record and drawn in the panel as one you gave with `/issue` or `/pr`.
 
 Other issues and pull requests the session meets are not its link. The planner's `gh pr view 12 --repo owner/repo`,
-an address it fetches and `Closes owner/repo#12` in a commit message it writes, and what you type, are
+an address it fetches and `Closes https://github.com/owner/repo/issues/12` in a commit message it writes, and what you type, are
 added to the panel's Pull requests and Issues sections and to
 [`/prs` and `/issues`](../reference/commands.md#issues-and-prs), and set no link. What a program
 printed is never read, so an issue created with `gh issue create` is listed once a later line or call

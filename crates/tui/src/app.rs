@@ -10370,7 +10370,8 @@ mod tests {
     /// A string nothing in the interface says, which the tools of the fixture below returned.
     const FROM_A_TOOL: &str = "TOOLSAID-7f3c1e";
     /// What a tool's result holds that the Pull requests and Issues sections would list if they read it.
-    const A_REFERENCE_FROM_A_TOOL: &str = "evil/trap#9 https://github.com/evil/trap/pull/10";
+    const A_REFERENCE_FROM_A_TOOL: &str =
+        "https://github.com/evil/trap/issues/9 https://github.com/evil/trap/pull/10";
 
     /// A session with every row of the panel a click acts on, whose tools returned
     /// [`FROM_A_TOOL`] in a result, in what a call showed and in what it was told, and whose reply
@@ -10382,7 +10383,7 @@ mod tests {
         session.opens_an_address = records_the_address;
         type_line(
             &mut session,
-            "do the work on brave/bravebot#7 and https://github.com/brave/bravebot/pull/8",
+            "do the work on https://github.com/brave/bravebot/issues/7 and https://github.com/brave/bravebot/pull/8",
         );
         handle_key(&mut session, key(KeyCode::Enter));
         session.set_todos(bravebot_core::todo::rows(&List::new(vec![
@@ -28050,7 +28051,10 @@ mod tests {
             );
         }
         let mut session = a_turn_running_on("first");
-        type_while_working(&mut session, "second is brave/bravebot#5");
+        type_while_working(
+            &mut session,
+            "second is https://github.com/brave/bravebot/issues/5",
+        );
         // What the running turn reported as it went (`ToMain::References`).
         session.add_references(&[
             Reference::new("brave", "bravebot", 77, LinkKind::PullRequest).unwrap(),
@@ -28084,10 +28088,13 @@ mod tests {
             .iter()
             .map(|queued| queued.prompt.as_str())
             .collect();
-        assert_eq!(waiting, vec!["second is brave/bravebot#5"]);
+        assert_eq!(
+            waiting,
+            vec!["second is https://github.com/brave/bravebot/issues/5"]
+        );
         assert_eq!(
             session.interjections().take().as_deref(),
-            Some("second is brave/bravebot#5"),
+            Some("second is https://github.com/brave/bravebot/issues/5"),
             "the running turn was handed a command"
         );
     }
@@ -28121,8 +28128,8 @@ mod tests {
     /// kind each item was read as, and a fork starts with the same list. A record with none, which
     /// is any record written before the list, resumes with none.
     ///
-    /// The faults it rejects: a resume that leaves the session's list empty, one that reads every
-    /// kind as named, and a fork that drops the list.
+    /// The faults it rejects: a resume that leaves the session's list empty, one that reorders it,
+    /// and a fork that drops the list.
     #[test]
     fn a_resumed_or_forked_session_has_met_what_its_record_says() {
         use bravebot_agent::links::{LinkKind, Reference};
@@ -28136,9 +28143,7 @@ mod tests {
         let mut workspace = Workspace::new(&root).expect("a workspace");
         let config = a_config_needing_no_sign_in();
         let met = [
-            Reference::new("o", "r", 9, LinkKind::Issue)
-                .unwrap()
-                .assumed(),
+            Reference::new("o", "r", 9, LinkKind::Issue).unwrap(),
             Reference::new("o", "r", 3, LinkKind::PullRequest).unwrap(),
         ];
         let mut session = Session::new("none");

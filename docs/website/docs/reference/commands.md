@@ -1291,12 +1291,12 @@ and Issues sections of the [info panel](../using/sessions.md#telling-sessions-ap
 starts with the link you gave with `/pr` or `/issue` where that is a GitHub address, and then holds
 what the session met in the order it was first met. A session that has met none says so.
 
-A session meets an item when you type a GitHub address or `owner/repo#12` in a line you send, when you
+A session meets an item when you type a full GitHub address in a line you send, when you
 open it with `--issue` or `--pr`, when the model's own `run`, `fetch_url` or `download_url` call names
-it (`gh pr view 12 --repo owner/repo`, an address, `Closes owner/repo#12` in a commit message), and
+it (`gh pr view 12 --repo owner/repo`, an address, `Closes https://github.com/owner/repo/issues/12` in a commit message), and
 when a file you vouched for names it. Nothing a program printed, a web page said or the model wrote in
 a reply is read, so an address in the output of `gh pr view` is not listed, and an issue the model
-creates with `gh issue create` is listed once a later line or call names its number. A bare `#12` names
+creates with `gh issue create` is listed once a later line or call names its number. An address is listed as the issue or pull request itself, with anything after its number dropped, and the word `owner/repo#12` is not read. A bare `#12` names
 no repository and is read only after `gh pr`, `gh issue` or a word such as `Closes`, in the repository of
 `--repo` or `-R`, else of your own link. Once a page or an untrusted file has been read in a turn, the
 model's later commands add nothing to the list, and what you type still does. The session keeps the

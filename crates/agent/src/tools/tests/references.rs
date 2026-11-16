@@ -78,7 +78,7 @@ fn a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_t
     let (found, said) = found_by(
         "run",
         &json!({
-            "command": "gh pr view 123 --repo brave/bravebot && git commit -m \"Closes brave/brave-core#77\"",
+            "command": "gh pr view 123 --repo brave/bravebot && git commit -m \"Closes https://github.com/brave/brave-core/issues/77\"",
             "directory": "nope"
         }),
         false,

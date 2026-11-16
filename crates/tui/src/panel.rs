@@ -2712,18 +2712,19 @@ mod tests {
 
     /// The panel speaks in the interface's own voice, so a reply or anything a tool returned drawn
     /// in it would read as the interface saying it. The rows of the Pull requests and Issues
-    /// sections come from what the person typed, so an address and a `owner/repo#n` word in a reply
-    /// and in what a tool returned add none, while the one the person typed is drawn.
+    /// sections come from what the person typed, so an address in a reply and in what a tool
+    /// returned adds none, while the one the person typed is drawn.
     ///
     /// Rejects: a session that reads the references out of a reply or a result as it reads them out
     /// of a line the person sent.
     #[test]
     fn nothing_a_turn_returned_reaches_the_panel() {
         use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
-        const TRAP: &str = "evil/trap#9 and https://github.com/evil/trap/pull/10";
+        const TRAP: &str =
+            "https://github.com/evil/trap/issues/9 and https://github.com/evil/trap/pull/10";
         let mut session = Session::new("none");
         session.identify("typed by the person", "~/b".to_string(), None);
-        for c in "see brave/bravebot#7".chars() {
+        for c in "see https://github.com/brave/bravebot/issues/7".chars() {
             session.type_char(c);
         }
         session.submit();
