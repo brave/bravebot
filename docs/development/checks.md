@@ -170,7 +170,8 @@ stops on one that is in neither that list nor `NAMED_NOT_READ`. A file outside `
 The changes job runs the classifier from the pull request's base commit, not from the pull request,
 so a change to the classifier is judged by the copy it replaces. The classifier and the Makefile are
 in `.github/CODEOWNERS`, and `make check-security` fails when a file a workflow step runs by path
-(`python3 <path>`, or the Makefile behind `make`) matches no entry there.
+(`python3 <path>`, `<path>` at a command position such as the first word after `run:`, `"$PYTHON"
+<path>`, or the Makefile behind `make`) matches no entry there.
 
 `make check-affected` makes that choice locally, against the merge base with `upstream/main`, or
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
