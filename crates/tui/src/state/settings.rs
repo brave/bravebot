@@ -64,6 +64,18 @@ impl Session {
         self
     }
 
+    /// Open the session in auto, because `--auto` or the person's own `permissions.startInAuto`
+    /// asked for it (AUTO-1).
+    ///
+    /// Unlike [`Session::starting_in_bypass`] it records nothing about where the session began: the
+    /// line under the box names auto for as long as the session is in it, and names nothing once the
+    /// key has left it, which is what it does for a session that reached auto by the key.
+    pub fn starting_in_auto(self) -> Self {
+        self.permission_mode
+            .set(bravebot_agent::PermissionMode::Auto);
+        self
+    }
+
     /// Take bypass off the ladder, because a settings layer wrote `permissions.bypassUnreachable`.
     ///
     /// A session already in bypass is put back to asking, and the person is told, since the mode

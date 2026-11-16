@@ -442,8 +442,7 @@ enum Wake<'a> {
 
 /// The session `typed` names, running, or the complaint to give.
 ///
-/// One that is `stopped` or `interrupted` is started again first, in the mode every session opens
-/// in (BG-9, BG-10), and only from a terminal: the start of a session is a thing a person did
+/// One that is `stopped` or `interrupted` is started again first, asking (BG-9, BG-10), and only from a terminal: the start of a session is a thing a person did
 /// (BG-2). For `interrupted` the terminal says first that the turn it was in is not repeated, and
 /// the new process tells the planner that turn ended (BG-12). The prompt a reply carries is the
 /// line the new process starts with, so it is not sent again, and the third value is true.

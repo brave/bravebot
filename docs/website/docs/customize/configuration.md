@@ -330,7 +330,7 @@ one thing leaves everything else in force:
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and the file `--settings` names; a project or local file's are ignored and reported |
 | `git.identities` | your own file and the file `--settings` names, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
-| `askIdleSeconds` | your own file and the file `--settings` names; a project or local file's is ignored and reported |
+| `askIdleSeconds`, `permissions.startInAuto` | your own file and the file `--settings` names; a project or local file's is ignored and reported, and a managed file's `permissions.startInAuto` is not read |
 | `limit` | your own file and the file `--settings` names; a project or local file may state one where you stated none, or lower yours in the same unit, and a value that removes yours, raises it or counts in the other unit is ignored and reported |
 | `updateCheck`, `deepLinks`, `suggestions`, `awaySummaryEnabled`, `tui.mouse`, `tui.contextMenu`, `deferMcpToolsAbove`, `promptCacheTtl` | your own file and the file `--settings` names decide them as they do `limit`: a project or local file may only move the key the safer way (turn the check, links, suggestions, the recap, the mouse or the menu off, lower the deferral size, ask for the `5m` cache lifetime) and a value that moves it the other way is ignored and reported |
 | anything else | the closest file that set it wins, in either direction: for example `effort`, `editorMode`, `terminalTitle`, `maxRunningDelegates`, `tui.wheelRows`, `search.maxFiles`, `run.maxOutput`, `run.maxSeconds` and `download.maxBytes` |
@@ -390,7 +390,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `limit` | the most tokens or premium requests a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
-| `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
+| `permissions` | which actions to refuse, and which to ask about ([below](#permissions)); `permissions.startInAuto` opens sessions in the auto mode ([below](#permissionsstartinauto)) |
 | `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([details](../security/sandbox.md#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([details](../security/sandbox.md#runnetwork)) |
@@ -1464,8 +1464,9 @@ relative name means a path under the workspace. See
 
 `defaultMode` is parsed so that a file carrying it is not rejected, and **acted on by nothing**: if
 you wrote `acceptEdits` you get the prompts you would have got without it. The modes it names do
-exist. Shift-Tab and `--dangerously-skip-permissions` are what choose one. See
-[modes](../security/permission-modes.md).
+exist. Shift-Tab, `--dangerously-skip-permissions`, `--auto` and
+[`permissions.startInAuto`](#permissionsstartinauto) are what choose one, and the last chooses only
+auto. See [modes](../security/permission-modes.md).
 
 **An unreadable rule is dropped, named, and takes nothing with it.** A line that is not a rule, names
 no family, or has an anchor that cannot be resolved is reported by `doctor` and in the session where
@@ -1500,6 +1501,39 @@ nothing away from you.
 parent holds whatever was refused beside the old directory, and allowing the move back would allow
 every move outward. To work above where you are, start a session there. It is read when the session
 opens, so one that moves into a checkout asking for it is confined from the next session there.
+
+#### `permissions.startInAuto`
+
+```json
+{ "permissions": { "startInAuto": true } }
+```
+
+`true` opens every interactive session in the [auto mode](../security/permission-modes.md#auto), where
+a classifier answers a command the sandbox confines and the first fetch of a URL, and writes go
+through unasked. Without the key a session opens asking, which is also what `false` does. It applies
+to a new session, to `--resume`, `--continue`, `--fork` and `--from-pr`, to the next session after an
+in-process `/resume`, and to the desktop application's new, opened and forked sessions. It does not
+apply to a one-shot run (`-p`), `--plain`, a background session, a scheduled run, a trigger,
+`skill eval`, a session an editor opens over ACP, one a local-host client opens, or one a
+`bravebot://open` link starts, all of which open asking. A session in auto cannot be moved to the background with `/bg`: the command is
+refused until you leave the mode.
+
+**Only your own file and the file `--settings` names are read for it.** A project or local file that
+names it has the key removed and `bravebot doctor` and the desktop settings view name the file, so a
+repository you cloned cannot choose who answers your prompts. An administrator's
+[managed file](managed-settings.md) does not set it either: a copy there is not read, and `doctor`
+says so. Only the boolean `true` opens a session in auto. `"true"` in quotes, a number and `null` leave
+sessions asking, and nothing reports them.
+
+**A flag on the line wins.** `--dangerously-skip-permissions` opens the session in bypassing whatever
+the key says, and `--auto` opens it in auto when the key is `false`. `--accept-edits` is refused on a
+line that starts a session, as before.
+
+**To get back to asking,** press Shift-Tab. From auto it goes to bypassing first, where that is
+reachable, and one more press goes to asking. Where a file you can see set
+[`bypassUnreachable`](#two-refusals-you-do-not-have-to-enumerate) it goes straight to asking. In the
+desktop application the mode shortcut goes from auto to asking. To stop opening sessions in auto,
+remove the key or set it to `false`.
 
 ### `attribution`
 

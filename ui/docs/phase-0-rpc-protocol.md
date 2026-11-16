@@ -1763,8 +1763,13 @@ Still open:
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
   only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest
   of that turn (MODE-8).
-- `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
-  A mode is not written to the record and a fork does not take its parent's (MODE-10).
+- `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is `ask`, or `auto`
+  where the person's `permissions.startInAuto` is true in the home settings file or in the file the
+  window selected (AUTO-1); a checkout's copy opens nothing in auto. The reply names the mode the
+  session's own handle holds, which is the one its turns run in. A mode is not written to the record
+  and a fork does not take its parent's (MODE-10). The key from auto goes to `ask`, since a window has
+  no bypassing. A session opened through ACP or the local host's `session.new` is put to `ask` before
+  it replies, so its `permissionMode` is `ask` (ACP-7, HOST-2).
 - `turn.started` and `manifest.started` carry `mode`, the mode the turn or run started in.
 - `session.sandbox` takes `session` and `mode`, one of `strict`, `read-only` or `workspace-write`, and answers
   `{ sandboxMode }`. `off`, and any other word, is `bad_request`: a window has no line that shows

@@ -55,9 +55,10 @@ pub enum PermissionMode {
     /// person's words and the action, and every other question is put to the person.
     ///
     /// The classifier removes a question and never refuses one: anything but its allow word leaves
-    /// the question with the person (AUTO-2, AUTO-6). The key reaches it, a one-shot run opens in it
-    /// with `--auto`, and no settings file, window request, recorded session or background session
-    /// does (AUTO-1).
+    /// the question with the person (AUTO-2, AUTO-6). The key reaches it, and a one-shot run or a
+    /// session in the terminal opens in it with `--auto`. A session in the terminal or a window opens
+    /// in it where the person's own settings say `permissions.startInAuto`. No checkout's file,
+    /// managed file, recorded session or background session does (AUTO-1).
     Auto,
 }
 

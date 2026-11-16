@@ -1435,17 +1435,17 @@ does, and `bravebot reply <id> "text"` sends it its next prompt. `bravebot sessi
 
 A background session holds a question it would ask until someone attaches, and a rule in a settings
 file that allows something does not answer for you there. Stopping it, or leaving it idle for an
-hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again in the
-mode every session opens in.
+hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again,
+asking.
 
 Inside an attached session, `/detach` ends the attachment and nothing else. See
 [Sessions in the background](../using/sessions.md#sessions-in-the-background).
 
-It is refused, with a line saying why and the session carrying on, in bypass, in an incognito
+It is refused, with a line saying why and the session carrying on, in bypass or auto, in an incognito
 session, before the session has a record to hand over (send a prompt first), in a session started
 with an option `--bg` also refuses (such as `--no-shell` or `--settings`), and while a loop, a goal
 or a watch is running, which the background session does not run. It is also refused after `/sandbox`
-moved the mode: a background session starts in the mode every session opens in, so the line says
+moved the mode: a background session starts asking, so the line says
 `/bg` is refused because `/sandbox` moved this session, and to run `/sandbox` with the mode that
 session starts in first. Typed while a turn runs it
 waits for the turn to end. The word takes nothing after it: `/bg now` is sent as a prompt.

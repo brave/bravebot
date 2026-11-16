@@ -4423,11 +4423,13 @@ fn an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not(
     );
 }
 
-/// CLI-1: `--auto` is refused beside the bypass flag, beside `--accept-edits`, and where there is
-/// no one-shot run to open in the mode, each with the argument status and nothing sent to the
-/// gateway.
+/// CLI-1, AUTO-1: `--auto` is refused beside the bypass flag and beside `--accept-edits`, on a line
+/// that starts a session as on one that starts a run, and where there is neither a one-shot run nor a
+/// session in the terminal to open in the mode, each with the argument status and nothing sent to
+/// the gateway. A line that starts a session is refused here too when it also names another mode,
+/// which is what keeps `--auto` from being read as one flag among two.
 #[test]
-fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
+fn auto_is_refused_with_the_other_mode_flags_and_where_nothing_opens_in_it() {
     let gateway = a_gateway_writing("out.txt", "hi");
     let scratch = Scratch::new("cli-running-auto-refused").with_settings(&settings_for(&gateway));
     for (arguments, says) in [
@@ -4439,9 +4441,22 @@ fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
             &["--auto", "--accept-edits", "-p", "x"][..],
             "--accept-edits",
         ),
+        (
+            &["--auto", "--dangerously-skip-permissions"][..],
+            "--dangerously-skip-permissions",
+        ),
+        (&["--auto", "--accept-edits"][..], "--accept-edits"),
+        (
+            &["--auto", "--resume", "--accept-edits"][..],
+            "--accept-edits",
+        ),
         (&["--auto", "--plain"][..], "one-shot"),
         (&["--auto", "--bg", "x"][..], "one-shot"),
-        (&["--auto"][..], "one-shot"),
+        (&["--auto", "doctor"][..], "one-shot"),
+        (
+            &["--auto", "--handle-uri", "bravebot://open"][..],
+            "one-shot",
+        ),
     ] {
         let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, arguments);
         let (_, stderr) = said(&output);
@@ -4457,6 +4472,33 @@ fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
         "a refused line sent a request"
     );
     assert!(!scratch.path.join("out.txt").exists());
+}
+
+/// AUTO-1: `permissions.startInAuto` in the person's own file opens sessions in auto and touches
+/// no one-shot run, which asks as it did, so a write nobody can approve is refused on status 4 and
+/// the file is not written. The fault it rejects is the setting read where a run chooses its mode,
+/// which would let a person's file make every unattended run write.
+#[test]
+fn the_setting_that_opens_sessions_in_auto_leaves_a_one_shot_run_asking() {
+    let gateway = a_gateway_asking_for_a_write();
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings");
+    settings["permissions"] = serde_json::json!({"startInAuto": true});
+    let scratch =
+        Scratch::new("cli-running-start-in-auto-one-shot").with_settings(&settings.to_string());
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a one-shot run wrote under a setting that is for sessions"
+    );
 }
 
 /// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4

@@ -474,7 +474,7 @@ closed ends with exit status 129, the status a shell reports for a program ended
 where the closing terminal sent no signal.
 
 A session with nothing running and no terminal attached for an hour is stopped, and the next `attach`
-or `reply` starts it again from its record in the mode every session opens in. A background session's
+or `reply` starts it again from its record, asking. A background session's
 process, whether `--bg` started it or `reply`, `attach` or the supervisor started it again, ends
 before its first turn when this machine's [managed settings](../customize/managed-settings.md) refuse
 the model it settled on, and the message names the file that refused it. A process that ends

@@ -354,12 +354,42 @@ impl Host {
             method: request.method.clone(),
             params: json!({ "directory": directory }),
         };
-        let opened = self.bridge.dispatch(&checked)?;
-        if let Some(handle) = opened.get("session").and_then(Value::as_str) {
-            if let Ok(mut owners) = self.owners.lock() {
-                owners.insert(handle.to_string(), connection);
+        let mut opened = self.bridge.dispatch(&checked)?;
+        if let Some(handle) = opened
+            .get("session")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            // The host offers its client no `session.mode` ([`allowlist::DENIED`]), and nobody is at
+            // the host to press a key. A session that opened in auto, as the person's own
+            // `permissions.startInAuto` makes a window's do (AUTO-1), would stay there with no way
+            // for the client to be asked, so a host's session asks, and says so.
+            // A session that could not be put to asking is closed and refused, so none stays in auto
+            // with no client that could answer it.
+            let moved = self.bridge.dispatch(&Request {
+                id: request.id,
+                method: "session.mode".to_string(),
+                params: json!({ "session": handle, "mode": "ask" }),
+            });
+            match moved {
+                Ok(moved) => opened["permissionMode"] = moved["permissionMode"].clone(),
+                Err(refused) => {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "the session is being refused, so a close that fails leaves nothing more to report"
+                    )]
+                    let _ = self.bridge.dispatch(&Request {
+                        id: request.id,
+                        method: "session.close".to_string(),
+                        params: json!({ "session": handle }),
+                    });
+                    return Err(refused);
+                }
             }
-            self.sessions.insert(handle.to_string(), None);
+            if let Ok(mut owners) = self.owners.lock() {
+                owners.insert(handle.clone(), connection);
+            }
+            self.sessions.insert(handle, None);
         }
         Ok(opened)
     }
