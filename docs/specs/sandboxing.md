@@ -5399,7 +5399,7 @@ shown by running the program, or not entirely:
       `XDG_` names found no `applications.menu` and ran nothing. So `kde-open` needed no session bus
       here: its start of the handler was in forking mode (`Failed to determine systemd version, falling
       back to extremely legacy forking mode`). All five names that ran are in the opener's list. The
-      test gained the `HOME` row with this change; with `HOME` removed from the list it failed with
+      test has a `HOME` row; with `HOME` removed from the list it fails with
       `HOME made kde-open run a program and the opener does not remove it`. `QT_PLUGIN_PATH`,
       `QT_QPA_PLATFORM_PLUGIN_PATH`, the other `QT_` names, `XDG_CACHE_HOME` and the `GIO_` module names
       have no marker form and were not run.
