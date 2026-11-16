@@ -114,6 +114,8 @@ const CRASH_REPORTS_KEY: &str = "crashReports";
 
 /// Where it turns retrieval off, and the name `doctor` reports the pin by (RETRIEVE-23).
 const RETRIEVAL_KEY: &str = "retrieval.enabled";
+/// Where it turns the daily usage ping off, and the name `doctor` reports the pin by.
+const USAGE_PING_KEY: &str = "usagePing";
 
 /// Where the rules it refuses are listed, and the name `doctor` reports each list by (PERM-19).
 const RULES_DENY: &str = "permissions.deny";
@@ -356,8 +358,8 @@ pub struct Managed {
     hosts: crate::sandbox_network::Hosts,
     /// The host keys it gave a value they cannot read, which pin nothing.
     hosts_unreadable: Vec<&'static str>,
-    /// Which of `crashReports` (CRASH-4) and `retrieval.enabled` (RETRIEVE-23) it wrote as
-    /// `false`, in that order.
+    /// Which of `crashReports` (CRASH-4), `retrieval.enabled` (RETRIEVE-23) and `usagePing` it
+    /// wrote as `false`, in that order.
     ///
     /// Read from this layer for the reason the keys above are: a key that can only turn a report
     /// off takes nothing from the person at the machine, so an administrator asking for it is not
@@ -448,6 +450,7 @@ impl Managed {
                     RETRIEVAL_KEY,
                     root.get("retrieval").and_then(|block| block.get("enabled")),
                 ),
+                (USAGE_PING_KEY, root.get(USAGE_PING_KEY)),
             ]
             .into_iter()
             .filter(|(_, value)| *value == Some(&serde_json::Value::Bool(false)))
@@ -609,6 +612,11 @@ impl Managed {
     /// sessions open in auto is the person's to say (AUTO-1).
     pub fn names_start_in_auto(&self) -> bool {
         self.start_in_auto_named
+    }
+
+    /// Whether this layer turned the daily usage ping off, which nothing a person sets can undo.
+    pub fn usage_ping_off(&self) -> bool {
+        self.turned_off.contains(&USAGE_PING_KEY)
     }
 
     /// The keys it named as something other than a boolean, which are absence.
@@ -1143,6 +1151,25 @@ mod tests {
             assert!(!managed.retrieval_off(), "{text}");
             assert!(managed.is_empty(), "{text}");
             assert_eq!(managed.retrieval_unreadable(), unreadable, "{text}");
+        }
+    }
+
+    /// `usagePing: false` is a pin and is named among them. `true` and a value that is not a
+    /// boolean pin nothing, so the layer can only turn the ping off.
+    #[test]
+    fn a_managed_usage_ping_false_is_a_pin_and_nothing_else_is() {
+        let off = scratch("managed-usage-ping-off", r#"{"usagePing": false}"#);
+        assert!(off.usage_ping_off());
+        assert!(!off.crash_reports_off());
+        assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["usagePing"]);
+        for (name, text) in [
+            ("on", r#"{"usagePing": true}"#),
+            ("quoted", r#"{"usagePing": "false"}"#),
+            ("absent", "{}"),
+            ("crash-only", r#"{"crashReports": false}"#),
+        ] {
+            let managed = scratch(&format!("managed-usage-ping-{name}"), text);
+            assert!(!managed.usage_ping_off(), "{text}");
         }
     }
 

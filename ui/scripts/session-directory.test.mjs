@@ -84,7 +84,8 @@ const TAKES_NO_DIRECTORY = [
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'permissions.list', 'permissions.revoke',
-  'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
+  'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
+  'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
   'accounts.list', 'accounts.signOut', 'effort.set',
 ]
