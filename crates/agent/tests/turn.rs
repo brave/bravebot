@@ -67722,6 +67722,13 @@ fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name(
     .expect("the turn runs");
 
     use bravebot_agent::report::{JobEvent, Outcome};
+    // What the job printed is shown as well when the turn sees it before it sees the exit, and
+    // that depends on how fast the job ran.
+    let announced: Vec<&JobEvent> = reporter
+        .jobs
+        .iter()
+        .filter(|event| !matches!(event, JobEvent::Printed { .. }))
+        .collect();
     let [
         JobEvent::Started {
             name,
@@ -67733,7 +67740,7 @@ fn a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name(
             name: ended,
             outcome: Outcome::Succeeded,
         },
-    ] = reporter.jobs.as_slice()
+    ] = announced.as_slice()
     else {
         panic!("not a start and then a finish: {:?}", reporter.jobs);
     };
