@@ -2402,6 +2402,7 @@ impl Bridge {
             .state
             .lock()
             .map_err(|_| Failure::new(ErrorCode::Internal, "Session state unavailable"))?;
+        let mut forgotten = None;
         if revoke {
             let kind = request.string("kind")?;
             match kind.as_str() {
@@ -2438,10 +2439,13 @@ impl Bridge {
                 // Withdrawn for the directory rather than this session, which keeps the map it
                 // has: the next session started there asks (TRUST-24).
                 "remembered" => forget_trust(&open.project)?,
+                // The project's standing MCP answers, for every session begun there. A tool answer
+                // is read at each call, so the next call here asks again (see remembered_mcp).
+                "mcp" => forgotten = Some(crate::remembered_mcp::forget(&open.project)?),
                 _ => return Err(Failure::bad_request("Unknown permission kind")),
             }
             // The session's own record changes only with its own grants.
-            if state.handle.is_some() && kind != "remembered" {
+            if state.handle.is_some() && kind != "remembered" && kind != "mcp" {
                 let turn = state.turns;
                 save(
                     &open.project,
@@ -2451,7 +2455,7 @@ impl Bridge {
                 );
             }
         }
-        Ok(json!({
+        let mut listed = json!({
             "paths": listed_rules(&state.answers.trust),
             "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
@@ -2460,7 +2464,13 @@ impl Bridge {
             // The rules this session opened under. They are read from settings files and
             // cannot be revoked here: editing the file changes them for the next session.
             "settingsRules": state.answers.rules.json(),
-        }))
+        });
+        // Read now for the same reason as `remembered`.
+        listed["mcpRemembered"] = crate::remembered_mcp::listed(&open.project);
+        if let Some(forgotten) = forgotten {
+            listed["forgotten"] = forgotten;
+        }
+        Ok(listed)
     }
 
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
