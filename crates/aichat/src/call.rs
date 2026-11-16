@@ -122,6 +122,65 @@ impl Pace {
     }
 }
 
+/// What a call to a backend keeps while it runs: what it has spent, how it waits and learns that it
+/// should stop, and what the model has refused so far.
+///
+/// Every client holds one, so the counters and the stop handle are written once.
+#[derive(Debug, Clone)]
+pub struct CallState {
+    /// The requests sent and the usage reported for them.
+    pub spent: Spent,
+    /// The stop to watch for and how long to wait before the first retry.
+    pub pace: Pace,
+    /// What this model has refused so far in the call in progress, loaded and settled by [`drive`].
+    pub refusals: Refusals,
+}
+
+impl CallState {
+    /// A call that has sent nothing, has no stop to watch for, and waits `backoff` before the
+    /// first retry.
+    pub fn new(backoff: Duration) -> Self {
+        Self {
+            spent: Spent::default(),
+            pace: Pace::new(backoff),
+            refusals: Refusals::default(),
+        }
+    }
+
+    /// Requests handed to egress in the last call, including capability probes.
+    pub fn attempts(&self) -> u32 {
+        self.spent.attempts
+    }
+
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> Conceded {
+        self.spent.conceded
+    }
+
+    /// Total reported usage of completed attempts in the last call, including retries.
+    /// Incomplete attempts add nothing. `None` if no completed usage was reported.
+    pub fn completed_usage(&self) -> Option<Usage> {
+        self.spent.total()
+    }
+
+    /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
+    pub fn last_request_tokens(&self) -> Option<u64> {
+        self.spent.last_prompt_tokens()
+    }
+
+    /// Stop reading a streamed reply as soon as this says to.
+    pub fn with_cancel(mut self, cancel: Cancel) -> Self {
+        self.pace.cancel = Some(cancel);
+        self
+    }
+
+    /// Wait this long before the first retry. Later retries still double it.
+    pub fn with_backoff(mut self, backoff: Duration) -> Self {
+        self.pace.backoff = backoff;
+        self
+    }
+}
+
 /// One optional field of a request that a service may refuse, and that a client can leave out of
 /// the request sent next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,23 +276,24 @@ pub trait Driven {
     /// The error that says the caller asked to stop.
     fn cancelled() -> Self::Error;
 
-    /// What the call has spent so far.
-    fn spent_mut(&mut self) -> &mut Spent;
+    /// What the call has spent so far, the stop to watch for and the wait between attempts, and
+    /// what the call has given up so far, which the client builds each request from.
+    fn state(&self) -> &CallState;
 
-    /// The stop to watch for and the wait between attempts.
-    fn pace(&self) -> &Pace;
+    /// The same, to count an attempt or give another field up.
+    fn state_mut(&mut self) -> &mut CallState;
 
-    /// What this call has given up so far, which the client builds each request from.
-    fn refusals(&self) -> &Refusals;
+    /// What the model under `key` is known to refuse. Read from the memory every client of this
+    /// crate shares, unless the client keeps its own.
+    fn recall(&self, key: &str) -> Refusals {
+        crate::remembered(key)
+    }
 
-    /// The same, to give another field up.
-    fn refusals_mut(&mut self) -> &mut Refusals;
-
-    /// What the model under `key` is known to refuse.
-    fn recall(&self, key: &str) -> Refusals;
-
-    /// Keep what the model under `key` was found to refuse.
-    fn remember(&self, key: &str, found: Refusals);
+    /// Keep what the model under `key` was found to refuse. Written to the memory every client of
+    /// this crate shares, unless the client keeps its own.
+    fn remember(&self, key: &str, found: Refusals) {
+        crate::remember(key, found);
+    }
 
     /// Whether this failure is the service refusing `concession` on `request`.
     ///
@@ -260,8 +320,11 @@ pub trait Driven {
     /// How long to wait after `failures` failed attempts, `error` being the last.
     fn pause(&self, failures: u32, error: &Self::Error) -> Duration;
 
-    /// Write the decision to send again to the diagnostic log.
-    fn log_retry(&self, attempt: u32, pause: Duration);
+    /// Write the decision to send again to the diagnostic log, under the event the aichat clients
+    /// share unless the client names its own.
+    fn log_retry(&self, attempt: u32, pause: Duration) {
+        crate::log_retry(attempt, pause);
+    }
 
     /// Repair what made `error` happen, where the client can, and say whether it did.
     ///
@@ -333,17 +396,17 @@ where
     Announce: FnMut(&mut X, Retry),
 {
     let recalled = client.recall(plan.key);
-    *client.refusals_mut() = recalled;
+    client.state_mut().refusals = recalled;
     let mut probed = false;
     let mut attempt = 1;
     let mut first_failed = None;
     loop {
         // Moves what the last attempt was billed into the call's total before the next replaces it.
-        client.spent_mut().begin_attempt();
+        client.state_mut().spent.begin_attempt();
         // Before the request is built, let alone sent. A stop that landed while the last attempt was
         // failing is still a stop, and spending a credential on a reply nobody wants is worse than
         // slow.
-        let result = if client.pace().cancelled() {
+        let result = if client.state().pace.cancelled() {
             Err(C::cancelled())
         } else {
             send(client, context, attempt)
@@ -357,7 +420,7 @@ where
         }
         let mut conceded = None;
         for &concession in plan.order {
-            if !client.refusals().has_given_up(concession)
+            if !client.state().refusals.has_given_up(concession)
                 && client.refused(request, concession, &error)
             {
                 conceded = Some(concession);
@@ -365,13 +428,13 @@ where
             }
         }
         if let Some(concession) = conceded {
-            client.refusals_mut().give_up(concession);
-            client.spent_mut().conceded.push(concession);
+            client.state_mut().refusals.give_up(concession);
+            client.state_mut().spent.conceded.push(concession);
             probed = true;
         } else if let Some(retry) = pause_before_next(client, attempt, &error, &mut first_failed) {
             client.log_retry(retry.attempt, retry.pause);
             announce(context, retry);
-            if !client.pace().wait(retry.pause) {
+            if !client.state().pace.wait(retry.pause) {
                 return Err(C::cancelled());
             }
             attempt += 1;
@@ -380,7 +443,7 @@ where
             // refused, so each goes back to what was known before the request and nothing is
             // written.
             if probed {
-                *client.refusals_mut() = recalled;
+                client.state_mut().refusals = recalled;
             }
             return Err(error);
         }
@@ -426,9 +489,9 @@ fn settled<C: Driven>(
     mut completion: Completion,
 ) -> Completion {
     if probed {
-        client.remember(key, *client.refusals());
+        client.remember(key, client.state().refusals);
     }
-    client.spent_mut().bill(&mut completion);
+    client.state_mut().spent.bill(&mut completion);
     completion
 }
 
@@ -621,9 +684,7 @@ mod tests {
 
     /// A client that answers from a script, so the driver is exercised without a network.
     struct Fake {
-        spent: Spent,
-        pace: Pace,
-        refusals: Refusals,
+        call: CallState,
         /// What each attempt reports as its usage and how it ends, first to last.
         script: std::collections::VecDeque<(Option<Usage>, Ended)>,
         /// How many requests may be sent in all.
@@ -639,9 +700,7 @@ mod tests {
     impl Fake {
         fn new(script: Vec<(Option<Usage>, Ended)>) -> Self {
             Self {
-                spent: Spent::default(),
-                pace: Pace::new(Duration::ZERO),
-                refusals: Refusals::default(),
+                call: CallState::new(Duration::ZERO),
                 script: script.into(),
                 allowed: 3,
                 window: None,
@@ -683,28 +742,12 @@ mod tests {
             Ended::Stopped
         }
 
-        fn spent_mut(&mut self) -> &mut Spent {
-            &mut self.spent
+        fn state(&self) -> &CallState {
+            &self.call
         }
 
-        fn pace(&self) -> &Pace {
-            &self.pace
-        }
-
-        fn refusals(&self) -> &Refusals {
-            &self.refusals
-        }
-
-        fn refusals_mut(&mut self) -> &mut Refusals {
-            &mut self.refusals
-        }
-
-        fn recall(&self, key: &str) -> Refusals {
-            remembered(key)
-        }
-
-        fn remember(&self, key: &str, found: Refusals) {
-            remember(key, found);
+        fn state_mut(&mut self) -> &mut CallState {
+            &mut self.call
         }
 
         fn refused(&self, _: &ChatRequest, _: Concession, error: &Ended) -> bool {
@@ -747,12 +790,12 @@ mod tests {
 
     /// One attempt of the fake: note what the request carried, count it, and end as scripted.
     fn attempt_of(client: &mut Fake, seen: &mut Seen, _: u32) -> Result<Completion, Ended> {
-        seen.sent_with.push(client.refusals);
-        client.spent.sent();
+        seen.sent_with.push(client.call.refusals);
+        client.call.spent.sent();
         let Some((reported, end)) = client.script.pop_front() else {
             panic!("the script ran out");
         };
-        client.spent.record(reported);
+        client.call.spent.record(reported);
         match end {
             Ended::Answered => Ok(completion_with(reported.unwrap_or_default())),
             other => Err(other),
@@ -765,7 +808,7 @@ mod tests {
         order: &[Concession],
         seen: &mut Seen,
     ) -> Result<Completion, Ended> {
-        client.spent.begin_call();
+        client.call.spent.begin_call();
         drive(
             client,
             &request_with(None),
@@ -854,7 +897,7 @@ mod tests {
             "a failed probe was written"
         );
         assert_eq!(
-            client.refusals,
+            client.call.refusals,
             Refusals::default(),
             "the fields stayed given up"
         );
@@ -877,7 +920,7 @@ mod tests {
                 }
             ]
         );
-        assert_eq!(client.refusals, effort_only());
+        assert_eq!(client.call.refusals, effort_only());
         assert_eq!(remembered(known), effort_only());
     }
 
@@ -916,9 +959,9 @@ mod tests {
     fn a_stop_that_lands_between_attempts_is_answered_before_the_next_is_sent() {
         let cancel = Cancel::new();
         let mut client = Fake::ending(vec![Ended::Refused, Ended::Answered]);
-        client.pace.cancel = Some(cancel.clone());
+        client.call.pace.cancel = Some(cancel.clone());
         let mut seen = Seen::new();
-        client.spent.begin_call();
+        client.call.spent.begin_call();
         let result = drive(
             &mut client,
             &request_with(None),
@@ -951,8 +994,8 @@ mod tests {
         let reply = run_fake(&mut client, "driver-test\nusage", &[], &mut seen)
             .expect("the third request answers");
         assert_eq!(reply.usage, usage(35, 6));
-        assert_eq!(client.spent.attempts, 3);
-        assert_eq!(client.spent.last_prompt_tokens(), Some(5));
+        assert_eq!(client.call.spent.attempts, 3);
+        assert_eq!(client.call.spent.last_prompt_tokens(), Some(5));
     }
 
     /// Rejects a driver that ignores the pause the client asks for (a 429 naming how long to wait),
@@ -1197,11 +1240,11 @@ mod tests {
         let result = run_fake(&mut client, "driver-test\nconceded", &order, &mut seen);
         assert_eq!(result.unwrap_err(), Ended::Failed);
         assert_eq!(
-            client.spent.conceded.in_order().collect::<Vec<_>>(),
+            client.call.spent.conceded.in_order().collect::<Vec<_>>(),
             [Concession::Effort, Concession::Breakpoints],
         );
 
-        client.spent.begin_call();
-        assert!(client.spent.conceded.is_empty());
+        client.call.spent.begin_call();
+        assert!(client.call.spent.conceded.is_empty());
     }
 }

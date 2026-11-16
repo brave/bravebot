@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND, SHOTS_DIR } from './drive-support.mjs'
 
 // A planner that makes the one call the last prompt names, and ends the turn once a tool answered.
 const { service, rounds } = await startModelService(({ messages }) => {
@@ -30,7 +30,7 @@ const lastToolResult = (round) => (JSON.parse(round).messages ?? []).filter((mes
 
 const { root, project, profile, env } = makeWorld('bravebot-mode-', { service })
 
-const output = '/tmp/bravebot-ui'
+const output = SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

@@ -2607,15 +2607,18 @@ impl Compiler<'_, '_> {
                     parts.push(ValuePart::Variable(name.clone()));
                 }
                 Piece::Substitution { source, offset } => {
-                    let node = parse_with(source, Expansions::Refused).map_err(|inner| {
-                        // The inner line's offsets are its own; the outer line's are what a
-                        // reader can point at.
-                        Refused {
-                            span: Span::new(inner.span.start + offset, inner.span.end + offset),
-                            ..inner
-                        }
+                    // The inner line's offsets are its own; the outer line's are what a reader can
+                    // point at. That holds for a refusal compiling the inner line as much as for
+                    // one parsing it.
+                    let into_the_line = |inner: Refused| Refused {
+                        span: Span::new(inner.span.start + offset, inner.span.end + offset),
+                        ..inner
+                    };
+                    let node = parse_with(source, Expansions::Refused).map_err(into_the_line)?;
+                    let steps = self.node(&node).map_err(|stopped| match stopped {
+                        Stopped::Compile(inner) => Stopped::Compile(into_the_line(inner)),
+                        rule @ Stopped::Rule(_) => rule,
                     })?;
-                    let steps = self.node(&node)?;
                     parts.push(ValuePart::Substitution {
                         source: source.clone(),
                         steps: Box::new(steps),
@@ -2725,32 +2728,128 @@ fn wants_a_terminal(program: &str, command: &Command) -> Option<Reason> {
         .filter_map(|word| word.literal())
         .collect();
     match name.as_str() {
-        "vi" | "vim" | "nvim" | "emacs" | "nano" | "pico" | "ed" | "micro" | "helix" | "hx"
-        | "kak" => Some(Reason::Editor),
+        name if is_a_terminal_editor(name) => Some(Reason::Editor),
         "less" | "more" | "most" => Some(Reason::Interactive(
             "a pager needs a terminal. Narrow the output in the line instead, with `head`, `tail` or `sed -n`",
         )),
         "top" | "htop" | "btop" => Some(Reason::Interactive(
             "this draws over a terminal. Ask for one reading instead, such as `ps`",
         )),
-        "git" => git_wants_a_terminal(&args),
+        "git" => git_wants_a_terminal(&args, &command.assignments),
         _ => None,
     }
 }
 
-fn git_wants_a_terminal(args: &[String]) -> Option<Reason> {
-    let subcommand = args.iter().find(|arg| !arg.starts_with('-'))?;
+/// What to do instead of `git rebase -i`, naming each route that reaches the same result.
+const INTERACTIVE_REBASE: &str = "`git rebase -i` opens an editor. Name the editor in the line: `GIT_SEQUENCE_EDITOR=<command> git rebase -i <base>`, where the command rewrites the todo file it is given. To fold fixup commits, run `git rebase --autosquash <base>` without `-i`. To change a commit's subject, commit `git commit --fixup=reword:<sha> -m <message>` and then run `git rebase --autosquash <base>`";
+
+/// Whether `name` is a program that needs a terminal to edit a file.
+fn is_a_terminal_editor(name: &str) -> bool {
+    matches!(
+        name,
+        "vi" | "vim" | "nvim" | "emacs" | "nano" | "pico" | "ed" | "micro" | "helix" | "hx" | "kak"
+    )
+}
+
+/// Whether a value given for an editor names one that runs without a terminal.
+///
+/// Empty names none, and so does a program of the list [`wants_a_terminal`] refuses on its own. The
+/// value is the planner's own literal text; nothing on disk is read to decide.
+fn names_an_editor_outright(value: &str) -> bool {
+    let Some(program) = value.split_whitespace().next() else {
+        return false;
+    };
+    Path::new(program)
+        .file_name()
+        .is_some_and(|name| !is_a_terminal_editor(&name.to_string_lossy()))
+}
+
+/// The editor settings a git line names outright: the value last assigned to each variable written
+/// in front of it and the value last given to each key by `-c`.
+struct GitEditors<'a> {
+    assignments: &'a [Assignment],
+    config: Vec<(&'a str, &'a str)>,
+}
+
+impl GitEditors<'_> {
+    /// Whether the variable was assigned, and if so whether its last literal value names an
+    /// editor. A value that is computed when the step starts is not one the plan shows, so it
+    /// names none.
+    fn variable(&self, name: &str) -> Option<bool> {
+        self.assignments
+            .iter()
+            .rev()
+            .find(|assignment| assignment.name == name)
+            .map(|assignment| {
+                assignment.computed.is_none() && names_an_editor_outright(&assignment.value)
+            })
+    }
+
+    /// Whether `-c` set the key, and if so whether its last value names an editor. Git reads the
+    /// key in either case.
+    fn key(&self, key: &str) -> Option<bool> {
+        self.config
+            .iter()
+            .rev()
+            .find(|(given, _)| given.eq_ignore_ascii_case(key))
+            .map(|(_, value)| names_an_editor_outright(value))
+    }
+
+    /// The editor of a commit message: the first setting given, in the order git reads them.
+    fn message_editor(&self) -> bool {
+        self.variable("GIT_EDITOR")
+            .or_else(|| self.key("core.editor"))
+            .unwrap_or(false)
+    }
+
+    /// The editor of the todo file of a rebase, which falls back to the editor of a message. A
+    /// setting that is given and names nothing is the one git uses, so it is not skipped.
+    fn todo_editor(&self) -> bool {
+        self.variable("GIT_SEQUENCE_EDITOR")
+            .or_else(|| self.key("sequence.editor"))
+            .unwrap_or_else(|| self.message_editor())
+    }
+}
+
+/// The subcommand of a git line and what `-c` set before it, skipping the options that take a value.
+fn git_subcommand(args: &[String]) -> Option<(usize, Vec<(&str, &str)>)> {
+    let mut config = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        match arg.as_str() {
+            "-c" => {
+                let setting = args.get(at + 1)?;
+                // A key with no `=` is a boolean true, which names no program.
+                config.push(setting.split_once('=').unwrap_or((setting, "")));
+                at += 2;
+            }
+            "-C" => at += 2,
+            _ if arg.starts_with('-') => at += 1,
+            _ => return Some((at, config)),
+        }
+    }
+    None
+}
+
+fn git_wants_a_terminal(args: &[String], assignments: &[Assignment]) -> Option<Reason> {
+    let (at, config) = git_subcommand(args)?;
+    let editors = GitEditors {
+        assignments,
+        config,
+    };
+    let subcommand = &args[at];
+    let args = &args[at + 1..];
     let has = |flags: &[&str]| args.iter().any(|arg| flags.contains(&arg.as_str()));
     match subcommand.as_str() {
-        "rebase" if has(&["-i", "--interactive"]) => Some(Reason::Interactive(
-            "`git rebase -i` opens an editor. Name the rewrite outright, with `--onto` or an explicit sequence",
-        )),
+        "rebase" if has(&["-i", "--interactive"]) && !editors.todo_editor() => {
+            Some(Reason::Interactive(INTERACTIVE_REBASE))
+        }
         "add" if has(&["-i", "--interactive", "-p", "--patch"]) => Some(Reason::Interactive(
             "`git add -i` and `git add -p` need a terminal. Name the paths to stage instead",
         )),
-        "commit" if !carries_a_message(args) => Some(Reason::Interactive(
-            "`git commit` with no message opens an editor. Pass `-m`",
-        )),
+        "commit" if !carries_a_message(args) && !editors.message_editor() => Some(
+            Reason::Interactive("`git commit` with no message opens an editor. Pass `-m`"),
+        ),
         _ => None,
     }
 }
@@ -4311,6 +4410,48 @@ mod tests {
         );
     }
 
+    /// A refusal from inside a substitution gives its position in the whole line, whether the inner
+    /// line failed to parse or failed to compile. A compile refusal that kept the inner line's own
+    /// offsets would point the planner at a column of text it never wrote there.
+    #[test]
+    fn bypass_substitution_refusals_are_placed_in_the_whole_line() {
+        let tree = Tree::new("bypass-offsets");
+        tree.executable("bin/cmd").executable("bin/inner");
+        for (line, text, reason) in [
+            (
+                "FOO=\"$(./bin/missing)\" ./bin/cmd",
+                "./bin/missing",
+                Reason::NotAtPath,
+            ),
+            (
+                "FOO=\"$(nosuchprogram-4022)\" ./bin/cmd",
+                "nosuchprogram-4022",
+                Reason::NotFound,
+            ),
+            (
+                "FOO=\"x-$(./bin/inner a > *.zzz)-y\" ./bin/cmd",
+                "*.zzz",
+                Reason::NotOnePath,
+            ),
+            (
+                "FOO=\"$(./bin/inner | ./bin/missing)\" ./bin/cmd",
+                "./bin/missing",
+                Reason::NotAtPath,
+            ),
+            (
+                "FOO=\"$(./bin/inner $X)\" ./bin/cmd",
+                "$X",
+                Reason::Variable,
+            ),
+        ] {
+            let refused = bypass_refused(line, &tree.root);
+            assert_eq!(refused.reason, reason, "{line}");
+            assert_eq!(refused.text, text, "{line}");
+            let start = line.find(text).expect("the refused text is in the line");
+            assert_eq!(refused.span, Span::new(start, start + text.len()), "{line}");
+        }
+    }
+
     /// A rule that denies the inner command stops the line, as it would for a step of its own.
     #[test]
     fn bypass_substitution_is_judged_by_the_rules_like_any_step() {
@@ -4698,6 +4839,33 @@ mod tests {
             "git commit --squash=HEAD",
             // Nothing follows `--fixup`, so it names no commit and supplies no message.
             "git commit --fixup",
+            "git rebase --interactive HEAD~3",
+            // A variable other than the two that name an editor does not lift the refusal.
+            "FOO=1 git rebase -i HEAD~3",
+            "GIT_SSH_COMMAND=ssh git rebase -i HEAD~3",
+            // An editor named with no command, or one that needs a terminal, names nothing outright.
+            "GIT_SEQUENCE_EDITOR= git rebase -i HEAD~3",
+            "GIT_EDITOR= git rebase -i HEAD~3",
+            "GIT_SEQUENCE_EDITOR=vim git rebase -i HEAD~3",
+            "GIT_EDITOR='nano -w' git rebase -i HEAD~3",
+            // The last assignment of a name is the one git sees.
+            "GIT_SEQUENCE_EDITOR=true GIT_SEQUENCE_EDITOR= git rebase -i HEAD~3",
+            // A `-c` that names no value, or another key, names no editor.
+            "git -c user.name=x rebase -i HEAD~3",
+            "git -c sequence.editor= rebase -i HEAD~3",
+            "git -c sequence.editor=vim rebase -i HEAD~3",
+            "git -c sequence.editor rebase -i HEAD~3",
+            "git -C . rebase -i HEAD~3",
+            // The variable lifts only the refusals about the editor it names: the sequence editor
+            // is not the one a commit message opens, and neither is one for `git add -p`.
+            "GIT_SEQUENCE_EDITOR=true git commit",
+            "GIT_SEQUENCE_EDITOR=true git add -p",
+            "GIT_EDITOR=true git add -p",
+            "git -c sequence.editor=true commit",
+            // Options before the subcommand are skipped to find it.
+            "git -c user.name=x commit",
+            "git -C . commit",
+            "git -C . add -p",
         ] {
             assert!(
                 matches!(
@@ -4707,6 +4875,113 @@ mod tests {
                 "`{line}` was not refused as interactive"
             );
         }
+    }
+
+    /// CMDLINE-15. An editor named outright is run by git in place of a terminal one, so the line
+    /// is not refused. The assignment belongs to the step it is written in front of, so one written
+    /// in front of another step does not name the editor for git.
+    #[test]
+    fn a_line_that_names_the_editor_outright_is_not_refused() {
+        let tree = Tree::new("editor-named");
+        tree.executable("bin/git").executable("bin/echo");
+        for line in [
+            "GIT_SEQUENCE_EDITOR=true ./bin/git rebase -i --autosquash HEAD~2",
+            "GIT_EDITOR=true ./bin/git rebase -i HEAD~2",
+            "GIT_EDITOR=true ./bin/git rebase --interactive HEAD~2",
+            "./bin/git -c sequence.editor=true rebase -i HEAD~2",
+            "./bin/git -c user.name=x -c sequence.editor=true rebase -i HEAD~2",
+            "./bin/git -C . -c sequence.editor=true rebase -i HEAD~2",
+            "GIT_SEQUENCE_EDITOR=./edit-todo.sh ./bin/git rebase -i HEAD~2",
+            "GIT_SEQUENCE_EDITOR='sed -i s/pick/reword/' ./bin/git rebase -i HEAD~2",
+            // A later assignment of the name replaces an earlier one that named nothing.
+            "GIT_SEQUENCE_EDITOR= GIT_SEQUENCE_EDITOR=true ./bin/git rebase -i HEAD~2",
+            // `GIT_EDITOR` is the editor of a commit message as well, so a commit that would open
+            // one is let through when the line names it.
+            "GIT_EDITOR=true ./bin/git commit",
+            "GIT_EDITOR=true ./bin/git commit --fixup=reword:HEAD",
+            "GIT_EDITOR=true ./bin/git commit --squash=HEAD",
+            // Options before the subcommand are skipped to find it.
+            "./bin/git -c user.name=x commit -m done",
+            "./bin/git -C . rebase --continue",
+        ] {
+            let plan = compiled(line, &tree.root);
+            assert_eq!(plan.steps.steps().len(), 1, "`{line}`");
+        }
+
+        // The assignment reaches the step, so git runs the editor the line named.
+        let plan = compiled(
+            "GIT_SEQUENCE_EDITOR=true ./bin/git rebase -i --autosquash HEAD~2",
+            &tree.root,
+        );
+        assert_eq!(
+            plan.steps.steps()[0].environment,
+            [("GIT_SEQUENCE_EDITOR".to_string(), "true".to_string())]
+        );
+
+        // The assignment in front of `echo` is `echo`'s, so `git` still has no editor named.
+        let refusal = compile_refused(
+            "GIT_SEQUENCE_EDITOR=true ./bin/echo x && ./bin/git rebase -i HEAD~2",
+            &tree.root,
+        );
+        assert!(matches!(refusal.reason, Reason::Interactive(_)));
+        assert_eq!(refusal.text, "./bin/git");
+        let refusal = compile_refused(
+            "GIT_SEQUENCE_EDITOR=true ./bin/echo x | ./bin/git rebase -i HEAD~2",
+            &tree.root,
+        );
+        assert_eq!(refusal.text, "./bin/git");
+    }
+
+    /// A value worked out when the step starts names no editor the plan shows, so the line is
+    /// refused as it is without the assignment. This only arises in bypass mode, since every other
+    /// mode refuses the computed value earlier.
+    #[test]
+    fn an_editor_whose_name_is_computed_does_not_lift_the_refusal() {
+        let tree = Tree::new("editor-computed");
+        tree.executable("bin/git");
+        for line in [
+            "GIT_SEQUENCE_EDITOR=$EDITOR_OF_THE_DAY ./bin/git rebase -i HEAD~2",
+            "GIT_SEQUENCE_EDITOR=$(./bin/git config sequence.editor) ./bin/git rebase -i HEAD~2",
+            "GIT_EDITOR=\"$(./bin/git config core.editor)\" ./bin/git rebase -i HEAD~2",
+        ] {
+            let refusal = bypass_refused(line, &tree.root);
+            assert!(
+                matches!(refusal.reason, Reason::Interactive(_)),
+                "`{line}` was not refused as interactive: {refusal}"
+            );
+        }
+        // The same line with a literal value is the one that compiles, so the refusal above is
+        // about the value being computed.
+        bypass_compiled(
+            "GIT_SEQUENCE_EDITOR=true ./bin/git rebase -i HEAD~2",
+            &tree.root,
+        );
+    }
+
+    /// The refusal of `git rebase -i` names each route that works, so a planner told it cannot
+    /// rebase interactively or reword a commit learns how to do either. The regression it rejects
+    /// is a message that names one of the three, or the earlier one that names only `--onto`.
+    #[test]
+    fn the_refusal_of_an_interactive_rebase_names_the_routes_that_work() {
+        let tree = Tree::new("rebase-routes");
+        let refusal = compile_refused("git rebase -i HEAD~3", &tree.root);
+        let said = refusal.said(true);
+        for route in [
+            "GIT_SEQUENCE_EDITOR=<command> git rebase -i",
+            "git rebase --autosquash",
+            "git commit --fixup=reword:<sha> -m <message>",
+        ] {
+            assert!(
+                said.contains(route),
+                "the refusal does not name `{route}`: {said}"
+            );
+        }
+        assert!(!said.contains("explicit sequence"), "{said}");
+        // The line is refused the same way whichever form of the flag it uses.
+        assert_eq!(
+            compile_refused("git rebase --interactive HEAD~3", &tree.root).said(true),
+            said
+        );
     }
 
     /// TOOL-6. The refusal of an editor names `edit_file` only where the turn's list holds it. A

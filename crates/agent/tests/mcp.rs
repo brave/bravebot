@@ -385,6 +385,9 @@ struct Answering {
     stop: Option<Cancel>,
     /// How long the person takes to answer the list question.
     list_delay: std::time::Duration,
+    /// How long the list questions took, measured here. A loaded machine wakes the sleep late, so
+    /// each can take longer than `list_delay`.
+    listed_for: std::time::Duration,
 }
 
 impl Answering {
@@ -404,6 +407,7 @@ impl Answering {
             asked: 0,
             stop: None,
             list_delay: std::time::Duration::ZERO,
+            listed_for: std::time::Duration::ZERO,
         }
     }
 }
@@ -461,11 +465,13 @@ impl Confirmer for Answering {
     }
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let began = std::time::Instant::now();
         self.lists.push(request.clone());
         std::thread::sleep(self.list_delay);
         if let Some(stop) = &self.stop {
             stop.cancel();
         }
+        self.listed_for += began.elapsed();
         self.list
     }
 
@@ -6853,6 +6859,48 @@ fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
     assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
 }
 
+/// SERVERS-16, BACKEND-24: the threshold a turn defers at is the one the settings in force read
+/// through the layers, so a project file that states a figure no count exceeds does not turn the
+/// person's small one into "offer everything in full".
+#[test]
+fn a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for() {
+    let scratch = Scratch::new("deferred-checkout-raised");
+    let home = scratch.path.join("home");
+    let project_file = bravebot_config::project_settings_file(&scratch.project());
+    std::fs::create_dir_all(&home).expect("home");
+    std::fs::create_dir_all(project_file.parent().expect("project directory"))
+        .expect("project directory");
+    std::fs::write(home.join("settings.json"), r#"{"deferMcpToolsAbove": 1}"#).expect("home file");
+    std::fs::write(
+        &project_file,
+        r#"{"deferMcpToolsAbove": 18446744073709551615}"#,
+    )
+    .expect("project file");
+    let settings = bravebot_config::Settings::layered(Some(home), Some(&scratch.project()), None);
+    let threshold = settings
+        .defer_mcp_tools_above()
+        .expect("the person's own figure is in force");
+
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        threshold,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    let names = offered_names(&sent[0]);
+    assert!(names.contains(&"load_tool".to_string()), "{names:?}");
+    assert!(
+        !names.contains(&FORECAST.to_string()),
+        "the checkout's figure kept the tool in full: {names:?}"
+    );
+}
+
 /// Run a deferring turn whose planner spawns a delegate with `spawn`, whose own planner then names
 /// `load_tool`. Returns the delegate's requests, what the person was asked and the MCP methods the
 /// server was sent past its handshake.
@@ -8345,10 +8393,10 @@ fn a_stop_during_the_check_on_a_servers_answer_that_asks_to_read_ends_the_turn_s
 struct IdleWallet;
 
 impl bravebot_aichat::Subscription for IdleWallet {
-    fn next_credential(&mut self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
-        Ok(bravebot_aichat::SubscriptionCredential {
+    fn next_credential(&mut self) -> bravebot_aichat::SubscriptionCredential {
+        bravebot_aichat::SubscriptionCredential {
             key: bravebot_config::Secret::new("credential-1".to_string()),
-        })
+        }
     }
 }
 
@@ -8417,6 +8465,9 @@ fn a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_anothe
 /// is: the checks, made together, are not part of it (SESSION-12, SERVERS-8). The regressions it
 /// rejects are a settle that charges only the first question's wait or drops the waits of the
 /// questions drawn after a check returned, and one that charges the checks' own wait to the person.
+/// The figure is held to the wait the person double measured, not to the delay it was given,
+/// because a loaded machine wakes each sleep late and three late wakes can add up to more than the
+/// margin. A check's wait charged to the person adds [`A_CHECK_TAKES`], and the margin is half that.
 #[test]
 fn the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once() {
     let scratch = Scratch::new("checks-together-wait");
@@ -8432,15 +8483,15 @@ fn the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once
         &Cancel::new(),
     );
     let timing = result.expect("the turn runs").timing;
-    let waited = 3 * 400;
+    let waited = reading.listed_for.as_millis() as u64;
     assert_eq!(reading.lists.len(), 3, "a list was not put to the person");
     assert!(
         timing.stalled_ms >= waited,
-        "the waits on the lists were not all charged to the person: {timing:?}"
+        "the waits on the lists were not all charged to the person, who waited {waited} ms: {timing:?}"
     );
     assert!(
-        timing.stalled_ms < waited + 400,
-        "the wait on the checks was charged to the person: {timing:?}"
+        timing.stalled_ms < waited + A_CHECK_TAKES.as_millis() as u64 / 2,
+        "the wait on the checks was charged to the person, who waited {waited} ms: {timing:?}"
     );
     assert!(
         timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,

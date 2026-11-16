@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync }
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 
 /** A language server that answers what a session asks of one, and says when it came up. */
 const SERVER = `#!/bin/sh
@@ -67,7 +67,7 @@ Object.assign(env, {
   STARTS: starts, DEFINED_AT: join(project, 'src/a.rs'),
 })
 
-const output = '/tmp/bravebot-ui'
+const output = SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 let closed = false

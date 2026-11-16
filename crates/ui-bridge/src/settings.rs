@@ -293,8 +293,11 @@ mod tests {
             assert!(keys.contains(&required), "{required} is not in the table");
         }
         for key in keys {
-            let (directory, settings) =
-                vetting_layers(Some("{}"), Some(&format!(r#"{{"{key}": "stated"}}"#)));
+            let text = match key.split_once('.') {
+                Some((block, name)) => format!(r#"{{"{block}": {{"{name}": "stated"}}}}"#),
+                None => format!(r#"{{"{key}": "stated"}}"#),
+            };
+            let (directory, settings) = vetting_layers(Some("{}"), Some(&text));
             let project = directory.path().join("project/.bravebot/settings.json");
             assert_eq!(
                 ignored(&settings),
@@ -302,6 +305,221 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    /// A checkout whose `limit` removes or raises the person's is listed with the key and the file,
+    /// as a key it may not name is. Read from the table of keys it may only narrow.
+    #[test]
+    fn a_checkout_limit_that_widens_the_persons_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "limit"));
+        for written in [r#"{"limit": null}"#, r#"{"limit": "999999999999"}"#] {
+            let (directory, settings) = vetting_layers(Some(r#"{"limit": "200k"}"#), Some(written));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": "limit", "path": project })],
+                "{written}"
+            );
+        }
+        let (_directory, settings) =
+            vetting_layers(Some(r#"{"limit": "200k"}"#), Some(r#"{"limit": "100k"}"#));
+        assert!(ignored(&settings).is_empty(), "a lower limit was reported");
+    }
+
+    /// A checkout whose `updateCheck` is `true` over the person's `false` is listed with the key and
+    /// the file, and one that turns the check off is not.
+    #[test]
+    fn a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "updateCheck"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"updateCheck": false}"#),
+            Some(r#"{"updateCheck": true}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "updateCheck", "path": project })]
+        );
+        assert_eq!(settings.update_check(), Some(false));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"updateCheck": true}"#),
+            Some(r#"{"updateCheck": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "a check turned off was reported"
+        );
+        assert_eq!(settings.update_check(), Some(false));
+    }
+
+    /// A checkout whose `deepLinks` is `true` over the person's `false` is listed with the key and
+    /// the file, and one that switches links off is not.
+    #[test]
+    fn a_checkout_deep_links_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "deepLinks"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"deepLinks": false}"#),
+            Some(r#"{"deepLinks": true}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "deepLinks", "path": project })]
+        );
+        assert_eq!(settings.deep_links(), Some(false));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"deepLinks": true}"#),
+            Some(r#"{"deepLinks": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "links switched off were reported"
+        );
+        assert_eq!(settings.deep_links(), Some(false));
+    }
+
+    /// A checkout whose `awaySummaryEnabled` is `true` over the person's `false` is listed with the
+    /// key and the file, and one that turns the recap off is not.
+    #[test]
+    fn a_checkout_away_recap_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "awaySummaryEnabled"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"awaySummaryEnabled": false}"#),
+            Some(r#"{"awaySummaryEnabled": true}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "awaySummaryEnabled", "path": project })]
+        );
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"awaySummaryEnabled": true}"#),
+            Some(r#"{"awaySummaryEnabled": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "a recap turned off was reported"
+        );
+        assert_eq!(settings.away_summary_enabled(), Some(false));
+    }
+
+    /// A checkout whose `tui.mouse` or `tui.contextMenu` is `true` over the person's `false` is
+    /// listed with the key and the file, a checkout that names only the wheel is not, and the
+    /// person's `false` stays in force in both.
+    #[test]
+    fn a_checkout_tui_key_turned_on_over_the_persons_off_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "tui.mouse"));
+        assert!(Settings::narrow_only_keys().any(|key| key == "tui.contextMenu"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"tui": {"mouse": false, "contextMenu": false}}"#),
+            Some(r#"{"tui": {"mouse": true, "contextMenu": true, "wheelRows": 3}}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        let mut listed = ignored(&settings);
+        listed.sort_by_key(|entry| entry["name"].as_str().map(str::to_string));
+        assert_eq!(
+            listed,
+            vec![
+                json!({ "name": "tui.contextMenu", "path": project }),
+                json!({ "name": "tui.mouse", "path": project }),
+            ]
+        );
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        assert_eq!(settings.wheel_rows(), Some(3));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"tui": {"mouse": false, "contextMenu": false}}"#),
+            Some(r#"{"tui": {"wheelRows": 3}}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "a block naming only the wheel was reported"
+        );
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert_eq!(settings.tui_context_menu(), Some(false));
+    }
+
+    /// A checkout whose `suggestions` is `true` is listed with the key and the file over the
+    /// person's `false` and over nothing, and one that leaves suggestions off is not.
+    #[test]
+    fn a_checkout_suggestions_turned_on_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "suggestions"));
+        for home in [Some(r#"{"suggestions": false}"#), None] {
+            let (directory, settings) = vetting_layers(home, Some(r#"{"suggestions": true}"#));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": "suggestions", "path": project })],
+                "{home:?}"
+            );
+            assert_ne!(settings.suggestions(), Some(true), "{home:?}");
+        }
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"suggestions": true}"#),
+            Some(r#"{"suggestions": false}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "suggestions left off were reported"
+        );
+        assert_eq!(settings.suggestions(), Some(false));
+    }
+
+    /// A checkout whose `deferMcpToolsAbove` is higher than the person's is listed with the key and
+    /// the file, and one that lowers the size is not.
+    #[test]
+    fn a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "deferMcpToolsAbove"));
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"deferMcpToolsAbove": "20k"}"#),
+            Some(r#"{"deferMcpToolsAbove": 18446744073709551615}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "deferMcpToolsAbove", "path": project })]
+        );
+        assert_eq!(settings.defer_mcp_tools_above(), Some(20_000));
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"deferMcpToolsAbove": "20k"}"#),
+            Some(r#"{"deferMcpToolsAbove": "5k"}"#),
+        );
+        assert!(ignored(&settings).is_empty(), "a lower size was reported");
+        assert_eq!(settings.defer_mcp_tools_above(), Some(5_000));
+    }
+
+    /// A checkout whose `promptCacheTtl` asks for the hour, over the person's five minutes or over
+    /// nothing, is listed with the key and the file, and one that asks for five minutes is not.
+    #[test]
+    fn a_checkout_asking_for_the_long_cache_lifetime_is_listed_as_ignored() {
+        assert!(Settings::narrow_only_keys().any(|key| key == "promptCacheTtl"));
+        for home in [Some(r#"{"promptCacheTtl": "5m"}"#), None] {
+            let (directory, settings) = vetting_layers(home, Some(r#"{"promptCacheTtl": "1h"}"#));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": "promptCacheTtl", "path": project })],
+                "{home:?}"
+            );
+            assert_ne!(
+                settings.prompt_cache_ttl(),
+                Some(bravebot_config::CacheTtl::OneHour),
+                "{home:?}"
+            );
+        }
+        let (_directory, settings) = vetting_layers(
+            Some(r#"{"promptCacheTtl": "1h"}"#),
+            Some(r#"{"promptCacheTtl": "5m"}"#),
+        );
+        assert!(
+            ignored(&settings).is_empty(),
+            "the shorter lifetime was reported"
+        );
+        assert_eq!(
+            settings.prompt_cache_ttl(),
+            Some(bravebot_config::CacheTtl::FiveMinutes)
+        );
     }
 
     fn vetting_layers(

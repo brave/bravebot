@@ -20,6 +20,10 @@
 # with -filter-mode=nofilter. Dirty files need a scan without the commit-only
 # baseline; reviewdog still filters them through the diff.
 #
+# In both modes a finding in a file under third_party/ (vendored crates) is not
+# counted, so on that one point this differs from the organization's check; see
+# docs/development/checks.md.
+#
 # No model is involved, so this is deterministic and cheap to re-run.
 
 set -uo pipefail
@@ -407,6 +411,18 @@ fi
 if [ "$scan_failed" -ne 0 ]; then
     cat "$FINDINGS"
     die "security scan failed; findings are incomplete"
+fi
+
+# Findings in the vendored crates under third_party/ are not counted, in either mode. That code
+# is upstream's, kept close to the published release, so its findings are not this branch's to
+# fix (docs/development/checks.md). Opengrep scans the whole checkout whatever the file list
+# says, so the findings are dropped here, by the path reviewdog reports them at.
+VENDORED='^third_party/'
+vendored="$(grep -c "$VENDORED" "$FINDINGS")"
+if [ "$vendored" -gt 0 ]; then
+    kept="$(grep -v "$VENDORED" "$FINDINGS")"
+    if [ -n "$kept" ]; then printf '%s\n' "$kept" > "$FINDINGS"; else : > "$FINDINGS"; fi
+    say "$vendored findings under third_party/ not counted: vendored code (docs/development/checks.md)"
 fi
 
 if [ ! -s "$FINDINGS" ]; then

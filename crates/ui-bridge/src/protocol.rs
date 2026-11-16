@@ -28,6 +28,8 @@ pub enum ErrorCode {
     NotADirectory,
     /// `~/.bravebot` could not be located or created.
     NoHome,
+    /// A file in `~/.bravebot` exists and cannot be used, or another program holds its lock.
+    StateUnusable,
     /// The agent's configuration could not be read.
     Config,
     /// The host does not offer this method, parameter or session to this client.
@@ -45,6 +47,7 @@ impl ErrorCode {
             Self::TurnInFlight => "turn_in_flight",
             Self::NotADirectory => "not_a_directory",
             Self::NoHome => "no_home",
+            Self::StateUnusable => "state_unusable",
             Self::Config => "config",
             Self::NotAllowed => "not_allowed",
             Self::Internal => "internal",

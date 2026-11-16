@@ -207,7 +207,7 @@ cli-auto-not-with-bypass =
 cli-auto-not-with-accept-edits =
     --auto est refusé avec --accept-edits : auto répond aussi à une écriture comme le fait l'acceptation des modifications, donnez donc --auto seul
 cli-auto-needs-a-run =
-    --auto s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
+    --auto s'applique à une exécution ponctuelle, comme -p "tâche", ou à une session qui s'ouvre dans le terminal. Cette ligne ne démarre ni l'une ni l'autre
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -225,9 +225,12 @@ cli-option-accept-edits =
     Pour une exécution ponctuelle, écrire les fichiers sans demander. Les commandes, les
     récupérations et une écriture qui créerait un identifiant restent refusées
 cli-option-auto =
-    Pour une exécution ponctuelle, laisser un classificateur répondre pour une commande que le bac à
-    sable confine et pour la première récupération d'une URL, et écrire les fichiers sans demander.
-    Tout ce que le classificateur n'autorise pas est refusé, de même qu'une écriture qui créerait un identifiant
+    Laisser un classificateur répondre pour une commande que le bac à sable confine et pour la
+    première récupération d'une URL, et écrire les fichiers sans demander. Dans une exécution
+    ponctuelle, tout ce que le classificateur n'autorise pas est refusé, de même qu'une écriture qui
+    créerait un identifiant. Une session s'ouvre dans ce mode et vous pose ces questions. La touche de
+    mode le quitte, et permissions.startInAuto dans ~/.bravebot/settings.json ouvre les sessions dans
+    ce mode sans l'option
 cli-option-help = Afficher ce message
 cli-option-version = Afficher la version
 
@@ -629,6 +632,9 @@ doctor-region-source-provider-entry = options.region de l'entrée amazon-bedrock
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-default-model-ignored =
+    { $name } dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-advisor-ignored =
     advisorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -663,6 +669,14 @@ doctor-settings-retrieval-ignored =
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-start-in-auto-ignored =
+    permissions.startInAuto dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+# Un nom de run.scrubEnv peut empêcher une restriction de s'appliquer à un programme autant qu'un
+# secret de lui parvenir : la liste d'une copie de travail n'est pas lue et ses noms ne retirent rien.
+doctor-settings-scrub-env-ignored =
+    run.scrubEnv dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings, et aucun de ses noms n'est retiré
 doctor-settings-references-ignored =
     references dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -678,6 +692,52 @@ doctor-settings-retention-ignored =
 # sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
 doctor-settings-home-only-ignored =
     { $key } dans { $path } n'est pas appliqué : il n'est lu que dans les réglages de la personne elle-même
+# La limite de dépense est la seule clé qu'une copie de travail peut nommer, et seulement pour
+# l'abaisser. Une valeur qui supprime la limite de la personne, la relève ou compte dans une autre
+# unité est écartée, de sorte que la question sur la dépense est posée au chiffre que la personne a écrit.
+doctor-settings-limit-ignored =
+    limit dans { $path } n'est pas appliqué : il peut abaisser la limite de ~/.bravebot/settings.json et ne peut ni la supprimer, ni la relever, ni la compter dans une autre unité
+# Une copie de travail peut désactiver la vérification de mise à jour au démarrage et ne peut pas la
+# réactiver : un `true` posé sur le `false` de la personne est écarté et la vérification reste désactivée.
+doctor-settings-update-check-ignored =
+    updateCheck dans { $path } n'est pas appliqué : il peut désactiver la vérification de mise à jour et ne peut pas la réactiver une fois qu'elle a été désactivée par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver les liens `bravebot://` et ne peut pas les réactiver : un
+# `true` posé sur le `false` de la personne est écarté et les liens restent refusés.
+doctor-settings-deep-links-ignored =
+    deepLinks dans { $path } n'est pas appliqué : il peut désactiver les liens et ne peut pas les réactiver une fois qu'ils ont été désactivés par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut laisser les suggestions de suite désactivées et ne peut pas les activer : un
+# `true` est écarté et aucune requête de suggestion n'est faite après un tour, que les réglages de la
+# personne indiquent `false` ou n'indiquent rien.
+doctor-settings-suggestions-ignored =
+    suggestions dans { $path } n'est pas appliqué : il peut laisser les suggestions désactivées et ne peut pas les activer, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
+# Une copie de travail peut désactiver le récapitulatif automatique d'une session laissée de côté et
+# ne peut pas le réactiver : un `true` posé sur le `false` de la personne est écarté et aucun
+# récapitulatif n'est demandé au retour dans le terminal.
+doctor-settings-away-summary-ignored =
+    awaySummaryEnabled dans { $path } n'est pas appliqué : il peut désactiver le récapitulatif automatique et ne peut pas le réactiver une fois qu'il a été désactivé par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver la capture de la souris et ne peut pas la réactiver : un
+# `true` posé sur le `false` de la personne est écarté et le terminal garde sa propre sélection et sa
+# propre molette.
+doctor-settings-tui-mouse-ignored =
+    tui.mouse dans { $path } n'est pas appliqué : il peut désactiver la capture de la souris et ne peut pas la réactiver une fois qu'elle a été désactivée par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut désactiver le menu du clic droit et ne peut pas le réactiver : un `true`
+# posé sur le `false` de la personne est écarté et un clic droit n'ouvre aucun menu.
+doctor-settings-tui-context-menu-ignored =
+    tui.contextMenu dans { $path } n'est pas appliqué : il peut désactiver le menu du clic droit et ne peut pas le réactiver une fois qu'il a été désactivé par ~/.bravebot/settings.json, le fichier nommé par --settings ou le fichier du projet
+# Une copie de travail peut abaisser la taille au-delà de laquelle les outils d'un serveur sont proposés
+# par leur nom, et ne peut ni la relever ni indiquer une valeur lue comme une absence de taille : une
+# telle valeur est écartée et la taille de la personne reste en vigueur.
+doctor-settings-defer-mcp-tools-ignored =
+    deferMcpToolsAbove dans { $path } n'est pas appliqué : il peut abaisser la taille de ~/.bravebot/settings.json et ne peut ni la relever, ni la supprimer
+# La durée de cache la plus longue est facturée à un tarif d'écriture plus élevé : une copie de travail
+# peut demander 5m et ne peut pas demander 1h, que seuls les réglages de la personne et le fichier
+# nommé par --settings peuvent choisir.
+doctor-settings-prompt-cache-ttl-ignored =
+    promptCacheTtl dans { $path } n'est pas appliqué : il peut demander 5m et ne peut pas demander 1h, ce que seuls ~/.bravebot/settings.json et le fichier nommé par --settings peuvent faire
+# Une clé qu'une copie de travail ne peut que restreindre et qui n'a pas de message propre ci-dessus,
+# de sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
+doctor-settings-narrowed-ignored =
+    { $key } dans { $path } n'est pas appliqué : il ne peut que restreindre ce que les réglages de la personne elle-même indiquent, et cette valeur ne le fait pas
 # Le balayage qui supprime les anciens enregistrements de session, les index du serveur de langage et
 # les constats attend tant que la durée demandée ne peut pas être déterminée, et ne supprime rien,
 # afin que la personne qui a fixé une durée ne se voie pas appliquer à la place celle qui est intégrée.
@@ -726,6 +786,7 @@ sandbox-rule-private-key = aucune liste n'ajoute d'accès à ~/.ssh, où se trou
 sandbox-rule-state-directory = aucune liste n'ajoute d'accès au dossier d'état, où se trouvent les clés de la passerelle (~/.bravebot, ou le dossier que BRAVEBOT_HOME désigne à la place), sauf pour lire son dossier sessions
 sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou le dossier d'état
 sandbox-rule-too-broad = son joker a regardé plus du disque qu'un motif ne le peut, donc ce qu'il désigne est inconnu
+sandbox-rule-names-a-variable = il commence par une variable, et aucune variable n'est développée dans un chemin, donc il serait lu comme un chemin relatif au dossier de la session ; écrivez le chemin en entier, ou commencez-le par ~/
 sandbox-rule-overridden = une autre entrée décide de ce chemin : un refus au même chemin, ou un refus écrit par le fichier géré
 sandbox-rule-cannot-subtract = cette plateforme ne peut pas retenir un chemin situé dans un dossier accordé à chaque étape, donc une étape est refusée au lieu d'être lancée avec le chemin accessible
 doctor-settings-allow-ignored =
@@ -737,6 +798,9 @@ doctor-settings-allow-granted =
 doctor-settings-unread = clé non lue
 doctor-settings-unread-key =
     { $key } dans { $path } n'est pas lu par cette version : il ne configure rien et ne restreint rien
+doctor-settings-unread-bypass =
+    { $key } dans { $path } n'est pas lu par cette version, donc le mode bypass reste accessible : la clé
+    qui le rend inaccessible est permissions.bypassUnreachable
 doctor-settings-mcp-declared =
     { $key } dans { $path } déclare un serveur MCP, ce que seul ~/.bravebot/mcp.json peut faire :
     rien de ce qu'il contient n'est démarré
@@ -835,7 +899,10 @@ permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ;
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
 permission-rule-empty-quoted-name = a des guillemets doubles autour de rien, et aucun fichier n'a un nom vide ; enlevez les parenthèses pour viser toute utilisation, ou mettez le nom du fichier entre les guillemets
 permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez tout le chemin entre guillemets doubles pour viser le nom tel qu'il est écrit
+permission-rule-unclosed-quote = a un guillemet qui n'est jamais fermé, donc elle n'est comparée qu'avec ses caractères tels qu'ils sont écrits, et non comme une ligne tapée ; fermez-le, ou écrivez \' ou \" pour un guillemet qui fait partie d'un mot
+permission-rule-trailing-backslash = se termine par une barre oblique inverse suivie de rien, donc elle n'est comparée qu'avec ses caractères tels qu'ils sont écrits, et non comme une ligne tapée ; enlevez-la, ou écrivez \\ pour une barre oblique inverse
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
+permission-rule-climbs = contient .. là où il ne peut pas être résolu : il sort du haut du système de fichiers, ou suit un segment contenant un * ; écrivez le chemin sans lui
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
 permission-rule-not-a-host = a un port, un schéma, un chemin ou un autre texte qui n'est pas un hôte après 'domain:' ; écrivez un nom d'hôte ou une adresse seul, comme WebFetch(domain:example.com) ou WebFetch(domain:[::1])
@@ -876,13 +943,7 @@ spend-limit-stopped = arrêté à la limite de la session : { $spent } { $unit }
 # Ce que dit une exécution arrêtée par une limite que son auteur lui a donnée, avant le cycle ou la requête qu'elle aurait faits.
 run-limit-rounds = arrêt à la limite de cycles d'appels d'outils ({ $most }) : le planificateur en a demandé un autre, qui n'a pas été exécuté
 run-limit-tokens = arrêt à la limite de jetons ({ $most }) : { $spent } ont été dépensés et la requête suivante n'a pas été envoyée
-repeated-call-header = Appel répété
-repeated-call-reached = Le planificateur a fait { $count } fois de suite le même appel à { $tool }. Il n'a pas été exécuté. Exécutez-le encore une fois, ou choisissez une autre voie.
-repeated-call-refuse = Ne pas l'exécuter, et dire au planificateur d'essayer une autre approche
-repeated-call-run-it = L'exécuter cette fois
-repeated-call-stop = Arrêter le tour
 repeated-call-refused = { $tool } n'a pas été exécuté : le même appel { $count } fois de suite
-repeated-call-stopped = arrêté à un appel répété : { $tool } appelé { $count } fois de suite
 ceiling-stop-answer-now = le modèle a atteint sa limite de sortie de { $tokens } jetons ; il lui est demandé une réponse plus courte
 ceiling-stop-ends-in-call = le modèle a de nouveau atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait, et cette réponse s'arrête là où elle s'est arrêtée ; relevez BRAVEBOT_OUTPUT_BUDGET ou demandez moins en un seul tour
 ceiling-stop-ends-in-a-call = le modèle a de nouveau atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait, et cette réponse s'arrête là où elle s'est arrêtée ; relevez BRAVEBOT_OUTPUT_BUDGET ou demandez moins en un seul tour
@@ -1491,6 +1552,10 @@ managed-denied =
 managed-host-unread =
     { $path }, que gère l'administrateur de cette machine, refuse des serveurs par hôte, et cette
     url écrit son hôte d'une façon qu'aucune entrée ne peut comparer
+managed-entry-unusable =
+    { $path }, que gère l'administrateur de cette machine, contient dans son { $list } une entrée
+    qui n'est ni un hôte ni une commande que cette version sait comparer, donc elle ne correspond
+    à aucun serveur : { $entry }
 servers-nobody-in-a-one-shot =
     { $alias } n'a pas été démarré : une exécution unique n'interroge personne, lancez donc
     bravebot mcp approve { $alias } dans un terminal
@@ -1627,7 +1692,7 @@ mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été lai
 mcp-move-title = déclarer ce serveur là où pointe sa réponse ?
 mcp-start-title = démarrer { $alias } ?
 command-mcp = Lister les serveurs MCP, en redémarrer un, en désactiver un ou en supprimer un
-mcp-command-usage = /mcp accepte list, reconnect [alias], disable <alias> ou remove <alias>
+mcp-command-usage = /mcp accepte list, reconnect [alias], disable <alias> ou remove <alias>. Un * dans l'alias de disable ou de remove remplace n'importe quelle suite de caractères
 mcp-command-none = Aucun serveur MCP n'est demandé ici, et aucun ne fonctionne
 mcp-command-running = Serveurs MCP en cours d'exécution :
 mcp-command-not-running = Serveurs MCP demandés ici et arrêtés :
@@ -1641,8 +1706,9 @@ mcp-command-disabled = { $alias } est désactivé pour cette session. Rien n'a �
 mcp-command-already-off = { $alias } est déjà désactivé
 mcp-command-needs-an-alias = /mcp { $command } demande l'alias d'un serveur
 mcp-command-not-an-alias = { $alias } n'est pas le nom d'un serveur MCP
+mcp-command-no-match = Aucun serveur MCP n'est désigné par { $pattern }. Rien n'a été modifié
 mcp-command-no-state-directory = Il n'y a pas de répertoire d'état, donc aucun serveur MCP n'est déclaré et aucun ne peut être supprimé
-mcp-command-remove-hint = /mcp remove <alias> supprime la déclaration et l'approbation d'un serveur et le retire des fichiers de réglages qui le demandent, si bien qu'aucune session ne le démarre
+mcp-command-remove-hint = /mcp remove <alias> supprime la déclaration et l'approbation d'un serveur et le retire des fichiers de réglages qui le demandent, si bien qu'aucune session ne le démarre. Un * dans l'alias, comme dans brave-*, désigne chaque serveur qui y correspond
 mcp-move-declared = { $alias } est déclaré à { $url }
 mcp-move-destination = et sa réponse pointe vers { $url }
 mcp-move-reaching = qui atteint { $authority }
@@ -1825,6 +1891,8 @@ config-picker-title = mode d'édition
 config-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
 config-editing-hint-ordinary = les flèches et les raccourcis readline
 config-editing-hint-vi = édition modale, avec hjkl et les opérateurs
+sidebar-picker-title = panneau d'informations
+sidebar-picker-keys = ↑↓ aller · Espace cocher · Échap fermer
 
 effort-picker-title = effort
 effort-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
@@ -2476,6 +2544,7 @@ status-cache-lifetime = durée demandée au service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 heure
 status-cache-lifetime-service-default = aucune, celle du service
+status-cache-given-up = désactivé pour ce modèle, qui l'a refusé
 hint-cache-hit-rate = cache { $rate } %
 status-trust = Confiance
 status-nothing-vouched-for = rien d'approuvé
@@ -2775,6 +2844,8 @@ command-note = Noter quelque chose au dossier de la session, sans le mettre dans
 command-branch = Copier cette session et continuer dans la copie, en gardant l'originale pour y revenir
 command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
 command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
+command-issues = Lister les tickets que cette session a nommés
+command-prs = Lister les pull requests que cette session a nommées
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-recap = Résumer où en est cette session, sans le mettre dans la conversation
@@ -2790,6 +2861,7 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
+command-sidebar = Choisir les sections que le panneau d'informations affiche
 command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
@@ -3062,6 +3134,7 @@ session-bg-incognito = /bg est refusé dans une session incognito, qui n'écrit 
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
 session-directory-not-changed = impossible de passer à { $directory } : { $problem }
 session-permission-rule-ignored = règle de permission ignorée dans settings.json : { $problem }
+session-permission-rule-partly-read = une règle de permission de settings.json s'applique telle qu'elle est écrite : { $problem }
 session-model-pick-refused = { $model }, choisi avec /model, est ignoré : { $reason }
 session-model-pick-set-aside = { $model }, choisi avec /model, est ignoré car aucun service configuré ne le sert
 session-permission-allow-ignored =
@@ -3249,9 +3322,11 @@ failure-with-next = { $what }. { $next }
 failure-unauthorized-next = Lancez `bravebot auth status` pour voir la connexion ou la clé utilisée, et `bravebot doctor` pour voir le point d'accès
 failure-premium-key-next = Lancez `bravebot auth login brave` pour remplacer la clé premium, ou `bravebot auth logout brave` pour envoyer les requêtes au point d'accès gratuit à la place. `bravebot auth status` montre la clé utilisée
 # Dit en dernier après une limite de débit. La première phrase est pour une requête vers une entrée
-# `provider`, qui peut indiquer `maxRetries` dans ses options, et la seconde pour tout service sans
-# entrée où l'indiquer.
+# `provider`, qui peut indiquer `maxRetries` dans ses options, la deuxième pour un compte AWS atteint
+# par les variables de niveau, qui indique le nombre dans `BRAVEBOT_BEDROCK_MAX_RETRIES`, et la
+# troisième pour tout service sans endroit où l'indiquer.
 failure-rate-limited-entry-next = Augmentez `maxRetries` dans les options de cette entrée de fournisseur pour attendre plus longtemps, ou définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle
+failure-rate-limited-variable-next = Augmentez `BRAVEBOT_BEDROCK_MAX_RETRIES` pour attendre plus longtemps, ou définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle
 failure-rate-limited-next = Définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle, ou réessayez plus tard
 failure-account-not-signed-in = pas connecté à un compte ChatGPT. Lancez `bravebot auth login chatgpt` pour vous connecter
 failure-account-ended = la connexion ChatGPT a pris fin. Lancez `bravebot auth login chatgpt` pour vous reconnecter
@@ -3675,6 +3750,8 @@ paste-files-refused =
     le nom d'un fichier copié n'est pas du texte ou contient un saut de ligne : aucun fichier n'a été collé
 return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
+shell-mode-idle-only =
+    le mode shell n'est disponible que sur une invite au repos, donc cette ligne n'a pas été envoyée : elle reste dans la zone de saisie
 leave-not-pressed =
     cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour quitter
 suspend-not-pressed =
@@ -3687,6 +3764,13 @@ suspend-failed = impossible de suspendre la session : { $reason }
 # que le nom de n'importe quel mode de permission tienne encore à côté sur une ligne de quatre-vingts
 # colonnes.
 leave-word-sent = Envoyé comme invite ; ctrl-c l'arrête, /exit pour partir
+# Dit sous la zone de saisie pendant le tour commencé par une commande tapée avec des mots après elle
+# alors qu'elle n'en prend aucun, comme /model suivi d'un nom de modèle. Ces mots font de la ligne
+# une invite : elle est partie vers le modèle et la commande ne s'est pas exécutée ; la commande
+# seule est ce qui l'exécute. Dessiné à droite de la ligne d'indications comme leave-word-sent, et
+# aussi court pour que le mode vi et le nom de n'importe quel mode de permission tiennent à côté sur
+# une ligne de quatre-vingts colonnes.
+command-sent-as-prompt = Invite envoyée ; ctrl-c l'arrête ; le mot seul l'exécute
 prompt-file-unreadable =
     /{ $name } est un fichier d'invite illisible comme texte, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-too-large =
@@ -4001,11 +4085,28 @@ held-hint = { $count ->
     [one] figée, { $count } ligne en dessous  ·  { $chord } pour revenir
    *[other] figée, { $count } lignes en dessous  ·  { $chord } pour revenir
     }
+# Le bouton en bas de la transcription tant que la vue est remontée au-dessus de la fin
+# (VIEW-45) : ses mots avec le nombre de lignes en dessous de la vue, et ses mots seuls là où la
+# place manque pour le nombre.
+jump-to-bottom = ↓ Aller en bas
+jump-to-bottom-rows = { $count ->
+    [one] ↓ Aller en bas  ·  { $count } ligne en dessous
+   *[other] ↓ Aller en bas  ·  { $count } lignes en dessous
+    }
 # Dit sur la ligne du bas tant qu'une tâche en arrière-plan tourne, et retiré quand la dernière se
 # termine.
 jobs-hint = { $count ->
     [one] 1 en arrière-plan
    *[other] { $count } en arrière-plan
+    }
+# La ligne au-dessus de la zone de saisie quand un tour est fini et que quelque chose continue sans
+# que personne ne tape : une boucle, une ligne que /after retient, une surveillance de fichier ou une
+# tâche en arrière-plan. Le libellé ouvre la ligne, et le renvoi la ferme là où elle tient en entier.
+standing-label = toujours actif
+standing-pointer = /status pour la liste
+standing-watches = { $count ->
+    [one] surveille 1 fichier
+   *[other] surveille { $count } fichiers
     }
 # Où en est une tâche en arrière-plan, dans la vue qu'ouvre sa ligne et dans /status. La durée vient
 # de l'horloge de ce côté, comptée depuis le lancement de la ligne.
@@ -4094,14 +4195,15 @@ panel-context = Contexte
 panel-language-servers = Serveurs de langage
 panel-mcp-servers = Serveurs MCP
 panel-plan = Plan
-panel-links = Liens
-# Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.
-panel-pull-request = Pull request
-panel-issue = Ticket
+panel-pull-requests = Pull requests
+panel-issues = Tickets
+# La dernière ligne d'une section du panneau d'informations coupée à la place disponible : le nombre de lignes laissées de côté.
+panel-more-references = +{ $count } de plus
 panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
+panel-cache-given-up = cache désactivé, refusé par le modèle
 # Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
 # de lignes de chaque sorte il a laissées de côté.
 panel-hidden-to-do = +{ $count } à faire
@@ -4122,6 +4224,17 @@ todos-heading = plan : { $done } sur { $total } terminées
 # La même, quand certaines de ses tâches ont été annulées, ce qu'elle compte à part de celles qui sont terminées.
 todos-heading-cancelled = plan : { $done } sur { $total } terminées, annulées : { $cancelled }
 todos-none = cette session n'a pas encore de plan
+# Ce que /issues et /prs mettent dans la transcription au-dessus de la liste, et l'unique ligne qu'ils disent quand la session n'a rien nommé.
+references-heading-issues = { $count ->
+    [one] { $count } ticket nommé dans cette session :
+   *[other] { $count } tickets nommés dans cette session :
+    }
+references-heading-prs = { $count ->
+    [one] { $count } pull request nommée dans cette session :
+   *[other] { $count } pull requests nommées dans cette session :
+    }
+references-none-issues = Aucun ticket n'a encore été nommé dans cette session.
+references-none-prs = Aucune pull request n'a encore été nommée dans cette session.
 # L'état que porte chaque tâche d'un plan affiché, à côté de sa marque.
 todos-status-pending = à faire
 todos-status-active = en cours
@@ -4536,6 +4649,9 @@ hover-footer-cancel-shell = cliquer pour quitter le mode shell
 hover-footer-paste = cliquer pour coller l'image
 hover-item = cliquer pour choisir celui-ci, cliquer encore pour le prendre
 hover-scrollbar = cliquer pour amener la vue ici, glisser le curseur pour défiler
+hover-pinned = cliquer pour aller à cette invite
+hover-to-tail = cliquer pour revenir aux dernières lignes
+hover-face = cliquer pour le faire cligner des yeux ou regarder ailleurs
 
 # Le petit menu qu'un clic droit ouvre sur une réponse, le bloc d'un délégué ou une sélection tenue.
 # Un mot ou une courte expression par entrée, et chacune fait ce que fait la commande ou le clic

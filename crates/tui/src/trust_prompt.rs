@@ -259,8 +259,13 @@ fn ask_one_from<B: Backend>(
         furthest: 0,
         page: 1,
         answerable: false,
+        hint: Rect::default(),
     };
     let mut ignored = false;
+    // Whether the last key was refused for arriving with others. Said in the row above the keys, so
+    // a `y` typed while the session started, which the question cannot tell from one a program
+    // wrote (PROMPT-7), is not refused with nothing on the screen saying why (#3846).
+    let mut refused_together = false;
 
     loop {
         // Drawn inside the loop rather than once before it, because the offer to leave is part of
@@ -272,7 +277,18 @@ fn ask_one_from<B: Backend>(
         // A terminal that cannot be drawn to cannot carry the question.
         if !ignored
             && terminal
-                .draw(|frame| drawn = draw_it(frame, offered_to_leave, scroll))
+                .draw(|frame| {
+                    drawn = draw_it(frame, offered_to_leave, scroll);
+                    // Only where a yes may be taken: otherwise the row says why it may not, which
+                    // is what a key pressed again would run into.
+                    if refused_together && drawn.answerable {
+                        frame.render_widget(Clear, drawn.hint);
+                        frame.render_widget(
+                            Paragraph::new(withheld(t!(trust_question_keys_together))),
+                            drawn.hint,
+                        );
+                    }
+                })
                 .is_err()
         {
             return Answer::Decline;
@@ -296,6 +312,9 @@ fn ask_one_from<B: Backend>(
         if key.kind != event::KeyEventKind::Press {
             continue;
         }
+        if arrived_alone {
+            refused_together = false;
+        }
         match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
             Response::Answer(answer) => return answer,
             Response::Scroll(by) => scroll = drawn.moved(scroll, by),
@@ -307,7 +326,10 @@ fn ask_one_from<B: Backend>(
             // of what just happened: the question stayed up and their virtualenv
             // activated, with nothing on the screen joining the two. Carried to the box,
             // where they can read it and decide (#403).
-            Response::Nothing if !arrived_alone => carried.extend(input::text_of(&key)),
+            Response::Nothing if !arrived_alone => {
+                carried.extend(input::text_of(&key));
+                refused_together = true;
+            }
             Response::Offer => offered_to_leave = true,
             Response::Nothing => {}
         }
@@ -428,6 +450,8 @@ struct Drawn {
     page: u16,
     /// Whether a yes may be taken.
     answerable: bool,
+    /// The row above the keys, where the loop says a key was refused for arriving with others.
+    hint: Rect,
 }
 
 impl Drawn {
@@ -871,6 +895,7 @@ impl Laid {
             furthest: self.furthest,
             page: self.body.height.saturating_sub(1).max(1),
             answerable: self.whole && answerable,
+            hint: self.hint,
         }
     }
 
@@ -1669,6 +1694,7 @@ mod tests {
             furthest: 5,
             page: 3,
             answerable: true,
+            hint: Rect::default(),
         };
         assert_eq!(drawn.moved(20, -1), 4);
         assert_eq!(drawn.moved(4, 3), 5);
@@ -2455,6 +2481,7 @@ mod tests {
                 furthest: 0,
                 page: 1,
                 answerable: true,
+                hint: Rect::default(),
             },
         );
         (answer, script.len())
@@ -2507,6 +2534,46 @@ mod tests {
         assert_eq!(answer, Answer::Decline);
         assert_eq!(left, 0, "the loop stopped before the key of its own");
         assert_eq!(carried, " nyc");
+    }
+
+    /// Keys that arrived together, such as keys typed while the session started and handed back
+    /// in one read, are refused as answers and the row above the keys says so. A loop that refused
+    /// them and drew nothing left a `y` that did nothing and a question that looked stuck (#3846).
+    #[test]
+    fn the_loop_says_when_it_refused_keys_that_arrived_together() {
+        let hint = Rect::new(0, 0, 80, 1);
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut script = vec![(typed('y'), false), (typed('a'), false)].into_iter();
+        let mut carried = String::new();
+        let answer = ask_one_from(
+            &mut terminal,
+            &mut carried,
+            || {
+                script
+                    .next()
+                    .map(Ok)
+                    .unwrap_or_else(|| Err(std::io::Error::other("script ended")))
+            },
+            |_, _, _| Drawn {
+                furthest: 0,
+                page: 1,
+                answerable: true,
+                hint,
+            },
+        );
+        assert_eq!(
+            answer,
+            Answer::Decline,
+            "a key that arrived with others answered"
+        );
+        assert_eq!(carried, "ya");
+        let row: String = (0..80)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(
+            row.contains(t!(trust_question_keys_together).trim()),
+            "nothing said the keys were refused: {row:?}"
+        );
     }
 
     /// A key that arrived with others cannot arm or take the offer to leave either: two interrupts

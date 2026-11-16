@@ -12,9 +12,9 @@ import { _electron as electron } from 'playwright-core'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdirSync } from 'node:fs'
 import { acceptsInspect } from './fuses.mjs'
-import { checker } from './drive-support.mjs'
+import { checker, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -106,11 +106,11 @@ check(
 const build = await page.locator('.sessions').getAttribute('data-build').catch(() => null)
 check(Boolean(build && build.trim()), `the build stamp came back (${build?.trim() ?? 'nothing'})`)
 
-await page.screenshot({ path: '/tmp/bravebot-ui/13-packaged.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/13-packaged.png` })
 await app.close()
 
 if (problems.length > 0) {
   console.log(`\nRESULT: ${problems.length} failed`)
   process.exit(1)
 }
-console.log('\nRESULT: ok — shot in /tmp/bravebot-ui/13-packaged.png')
+console.log(`\nRESULT: ok — shot in ${SHOTS_DIR}/13-packaged.png`)

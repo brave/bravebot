@@ -15,6 +15,7 @@ governs:
   - crates/tui/src/confirm.rs
   - crates/tui/src/panel.rs
   - crates/tui/src/list_picker.rs
+  - crates/tui/src/sidebar_prompt.rs
   - crates/tui/src/model_prompt.rs
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/sessions_screen.rs
@@ -174,7 +175,10 @@ dragging its border does, since the text then wraps into other rows ([MOUSE-34](
 
 `tui.mouse` set to the boolean `false`, in any settings file, stops the interface asking the terminal
 to report the mouse: the wheel and a drag are the terminal's own, and the interface does no selecting
-of its own. Any other value, including the string `"false"`, leaves capture on. While the mouse is
+of its own. Any other value, including the string `"false"`, leaves capture on. A project or local
+layer may state `false` and may not state `true` over the person's `false` in `~/.bravebot/settings.json`
+or the file `--settings` names, which is dropped and reported ([BACKEND-24](backends.md#BACKEND-24)); capture
+is on where nothing is stated, and a layer naming another key of `tui` does not remove this one. While the mouse is
 reported the `?` list names the drag that selects and the terminal's bypass modifier, Shift on most
 terminals and Option on macOS iTerm2 and Terminal.app, and the right click while the menu it opens is
 on ([MOUSE-52](#MOUSE-52)). With `tui.mouse` false it names none of them, since the terminal's own
@@ -183,6 +187,9 @@ stand for a click either, which no click reaches: the word that copies a fenced 
 ([MOUSE-27](#MOUSE-27)) and the label that leaves a delegate's view ([MOUSE-24](#MOUSE-24)).
 
 `verified-by: bravebot_config::settings::only_a_boolean_turns_mouse_capture_off`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
+`verified-by: bravebot_tui::app::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
 `verified-by: bravebot_tui::app::a_session_with_the_mouse_off_never_asks_for_mouse_reporting`
 `verified-by: bravebot_tui::app::the_mouse_is_captured_unless_the_settings_turn_it_off`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_terminals_own_selection`
@@ -436,6 +443,13 @@ covers, and it takes only what the frame drew, so a row the pane had no room for
 click. The keys that `?` lists have nothing to take, so a click on one does nothing, and a click in
 the box is [MOUSE-16](#MOUSE-16)'s. The keys stay the way to do it without a mouse.
 
+The checklist `/sidebar` opens ([PANEL-17](info-panel.md#PANEL-17)) is the one picker that takes a
+row on a single left press. Its rows are boxes that turn on or off and the checklist stays open, so
+the press that puts the cursor on a row also turns it, and the next press on it turns it back. The
+press lands on the row drawn under the pointer and not on the row the cursor was on, a press on the
+border, on the lines under the list or below the last row changes nothing, and the wheel moves the
+cursor ([MOUSE-46](#MOUSE-46)).
+
 `verified-by: bravebot_tui::list_picker::a_press_moves_the_cursor_and_a_second_press_takes_the_row`
 `verified-by: bravebot_tui::list_picker::two_presses_on_different_rows_or_far_apart_take_nothing`
 `verified-by: bravebot_tui::list_picker::a_press_inside_the_panel_but_off_the_rows_and_anything_but_a_left_press_leave_it_alone`
@@ -446,6 +460,10 @@ the box is [MOUSE-16](#MOUSE-16)'s. The keys stay the way to do it without a mou
 `verified-by: bravebot_tui::list_picker::a_key_after_a_press_moves_the_list_as_the_keys_alone_do`
 `verified-by: bravebot_tui::list_picker::the_panel_and_its_rows_are_drawn_where_placed_says_they_are`
 `verified-by: bravebot_tui::list_picker::the_picker_opened_at_rest_reads_the_pointer`
+`verified-by: bravebot_tui::list_picker::a_picker_that_takes_on_the_first_press_does_and_the_others_still_need_two`
+`verified-by: bravebot_tui::sidebar_prompt::one_press_on_a_row_turns_it_off_and_the_next_turns_it_on_again`
+`verified-by: bravebot_tui::sidebar_prompt::a_press_turns_off_the_row_it_landed_on_and_not_the_one_under_the_cursor`
+`verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_of_the_checklist_turns_its_section_off_and_a_press_outside_keeps_that`
 `verified-by: bravebot_tui::theme_prompt::the_pointer_previews_the_row_and_an_outside_press_puts_the_old_theme_back`
 `verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_moves_the_cursor_and_a_second_takes_it_in_a_picker_opened_mid_turn`
 `verified-by: bravebot_tui::app::tests::pickers::presses_on_two_rows_or_off_the_rows_take_nothing_in_a_picker_opened_mid_turn`
@@ -853,10 +871,10 @@ section ([MOUSE-11](#MOUSE-11), [MOUSE-12](#MOUSE-12), [MOUSE-13](#MOUSE-13), [M
 box as it was. At the plain prompt that is what Enter does there. While a
 turn runs it is carried out at once where the table says the command runs mid-turn and no line
 waiting ahead of it could change what it acts on ([CMD-8](commands.md#CMD-8)): `/model` and
-`/effort` ask for their picker as a mode of the session, `/context` is said as a command's
-answer is, so what the turn did is not counted as what it said, and `/diff` draws the files state or
-says why it cannot in the same way. Otherwise it waits in the queue
-with the note a typed line gets, as `/mcp` does, which waits for the turn to end. Where the session
+`/effort` ask for their picker as a mode of the session, `/context` and a bare `/mcp` are said as a
+command's answer is, so what the turn did is not counted as what it said, and `/diff` draws the
+files state or says why it cannot in the same way. Otherwise it waits in the queue
+with the note a typed line gets, as `/model` does behind a waiting prompt. Where the session
 is working and no turn is running, as under a summary or an aside, every command waits, and so it does
 while a command the person typed is running, which reads no line typed after it and has nothing to
 carry a click out with. It waits in the queue with a note that says it waits for the command to end,
@@ -1295,21 +1313,31 @@ they read or the exact address, and nothing in the address.
 `verified-by: bravebot_tui::link_clicks::a_typed_address_opens_while_a_turn_runs_and_a_typed_name_is_refused`
 
 <a id="MOUSE-41"></a>
-### MOUSE-41: a click on the info panel's pull request or issue row opens the link the person gave
+### MOUSE-41: a click on a row of the info panel's Pull requests or Issues section opens its address
 
-In the info panel, a left click that sweeps nothing on the `Pull request` row or the `Issue` row opens
-the address `/pr` or `/issue` set ([PANEL-12](info-panel.md#PANEL-12)) in the person's browser. It
-needs no modifier, since the panel draws only what the person and the driver said and nothing a tool
-returned reaches it ([PANEL-11](info-panel.md#PANEL-11)), and a click on a row of the person's own is
-not one that could take them somewhere nobody chose. The address is the one that was set, text the
-person typed, so it is routing on its own integrity ([ROUTE-2](routing.md#ROUTE-2)), held to one `http`
-or `https` address with a host in printable ASCII ([PANEL-12](info-panel.md#PANEL-12)). It is not the text
-the row draws for it: the shorthand `{owner}/{repo}#{n}`, or the address cut from the left to fit. It is
-never built from a repository the person did not name. An address naming a user, as in
-`https://github.com@example.test/`, is refused by the opener ([MOUSE-40](#MOUSE-40)), so its row is
-drawn and is not a target. The word beside the link and the link are one target, and the heading, the
-rows around them and the border column, which is the panel's resize handle
-([PANEL-6](info-panel.md#PANEL-6)), are not.
+In the info panel, a left click that sweeps nothing on a row of the `Pull requests` section or the
+`Issues` section opens that row's address in the person's browser. It needs no modifier, since the
+panel draws only what the person and the driver said and nothing an untrusted tool result returned
+reaches it ([PANEL-11](info-panel.md#PANEL-11)), and a click on a row of the person's own is not one
+that could take them somewhere nobody chose. There are two kinds of row.
+
+- The row of the session's own link, which `/pr` or `/issue` set ([PANEL-12](info-panel.md#PANEL-12)).
+  The address is the one that was set, text the person typed, so it is routing on its own integrity
+  ([ROUTE-2](routing.md#ROUTE-2)), held to one `http` or `https` address with a host in printable
+  ASCII. It is not the text the row draws for it: the shorthand `{owner}/{repo}#{n}`, or the address
+  cut from the left to fit.
+- The row of an item the session met ([PANEL-16](info-panel.md#PANEL-16)). The address is built from
+  the owner, the repository and the number the item holds, which were validated to the characters
+  GitHub allows, as `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}` by the kind of
+  its section. No other text is in it, and nothing a reply or a tool result said is.
+
+An address is never built from a repository the person did not name or the driver did not validate.
+An address naming a user, as in `https://github.com@example.test/`, is refused by the opener
+([MOUSE-40](#MOUSE-40)), so its row is drawn and is not a target. The whole of a row's cells after
+the border is one target, and the headings, the `+{n} more` row that counts what a section left out,
+the rows around them and the border column, which is the panel's resize handle
+([PANEL-6](info-panel.md#PANEL-6)), are not. A row that is cut for want of room is not drawn and is
+not a target ([PANEL-9](info-panel.md#PANEL-9)).
 
 As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single
 click, so a drag is a selection, and a click over the scroller, a
@@ -1317,8 +1345,9 @@ history search or a picker opens nothing. The browser is started as for MOUSE-40
 the link while a turn or a command runs. A pointer over the row is told from the same record, so
 what it says it would open and what a click opens are the same ([MOUSE-51](#MOUSE-51)).
 
-**The keyboard.** `/pr` and `/issue` with no argument say the address that is set, and `/open` followed by
-that address opens it in the browser as the click does ([CMD-30](commands.md#CMD-30)).
+**The keyboard.** `/pr` and `/issue` with no argument say the address that is set, `/prs` and `/issues`
+print each item of a section with its address ([CMD-31](commands.md#CMD-31)), and `/open` followed by
+an address opens it in the browser as the click does ([CMD-30](commands.md#CMD-30)).
 
 `verified-by: bravebot_tui::link_clicks::a_click_on_the_panels_pull_request_or_issue_row_opens_what_the_person_gave`
 `verified-by: bravebot_tui::link_clicks::a_link_row_opens_the_address_as_it_was_set_and_not_the_text_drawn_for_it`
@@ -1605,7 +1634,9 @@ headings, the spaces between sections and the models of a folded section
 ([VIEW-40](terminal-transcript.md#VIEW-40)) are not counted. In the search over the prompts already
 sent a turn of the wheel up moves the cursor to older prompts and one down to newer ones, and stops at
 the oldest and the newest. In the lists of sessions it moves the cursor that many sessions, over the
-headings of the sessions view, and stops at the first and the last. In each of these it takes no row,
+headings of the sessions view, and stops at the first and the last, except that over the details
+beside the Sessions screen's list it scrolls them that many lines
+([SCREEN-12](sessions-screen.md#SCREEN-12)). In each of these it takes no row,
 leaves the list open, and does not scroll the transcript beneath it. Over the rows of the list
 offered under the box as a line is typed the wheel moves the cursor that many items and stops at the
 first and the last, and elsewhere on the screen it scrolls the transcript. While the scroller's key
@@ -1626,6 +1657,7 @@ deleting a record do not read the wheel. The keys stay the way to do it without 
 `verified-by: bravebot_tui::app::tests::history_search::the_wheel_walks_the_prompts_by_the_wheel_rows_and_stops_at_both_ends`
 `verified-by: bravebot_tui::sessions_view::the_wheel_moves_the_cursor_by_the_sessions_asked_over_the_headings`
 `verified-by: bravebot_tui::sessions_screen_tests::the_wheel_walks_the_cursor_and_stops_at_the_ends`
+`verified-by: bravebot_tui::sessions_screen_tests::the_wheel_scrolls_the_details_over_them_and_walks_the_cursor_elsewhere`
 `verified-by: bravebot_tui::app::tests::completions::the_wheel_over_the_list_walks_it_and_elsewhere_scrolls_the_transcript`
 `verified-by: bravebot_tui::confirm::tests::mouse_tests::a_turn_of_the_wheel_moves_the_body_of_a_question_as_the_keys_do`
 `verified-by: bravebot_tui::app::tests::popups::a_press_outside_the_scrollers_key_list_puts_it_away_and_nothing_else`
@@ -1641,6 +1673,7 @@ nothing else, and the release that follows it is the panel's.
 | Panel | What Escape does | A left press outside it |
 |---|---|---|
 | the pickers `/effort`, `/config`, `/theme` and `/model` open, at rest and while a turn runs | leaves what was in force alone, and `/theme` puts back the theme it opened on | closes it the same way |
+| the checklist `/sidebar` opens, at rest and while a turn runs | closes it and keeps every change already made | closes it the same way |
 | the search over the prompts already sent | closes it, leaving the box as it was | closes it the same way |
 | the Sessions screen and the list `bravebot sessions` opens | leaves without resuming or attaching | there is nothing outside them: each takes the whole screen |
 | the list offered under the box as a line is typed | clears the line, which discards what was typed | does nothing |
@@ -1649,6 +1682,7 @@ nothing else, and the release that follows it is the panel's.
 
 `verified-by: bravebot_tui::list_picker::a_left_press_outside_the_panel_cancels_and_takes_nothing`
 `verified-by: bravebot_tui::model_prompt::a_left_press_outside_the_panel_keeps_the_current_model`
+`verified-by: bravebot_tui::sidebar_prompt::the_wheel_walks_a_press_outside_closes_and_a_press_off_the_rows_changes_nothing`
 `verified-by: bravebot_tui::app::tests::history_search::a_press_outside_the_search_closes_it_and_leaves_the_box_as_it_was`
 `verified-by: bravebot_tui::theme_prompt::the_pointer_previews_the_row_and_an_outside_press_puts_the_old_theme_back`
 `verified-by: bravebot_tui::app::tests::pickers::a_press_outside_a_picker_opened_mid_turn_closes_it_and_clicks_nothing_beneath`
@@ -1781,7 +1815,8 @@ nothing of the frame beneath it is a target, and the panel is found where it is 
 says whether a cell is a panel's. The way
 back out of a delegate's view ([MOUSE-24](#MOUSE-24)), the marker that leads a reply
 ([MOUSE-26](#MOUSE-26)), the word that copies a fenced block ([MOUSE-27](#MOUSE-27)), a prompt
-waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)) and each hint on the row under the box, with the
+waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)), the prompt drawn above the view
+([MOUSE-54](#MOUSE-54)), the button at the bottom of the view ([MOUSE-55](#MOUSE-55)), the face on the opening screen ([MOUSE-56](#MOUSE-56)) and each hint on the row under the box, with the
 permission mode ([MOUSE-14](#MOUSE-14), [MOUSE-48](#MOUSE-48)), are in the record. The marker and the word are not
 targets in a delegate's view, whose entries are the delegate's and not the session's, or in the files
 state.
@@ -1797,8 +1832,8 @@ last column is the state it is in whichever of those it was opened over.
 | a file's row, the close control, a control of the edit bar and a pane the wheel scrolls, in the files state | yes | yes | yes | no | no | yes | no |
 | a hint under the box, the permission mode included | yes | yes | no | no | no | no | no |
 | a place in the box's text, a prompt waiting behind a turn and the words that remove it | yes | yes | yes | no | no | no | no |
-| the track of the scrollbar, a row of the list under the box | yes | yes | yes | no | no | yes | no |
-| a reply's marker, the word that copies a block, a call, a delegate's block | yes | yes | yes | yes | no | no | no |
+| the track of the scrollbar, the button at the bottom of the view, a row of the list under the box | yes | yes | yes | no | no | yes | no |
+| a reply's marker, the word that copies a block, a call, a delegate's block, the prompt drawn above the view | yes | yes | yes | yes | no | no | no |
 | a web address | yes | yes | yes | yes | no | yes | yes |
 | a file path | yes | no | no | yes | no | yes | no |
 | the way back out of a delegate's view | no | no | no | no | no | no | yes |
@@ -1841,7 +1876,7 @@ takes a second click as its own ([MOUSE-15](#MOUSE-15)). A path waits for the se
 whether the first was a click on it ([MOUSE-42](#MOUSE-42)). Nor is a click that did nothing: a
 double click on text that is no target, or on an address without ctrl held, selects the word.
 
-The rows, the tabs and "Show more" of the Sessions screen ([SCREEN-12](sessions-screen.md#SCREEN-12))
+The rows, the tabs, "Show more" and the details of the Sessions screen ([SCREEN-12](sessions-screen.md#SCREEN-12))
 are recorded as the cells they are drawn in, and stand while the Sessions screen is open. While it is open it
 is the whole frame, so no target of the plain frame stands.
 
@@ -1891,7 +1926,7 @@ show in every theme and under `NO_COLOR`. The track of the scrollbar has no text
 The row where the frame draws its hints, which is the row under the box, the scroller's footer and the
 footer of a delegate's view, says in one line what a click on the target does, from a message of the
 catalog for each kind of target, in the room to the right of the last cell the row has drawn. For an
-address, a path and the pull request or issue row of the info panel the line carries the address, or
+address, a path and a row of the info panel's Pull requests or Issues section the line carries the address, or
 the path with the line it names, after the sentence, as the cells show it and for the panel as it
 opens, cut to what is left by the columns the characters are drawn in: an address from the right,
 which keeps the host, and a path from the left, which keeps the name, whatever the name is written
@@ -1993,10 +2028,14 @@ The menu has no key of its own, since it is a convenience over commands and clic
 one: `/copy`, `/copy text`, `/branch` and Ctrl-L are the keyboard path, and a selection, which only the
 mouse makes, is copied as it is for a drag ([MOUSE-1](#MOUSE-1)). `tui.contextMenu` set to the boolean `false`,
 in any settings file, opens no menu, and any other value, including the string `"false"`, leaves it on.
+A project or local layer may state `false` and may not state `true` over the person's `false`, as for
+`tui.mouse` ([MOUSE-4](#MOUSE-4)).
 It is a setting apart from `tui.mouse` because terminals disagree about a right click: macOS Terminal
 reports ctrl-click as one, and some terminals keep a right click for a menu of their own, while the
 wheel and the drag the interface reads are wanted anyway.
 
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_tui::app::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
 `verified-by: bravebot_tui::app::tests::menu::a_right_press_opens_the_menu_of_what_is_under_it_and_nowhere_else`
 `verified-by: bravebot_tui::app::tests::menu::with_a_selection_held_and_the_pointer_inside_it_the_menu_copies_the_selection`
 `verified-by: bravebot_tui::app::tests::menu::the_menu_is_drawn_inside_the_screen_wherever_the_pointer_is_and_wraps_nothing`
@@ -2055,3 +2094,102 @@ screen's own path.
 `verified-by: bravebot_tui::app::tests::wide::the_wheel_at_a_cell_past_223_turns_what_is_under_it`
 `verified-by: bravebot_tui::app::tests::wide::a_click_on_a_row_past_223_takes_the_row_it_names`
 `verified-by: bravebot_tui::input::a_report_past_column_223_is_handed_out_as_the_cell_it_names`
+
+<a id="MOUSE-54"></a>
+### MOUSE-54: a click on the prompt drawn above the view puts that prompt at the top of it
+
+A left click that sweeps nothing on the row of the prompt drawn above the view
+([VIEW-44](terminal-transcript.md#VIEW-44)) puts the row that prompt begins at at the top of the view,
+as `{` does in the scroller ([SCROLL-3](scroller.md#SCROLL-3)), and the prompt is then drawn in its own
+place and not above the view. The row is the one the frame that drew the prompt measured. At rest the
+view is then held there, as a view scrolled back is ([VIEW-27](terminal-transcript.md#VIEW-27)). The
+row is recorded as the cells of the screen it is drawn in and stands where the transcript's own
+targets do ([MOUSE-50](#MOUSE-50)): at rest, while a turn or a command runs and in the scroller. As for
+every click, the press and the release are on one cell and the press is a single click. A press on
+the row begins no selection, since the row is not the transcript's, so a drag along it selects
+nothing.
+
+`verified-by: bravebot_tui::app::tests::pinned::a_click_on_the_prompt_drawn_above_the_view_puts_that_prompt_at_the_top`
+`verified-by: bravebot_tui::app::tests::pinned::a_selection_never_begins_on_the_prompt_drawn_above_the_view_or_takes_its_words`
+`verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
+`verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
+`verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
+`verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`
+
+<a id="MOUSE-55"></a>
+### MOUSE-55: a click on the button at the bottom of the view returns it to the tail
+
+A left click that sweeps nothing on the button drawn in the last row of the transcript's
+pane while the view is held off the tail ([VIEW-45](terminal-transcript.md#VIEW-45)) returns the view to
+the tail as `ctrl-end` does, and as a click on the hint that names the key does
+([MOUSE-48](#MOUSE-48)). The view follows what arrives again and the button is gone. The target is the
+button's cells, which are its words and the blank on each side of them, and the rest of the row is
+not. As for every click, the press and the release are on one cell and the press is a single click,
+so a drag is a selection and the first click of a double click acts once. A press of another button
+does nothing. A click puts away the selection that was held, as every click that acts does.
+`ctrl-end` leaves it, since the selection stays on its text as the view scrolls
+([MOUSE-34](#MOUSE-34)).
+
+A press on the button begins no selection, since the row is not the transcript's, so a drag along it
+selects nothing. A drag from the transcript that ends on the row or below it reaches the rows above the
+button and no further, and a copy does not take its words. Held below the pane, the drag scrolls the
+view toward the tail ([MOUSE-37](#MOUSE-37)), and the row is below the pane for that, beside the
+button's words and on them. Where that brings the view back to the tail the button is gone and its
+row is a row of the pane again. The selection ends on the last row of text the drag reached, and a
+copy ends there.
+
+The target is recorded as the cells of the screen the button is drawn in. It stands as the scrollbar
+does ([MOUSE-50](#MOUSE-50)): at rest, while a turn or a command runs and in the files state, and in
+no view that replaces the frame. A panel drawn over it takes the press first
+([MOUSE-45](#MOUSE-45)). A question the interface puts to the person is not a panel of the frame: it
+draws its own frame over the whole screen, so no button is drawn while it is up, and a press, a release
+or a move of the pointer on the cells the button was in answers nothing and leaves the view held
+([MOUSE-44](#MOUSE-44)). The pointer over it is held ([MOUSE-51](#MOUSE-51)), and the row of hints says
+what a click does. The key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::tests::jump::a_click_on_the_button_returns_the_view_to_the_tail_as_ctrl_end_does`
+`verified-by: bravebot_tui::app::tests::jump::only_a_single_click_of_the_left_button_on_the_words_of_the_button_acts`
+`verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
+`verified-by: bravebot_tui::app::tests::jump::a_drag_held_on_the_row_of_the_button_scrolls_the_view_toward_the_tail`
+`verified-by: bravebot_tui::app::tests::jump::a_click_on_the_button_puts_a_held_selection_away_and_ctrl_end_leaves_it`
+`verified-by: bravebot_tui::confirm::tests::mouse_tests::no_pointer_event_answers_any_question`
+`verified-by: bravebot_tui::app::tests::jump::the_pointer_over_the_button_marks_it_and_says_what_a_click_does`
+`verified-by: bravebot_tui::app::tests::selection::a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_selection`
+`verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
+`verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
+`verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
+`verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`
+
+<a id="MOUSE-56"></a>
+### MOUSE-56: a click on the face on the opening screen makes it blink or look to the other side
+
+A left click that sweeps nothing on the cells the pixel face is drawn in on the opening screen
+([VIEW-21](terminal-transcript.md#VIEW-21)) makes the face do for a moment one of the two things it
+does on its own schedule. The first click makes it blink, the next makes it look to the other side, and
+they alternate after that. A blink lasts 200 ms and a glance 1400 ms, after which the face is held as
+its own schedule holds it, and the schedule goes on as before while a click is shown. The face is
+drawn again at once. Where `NO_MOTION` is set a click does nothing, since that face never moves.
+
+The target is the face's cells and no others: its columns and its rows, and not the wordmark beside
+it, the rows above or below it or the margin to its left. It is recorded where the face is drawn, so
+where the face is not drawn (no colour, or a screen too narrow for it) there is no target, and once
+the screen shows anything but the opening screen there is none either. It stands as the scrollbar
+does ([MOUSE-50](#MOUSE-50)): in the plain frame and not in the files state, and a panel drawn over it
+takes the press first ([MOUSE-45](#MOUSE-45)). As for every click, the press and the release are on
+one cell and the press is a single click. The pointer over it is held ([MOUSE-51](#MOUSE-51)), and the
+row of hints says what a click does.
+
+**Why.** The face already blinks and looks around by itself, so a person who points at it expects it
+to answer. The click shows nothing that the schedule does not, so it gives no one a way to read or
+change anything else.
+
+`verified-by: bravebot_tui::app::tests::clicks::a_click_on_any_cell_of_the_face_blinks_it_and_the_next_one_makes_it_glance`
+`verified-by: bravebot_tui::app::tests::clicks::a_click_beside_the_face_or_on_the_mark_does_not_move_it`
+`verified-by: bravebot_tui::app::tests::clicks::the_face_is_a_target_only_on_the_opening_screen`
+`verified-by: bravebot_tui::avatar::a_click_makes_the_face_blink_and_the_next_one_glance_for_a_moment`
+`verified-by: bravebot_tui::avatar::a_click_does_nothing_where_no_motion_is_asked_for`
+`verified-by: bravebot_tui::avatar::look_now_shows_a_click_at_once`
+`verified-by: bravebot_tui::app::tests::standing::every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other`
+`verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
+`verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
+`verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`

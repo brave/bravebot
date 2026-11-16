@@ -106,7 +106,20 @@ pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static st
         Reason::StateDirectory => t!(sandbox_rule_state_directory),
         Reason::HoldsCredentials => t!(sandbox_rule_holds_credentials),
         Reason::TooBroad => t!(sandbox_rule_too_broad),
+        Reason::NamesAVariable => t!(sandbox_rule_names_a_variable),
         Reason::Overridden => t!(sandbox_rule_overridden),
+    }
+}
+
+/// The line a session says about an entry of a permissions list, around `described`, which is
+/// [`describe`] of it as its front end spells it.
+///
+/// An entry the rule language dropped is ignored, and one it kept ([`Unreadable::keeps_the_rule`])
+/// is in force as written, so the two are not said as one sentence.
+pub fn said_in_a_session(rejected: &Rejected, described: String) -> String {
+    match rejected.reason.keeps_the_rule() {
+        true => t!(session_permission_rule_partly_read, problem = described),
+        false => t!(session_permission_rule_ignored, problem = described),
     }
 }
 
@@ -158,7 +171,10 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::EmptyBrackets => t!(permission_rule_empty_brackets),
         Unreadable::EmptyQuotedName => t!(permission_rule_empty_quoted_name),
         Unreadable::WhitespaceAtAnEnd => t!(permission_rule_whitespace_at_an_end),
+        Unreadable::UnclosedQuote => t!(permission_rule_unclosed_quote),
+        Unreadable::TrailingBackslash => t!(permission_rule_trailing_backslash),
         Unreadable::Unanchored => t!(permission_rule_unanchored),
+        Unreadable::Climbs => t!(permission_rule_climbs),
         Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
         Unreadable::NotAHost => t!(permission_rule_not_a_host),
@@ -185,7 +201,11 @@ pub fn for_an_unattended_run(
     workspace: &std::path::Path,
 ) -> (Permissions, Vec<Rejected>) {
     let lists = settings.permissions();
-    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
+    let anchors = anchors(
+        profile,
+        Some(workspace),
+        crate::workspace::volume_folds_case(workspace),
+    );
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
     explain(&mut permissions, settings);
@@ -224,12 +244,21 @@ fn explain(permissions: &mut Permissions, settings: &Settings) {
 /// Both come from the user's home directory, the settings one by joining `.bravebot` onto it. So
 /// what this takes is the home directory itself and not the state directory that sits inside it
 /// (PERM-3), which is the same distinction a `~` in a command line turns on (CMDLINE-4).
-fn anchors(profile: Option<&std::path::Path>, folds_case: bool) -> Anchors {
+fn anchors(
+    profile: Option<&std::path::Path>,
+    workspace: Option<&std::path::Path>,
+    folds_case: bool,
+) -> Anchors {
     let home = profile.map(|profile| profile.display().to_string());
     Anchors {
         // The settings file lives in the global state directory, so a `/` rule is anchored there.
         settings_dir: home.as_ref().map(|home| format!("{home}/.bravebot")),
         home,
+        // The place a relative rule holding `..` climbs out of (PERM-3), spelled as the workspace
+        // resolves to, since a path reaches the gates by that name.
+        workspace: workspace
+            .and_then(|workspace| workspace.canonicalize().ok())
+            .map(|workspace| workspace.display().to_string()),
         // The host's answer, which this crate is the lowest one that may ask for: the kernel has
         // no filesystem and takes it as data (PERM-3).
         backslash_separates: crate::workspace::BACKSLASH_SEPARATES,
@@ -365,7 +394,11 @@ pub fn with_granted(
     // narrowing one however the list is ordered. The order the person read them in is the order they
     // were proposed in, which is the order to report a bad one in.
     let allow: Vec<String> = lists.allow.iter().chain(granted).cloned().collect();
-    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
+    let anchors = anchors(
+        profile,
+        Some(workspace),
+        crate::workspace::volume_folds_case(workspace),
+    );
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
     explain(&mut permissions, settings);
@@ -418,7 +451,7 @@ fn dropped_allow_entries(settings: &Settings, anchors: &Anchors) -> (Vec<Propose
 /// [PERM-14]: ../../../docs/specs/permissions.md
 /// [PERM-15]: ../../../docs/specs/permissions.md
 pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<Proposed> {
-    dropped_allow_entries(settings, &anchors(profile, false)).0
+    dropped_allow_entries(settings, &anchors(profile, None, false)).0
 }
 
 /// The rules `proposed` holds as an `allow` list of their own, read as [`with_granted`] reads one.
@@ -433,7 +466,11 @@ pub fn as_allow_list(
     workspace: &std::path::Path,
 ) -> Permissions {
     let allow: Vec<String> = proposed.iter().map(|rule| rule.rule.clone()).collect();
-    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
+    let anchors = anchors(
+        profile,
+        Some(workspace),
+        crate::workspace::volume_folds_case(workspace),
+    );
     Permissions::parse(&[], &[], &allow, &anchors).0
 }
 
@@ -901,7 +938,10 @@ mod tests {
             Unreadable::EmptyBrackets,
             Unreadable::EmptyQuotedName,
             Unreadable::WhitespaceAtAnEnd,
+            Unreadable::UnclosedQuote,
+            Unreadable::TrailingBackslash,
             Unreadable::Unanchored,
+            Unreadable::Climbs,
             Unreadable::NotADomainRule,
             Unreadable::NoDomainNamed,
             Unreadable::NotAHost,
@@ -915,6 +955,38 @@ mod tests {
             assert!(!words.is_empty(), "a reason with nothing to say");
             assert!(seen.insert(words), "two reasons both read '{words}'");
         }
+    }
+
+    /// A session says an entry the rule language dropped is ignored and one it kept is in force as
+    /// written. A rule reported as ignored that still refuses sends somebody to remove a rule that
+    /// protects them, and the reverse reads a dropped rule as protection.
+    #[test]
+    fn a_session_says_a_kept_rule_is_in_force_and_a_dropped_one_is_ignored() {
+        let (_, rejected) = from_settings(
+            &layered_settings(
+                "kept-and-dropped",
+                None,
+                Some(r#"{"permissions": {"deny": ["Bash(sh -c \"rm *)", "Read()"]}}"#),
+            ),
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        let said = rejected
+            .iter()
+            .map(|reject| said_in_a_session(reject, describe(reject)))
+            .collect::<Vec<_>>();
+        assert_eq!(said.len(), 2, "{said:?}");
+        let kept = said
+            .iter()
+            .find(|line| line.contains("rm *"))
+            .expect("kept");
+        let dropped = said
+            .iter()
+            .find(|line| line.contains("Read()"))
+            .expect("dropped");
+        assert!(kept.contains("in force as written"), "{kept}");
+        assert!(!kept.contains("ignoring"), "{kept}");
+        assert!(dropped.contains("ignoring"), "{dropped}");
     }
 
     /// PERM-14 at the boundary that turns lists into rules: a `Bash` allow rule a checkout wrote
@@ -1502,6 +1574,44 @@ mod tests {
         assert_eq!(host_spelling("/C:/x", false), "/C:/x");
         assert_eq!(host_spelling("/C:", false), "/C:");
         assert_eq!(host_spelling("/home/x", true), "/home/x");
+    }
+
+    /// PERM-3, PERM-7: a `deny` rule naming a directory without `/**` covers the files under it by
+    /// the names the file tools ask by, and a rule holding `..` covers the full path a call to the
+    /// file arrives as, read for a workspace that resolves. A rule climbing above the top of the
+    /// file system is reported and dropped.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_rule_and_a_rule_holding_dot_dot_cover_the_files_they_name() {
+        let root = project_with_a_linked_directory("permissions-directory-and-dot-dot");
+        let beside = root.parent().unwrap().join("sib");
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(./real/)", "Read(../sib/.env)", "Edit(//{}/../sib/x)", "Read(//../x)"]}}}}"#,
+            root.display().to_string().trim_start_matches('/'),
+        ));
+        let (permissions, rejected) = from_settings(&settings, None, &root);
+
+        assert_eq!(
+            rejected.iter().map(|r| r.reason).collect::<Vec<_>>(),
+            [Unreadable::Climbs],
+            "only the rule climbing above the top of the file system is unreadable: {rejected:?}"
+        );
+        for (subject, path) in [
+            (Subject::Read, "real/secret.txt".to_string()),
+            (Subject::Read, beside.join(".env").display().to_string()),
+            (Subject::Edit, beside.join("x").display().to_string()),
+        ] {
+            assert_eq!(
+                permissions.for_path(subject, &path),
+                Decision::Ruled(Ruling::Deny),
+                "{path} was not covered"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Read, &beside.join("other").display().to_string()),
+            Decision::Unmatched,
+            "a rule naming one file beside the project covered another"
+        );
     }
 
     /// PERM-7: a name is a place at the top of the workspace as well as at any depth, so a rule

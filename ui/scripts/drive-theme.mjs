@@ -1,10 +1,10 @@
 // That System / Light / Dark can be chosen and remembered.
-import { checker, launch } from './drive-support.mjs'
+import { checker, launch, SHOTS_DIR } from './drive-support.mjs'
 import { appState, locateProfile } from './drive-profile.mjs'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
-const shots = '/tmp/bravebot-ui'
+const shots = SHOTS_DIR
 mkdirSync(shots, { recursive: true })
 
 const { check, problems } = checker()

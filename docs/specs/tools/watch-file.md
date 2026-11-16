@@ -34,7 +34,7 @@ is held to. A field for what a fire should say would let a turn write its own ne
 for how often to look would make the latency the planner's to choose; and either would turn a call
 anybody can read into one they cannot.
 
-`verified-by: bravebot_agent::tools::nothing_on_this_tool_says_anything_but_which_file`
+`verified-by: bravebot_agent::tools::tests::watching::nothing_on_this_tool_says_anything_but_which_file`
 
 <a id="ARM-2"></a>
 ### ARM-2: the gate is the one a read of that path goes through, and nothing more is granted
@@ -49,8 +49,8 @@ a prompt of its own here would put a second question to somebody who has already
 first. And a path nobody vouched for is one this program has no business reporting movement on, so
 the gate is not looser either.
 
-`verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
-`verified-by: bravebot_agent::tools::a_watch_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::watching::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
+`verified-by: bravebot_agent::tools::tests::watching::a_watch_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::turn::under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass`
 `verified-by: bravebot_agent::turn::a_watch_is_refused_at_arming_where_a_read_of_the_path_is`
 
@@ -70,8 +70,8 @@ so an absent first look is something a later look can differ from: the file appe
 that, and not as a write. A path the session could not reach is still refused, as a read of it would
 be ([ARM-2](#ARM-2)).
 
-`verified-by: bravebot_agent::tools::a_directory_is_refused_rather_than_watched`
-`verified-by: bravebot_agent::tools::a_path_that_names_nothing_is_armed_to_report_it_appearing`
+`verified-by: bravebot_agent::tools::tests::watching::a_directory_is_refused_rather_than_watched`
+`verified-by: bravebot_agent::tools::tests::watching::a_path_that_names_nothing_is_armed_to_report_it_appearing`
 
 <a id="ARM-4"></a>
 ### ARM-4: a call the session cannot honour is refused with the reason, not armed silently
@@ -88,8 +88,8 @@ it guessing between a rule it could explain and a mistake it should retry.
 tool wrote without the session's answer would be telling the planner about a watch that does not
 exist.
 
-`verified-by: bravebot_agent::tools::a_session_already_doing_something_untyped_refuses_and_says_which`
-`verified-by: bravebot_agent::tools::a_turn_that_fills_the_last_free_slot_is_refused_after_it`
+`verified-by: bravebot_agent::tools::tests::watching::a_session_already_doing_something_untyped_refuses_and_says_which`
+`verified-by: bravebot_agent::tools::tests::watching::a_turn_that_fills_the_last_free_slot_is_refused_after_it`
 
 <a id="ARM-5"></a>
 ### ARM-5: a surface that keeps no watches is offered no way to arm one
@@ -101,8 +101,8 @@ the way any other name nobody offered is: no such tool.
 nobody in front of it has no such reader, and a delegate ends when it answers, so a watch it armed
 would outlive everything that could act on one.
 
-`verified-by: bravebot_agent::tools::a_surface_that_keeps_no_watches_is_not_offered_the_tool`
-`verified-by: bravebot_agent::tools::a_call_to_watch_a_file_from_a_delegate_or_a_surface_with_no_watches_is_answered_as_an_unknown_name`
+`verified-by: bravebot_agent::tools::tests::watching::a_surface_that_keeps_no_watches_is_not_offered_the_tool`
+`verified-by: bravebot_agent::tools::tests::watching::a_call_to_watch_a_file_from_a_delegate_or_a_surface_with_no_watches_is_answered_as_an_unknown_name`
 `verified-by: bravebot_agent::turn::a_run_that_keeps_no_watches_answers_a_call_to_arm_one_as_an_unknown_name`
 
 <a id="ARM-6"></a>
@@ -122,6 +122,6 @@ descriptions happen to be in.
 is not one file, and where the person asked for their own line to be run again. Cutting it would
 leave those cases with nothing.
 
-`verified-by: bravebot_agent::tools::a_read_is_sent_to_the_watch_where_one_can_be_armed`
-`verified-by: bravebot_agent::tools::a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed`
+`verified-by: bravebot_agent::tools::tests::watching::a_read_is_sent_to_the_watch_where_one_can_be_armed`
+`verified-by: bravebot_agent::tools::tests::watching::a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed`
 `verified-by: bravebot_agent::watch_withheld_by_tools::a_read_does_not_name_a_watch_the_command_line_took_away`

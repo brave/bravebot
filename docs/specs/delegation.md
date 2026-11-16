@@ -341,7 +341,7 @@ report.
 A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
 There is no report to sit beside, so the sentence says the limit was spent and that the same task
 will not get further; the person's note gains the bound the same way. What the failure was stays the
-fixed category, said to the planner only for a limit or an outage as below
+fixed category, said to the planner only for a limit, an outage, a silence or a stopped reply as below
 ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this driver holds, not a reason
 read off a service's answer.
 
@@ -351,15 +351,24 @@ it asks for a tool instead, there is no answer to carry and the run ends as a fa
 is then told only that the delegate did not finish, which reads as bad luck, so it spawns the same
 delegate on the same task and the budget goes on repeats of a run that cannot end differently.
 
-**A limit or an outage is named, because a repeat meets it again.** A delegate that ended
-rate-limited or unavailable is told of with its category and with the sentence that starting the
-same delegate again meets the same limit, beside the bound sentence where the bound was also spent.
-A planner told only that the delegate did not finish takes it for bad luck and starts the same
-delegate again, which makes the same requests into the same limit. The sentence is written by this
-driver for each of the two categories from the closed name the trail records
-([TRACE-8](trace.md#TRACE-8)), so nothing the service answered is carried
-([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and a lost thread are still
-told as only that the delegate did not finish.
+**A limit, an outage, a silence or a stopped reply is named, because a repeat meets it again.** A
+delegate that ended rate-limited or unavailable is told of with its category and with the sentence
+that starting the same delegate again meets the same limit, beside the bound sentence where the
+bound was also spent. A delegate that ended transport or incomplete is told of with its category,
+with the statement that the service sent no refusal, with the sentence that starting the same
+delegate again on the same task may meet the same silence or stop the same way, and with the
+instruction to split the task so that each delegate makes smaller replies or writes. The statement
+that no refusal came is made because a planner left without a cause has written that a declined or
+refused call might be it, and a transport or incomplete ending carries no refusal. The sentence does
+not say that starting again will succeed or that the task need not change. A planner told only that
+the delegate did not finish takes it for bad luck and starts the same delegate again, which makes
+the same requests into the same ending. The sentence is written by this driver for each of the four
+categories from the closed name the trail records ([TRACE-8](trace.md#TRACE-8)), so nothing the
+service answered is carried ([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and
+a lost thread are still told as only that the delegate did not finish. What the delegate had read or
+written before it failed is not handed back: the planner is told the counts of commands and writes
+and nothing of their content, because only the report crosses back and a delegate that failed
+has none ([DELEGATE-9](#DELEGATE-9)).
 
 **Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
 limiting round to say what stopped it, and that is model text: a delegate may spend its last round
@@ -375,8 +384,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
-`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
-`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way`
 
 <a id="DELEGATE-29"></a>
 ### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
@@ -807,12 +816,30 @@ However many runs are going, the confirmer, the reporter and the audit trail are
 each is taken for one call at a time. A delegate wanting a write approved while somebody is
 reading another delegate's diff waits for them to finish reading it.
 
+Only a question that reaches the person waits. A question the permission mode answers without one
+([MODE-9](permission-modes.md#MODE-9): a bypass or accept-edits approval, a plan-mode or
+read-only refusal) is answered when it is asked, without taking the confirmer, and is recorded as the
+mode's answer with the mode's name ([TRACE-7](trace.md#TRACE-7)). The mode is read at that moment
+and not when the confirmer was lent, so a mode chosen while another run's question is open decides
+the questions after it ([MODE-8](permission-modes.md#MODE-8)), and a question already queued is
+decided under the mode in force when its turn comes. A delegate the person has stopped
+([DELEGATE-25](#DELEGATE-25)) is refused before the mode is read, in every mode. A confirmer that
+answers nothing in advance is asked for every question, which is the safe default.
+
 **Why.** The alternative is two questions on one screen, which is a person answering neither
 properly, and two trails, which is a record with a hole in it exactly over the part of the turn
-nobody watched.
+nobody watched. A question nobody is asked has no screen to share, and queueing it behind a
+person's open question would hold a delegate idle for as long as the person takes to answer
+something unrelated to it.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::turn::one_trail_records_the_delegate_and_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_delegates_read_bypass_answers_is_not_held_behind_the_turns_open_question`
+`verified-by: bravebot_agent::shared::a_read_bypassing_approves_is_not_held_behind_another_delegates_open_question`
+`verified-by: bravebot_agent::shared::what_a_mode_answers_unasked_is_not_held_behind_an_open_question`
+`verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
+`verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
+`verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
 
 <a id="DELEGATE-17"></a>
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it
@@ -1293,6 +1320,7 @@ futility as the round limit and takes the same way out, which keeps what the del
 `verified-by: bravebot_agent::turn::a_stop_the_delegate_never_acted_on_is_not_reported_as_one`
 `verified-by: bravebot_agent::shared::a_stopped_delegates_question_is_declined_and_a_siblings_is_asked`
 `verified-by: bravebot_agent::shared::a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile`
+`verified-by: bravebot_agent::shared::a_stopped_delegate_is_refused_what_the_mode_would_have_approved`
 
 <a id="DELEGATE-27"></a>
 ### DELEGATE-27: a definition may name the effort its delegate asks for

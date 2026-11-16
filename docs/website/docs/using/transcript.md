@@ -19,6 +19,15 @@ Write", by the word its own row will start with. The token count beside it moves
 arguments arrive, so a long file being written reads as work and not as a stall. The name goes once
 the call starts, the round ends, or the request has to be sent again.
 
+**While a request that failed in transit waits to be sent again, the working indicator says when**:
+`Reconnecting, next try in 38s`. Where a retry window decides how long the request goes on being sent
+again, it also says how long is left before bravebot gives up: `Reconnecting, next try in 38s, giving up
+in 52m 10s`. Both count down on screen. Where only a `maxRetries` count decides, there is no time to
+give up and the second figure is left out. When the pause is over, and while the next attempt is out,
+the indicator reads `Reconnecting` again. A line you type during the wait is still sent at once. The
+window and the count are set in the provider's
+[`options`](../customize/providers/openai-compatible.md#retries-and-a-reply-gone-quiet).
+
 **While the turn waits for a delegate's report, the working indicator reads "Waiting on d1"**, with the
 delegate's number, or "Waiting on d1, d2" with the numbers of every delegate still working. A planner
 that has only delegates left ends its round with one line saying what is outstanding, and that line
@@ -72,6 +81,8 @@ to stderr, the codes are left out and a row under the text says how many,
 for example `14 colour codes not drawn`. Every other control character and escape sequence, such as
 one that moves the cursor or erases a line, is still replaced by a visible picture. A prompt asking
 you to approve text, a block's heading, and a file name draw every byte, colour codes included.
+The text of a command's output that the model reads also has its codes taken out and counted, so the
+model is not sent them ([the run tool](../reference/run-tool.md)).
 
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.
@@ -231,9 +242,15 @@ every theme.
 
 :::note
 The question about your background colour is asked once, before the first frame, and the answer is
-read straight off the terminal. Anything typed or pasted into the window before it arrives is read by
-that same question and discarded, and a terminal that answers with nothing holds the window open for
-its full 80 milliseconds. It happens once a session, before there is a box to type into.
+read straight off the terminal, together with the questions about your keys and graphics. Keys typed
+or pasted into the window before the answers arrive are kept and reach the box in the order you typed
+them, though nothing is drawn until the questions are answered or given up on: up to 80 milliseconds
+for the background colour and 500 milliseconds for the keys on a terminal that answers nothing. A
+terminal that answers the key question later than that is sent no disambiguated keys for the session,
+and one that did not answer it within 500 milliseconds is not asked about graphics. Keys that arrived
+together in one read do not answer the trust question, and the row above its keys says they were
+refused. Bytes that belong to no key are dropped, and the session says how many in a note before the
+first prompt. It happens once a session.
 :::
 
 See [Choosing a theme](../customize/theme.md) for where the choice is stored
@@ -260,13 +277,14 @@ one service, billed and credentialled differently, and which one answers is what
 between.
 
 **Left folds the section the cursor is in** down to its heading, which then says how many models it
-holds, and **Right** opens it again. The cursor moves to the nearest model still drawn. The arrow
-keys, Home, End and the wheel go over the models of a folded section, and Enter does nothing while
-the cursor is in one. Typing or deleting a character opens every section, so a search never hides a
-match.
+holds, and **Right** opens it again. The cursor moves to the folded section's heading, which is drawn as
+the row the cursor is on. The arrow keys, Home, End and the page keys stop on the heading of a folded
+section and go over its models, the wheel goes over the headings and the models, and Enter does
+nothing while the cursor is on a heading, so a list with every section folded can still be walked.
+Typing or deleting a character opens every section, so a search never hides a match.
 
-**PageDown and PageUp** move the cursor a screenful at a time through the models drawn, and **Home**
-and **End** go to the first and the last.
+**PageDown and PageUp** move the cursor a screenful at a time through the rows it can be on, and
+**Home** and **End** go to the first and the last.
 
 ## When the environment declines colour or motion
 
@@ -317,6 +335,24 @@ All of these work while a turn is running, and the view does not jump to follow 
 
 While the view is held off the latest, the bottom line says so and counts the rows that are below it,
 and names **Ctrl-End**, which returns to the latest. The cue goes when the view is back.
+
+**A button returns the view to the latest.** While the view is held off the latest, the last row of
+the transcript holds `↓ Jump to bottom` with the count of rows below it. The row under it is the
+status line while a turn or a command runs, and the box otherwise. Clicking
+it does what Ctrl-End does, and it is gone once the view is back. It takes that row from the
+transcript and covers none of its text. It is left out,
+and the line under the box is the only cue, in a pane narrower than the words or shorter than four
+rows, and it is not drawn in the scroller, a delegate's view, the view of an aside or of what a command
+printed, or the opening screen. It is not drawn while a question waits for your answer, and a click
+where it was answers nothing. The button is not part of the text, so
+a drag on it selects nothing and a copy never takes it.
+
+**The prompt you are reading the answer to stays at the top.** Once the prompt of the turn at the top
+of the view has scrolled off, the first row of the transcript holds it again, on one row and cut to
+fit, at rest and in the scroller. It is not part of the text, so a drag on it selects nothing and a
+copy never takes it. Clicking it puts that prompt back at the top of the view. Nothing is drawn there
+over what a shell command printed, or in a pane shorter than four rows or narrower than sixteen
+columns.
 
 ## The scroller
 
@@ -492,9 +528,13 @@ says what a click does and what does the same from the keyboard.
 | the marker at the start of a reply | copies that reply, as `/copy` does. A reply still arriving has none to click until it ends | `/copy` |
 | `copy` at the right of a code block's header | copies that block alone, as the reply wrote it | `/copy block`, or `/copy block 2` for the one before |
 | a call that has more to show | at the prompt, including while a turn runs, opens the scroller on that call, expanded. In the scroller it expands the call, and again collapses it | Ctrl-O, then `x` |
+| `↓ Jump to bottom` at the bottom of a view held off the latest | returns the view to the latest, also while a turn runs | Ctrl-End |
 | a delegate's block | opens that delegate's view, in the scroller, at the prompt and while a turn runs | Ctrl-L |
 | `‹ back` in the header of a delegate's view, or the sentence that closes it | leaves the view and returns to what it was opened over | Ctrl-L |
 | a prompt waiting behind a turn | takes it back into the box, with the prompts typed after it | Up, which takes them all |
+| `remove` at the right of a waiting line | removes that line from the queue and puts nothing in the box; a prompt removed is out of the turn's reach, and stays in the history | clearing the box discards the waiting lines |
+| `clear all` on the oldest waiting line, drawn once a second line waits | removes every waiting line, newest first, and leaves the box as it was | clearing the box |
+| a command a click on the info panel queued | removes it from the queue, since it has nothing to put in the box | |
 | a web address in the assistant's words, with ctrl held | opens it in your browser, also while a turn runs | `/open 1`, or `/open` and the address |
 | a file path in the assistant's words | shows the file at the end of the transcript, a moment later so a double click still selects the name | `/open 2`, or `/open` and the path |
 | a file path in the assistant's words, with ctrl held | opens the file in your editor, at the line the path gave | `/open edit 2`, or `/open edit` and the path |
@@ -551,8 +591,8 @@ the rest.
 | the rest of the border, dragged | gives the panel more room or less | none: Ctrl-X hides it where the width does not suit |
 
 While a turn runs, a click on a row that stands for a command does what the command typed does then:
-the pickers open and `/context`, `/lsp` and `/diff` answer at once, and `/mcp`, which waits for the turn to
-end, waits in the queue under the box. While a command you typed with `!` runs, every one of them waits in
+the pickers open and `/context`, `/lsp`, `/diff` and `/mcp` answer at once. A row whose command would
+wait for a line typed before it waits in the queue under the box. While a command you typed with `!` runs, every one of them waits in
 the queue, and is carried out when the command has ended.
 
 **Under the box**
@@ -571,6 +611,7 @@ Parts of the row that only report, such as the context reading and what a copy t
 | Click | What it does | The same from the keyboard |
 |---|---|---|
 | a row of the `/effort`, `/config`, `/theme` and `/model` pickers | the first click moves the cursor to it, and `/theme` shows the theme under it. The second takes it, when it is on the same row | Up, Down and Enter |
+| a row of the `/sidebar` checklist | turns that section of the info panel on or off, on the one click | Up, Down, Space and Enter |
 | a prompt in the search over earlier prompts | the first click moves the cursor to it and the second puts it in the box, sending nothing | Up, Down and Enter |
 | a session in the [Sessions screen](sessions-screen.md#the-mouse) or the list `bravebot sessions` opens | the first click moves the cursor to it and the second opens it as Enter does, or attaches to it. A click on a tab of the Sessions screen chooses it | Up, Down and Enter |
 | outside a picker or the search over earlier prompts | closes it, with nothing changed | Escape |
@@ -593,7 +634,8 @@ one chose.
 While the mouse is captured and the transcript is longer than the room for it, a scrollbar stands in
 the last column of the transcript, in the plain view and not in the scroller, a delegate's view, the
 search over earlier prompts or the opening screen. Its thumb shows where the view is in the whole,
-and the lines wrap to the columns it leaves. Pressing in the column puts the middle of the thumb where
+and the lines wrap to the columns it leaves. It runs beside the rows under the prompt kept at the
+top, where one is, and above the button that returns to the latest, where one is. Pressing in the column puts the middle of the thumb where
 you pressed, and dragging the thumb scrolls with the pointer, from wherever in the window the pointer
 goes: above or below the column is the first row or the last. It answers while a turn runs. It is not
 part of the text, so a drag across it copies nothing from it. The wheel, the arrow keys and the page

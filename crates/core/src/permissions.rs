@@ -141,6 +141,10 @@ pub struct Anchors {
     pub home: Option<String>,
     /// The directory the settings file sits in, for a single-slash pattern.
     pub settings_dir: Option<String>,
+    /// The workspace, as a full path, for a relative pattern holding a `..` that climbs out of it
+    /// (PERM-3). Absent, such a pattern is kept as written, which is what a caller with no
+    /// workspace to resolve against gets.
+    pub workspace: Option<String>,
     /// Whether the host separates one segment of a path from the next with a backslash as well as
     /// with a slash. Supplied by the caller for the same reason the two directories are: this
     /// crate asks the host nothing, and the answer cannot be read off a pattern or a path, since a
@@ -171,7 +175,7 @@ enum Pattern {
     /// A path pattern against an absolute path.
     Absolute(PathPattern),
     /// A command pattern, matched against one stage's argv.
-    Command(String),
+    Command(CommandPattern),
     /// A host name, from a `domain:` specifier, matched against a URL's host and its subdomains.
     /// The second is the name's ASCII form ([`crate::punycode::to_ascii`]) where a label is outside
     /// ASCII, so the rule covers the host in either spelling.
@@ -182,6 +186,47 @@ enum Pattern {
     Server(String),
     /// One tool of one server, from `Mcp(weather:get_forecast)`.
     Tool(String, String),
+}
+
+/// A command specifier, in the readings a stage is matched against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandPattern {
+    /// The specifier's characters as written, a trailing `:*` read as ` *`. The only reading an
+    /// `allow` rule has (PERM-5).
+    written: String,
+    /// The specifier read as a typed line is, so a quote, a backslash escape and a run of spaces
+    /// mean what they mean in a line ([`typed_line`]). Only a `deny` or `ask` rule is matched
+    /// against it, in addition to `written`, so a rule covers everything it covered before.
+    /// `None` where it reads as `written` does, or for a rule no line can be read from, which an
+    /// `allow` rule keeps as it was.
+    typed: Option<String>,
+}
+
+impl CommandPattern {
+    /// Whether this covers one stage.
+    ///
+    /// A rule that restricts is also matched with the program word of both sides in canonical
+    /// form, so a program named in one Unicode spelling is covered in another, which a volume
+    /// opens as the same file (PERM-5, PERM-7). Arguments are compared as written.
+    fn covers(&self, stage: &Stage, restricting: bool) -> bool {
+        if !restricting {
+            return command_matches(&self.written, &stage.written, false);
+        }
+        std::iter::once(self.written.as_str())
+            .chain(self.typed.as_deref())
+            .any(|reading| {
+                if command_matches(reading, &stage.written, true) {
+                    return true;
+                }
+                let (program, rest) = reading.split_at(reading.find(' ').unwrap_or(reading.len()));
+                if stage.canonical.is_none() && program.is_ascii() {
+                    return false;
+                }
+                let canonical = format!("{}{rest}", crate::canonical::decompose(program));
+                let stage = stage.canonical.as_deref().unwrap_or(&stage.written);
+                command_matches(&canonical, stage, true)
+            })
+    }
 }
 
 /// A path pattern and whether it was written anchored.
@@ -220,6 +265,9 @@ pub struct Rule {
     /// set after the rules are read, by whoever held the file, and is only ever handed to a report.
     /// A rule decides exactly what it decided before one was written.
     reason: Option<String>,
+    /// Why a `deny` or `ask` `Bash` rule has no typed reading, so it is matched as written alone
+    /// (PERM-5). Read only by [`Permissions::parse`], which reports it.
+    typed_unreadable: Option<Unreadable>,
 }
 
 impl Rule {
@@ -234,10 +282,21 @@ impl Rule {
     /// name where a path is bytes and as likely padding inside the brackets, and a rule read either
     /// way would be about a file the person may not have meant ([`Unreadable::WhitespaceAtAnEnd`]).
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
+        Self::parse_in(text, anchors, Ruling::Allow)
+    }
+
+    /// [`Rule::parse`] for a rule written in the list `ruling` names.
+    ///
+    /// A `Bash` rule in `deny` or `ask` is also read as a typed line is. One that no line can be
+    /// read from, for a quote left open or a backslash with nothing after it, is kept and matched
+    /// as its characters are written alone, so it protects what it did before the typed reading
+    /// existed, and [`Rule::typed_unreadable`] says why it has no other reading (PERM-5, PERM-11).
+    /// An `allow` rule is not read that way, so [`Rule::parse`] is the reading of that list.
+    pub fn parse_in(text: &str, anchors: &Anchors, ruling: Ruling) -> Result<Self, Rejected> {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
         // find in their file, and a report that trimmed them names neither.
-        Self::parse_trimmed(text.trim(), anchors)
+        Self::parse_trimmed(text.trim(), anchors, ruling)
             .map(|rule| Self {
                 written: text.trim().to_string(),
                 ..rule
@@ -253,13 +312,19 @@ impl Rule {
         &self.written
     }
 
+    /// Why this rule is matched as written alone, where it is a `deny` or `ask` `Bash` rule that
+    /// no typed line can be read from.
+    pub fn typed_unreadable(&self) -> Option<Unreadable> {
+        self.typed_unreadable
+    }
+
     /// Why the person wrote it, or `None` where no reason of theirs is attached (PERM-1).
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
     }
 
     /// [`Rule::parse`] on text with its surrounding space already removed.
-    fn parse_trimmed(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
+    fn parse_trimmed(text: &str, anchors: &Anchors, ruling: Ruling) -> Result<Self, Rejected> {
         if text.is_empty() {
             return Err(Rejected::new(text, Unreadable::Empty));
         }
@@ -303,6 +368,7 @@ impl Rule {
             return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
         }
 
+        let mut typed_unreadable = None;
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
             None | Some("*") => Pattern::Everything,
@@ -311,7 +377,7 @@ impl Rule {
             }
             Some(specifier) if subject.takes_a_path() => {
                 path_pattern(quoted.unwrap_or(specifier), anchors, quoted.is_some())
-                    .ok_or_else(|| Rejected::new(text, Unreadable::Unanchored))?
+                    .map_err(|reason| Rejected::new(text, reason))?
             }
             Some(specifier) if subject == Subject::WebFetch => {
                 // Claude Code's spelling, and the only one: a URL prefix would read as covering a
@@ -345,7 +411,18 @@ impl Rule {
             }
             Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
                 .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
-            Some(specifier) => Pattern::Command(command_pattern(specifier)),
+            Some(specifier) => {
+                let written = command_pattern(specifier);
+                let typed = match typed_line(specifier) {
+                    _ if ruling == Ruling::Allow => None,
+                    Ok(line) => Some(typed_pattern(line)).filter(|typed| *typed != written),
+                    Err(reason) => {
+                        typed_unreadable = Some(reason);
+                        None
+                    }
+                };
+                Pattern::Command(CommandPattern { written, typed })
+            }
         };
 
         Ok(Self {
@@ -354,6 +431,7 @@ impl Rule {
             landed: Vec::new(),
             written: String::new(),
             reason: None,
+            typed_unreadable,
         })
     }
 
@@ -367,8 +445,8 @@ impl Rule {
     /// a path: relative for a pattern about the workspace and in full for any other. A leading `**`
     /// also matches no segment, so the segments after it name a place at the anchor too: a bare
     /// name, read as `**/name`, is followed at the top of the workspace. A pattern that starts with
-    /// any other star names no place. A prefix holding `..` is left as written, as a path holding one
-    /// is (TRUST-10).
+    /// any other star names no place. A prefix still holding `..` is left as written: a rule is
+    /// resolved when it is read (PERM-3), and one kept as written had no workspace to resolve against.
     ///
     /// The spelling added is rooted where it landed and never floats: the name a link reaches is one
     /// place. Only the place the prefix names is followed, not the nested copies PERM-4 floats a
@@ -520,10 +598,10 @@ impl Rule {
     /// Whether this rule covers running one stage, `argv` its program word and arguments.
     ///
     /// `restricting` selects what a space in the pattern covers, which differs between the lists.
-    fn covers_command(&self, argv: &[Place], restricting: bool) -> bool {
+    fn covers_command(&self, stage: &Stage, restricting: bool) -> bool {
         match &self.pattern {
             Pattern::Everything => true,
-            Pattern::Command(pattern) => command_matches(pattern, argv, restricting),
+            Pattern::Command(pattern) => pattern.covers(stage, restricting),
             Pattern::Relative(_)
             | Pattern::Absolute(_)
             | Pattern::Domain(..)
@@ -622,6 +700,16 @@ pub enum Unreadable {
     WhitespaceAtAnEnd,
     /// A path rule in a run with no home or settings directory to resolve it against.
     Unanchored,
+    /// A `Bash` rule in `deny` or `ask` with a quote that is never closed, as `Bash(sh -c "rm *)`.
+    /// A line with one does not compile, so the rule has no typed reading. It is kept and matched
+    /// as its characters are written ([`Unreadable::keeps_the_rule`]).
+    UnclosedQuote,
+    /// A `Bash` rule in `deny` or `ask` that ends in a backslash with nothing after it, kept the
+    /// same way.
+    TrailingBackslash,
+    /// A path rule holding a `..` that cannot be resolved: one that climbs above the top of the
+    /// file system, or that follows a segment holding a `*`, whose parent is not one place.
+    Climbs,
     /// A `WebFetch` rule whose specifier does not begin `domain:`.
     NotADomainRule,
     /// `WebFetch(domain:)`, which names no host.
@@ -635,6 +723,14 @@ pub enum Unreadable {
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
     /// neither: `null`, a string, a list in place of the block.
     NotAList,
+}
+
+impl Unreadable {
+    /// Whether the rule is still in force, matched as written, and the entry is a warning rather
+    /// than a rule that was dropped (PERM-5).
+    pub fn keeps_the_rule(self) -> bool {
+        matches!(self, Self::UnclosedQuote | Self::TrailingBackslash)
+    }
 }
 
 impl Rejected {
@@ -705,11 +801,18 @@ impl Permissions {
         anchors: &Anchors,
     ) -> (Self, Vec<Rejected>) {
         let mut rejected = Vec::new();
-        let mut read = |texts: &[String]| -> Vec<Rule> {
+        let mut read = |texts: &[String], ruling: Ruling| -> Vec<Rule> {
             texts
                 .iter()
-                .filter_map(|text| match Rule::parse(text, anchors) {
-                    Ok(rule) => Some(rule),
+                .filter_map(|text| match Rule::parse_in(text, anchors, ruling) {
+                    Ok(rule) => {
+                        // Kept and in force as written, and said, since it is not read as a typed
+                        // line is and its writer may have meant it to be (PERM-5).
+                        if let Some(reason) = rule.typed_unreadable {
+                            rejected.push(Rejected::new(text, reason));
+                        }
+                        Some(rule)
+                    }
                     Err(problem) => {
                         rejected.push(problem);
                         None
@@ -718,9 +821,9 @@ impl Permissions {
                 .collect()
         };
         let permissions = Self {
-            deny: read(deny),
-            ask: read(ask),
-            allow: read(allow),
+            deny: read(deny, Ruling::Deny),
+            ask: read(ask, Ruling::Ask),
+            allow: read(allow, Ruling::Allow),
             backslash_separates: anchors.backslash_separates,
             folds_case: anchors.folds_case,
         };
@@ -917,24 +1020,24 @@ impl Permissions {
     /// The rule that decides [`Permissions::for_command`] for one stage.
     pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
         let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
-        let argv = places(&words);
+        let argv = stage_of(&words);
         // The stage as run is the only one an `allow` rule is matched against, as written. A list
         // that restricts is also matched against what is left after each leading wrapper
         // (PERM-20), and against each of those with the program word read as a host that ignores
         // its dots, spaces, stream suffix and `.exe`, `.com`, `.cmd` or `.bat` reads it (PERM-5).
         let mut stages = vec![words.clone()];
         stages.extend(wrapped_commands(&words));
-        let mut read_as: Vec<Vec<Place>> = Vec::new();
+        let mut read_as: Vec<Stage> = Vec::new();
         for (at, stage) in stages.iter().enumerate() {
             if at > 0 {
-                read_as.push(places(stage));
+                read_as.push(stage_of(stage));
             }
             if let Some((program, rest)) = stage.split_first()
                 && let Some(bare) = without_suffixes(program)
             {
                 let mut bare_stage = vec![bare];
                 bare_stage.extend_from_slice(rest);
-                read_as.push(places(&bare_stage));
+                read_as.push(stage_of(&bare_stage));
             }
         }
         self.deciding(|rule, restricting| {
@@ -1101,26 +1204,51 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 /// A name rooted at a drive letter is keyed the way [`Permissions::for_path`] keys the path, both
 /// as the directory a `~/` or `/` pattern is anchored at and as a specifier written without `//`,
 /// since the host spells a full path that way and the path it names reads as one.
-fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Option<Pattern> {
+///
+/// A `..` in the pattern is resolved here, against the place its anchor names, so a rule is held in
+/// the form a call's path is (TRUST-10): `Read(../sib/.env)` in a session at `/home/someone/proj` is
+/// the full path `/home/someone/sib/.env`. One that climbs above the top of the file system, or that
+/// follows a segment holding a wildcard, whose parent is not one place, is reported
+/// ([`Unreadable::Climbs`]). A relative pattern that climbs out of the workspace is kept as written
+/// where the caller named no workspace, which only a caller whose rules decide nothing does.
+fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Result<Pattern, Unreadable> {
     use crate::spelling::{to_key, to_slash};
     let backslash_separates = anchors.backslash_separates;
     let rooted = |key: &str| {
-        let key = drive_in_upper_case(key, backslash_separates);
-        Some(Pattern::Absolute(PathPattern::rooted(
-            &fold(&key, anchors.folds_case),
-            literal,
-        )))
+        let key = fold(
+            &drive_in_upper_case(key, backslash_separates),
+            anchors.folds_case,
+        );
+        let pattern = PathPattern::rooted(&key, literal)?;
+        // `D:/..` is `D:/` itself, so a `..` that takes out the drive names no place of this rule.
+        let drive = split(&key).into_iter().next().filter(|first| {
+            backslash_separates
+                && matches!(first.as_bytes(), [letter, b':'] if letter.is_ascii_alphabetic())
+        });
+        match drive {
+            Some(drive) if pattern.segments.first() != Some(&drive) => Err(Unreadable::Climbs),
+            _ => Ok(Pattern::Absolute(pattern)),
+        }
     };
     let specifier = &*to_slash(specifier, backslash_separates);
     if specifier.starts_with("//") {
         return rooted(&specifier[1..]);
     }
     if let Some(rest) = specifier.strip_prefix("~/") {
-        let home = to_key(anchors.home.as_deref()?, backslash_separates);
+        let home = to_key(
+            anchors.home.as_deref().ok_or(Unreadable::Unanchored)?,
+            backslash_separates,
+        );
         return rooted(&join(&home, rest));
     }
     if let Some(rest) = specifier.strip_prefix('/') {
-        let base = to_key(anchors.settings_dir.as_deref()?, backslash_separates);
+        let base = to_key(
+            anchors
+                .settings_dir
+                .as_deref()
+                .ok_or(Unreadable::Unanchored)?,
+            backslash_separates,
+        );
         return rooted(&join(&base, rest));
     }
     let keyed = to_key(specifier, backslash_separates);
@@ -1128,14 +1256,47 @@ fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Option<Pat
         return rooted(&keyed);
     }
     // Decided on the specifier as written: `./x` says where it starts, and only a specifier with
-    // no slash in it is a name that matches at any depth.
+    // no slash in it is a name that matches at any depth. A pattern holding `..` is not a name
+    // either: it says where it starts as `./x` does.
     let dotted = specifier.strip_prefix("./");
     let rest = dotted.unwrap_or(specifier);
-    Some(Pattern::Relative(PathPattern::relative(
-        &fold(rest, anchors.folds_case),
-        dotted.is_some(),
+    let holds_dots = rest.split('/').any(|segment| segment == "..");
+    let (climbs, below) = resolve_dots(split(&fold(rest, anchors.folds_case)), literal)?;
+    let mut segments = vec!["..".to_string(); climbs];
+    if climbs > 0
+        && let Some(workspace) = anchors.workspace.as_deref()
+    {
+        return rooted(&join(&to_key(workspace, backslash_separates), rest));
+    }
+    segments.extend(below);
+    Ok(Pattern::Relative(PathPattern::relative(
+        &segments.join("/"),
+        dotted.is_some() || holds_dots,
         literal,
     )))
+}
+
+/// `segments` with each `..` taken out together with the segment before it, and the number of `..`
+/// that had nothing before them to take out, which climb out of wherever the pattern starts.
+///
+/// A `..` after a segment holding a wildcard is not resolvable, since the parent of `*` is not one
+/// place, so the pattern is reported. In a quoted pattern a `*` is an ordinary character and the
+/// segment is a name.
+fn resolve_dots(segments: Vec<String>, literal: bool) -> Result<(usize, Vec<String>), Unreadable> {
+    let mut kept: Vec<String> = Vec::new();
+    let mut climbs = 0;
+    for segment in segments {
+        if segment != ".." {
+            kept.push(segment);
+            continue;
+        }
+        match kept.pop() {
+            Some(parent) if !literal && parent.contains('*') => return Err(Unreadable::Climbs),
+            Some(_) => {}
+            None => climbs += 1,
+        }
+    }
+    Ok((climbs, kept))
 }
 
 /// The name between the double quotes of a path specifier written as one, or `None` for a
@@ -1188,14 +1349,19 @@ fn join(base: &str, rest: &str) -> String {
 }
 
 impl PathPattern {
-    /// A pattern that starts where it says it starts, so it never floats.
-    fn rooted(pattern: &str, literal: bool) -> Self {
-        Self {
-            segments: split(pattern),
+    /// A pattern that starts where it says it starts, so it never floats. One that climbs above
+    /// the top of the file system names no place and is reported.
+    fn rooted(pattern: &str, literal: bool) -> Result<Self, Unreadable> {
+        let (climbs, segments) = resolve_dots(split(pattern), literal)?;
+        if climbs > 0 {
+            return Err(Unreadable::Climbs);
+        }
+        Ok(Self {
+            segments,
             floats_when_restricting: false,
             literal,
             anywhere: false,
-        }
+        })
     }
 
     /// A workspace-relative pattern.
@@ -1250,7 +1416,17 @@ impl PathPattern {
     }
 
     /// Whether this pattern covers `path`, already split into segments.
+    ///
+    /// A pattern that restricts covers what is under the place it names as well as the place, as a
+    /// trailing `/**` does and as a walk that does not descend into a covered directory assumes
+    /// (PERM-3). A pattern that grants covers the place it names and no more.
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
+        self.names(path, restricting)
+            || (restricting && (1..path.len()).any(|end| self.names(&path[..end], restricting)))
+    }
+
+    /// Whether this pattern names `path` itself.
+    fn names(&self, path: &[&str], restricting: bool) -> bool {
         if self.literal {
             let ends_with = path.len() >= self.segments.len()
                 && path[path.len() - self.segments.len()..]
@@ -1419,6 +1595,104 @@ fn command_pattern(specifier: &str) -> String {
     match specifier.strip_suffix(":*") {
         Some(head) => format!("{head} *"),
         None => specifier.to_string(),
+    }
+}
+
+/// A command specifier read as a typed line is, with its quoting resolved.
+///
+/// The rule is written the way a line is typed, and a stage's argv is what that line compiled to,
+/// so `Bash(sh -c "*")` and `Bash(git\ push *)` are about the words `sh`, `-c` and anything, and
+/// `git push` and anything. What is resolved is what the line compiler resolves
+/// (`crates/agent/src/cmdline.rs`): whitespace outside quotes ends a word and a run of it is one
+/// gap, single quotes keep every character, double quotes keep every character except that a
+/// backslash before `"`, `\`, `$` or a backtick is that character, and a backslash outside quotes
+/// is the character after it. The words are joined by one space, which in a rule that restricts
+/// covers a gap and a space inside a word alike (PERM-5), so a quoted word holding a space is
+/// covered whether the stage has it as one word or as two.
+///
+/// A `*` keeps its meaning wherever it stands, quoted or not: the rule covers more than the line
+/// the quotes spelled, which is the direction a rule that restricts may err in (PERM-4). A
+/// quote that is never closed and a backslash with nothing after it are what the line compiler
+/// refuses, so no line is a reading of them.
+fn typed_line(specifier: &str) -> Result<String, Unreadable> {
+    let mut out = String::new();
+    let mut chars = specifier.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => loop {
+                match chars.next() {
+                    Some('\'') => break,
+                    Some(c) => out.push(c),
+                    None => return Err(Unreadable::UnclosedQuote),
+                }
+            },
+            '"' => loop {
+                match chars.next() {
+                    Some('"') => break,
+                    Some('\\') => match chars.next() {
+                        Some(c @ ('"' | '\\' | '$' | '`')) => out.push(c),
+                        Some(c) => {
+                            out.push('\\');
+                            out.push(c);
+                        }
+                        None => return Err(Unreadable::UnclosedQuote),
+                    },
+                    Some(c) => out.push(c),
+                    None => return Err(Unreadable::UnclosedQuote),
+                }
+            },
+            '\\' => match chars.next() {
+                Some(c) => out.push(c),
+                None => return Err(Unreadable::TrailingBackslash),
+            },
+            c if c.is_whitespace() => {
+                while chars.next_if(|next| next.is_whitespace()).is_some() {}
+                out.push(' ');
+            }
+            c => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+/// [`command_pattern`] for a line [`typed_line`] read: a trailing `:*` is a trailing ` *`, with the
+/// space a person typed before it taken as the same gap.
+fn typed_pattern(line: String) -> String {
+    match line.strip_suffix(":*") {
+        Some(head) => format!("{} *", head.trim_end()),
+        None => line,
+    }
+}
+
+/// A stage's argv in the readings a pattern is matched against.
+struct Stage {
+    /// The words as the compiler split them.
+    written: Vec<Place>,
+    /// The same with the program word in canonical form, where it holds a character outside ASCII,
+    /// so that `caf\u{e9}` and `cafe\u{301}` are one program, which APFS starts as one file.
+    canonical: Option<Vec<Place>>,
+}
+
+// The canonical copy is built only for a non-ASCII program word, so `CommandPattern::covers` skips
+// the canonical comparison for every other stage.
+fn stage_of<S: AsRef<str>>(argv: &[S]) -> Stage {
+    let canonical = argv
+        .first()
+        .filter(|program| !program.as_ref().is_ascii())
+        .map(|program| {
+            let mut places: Vec<Place> = crate::canonical::decompose(program.as_ref())
+                .chars()
+                .map(Place::Program)
+                .collect();
+            for word in &argv[1..] {
+                places.push(Place::Gap);
+                places.extend(word.as_ref().chars().map(Place::Char));
+            }
+            places
+        });
+    Stage {
+        written: places(argv),
+        canonical,
     }
 }
 
@@ -1874,6 +2148,7 @@ mod tests {
         Anchors {
             home: Some("/home/someone".to_string()),
             settings_dir: Some("/home/someone/.bravebot".to_string()),
+            workspace: Some("/home/someone/proj".to_string()),
             backslash_separates: false,
             folds_case: false,
         }
@@ -2330,6 +2605,249 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "the bare command a deny rule names was not covered when it came as one word"
         );
+    }
+
+    /// The same rule, written in `deny` and in `ask`: the two lists that restrict.
+    fn restricting(rule: &str) -> [(Ruling, Permissions); 2] {
+        [
+            (Ruling::Deny, rules(&[rule], &[], &[])),
+            (Ruling::Ask, rules(&[], &[rule], &[])),
+        ]
+    }
+
+    /// A rule is written the way a line is typed and a stage is what the line compiled to, so a
+    /// quote, a backslash escape and a run of spaces in a deny or ask rule mean what they mean in a
+    /// line (PERM-5). Read as plain characters, `Bash(sh -c "*")` needed a `"` in the argv, which
+    /// the compiler never leaves there, and refused nothing.
+    #[test]
+    fn a_deny_or_ask_rule_written_as_a_typed_line_covers_the_words_that_line_compiles_to() {
+        let cases: &[(&str, Argvs, Argvs)] = &[
+            (
+                r#"Bash(sh -c "*")"#,
+                &[&["sh", "-c", "rm x"], &["sh", "-c", ""]],
+                &[&["sh", "-x", "rm x"], &["bash", "-c", "rm x"], &["sh"]],
+            ),
+            (
+                r#"Bash(tool "x y")"#,
+                &[&["tool", "x y"], &["tool", "x", "y"]],
+                &[&["tool", "x yz"], &["tool", "x"], &["tool", "y"]],
+            ),
+            (
+                "Bash(tool 'x y')",
+                &[&["tool", "x y"], &["tool", "x", "y"]],
+                &[&["tool", "x yz"], &["tool", "x"]],
+            ),
+            (
+                r"Bash(git\ push *)",
+                &[&["git", "push", "origin"], &["git", "push"]],
+                &[&["git", "pull", "origin"], &["gitpush", "origin"]],
+            ),
+            (
+                "Bash(git  push *)",
+                &[&["git", "push", "origin"], &["git", "push"]],
+                &[&["git", "fetch", "origin"]],
+            ),
+            (
+                "Bash(git push :*)",
+                &[&["git", "push", "origin"], &["git", "push"]],
+                &[&["git", "pull", "origin"]],
+            ),
+            (
+                r#"Bash(echo "a\"b")"#,
+                &[&["echo", "a\"b"]],
+                &[&["echo", "ab"], &["echo", "a\\\"b"]],
+            ),
+            (
+                r"Bash(echo 'a\b')",
+                &[&["echo", r"a\b"]],
+                &[&["echo", "ab"]],
+            ),
+            (
+                r#"Bash(echo "a\b")"#,
+                &[&["echo", r"a\b"]],
+                &[&["echo", "ab"]],
+            ),
+            (
+                r"Bash(echo a\ b)",
+                &[&["echo", "a b"], &["echo", "a", "b"]],
+                &[&["echo", "ab"]],
+            ),
+            (
+                r#"Bash(echo "a*")"#,
+                &[&["echo", "abc"], &["echo", "a"]],
+                &[&["echo", "ba"]],
+            ),
+        ];
+        for (rule, matching, not_matching) in cases {
+            for (ruling, permissions) in restricting(rule) {
+                for argv in *matching {
+                    assert_eq!(
+                        permissions.for_command(argv),
+                        Decision::Ruled(ruling),
+                        "{ruling:?} {rule} should cover {argv:?}"
+                    );
+                }
+                for argv in *not_matching {
+                    assert_eq!(
+                        permissions.for_command(argv),
+                        Decision::Unmatched,
+                        "{ruling:?} {rule} should not cover {argv:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A rule that restricts keeps covering the words it covered when its characters were compared
+    /// as written, so a quote the planner put into an argument is still covered by the rule that
+    /// names it, and the typed reading adds to what the rule covers.
+    #[test]
+    fn a_deny_or_ask_rule_with_quotes_still_covers_an_argument_holding_those_quotes() {
+        for (ruling, permissions) in restricting(r#"Bash(echo "x")"#) {
+            for argv in [&["echo", "\"x\""][..], &["echo", "x"]] {
+                assert_eq!(
+                    permissions.for_command(argv),
+                    Decision::Ruled(ruling),
+                    "{ruling:?} did not cover {argv:?}"
+                );
+            }
+        }
+    }
+
+    /// An allow rule grants the words its characters name and nothing a typed line would read it
+    /// as, so a rule with a quote, an escape or two spaces grants no command the quotes would have
+    /// spelled. Reading it as a line would let one line of a settings file grant more than it says.
+    #[test]
+    fn an_allow_rule_is_not_read_as_a_typed_line() {
+        assert_allow_rules_cover(&[
+            (
+                r#"Bash(tool "x y")"#,
+                &[],
+                &[&["tool", "x y"], &["tool", "x", "y"]],
+            ),
+            (r"Bash(git\ push *)", &[], &[&["git", "push", "origin"]]),
+            ("Bash(git  push *)", &[], &[&["git", "push", "origin"]]),
+            ("Bash(git push :*)", &[], &[&["git", "push", "origin"]]),
+            (
+                r#"Bash(sh -c "*")"#,
+                &[&["sh", "-c", "\"rm x\""]],
+                &[&["sh", "-c", "rm x"]],
+            ),
+        ]);
+    }
+
+    /// A deny or ask rule no line can be read from, a quote never closed or a backslash with
+    /// nothing after it, is kept and matches the argv its characters spell, as it did before a
+    /// typed reading existed. It is named as a warning (PERM-5, PERM-11), and the rules beside it
+    /// are kept. In `allow` the same text is a rule about those characters and is not named.
+    #[test]
+    fn a_deny_or_ask_rule_no_line_can_be_read_from_is_kept_as_written_and_named() {
+        let cases = [
+            (
+                r#"Bash(sh -c "rm *)"#,
+                Unreadable::UnclosedQuote,
+                ["sh", "-c", "\"rm x"],
+            ),
+            (
+                "Bash(sh -c 'rm *)",
+                Unreadable::UnclosedQuote,
+                ["sh", "-c", "'rm x"],
+            ),
+            (
+                r#"Bash(echo "a\")"#,
+                Unreadable::UnclosedQuote,
+                ["echo", "\"a\\\"", ""],
+            ),
+            (
+                r"Bash(echo a\)",
+                Unreadable::TrailingBackslash,
+                ["echo", "a\\", ""],
+            ),
+        ];
+        for (written, reason, argv) in cases {
+            assert!(reason.keeps_the_rule());
+            let argv: Vec<&str> = argv.into_iter().filter(|word| !word.is_empty()).collect();
+            let owned = [written.to_string(), "Bash(ls *)".to_string()];
+            for (ruling, denied, asked) in [
+                (Ruling::Deny, &owned[..], &[][..]),
+                (Ruling::Ask, &[][..], &owned[..]),
+            ] {
+                let (permissions, rejected) = Permissions::parse(denied, asked, &[], &anchors());
+                assert_eq!(rejected.len(), 1, "{written}");
+                assert_eq!(rejected[0].reason, reason, "{written}");
+                assert_eq!(rejected[0].text, written);
+                assert_eq!(
+                    permissions.for_command(&argv),
+                    Decision::Ruled(ruling),
+                    "{written} did not match the argv its characters spell"
+                );
+                assert_ne!(
+                    permissions.for_command(&["ls", "x"]),
+                    Decision::Unmatched,
+                    "the rule beside {written} was dropped"
+                );
+            }
+            let (permissions, rejected) =
+                Permissions::parse(&[], &[], &[written.to_string()], &anchors());
+            assert_eq!(rejected, Vec::new(), "{written} in allow");
+            assert!(!permissions.is_empty());
+        }
+    }
+
+    /// A program is one program under every spelling of its name that a volume opens as one file
+    /// (PERM-5): on APFS `cafe` and a combining acute accent starts the file named `caf` and the
+    /// precomposed letter. Both sides are put in the one form, so the rule covers the program in
+    /// either spelling whichever one it is written in, in any case, and under a wrapper.
+    #[test]
+    fn a_deny_or_ask_rule_covers_a_program_in_every_canonical_spelling_of_its_name() {
+        let nfc = "caf\u{e9}";
+        let nfd = "cafe\u{301}";
+        for rule in [format!("Bash({nfc} *)"), format!("Bash({nfd} *)")] {
+            for (ruling, permissions) in restricting(&rule) {
+                for argv in [
+                    vec![nfc, "x"],
+                    vec![nfd, "x"],
+                    vec!["CAFE\u{301}", "x"],
+                    vec!["CAF\u{c9}"],
+                    vec!["timeout", "5", nfd, "x"],
+                ] {
+                    assert_eq!(
+                        permissions.for_command(&argv),
+                        Decision::Ruled(ruling),
+                        "{ruling:?} {rule} did not cover {argv:?}"
+                    );
+                }
+                for argv in [vec!["cafe", "x"], vec!["caf\u{e8}", "x"], vec!["x", nfd]] {
+                    assert_eq!(
+                        permissions.for_command(&argv),
+                        Decision::Unmatched,
+                        "{ruling:?} {rule} covered {argv:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Only the program word is put in canonical form: an argument is a name the program is handed
+    /// and compared as written, as PERM-5 says of every word after it, and an allow rule is matched
+    /// as written whatever it names.
+    #[test]
+    fn only_a_deny_or_ask_rules_program_word_is_compared_in_canonical_form() {
+        for (ruling, permissions) in restricting("Bash(echo caf\u{e9})") {
+            assert_eq!(
+                permissions.for_command(&["echo", "caf\u{e9}"]),
+                Decision::Ruled(ruling)
+            );
+            assert_eq!(
+                permissions.for_command(&["echo", "cafe\u{301}"]),
+                Decision::Unmatched
+            );
+        }
+        assert_allow_rules_cover(&[(
+            "Bash(caf\u{e9} *)",
+            &[&["caf\u{e9}", "x"]],
+            &[&["cafe\u{301}", "x"]],
+        )]);
     }
 
     /// The shapes of the documented table, read as a deny or an ask rule: wherever the pattern puts
@@ -3229,8 +3747,9 @@ mod tests {
 
     /// PERM-7: a `deny` or `ask` path rule is followed from the segments before its first `*`, keyed
     /// as a gate holds a path, and a name or a leading `**` from the segments after it. A pattern
-    /// that starts with any other star, a prefix holding `..`, a rule that is not about a path and an
-    /// `allow` rule have nothing to follow.
+    /// that starts with any other star, a rule that is not about a path and an `allow` rule have
+    /// nothing to follow. A `..` is resolved when the rule is read (PERM-3), so `../up/**` is
+    /// followed as the full path it names.
     #[test]
     fn a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star() {
         let mut permissions = rules(
@@ -3258,6 +3777,7 @@ mod tests {
                 "linked",
                 ".env",
                 "x",
+                "/home/someone/up",
                 "/abs/dir",
                 "/home/someone/notes.md",
                 "a/b.md"
@@ -3490,6 +4010,162 @@ mod tests {
             permissions.for_path(Subject::Read, "/tmp/scratchpad"),
             Decision::Unmatched
         );
+    }
+
+    /// PERM-3, PERM-7: a `deny` or `ask` rule naming a directory without `/**` covers what is under
+    /// it, in every spelling of the directory and for both path families, as the rule with `/**`
+    /// does. The siblings whose names merely start the same way, and the same name below another
+    /// directory for a rule written from `./`, stay uncovered, so the rule is no wider than the
+    /// directory it names.
+    #[test]
+    fn a_deny_or_ask_rule_naming_a_directory_covers_the_files_under_it() {
+        for (subject, family) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+            for spelling in ["./secrets", "./secrets/", "secrets/", "//work/secrets/"] {
+                let rule = format!("{family}({spelling})");
+                let (root, below) = match spelling.starts_with("//") {
+                    true => ("/work/secrets", "/work/secrets/a/b"),
+                    false => ("secrets", "secrets/a/b"),
+                };
+                for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                    let permissions = match ruling {
+                        "deny" => rules(&[&rule], &[], &[]),
+                        _ => rules(&[], &[&rule], &[]),
+                    };
+                    for path in [root, &format!("{root}/key"), below] {
+                        assert_eq!(
+                            permissions.for_path(subject, path),
+                            Decision::Ruled(list),
+                            "{rule} in {ruling} did not cover {path}"
+                        );
+                    }
+                    let sibling = root.replace("secrets", "secrets-old");
+                    assert_eq!(
+                        permissions.for_path(subject, &format!("{sibling}/key")),
+                        Decision::Unmatched,
+                        "{rule} in {ruling} covered the sibling {sibling}"
+                    );
+                }
+            }
+        }
+        // A rule from `./` stays at the top, so the same name below another directory is not it.
+        let permissions = rules(&["Read(./secrets/)"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "other/secrets/key"),
+            Decision::Unmatched
+        );
+        // And the rule is about the one family it names.
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "secrets/key"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3: an `allow` rule keeps its reading. Widening a grant to what is under the directory
+    /// would grant files nobody named.
+    #[test]
+    fn an_allow_rule_naming_a_directory_grants_that_entry_and_not_what_is_under_it() {
+        for spelling in ["./notes", "./notes/", "notes/"] {
+            let permissions = rules(&[], &[], &[&format!("Edit({spelling})")]);
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "notes"),
+                Decision::Ruled(Ruling::Allow),
+                "{spelling} did not grant the entry it names"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "notes/a.md"),
+                Decision::Unmatched,
+                "{spelling} as an allow rule granted a file under the directory"
+            );
+        }
+    }
+
+    /// PERM-3, TRUST-10: a rule holding `..` is put in the form a call's path has, resolved against
+    /// the place its anchor names. Each rule is alone in `deny`, in the session at
+    /// `/home/someone/proj`.
+    #[test]
+    fn a_rule_holding_dot_dot_covers_the_place_a_call_to_it_arrives_as() {
+        for (rule, path, covered) in [
+            ("Read(../sib/.env)", "/home/someone/sib/.env", true),
+            ("Read(../sib/.env)", "/home/someone/sib/other", false),
+            ("Read(../sib/.env)", "/home/someone/proj/sib/.env", false),
+            ("Read(./../sib/**)", "/home/someone/sib/a/b", true),
+            ("Read(a/../b)", "b", true),
+            ("Read(a/../b)", "a/b", false),
+            (
+                "Read(//home/someone/proj/../sib/.env)",
+                "/home/someone/sib/.env",
+                true,
+            ),
+            (
+                "Read(//home/someone/proj/../sib/.env)",
+                "/home/someone/proj/sib/.env",
+                false,
+            ),
+            ("Read(~/proj/../sib/.env)", "/home/someone/sib/.env", true),
+            ("Read(/../sib/.env)", "/home/someone/sib/.env", true),
+        ] {
+            let permissions = rules(&[rule], &[], &[]);
+            let decided = permissions.for_path(Subject::Read, path);
+            let wanted = match covered {
+                true => Decision::Ruled(Ruling::Deny),
+                false => Decision::Unmatched,
+            };
+            assert_eq!(decided, wanted, "{rule} against {path}");
+        }
+    }
+
+    /// PERM-3: a rule holding `..` is resolved the same in `ask` and `allow`, so a grant for
+    /// `../sib/x` covers the file it names and no other.
+    #[test]
+    fn a_rule_holding_dot_dot_is_resolved_in_every_list() {
+        let ask = rules(&[], &["Edit(../sib/x)"], &[]);
+        let allow = rules(&[], &[], &["Edit(../sib/x)"]);
+        assert_eq!(
+            ask.for_path(Subject::Edit, "/home/someone/sib/x"),
+            Decision::Ruled(Ruling::Ask)
+        );
+        assert_eq!(
+            allow.for_path(Subject::Edit, "/home/someone/sib/x"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            allow.for_path(Subject::Edit, "/home/someone/sib/y"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3, PERM-11: a rule whose `..` cannot be resolved is reported and decides nothing, in the
+    /// words the sandbox lists use for the same entry, rather than being kept as a rule that no
+    /// call reaches. One climbing above the top of the file system, one following a wildcard, and one
+    /// taking out a drive letter are such rules.
+    #[test]
+    fn a_rule_whose_dot_dot_cannot_be_resolved_is_reported() {
+        for text in [
+            "Read(//../x)",
+            "Read(//home/../../x)",
+            "Read(~/../../../../x)",
+            "Read(src/*/../x)",
+            "Read(**/../x)",
+        ] {
+            let rejected = Rule::parse(text, &anchors()).expect_err(text);
+            assert_eq!(rejected.reason, Unreadable::Climbs, "{text}");
+        }
+        let drive = Anchors {
+            backslash_separates: true,
+            ..anchors()
+        };
+        let rejected = Rule::parse("Read(//D:/../x)", &drive).expect_err("a drive climbed out of");
+        assert_eq!(rejected.reason, Unreadable::Climbs);
+        // A `..` that stays below the drive is a rule like any other.
+        assert!(Rule::parse("Read(//D:/a/../x)", &drive).is_ok());
+        // In a quoted name a `*` is a character of the name, so the parent of `*` is that name.
+        assert!(Rule::parse("Read(\"./src/*/../x\")", &anchors()).is_ok());
+        // A rule climbing out of a workspace is one a caller with no workspace keeps as written.
+        let none = Anchors {
+            workspace: None,
+            ..anchors()
+        };
+        assert!(Rule::parse("Read(../sib/.env)", &none).is_ok());
     }
 
     /// A family names one family. Reads and edits are separate questions, and a rule about one
@@ -4653,6 +5329,7 @@ mod tests {
         let anchors = Anchors {
             home: Some("C:\\Users\\someone".to_string()),
             settings_dir: Some("C:\\Users\\someone/.bravebot".to_string()),
+            workspace: None,
             backslash_separates: true,
             folds_case: false,
         };

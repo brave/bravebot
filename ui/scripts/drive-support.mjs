@@ -1,13 +1,15 @@
 // Setup that the drivers running against the live session list share.
 //
-// Everything launched from here uses the real profile: no `--user-data-dir` is passed, so the app
-// reads and writes the person's own `bravebot-ui.json` and `experience.json`, and the agent it
-// starts uses their `HOME`. `ui/docs/testing.md` lists which drivers do that. A driver that
-// launches through this module is on that list.
+// A launch given no user-data directory uses the real profile: no `--user-data-dir` is passed, so
+// the app reads and writes the person's own `bravebot-ui.json` and `experience.json`, and the agent
+// it starts uses their `HOME`. `ui/docs/testing.md` lists which drivers do that. A driver that
+// launches through this module without a user-data directory is on that list.
 //
 // `playwright-core` is loaded when a launch happens, so the helpers that only take a page can be
 // tested without a browser driver installed.
 
+/** The directory the drivers write their screenshots to. */
+export const SHOTS_DIR = '/tmp/bravebot-ui'
 /** The composer's text box, and the same while it accepts input (no turn is running). */
 export const COMPOSER_INPUT = '.composer textarea'
 export const COMPOSER_IDLE = '.composer textarea:not([disabled])'
@@ -21,6 +23,8 @@ export const COMPOSER_NAME = 'Message the agent'
 export const ASSISTANT_BUBBLE = '.bubble.assistant'
 /** The button on a bot's row that opens its page. */
 export const BOT_OPEN_BUTTON = '.bot-open-button'
+/** The greeting a bot's page shows before its first turn. */
+export const BOT_GREETING = '[data-test="bot-greeting"]'
 /** The yes on a trust question. */
 export const TRUST_APPROVE = '[data-test="trust-approve"]'
 /**
@@ -30,6 +34,10 @@ export const TRUST_APPROVE = '[data-test="trust-approve"]'
  * reading a label through it reads empty text (#3659).
  */
 export const CONFIRM_BUTTON = '.confirm-actions leo-button'
+/** The yes of a question in a `.confirm-actions` row. Variants append to it, as in `${APPROVE_BUTTON}:not(.always)`. */
+export const APPROVE_BUTTON = '.confirm-actions .approve'
+/** The no of a question in a `.confirm-actions` row. */
+export const REJECT_BUTTON = '.confirm-actions .reject'
 
 /** The trust question, which is a dialog named "Project trust". */
 export const trustQuestion = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })
@@ -86,6 +94,43 @@ export async function approveTrust(question) {
   await question.locator(TRUST_APPROVE).click()
 }
 
+/**
+ * Answer the trust question when the open session asks it, then wait `settle` ms. A session whose
+ * record kept no trust map asks again on open, and trusting is what lets a turn get as far as
+ * wanting to run something.
+ */
+export async function approveTrustIfAsked(page, settle = 600) {
+  if (await page.locator('.trust').isVisible().catch(() => false)) {
+    await approveTrust(trustQuestion(page))
+    await page.waitForTimeout(settle)
+  }
+}
+
+/**
+ * Count the session rows. With none, print the skip result, close the app and exit 0, since a
+ * driver has nothing to open.
+ */
+export async function sessionsOrSkip(app, page) {
+  const sessions = await page.locator('.session').count()
+  if (sessions === 0) {
+    console.log('RESULT: skipped — no sessions to open')
+    await app.close()
+    process.exit(0)
+  }
+  return sessions
+}
+
+/**
+ * Open the first session, wait `settle` ms for it to load, and answer its trust question if it
+ * asks one. Skips the run when there is no session (see `sessionsOrSkip`).
+ */
+export async function openFirstSession(app, page, { settle = 1500 } = {}) {
+  await sessionsOrSkip(app, page)
+  await page.locator('.session').first().click()
+  await page.waitForTimeout(settle)
+  await approveTrustIfAsked(page)
+}
+
 /** The `check` helper every driver prints with, and the list of what failed. */
 export function checker() {
   const problems = []
@@ -96,12 +141,15 @@ export function checker() {
   return { check, problems }
 }
 
+export const launchArguments = (userData) => ['.', ...(userData ? [`--user-data-dir=${userData}`] : [])]
+
 /**
- * Launch the app against the real profile (no `--user-data-dir`), as the development build runs.
+ * Launch the app against `userData`, or against the real profile when none is given, as the
+ * development build runs.
  */
-export const launch = async () => {
+export const launch = async (userData) => {
   const { _electron: electron } = await import('playwright-core')
-  return electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+  return electron.launch({ args: launchArguments(userData), cwd: process.cwd(), timeout: 40000 })
 }
 
 // The left column has two tabs and remembers which was last open, so a run after somebody left it

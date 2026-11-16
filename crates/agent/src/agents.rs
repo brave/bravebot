@@ -283,6 +283,31 @@ pub enum Refused {
     KindHoldsNoServers,
 }
 
+/// The text of a definition as lines that keep their line endings, and the index of the line that
+/// closes its frontmatter. `lines[1..close]` is the frontmatter block.
+fn split_definition(text: &str) -> Result<(Vec<&str>, usize), Refused> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    if lines.first().map(|l| l.trim_end()) != Some("---") {
+        return Err(Refused::NotADefinition);
+    }
+    let close = lines[1..]
+        .iter()
+        .position(|l| l.trim_end() == "---")
+        .map(|at| at + 1)
+        .ok_or(Refused::NotADefinition)?;
+    Ok((lines, close))
+}
+
+/// Where the lines of a replaced key's value stop being the key's: `end` less the blank lines at
+/// its tail, which are the file's layout and stay. Never earlier than `at`.
+fn blank_tail(block: &[&str], at: usize, end: usize) -> usize {
+    let mut claimed = end;
+    while claimed > at && block[claimed - 1].trim().is_empty() {
+        claimed -= 1;
+    }
+    claimed
+}
+
 /// Rewrite the description, the model and the body of a definition's text, and leave every other
 /// line as it is ([MEMORY-9](../../../docs/specs/definition-memory.md#MEMORY-9)).
 ///
@@ -313,15 +338,7 @@ pub fn rewrite_definition(
         Some(m) => Some(m),
     };
 
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    if lines.first().map(|l| l.trim_end()) != Some("---") {
-        return Err(Refused::NotADefinition);
-    }
-    let close = lines[1..]
-        .iter()
-        .position(|l| l.trim_end() == "---")
-        .map(|at| at + 1)
-        .ok_or(Refused::NotADefinition)?;
+    let (lines, close) = split_definition(text)?;
     let block = &lines[1..close];
 
     let quoted = |value: &str| format!("'{}'", value.replace('\'', "''"));
@@ -333,15 +350,7 @@ pub fn rewrite_definition(
     while at < block.len() {
         let line = block[at];
         at += 1;
-        // The lines that belong to this key, by the rule `skills::declarations` reads them with.
-        let opened_at = crate::skills::indent_of(line);
-        let mut end = at;
-        while let Some(next) = block.get(end) {
-            if !next.trim().is_empty() && crate::skills::indent_of(next) <= opened_at {
-                break;
-            }
-            end += 1;
-        }
+        let end = crate::skills::continuation_end(block, at);
         let key = line.split_once(':').map(|(key, _)| key.trim());
         // A key written twice is read as its last line, so the first is replaced and the rest go.
         match key {
@@ -367,11 +376,7 @@ pub fn rewrite_definition(
             }
         }
         // Blank lines after the replaced value are the file's layout and stay.
-        let mut claimed = end;
-        while claimed > at && block[claimed - 1].trim().is_empty() {
-            claimed -= 1;
-        }
-        at = claimed;
+        at = blank_tail(block, at, end);
     }
     if !wrote_description {
         return Err(Refused::NotADefinition);
@@ -428,15 +433,7 @@ pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String,
         return Err(Refused::InlineServers);
     }
 
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    if lines.first().map(|l| l.trim_end()) != Some("---") {
-        return Err(Refused::NotADefinition);
-    }
-    let close = lines[1..]
-        .iter()
-        .position(|l| l.trim_end() == "---")
-        .map(|at| at + 1)
-        .ok_or(Refused::NotADefinition)?;
+    let (lines, close) = split_definition(text)?;
     let block = &lines[1..close];
 
     let line_for = |servers: &[String]| {
@@ -453,14 +450,7 @@ pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String,
     while at < block.len() {
         let line = block[at];
         at += 1;
-        let opened_at = crate::skills::indent_of(line);
-        let mut end = at;
-        while let Some(next) = block.get(end) {
-            if !next.trim().is_empty() && crate::skills::indent_of(next) <= opened_at {
-                break;
-            }
-            end += 1;
-        }
+        let end = crate::skills::continuation_end(block, at);
         if line.split_once(':').map(|(key, _)| key.trim()) != Some("mcpServers") {
             out.push_str(line);
             for kept in &block[at..end] {
@@ -473,11 +463,7 @@ pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String,
             out.push_str(&line_for(servers));
         }
         wrote = true;
-        let mut claimed = end;
-        while claimed > at && block[claimed - 1].trim().is_empty() {
-            claimed -= 1;
-        }
-        at = claimed;
+        at = blank_tail(block, at, end);
     }
     if let (false, Some(servers)) = (wrote, servers) {
         out.push_str(&line_for(servers));

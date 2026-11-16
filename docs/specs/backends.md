@@ -375,7 +375,7 @@ A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/set
 It outranks the `model` key in that file, is outranked by one in the file `--settings` named
 ([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act),
 and a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json` cannot name a model at
-all. A key spelled blank, or as something other than a string, names nothing and does not outrank a
+all, by the `model` key or by `env.BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)). A key spelled blank, or as something other than a string, names nothing and does not outrank a
 pick. It still displaces the key a lower file named, so with nothing recorded the exported variable
 or the build answers. Above all of it are `--model` and a model picked in the session that is
 running. The `/model` picker, at rest and during a turn, opens on the model in force and marks it as
@@ -385,8 +385,8 @@ settles on. The same model in force is the one the roster is read for the window
 level is read, and the one the sign-in a session makes and the refusal of a level a turn learned are asked
 about, so none of them is read for the pick alone.
 
-**Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
-lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
+**Why.** A build made with a default model bakes it in, so this value ranked like the rest of the file would
+lose on every binary made that way: the key would parse, `doctor` would report it, and nothing
 would change outside a source build.
 
 The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
@@ -407,6 +407,8 @@ and the pick is the later of the two.
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
+`verified-by: bravebot_config::settings::a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do`
+`verified-by: bravebot_config::lib::a_checkouts_default_model_does_not_reach_the_configuration`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_named_file_spelling_the_model_blank_displaces_the_home_key_and_names_nothing`
@@ -1217,7 +1219,8 @@ would cost it the field that keeps a long argument from being cut off and still 
 ceiling goes before the ask for arguments because, given up wrongly, it costs a model its replies
 longer than the fallback, where the ask costs it every long argument, written into a silence the
 idle bound cuts. Where the request that answered had given up more than one, all of them are
-remembered, as on a gateway. A request refused with nothing left to give up settles nothing, and
+remembered, as on a gateway, except that the breakpoints are held back: they are remembered only as
+BACKEND-27 says. A request refused with nothing left to give up settles nothing, and
 what an earlier request settled for that model stands.
 
 **Why.** The judgment is the only description these services offer, and throwing it away leaves the
@@ -1230,6 +1233,14 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
+`verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
+`verified-by: bravebot_bedrock::lib::a_first_refusal_is_forgotten_with_the_record`
+`verified-by: bravebot_bedrock::lib::taking_the_thinking_refusal_from_an_earlier_session_counts_no_breakpoint_refusal`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
 `verified-by: bravebot_bedrock::lib::the_ask_to_show_thinking_is_given_up_before_the_level`
 `verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
@@ -1326,21 +1337,138 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
-| `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
+| `env`, `keybindings`, `search`, `tui` | per name, one level down; the value under a name is replaced whole |
+| the twenty `env` names: those of the network, Google, Bedrock, Bedrock patience and endpoint sets, and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names, wherever it sits ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
+| `run.scrubEnv` | home layer, and the file `--settings` names, whose entries are kept together; a project or local layer's list is ignored and reported by `doctor`, and the rest of that layer's `run` block is read as before |
+| every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
-| `references`, `attribution`, `askIdleSeconds` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way |
-| anything else | the closest layer that set it wins |
+| `references`, `attribution`, `askIdleSeconds`, `permissions.startInAuto` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way. The managed file is not read for `permissions.startInAuto`, and `doctor` says so where it names it ([AUTO-1](auto-mode.md#AUTO-1)) |
+| `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
+| `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
+| `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
+| `suggestions` | the same as `limit`, with the default bound: a project or local layer may leave it off and may not turn it on, over the person's `false` or over nothing |
+| `awaySummaryEnabled` | the same as `updateCheck`: a project or local layer may turn the automatic recap off and may not turn it on over the person's `false` |
+| `tui.mouse`, `tui.contextMenu` | the same as `updateCheck`, each key apart: a project or local layer may turn mouse capture or the right-click menu off and may not turn it back on over the person's `false` |
+| `deferMcpToolsAbove` | the same as `limit`: a project or local layer may lower the size, or state one where the person's files state none, and may not raise it or remove it |
+| `promptCacheTtl` | the same as `limit`, with the default bound: a project or local layer may ask for `5m` and may not ask for `1h`, over the person's `5m` or over nothing |
+| anything else | the closest layer that set it wins, in either direction. The keys that are in neither table are the ones whose value changes no destination, spend, program environment, request that sends the conversation, or terminal input the person turned off, for example `effort` ([BACKEND-43](#BACKEND-43)), `editorMode`, `terminalTitle`, `notificationMethod`, `maxRunningDelegates` ([DELEGATE-7](delegation.md#DELEGATE-7)), `awaySummaryIdleSeconds`, `tui.wheelRows` ([SCROLL-3](scroller.md#SCROLL-3)), `search.maxFiles`, `search.maxSeconds` ([SEARCH-9](tools/search.md#SEARCH-9)), `run.maxOutput` ([RUN-21](tools/run.md#RUN-21)), `run.defaultSeconds`, `run.maxSeconds` ([RUN-23](tools/run.md#RUN-23)) and `download.maxBytes` ([DOWNLOAD-4](tools/download-url.md#DOWNLOAD-4)). A key moves into a table when it is found to decide one of those, and the table row and this one change together |
 
-The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
+The keys of the rows above that a layer may not name are read from one table, so `doctor` and
 the desktop settings view each name every file that carried one, and a key added to the table is
-reported by both without an edit to either.
+reported by both without an edit to either. A key inside a block is written `block.name`, and only
+that name is removed from the layer: `run.scrubEnv` is dropped from a checkout's `run` block and the
+block's other names stay.
 
-A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
-a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
-block or list stays in force.
+`run.scrubEnv` is in the table because a name in it is not only a restriction. A program is started
+without every variable the list names, and a variable can hold a restriction: the person's
+`npm_config_ignore_scripts` keeps a package's install scripts from running and `PYTHONSAFEPATH` keeps
+the working directory off the module path. A checkout naming either, or a pattern holding it
+([RUN-28](tools/run.md#RUN-28)), would start every program without it. The decision is by which layer
+the file is, so nothing a file says is read to make it. The list the person's files state is
+withheld as before, and the planner is told of those names without being given them
+([RUN-12](tools/run.md#RUN-12)).
+
+The keys a project or local layer may only narrow are read from a second table (`NARROW_ONLY`), kept
+beside the first and reported through the same accessor, so `doctor` and the desktop settings view
+name a file whose value was not obeyed in the same way, and a key added to either table is reported
+by both without an edit to either. A key in it is settled once every layer has been read, and not
+by the closest layer winning. The layers entitled to the key (the home layer and the file
+`--settings` names, the later of the two winning) state the value in force. A project or local layer
+is then obeyed for it only where it takes nothing from that value: where the entitled layers state
+nothing, it is held to the key's default where the key has one and states the value where it has
+none; where they state one, it may state a value that is no wider, and what
+no wider means is a rule of the key's kind. The two checkout files are held to this in turn, project
+then local, each against the value the one before left, so the local file cannot raise what the
+project file lowered. A value that is not obeyed is dropped, the file is recorded under the key, and
+the value is not read anywhere. Only the home layer or the file `--settings` names can remove,
+raise or replace a value in the table.
+
+For `limit`, a layer states a value when it holds a whole number of tokens above zero or a count
+string such as `"200k"` or `"50 credits"`. `null`, zero, a string that is no figure and any other
+type state nothing, which is how the person's own file says they want no limit. A checkout's value
+is no wider when it is in the same unit as the value in force and no larger. A figure in the other
+unit is not narrower than a figure in this one, since tokens and credits count different things, so
+it is not obeyed. A checkout's `null`, zero or non-figure over a limit in force is a removal and is
+not obeyed. Where the person's own files state no limit, a checkout may state one, and a checkout
+value that states nothing leaves no limit and is not reported, because it removed nothing.
+[TURN-8](turns.md#TURN-8) is why `limit` is in the table, and `askIdleSeconds` is kept to the person's
+files for the reason [ASK-9](tools/ask-user.md#ASK-9) gives, which is that the person's own clock is
+not a repository's to set.
+
+For `updateCheck`, a layer states a value when it holds a boolean; a string, a number and `null`
+state nothing. `false` is the narrower value, so a checkout's `false` is obeyed whatever the person
+stated, and its `true` is obeyed only where the person's own files do not state `false`. The check is
+on where nothing is stated, so a checkout's `true` over nothing or over the person's `true` changes
+nothing and is not reported. A checkout's `true` over the person's `false` is not obeyed and is
+reported. The startup check for a newer release is why the key is in the table.
+
+`deepLinks` is read the same way as `updateCheck`: only a boolean states it, `false` is the narrower
+value, and a checkout's `true` over the person's `false` is not obeyed and is reported. A link is
+refused where the merged value is `false`, so a checkout that wrote `false` refuses links for whoever
+runs `--handle-uri` there, and a checkout cannot open one the person refused
+([LINK-6](deep-links.md#LINK-6)).
+
+`suggestions` is off where nothing is stated, so the table holds a checkout to `false` where the
+person's own files state nothing, as it holds it to the person's value where they state one. Only a
+boolean states it. A checkout's `false` is obeyed whatever the person stated. Its `true` is obeyed
+only where the person's own files state `true`, which changes nothing, and is otherwise not obeyed
+and is reported, so a checkout cannot start a request after each turn that the person did not ask
+for ([INPUT-43](terminal-input.md#INPUT-43)). A value that is not a boolean states nothing, is
+absence, and is not reported.
+
+`awaySummaryEnabled` is read the same way as `updateCheck`: only a boolean states it, `false` is the
+narrower value, and a checkout's `true` over the person's `false` is not obeyed and is reported. The
+recap is on where nothing is stated, so a checkout's `true` over nothing or over the person's `true`
+changes nothing and is not reported. A checkout's `false` is obeyed whatever the person stated. A
+checkout therefore cannot cause a request that sends the conversation for a summary the person
+turned off ([CMD-20](commands.md#CMD-20)). `awaySummaryIdleSeconds` is not in the table: the closest
+layer that names a whole count decides it, because it only moves the time at which the recap is made
+when the recap is on.
+
+For `deferMcpToolsAbove`, a layer states a value when it holds a whole number above zero or a count
+string such as `"20k"`. `null`, zero, a negative or fractional number, a boolean and a string that
+is no figure state nothing, which is how a layer says every tool is offered in full. A checkout's
+value is no wider when it is no larger than the value in force, since a larger size sends more of
+every tool definition on every request. A checkout's larger value, and a value that states nothing
+over one in force, are not obeyed and are reported, so a checkout cannot turn the person's
+deferral into every tool in full ([SERVERS-16](mcp-servers.md#SERVERS-16)). Where the person's own
+files state no size, a checkout may state one, because the key has no default bound, and a checkout
+value that states nothing there leaves no size and is not reported. The two checkout files are held
+to this in turn, so the local file cannot raise what the project file lowered.
+
+For `promptCacheTtl`, a layer states a value when it holds the string `5m` or `1h`, ignoring
+surrounding space and spelled in lower case. Any other string, a number, a boolean and `null` state
+nothing. `5m` is the narrower value, since the longer lifetime is charged at a higher write rate
+([BACKEND-27](#BACKEND-27)). The key has a default bound, which is no lifetime, so where the
+person's own files state nothing a checkout's `5m` is obeyed and its `1h` is not. Where they state
+`5m`, a checkout's `1h` is not obeyed, and where they state `1h` a checkout's `5m` is obeyed. A
+checkout's `1h` over the person's `1h` changes nothing and is not reported. A checkout value that
+states no lifetime over one in force is a removal and is not obeyed, and one where none is in force
+removes nothing and is not reported. The file `--settings` names is the person's own act and may
+state either, inside the workspace or outside it ([PERM-14](permissions.md#PERM-14)). The two
+checkout files are held to this in turn.
+
+`tui.mouse` and `tui.contextMenu` are read the same way as `updateCheck`: only a boolean states
+either, `false` is the narrower value, and a checkout's `true` over the person's `false` is not
+obeyed and is reported with the key spelled as written in the file (`tui.mouse`). Capture and the
+menu are on where nothing is stated, so a checkout's `true` over nothing or over the person's `true`
+changes nothing and is not reported. A checkout's `false` is obeyed whatever the person stated. The
+`tui` block combines per name, so a checkout naming one key of it leaves the person's other names in
+force, and a checkout's `tui` does not take the person's `tui.mouse` with it. The two keys are settled
+one at a time: a checkout turning one off changes nothing about the other. A checkout therefore
+cannot start the terminal reporting the mouse, or open a menu over a click, that the person turned
+off ([MOUSE-4](mouse.md#MOUSE-4), [MOUSE-52](mouse.md#MOUSE-52)). Where the person's own files and the
+file `--settings` names both state a value, the later of the two decides it, as for `limit`. A
+nested key is written as `block.name` in the table and in a report.
+
+Which of these layers are read does not depend on the answer to the directory trust question at
+startup. That answer decides the trust map ([TRUST-7](trust-map.md#TRUST-7)), so a checkout's files
+are read whichever way it is answered, and what they may set is decided by the rows above.
+
+A layer that spells `permissions`, `run` or `tui` as something other than an object, or `run.scrubEnv`
+or a list under `permissions` as something other than an array, sets nothing there: the weaker
+layers' block or list stays in force.
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
 layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
@@ -1371,9 +1499,9 @@ answering for one must not answer for the other by omission. The chords under `k
 same case: a file moving one action's key is no statement about the other six, and a checkout
 widening a search's walk for its own size is none about how long a read may take.
 
-The lists are the exception because an entry in one only ever narrows what is possible: a name under
-`scrubEnv` takes a variable away from a subprocess, and a rule under `permissions` refuses something
-that was otherwise allowed. Overriding either would let a layer hand back what a weaker one withheld,
+The lists under `permissions` and `mcp.request` are the exception because an entry in one only ever
+narrows what is possible: a rule under `permissions` refuses something that was otherwise allowed.
+Overriding either would let a layer hand back what a weaker one withheld,
 and a permission removed by a file somebody did not open is the one outcome worth ruling out. A value
 of another shape names no entry, so letting it replace a list would remove every entry under it and
 add none. A model is one choice rather than a list, so it resolves like any other single value, and
@@ -1405,7 +1533,8 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_overrides_a_name_the_global_one_set`
 `verified-by: bravebot_config::settings::a_name_only_the_global_layer_set_survives_a_project_layer`
 `verified-by: bravebot_config::settings::the_local_layer_beats_the_one_a_checkout_carries`
-`verified-by: bravebot_config::settings::every_layer_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
 `verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_rules_takes_no_rule_away`
 `verified-by: bravebot_config::settings::a_layer_that_is_not_a_list_of_names_takes_no_name_away`
@@ -1432,13 +1561,46 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_that_is_a_device_is_skipped`
 `verified-by: bravebot_config::settings::a_read_stops_one_byte_past_the_bound`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
-`verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
 `verified-by: bravebot_cli::doctor::a_checkout_naming_any_home_only_key_is_reported_with_the_key_and_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_naming_any_home_only_key_is_listed_as_ignored`
+`verified-by: bravebot_cli::doctor::a_checkout_limit_that_widens_the_persons_is_reported_with_the_file`
+`verified-by: bravebot_cli::doctor::every_narrow_only_key_is_said_with_its_file_and_not_as_home_only`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_limit_that_widens_the_persons_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::the_narrow_only_table_keys_are_unique_and_not_home_only`
+`verified-by: bravebot_config::settings::every_narrow_only_key_keeps_the_persons_value_against_a_wider_one`
+`verified-by: bravebot_config::settings::a_key_in_neither_table_is_decided_by_the_closest_layer_in_either_direction`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_update_check_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_deep_links_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_deep_links_that_accepts_them_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_deep_links_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_away_recap_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_tui_key_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_tui_key_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_away_recap_turned_on_over_the_persons_off_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
+`verified-by: bravebot_cli::doctor::a_checkout_deferral_threshold_that_raises_the_persons_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_deferral_threshold_above_the_persons_is_listed_as_ignored`
+`verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
+`verified-by: bravebot_config::settings::a_default_bound_holds_a_checkout_where_the_person_stated_nothing`
+`verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
+`verified-by: bravebot_config::settings::the_cache_lifetime_words_of_the_table_are_the_lifetimes_the_setting_reads`
+`verified-by: bravebot_cli::doctor::a_checkout_asking_for_the_long_cache_lifetime_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_asking_for_the_long_cache_lifetime_is_listed_as_ignored`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
@@ -1522,11 +1684,28 @@ into a `Usage`. Without that a cached round reads as a conversation that shrank 
 are also carried through separately, which is what BACKEND-31 requires and the only way anything can
 say whether this clause is working.
 
-**A model that refuses them is not sent them again.** Prompt caching is not something every model
-this backend can reach offers, and one that does not refuses the whole request rather than reading
-past the breakpoints. A request refused on its contents is therefore sent once more without them,
-and where that answers, no later request in the session carries them. Only a refusal does this:
-every other failure leaves the breakpoints in place.
+**A model that refuses them is not sent them again, once it has refused twice.** Prompt caching is
+not something every model this backend can reach offers, and one that does not refuses the whole
+request rather than reading past the breakpoints. A request refused on its contents is therefore
+sent once more without them. The status that refuses them is the one an expired credential or a
+burst of requests also gets, so one refusal that the next request answers is not proof of anything:
+it is held as a doubt, and the request that answered is the only one that goes without them. The
+model is recorded as refusing them when a request that began after that doubt was held is refused
+the same way. Requests that began together count once however many of them are refused, so a burst
+of concurrent requests cannot record a model. A request that carried them and the lifetime, and was
+answered, clears the doubt. After that record, no later request carries them until the record has
+lapsed, which it does after thirty minutes, and a request after that carries them again. The record
+is kept in the process only ([BACKEND-63](#BACKEND-63)). Only a refusal does any of this: every
+other failure leaves the breakpoints in place. The decision is made from the status and a count,
+never from the body of a reply.
+
+**A model recorded as refusing them says so.** A prefix sent without breakpoints is read at the full
+rate on every request and draws no cache figure, since the figures are drawn only above zero
+([BACKEND-31](#BACKEND-31)). So that the person is not left to infer it from a bill, the status
+report and the info panel ([PANEL-8](info-panel.md#PANEL-8)) say that the caching is off for the
+model in force while it is recorded, a fixed sentence from the catalog. The front end asks the
+backend crate through `bravebot_agent::backend::breakpoints_given_up`, which holds a status and a
+count and no content, and notes the answer after each turn and run, on a pick, and at start.
 
 **Why ask rather than know.** An inference-profile ARN does not say which model is behind it, which
 is the same fact that makes one figure stand in for every tier's context window. Asking costs one
@@ -1542,8 +1721,19 @@ asking a service which refuses costs one round trip while not asking costs every
 settings puts a `ttl` of that word on each breakpoint, the prompt's and the conversation's alike.
 Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
 has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
-is why the default is no lifetime rather than the longest. The value comes from the settings and
+is why the default is no lifetime rather than the longest. The setting is read from the person's own
+file and from the file `--settings` names. A project or local layer may state `5m` and may not state
+`1h`, which is dropped and reported ([BACKEND-24](#BACKEND-24)), so a repository cannot make every
+request in it carry the dearer lifetime. The value comes from the settings and
 never from message content, so no branch depends on an untrusted byte.
+
+**The same setting bounds one `job_output` wait.** A request sent after the cached prefix expired
+writes the whole conversation again and reads none of it, so the longest wait the tool accepts is 30
+seconds under the lifetime in force: 270 seconds where the setting is `5m` or absent, 600 where it
+is `1h` ([RUN-17](tools/run.md#RUN-17)). Absent is treated as `5m`, whichever service answers,
+including the Brave endpoint and `api.openai.com`, which cache without being asked and whose
+lifetime is not stated here: the shorter bound is the one that cannot cost a rewrite where the
+lifetime is five minutes, and costs only an extra call where it is longer.
 
 **A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
 a lifetime on it refuses the request in the same way a model without caching does. A refusal of a
@@ -1571,8 +1761,16 @@ for one that does not.
 `verified-by: bravebot_bedrock::protocol::no_lifetime_is_sent_where_none_was_chosen`
 `verified-by: bravebot_bedrock::lib::the_chosen_lifetime_is_sent_until_the_model_refuses_it`
 `verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
+`verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
+`verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
+`verified-by: bravebot_config::lib::a_checkouts_long_cache_lifetime_reaches_no_account`
+`verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
@@ -1817,7 +2015,10 @@ figure reports one or the other.
 cache exactly as much as it says a round whose cache missed, and nothing here distinguishes them.
 Whatever presents these figures presents nothing when they are zero, rather than presenting a miss
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
-read nothing back reports the write and says nothing about the read.
+read nothing back reports the write and says nothing about the read. The one exception is a model
+recorded as refusing the cache breakpoints ([BACKEND-27](#BACKEND-27)), whose requests carry none
+and so can report no figure: the status report and the info panel say that the caching is off for
+it, in place of figures.
 
 **The status panel and footer report the last turn's.** A turn in flight reports its own running
 totals from the first round that completed a request ([PANEL-8](info-panel.md#PANEL-8)), and the
@@ -1838,7 +2039,8 @@ before it on the panel.
 setting and not a reading: no reply says how long a service kept a prefix, and a model that refuses
 the field is sent the request without it (BACKEND-27, BACKEND-32). The line is drawn from the setting
 whichever service answered ([Known costs](#known-costs)). It sits there because a read of
-zero after a pause means a different thing under five minutes than under an hour.
+zero after a pause means a different thing under five minutes than under an hour. The same setting
+bounds the longest `job_output` wait (BACKEND-27).
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
@@ -1882,6 +2084,8 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`
 `verified-by: bravebot_aichat::client::an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
 `verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
+`verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 
 <a id="BACKEND-32"></a>
 ### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
@@ -2020,7 +2224,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these twenty-two variables
+### BACKEND-33: an `env` block names these twenty-four variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -2031,7 +2235,7 @@ something reads:
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to, in place of the one compiled in |
-| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
+| `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one, read from the person's own layers alone |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
 | `BRAVEBOT_USE_BEDROCK` | `1` to reach models through somebody's own AWS account |
@@ -2040,6 +2244,8 @@ something reads:
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | the model the tier word `opus` names |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
+| `BRAVEBOT_BEDROCK_MAX_RETRIES` | how many times a request to that account is sent again, at most 7, where `0` sends each request once ([BACKEND-55](#BACKEND-55)) |
+| `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` | how many milliseconds a reply from that account may go quiet before it is given up on, at most 600000 ([BACKEND-55](#BACKEND-55)) |
 | `GOOGLE_API_KEY` | the key a request to Google Vertex AI is sent with |
 | `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under, where there is one |
 | `VERTEX_LOCATION` | the location it is made in, where that is not `global`, and not read with no project |
@@ -2052,16 +2258,29 @@ something reads:
 
 The last six rows are the network names. Three more rows are the Google names, and six are the
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
-`ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
-`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
+`ANTHROPIC_DEFAULT_*_MODEL` tiers. The two `BRAVEBOT_BEDROCK_*` rows are a further set of two, the
+Bedrock patience names: they choose no account, and state how many times a request to the account
+the six names configure is sent again and how long a reply from it may go quiet. They are held to
+the bounds a `provider` entry's `maxRetries` and `idleTimeoutMs` are ([BACKEND-55](#BACKEND-55)): a
+value that is not a whole number states nothing, a count above 7 is 7, a gap above 600000 is
+600000, and a gap of `0` states nothing, while a count of `0` is a statement. The endpoint rows,
+`BRAVE_AI_CHAT_ENDPOINT` and
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a further set, and `BRAVEBOT_DEFAULT_MODEL` is a set of one
+name. All six come from the person's own layers
 alone, the user's settings file and the file the command line named, wherever it sits
 ([PERM-14](permissions.md#PERM-14)).
 The project and local files arrive with a clone, and a proxy or an authority they chose would decide
 where conversation content is sent and who may read it, a Google key or project, or an AWS account,
-region, profile or tier model, they chose would decide which account receives it, and an endpoint
+region, profile or tier model, they chose would decide which account receives it, a retry count or an
+idle gap they chose would raise the requests billed to the person's account or hold their turn on a
+dead connection, an endpoint
 they chose would decide which host receives the conversation and which host the premium key is
-presented to. So one of these seventeen names in either file is reported by `doctor` with the file
+presented to, and a default model they chose would decide which of the person's configured services
+receives it, a `provider` entry's gateway or Brave's. So one of these twenty names in either file is reported by `doctor` with the file
 that wrote it and decides nothing, and it does not displace what a layer entitled to state it said.
+That holds for the `model` key too ([BACKEND-11](#BACKEND-11)), so a checkout names a model by no
+spelling. `doctor` reports the default model's ignored file with the model, and the network names
+with the network.
 The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six Bedrock names and the two
 endpoints, so every pinnable name is read from the person's layers alone. A build that carries an
 endpoint outranks the file, as for every name ([BACKEND-35](#BACKEND-35)), and a source build
@@ -2095,7 +2314,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a twenty-third variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a twenty-fifth variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -2112,6 +2331,9 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::settings::an_env_block_is_read`
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_files_do_not_choose_the_default_model_and_the_persons_own_do`
+`verified-by: bravebot_config::lib::a_checkouts_default_model_does_not_reach_the_configuration`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_default_model_that_decides_nothing`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
 `verified-by: bravebot_config::settings::a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::a_named_file_states_the_network_wherever_it_sits`
@@ -2222,7 +2444,17 @@ A top-level key beside the ones this build reads is kept on the same terms. The 
 applies, the key configures nothing and restricts nothing, and `doctor` names it with the file that
 set it, weakest first, every file that set one being named. The key is reported and what it was set
 to is not. A variable in `env` is not reported this way, being named already among the names the file
-set, and neither is a key inside a block this build reads.
+set.
+
+A key inside `permissions`, `sandbox.filesystem` or `run` that this build does not read is reported
+the same way, spelled with the block that leads to it (`run.scrubenv`,
+`sandbox.filesystem.denyread`). A misspelling of a key those blocks read restricts nothing and reads
+to whoever wrote it as a restriction in force. `permissions.defaultMode` is read and acted on by
+nothing ([permissions.md](permissions.md)), and is not reported. `permissions.startInAuto` is read
+([AUTO-1](auto-mode.md#AUTO-1)) and is reported by `doctor` only where a layer that may not name it did. Claude Code's
+`permissions.disableBypassPermissionsMode` is reported with the key this build reads for the same
+purpose, `permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), since a block copied
+out of `~/.claude/settings.json` arrives holding it and the bypass mode stays reachable.
 
 That holds because the reason above is about the file rather than about the `env` block. The file is
 documented as largely the shape of another tool's, so a block pasted from one arrives holding
@@ -2241,8 +2473,11 @@ file in a checkout.
 `verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
 `verified-by: bravebot_config::settings::a_key_beside_the_ones_this_build_reads_is_named_with_the_file_that_set_it`
 `verified-by: bravebot_config::settings::a_key_this_build_reads_is_never_reported_as_unread`
+`verified-by: bravebot_config::settings::a_key_inside_a_restricting_block_that_nothing_reads_is_named_with_its_block`
+`verified-by: bravebot_config::settings::a_key_unread_inside_a_block_is_named_in_every_file_that_set_it`
 `verified-by: bravebot_config::settings::a_variable_nothing_consults_is_named_among_the_names_and_not_as_an_unread_key`
 `verified-by: bravebot_cli::running::doctor_names_a_top_level_key_it_does_not_read`
+`verified-by: bravebot_cli::running::doctor_names_a_restriction_that_names_nothing`
 
 <a id="BACKEND-37"></a>
 ### BACKEND-37: failures carry safe reasons and measured request counts
@@ -2255,11 +2490,21 @@ before backoff does not count until it starts. Cancelling that wait retains the 
 Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
 messages do not enter these details. Processor failures use a fixed category in their tool results;
 delegate failures tell the planner that the delegate did not finish and nothing about the failure
-beyond that, except that a delegate that ended rate-limited or unavailable is told so in a sentence
-this driver writes for each of the two categories, and says that starting the same delegate again
-meets the same limit ([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
+beyond that, except that a delegate that ended rate-limited, unavailable, transport or incomplete is
+told so in a sentence this driver writes for each of the four categories. The first two say that
+starting the same delegate again meets the same limit. The other two say that no refusal came from
+the service, that starting the same delegate again on the same task may meet the same silence or
+stop, and that the task should be split so that each delegate makes smaller replies or writes
+([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
 closed category name the trail records, so no word of the service's answer is carried, and every
-other category is still not named to the planner. Where the run had spent its round bound, the
+other category is still not named to the planner. A delegate ends transport when a request did not
+reach the service, when the connection was dropped or went silent before any of the reply's body
+arrived (including the Bedrock case below), when the time to begin a reply that was streamed ran
+out, and when a redirect chain did not end or named no location. It ends incomplete when any of the
+reply's body arrived and the reply then stopped, went silent for longer than the gap allowed or ran
+out of time, and when a reply asked for whole was still being written at the time its request stated
+for it, whether or not any of it had arrived. The endings are set out under "Each ending of a
+request" below. Where the run had spent its round bound, the
 driver's own count of that bound is said too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a
 number this process fixed before the run started rather than anything read out of the answer that
 failed. Compaction failure messages also use the category, except that one that failed on the
@@ -2301,7 +2546,9 @@ names map to incomplete. Retry eligibility is unchanged.
 A streamed Bedrock reply that stops arriving once any of its body has arrived is incomplete, and
 never a request that did not get through, whatever the transport said about the read that failed.
 A read that fails before any of the body has arrived stays a transport failure and is not sent
-again. A reply that stopped is sent again where its request asked for tool arguments as they are
+again. A Bedrock reply that never began is therefore not sent again, and a delegate that met it on
+every request is told it ended transport, so the planner splits the task rather than starting the
+same delegate again. A reply that stopped is sent again where its request asked for tool arguments as they are
 written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered one without the ask:
 there the silence may be the service holding an argument back until the model has finished it, and a
 second request waits out the same silence and is billed for it.
@@ -2315,6 +2562,29 @@ that died, and it sends the request again as it did before either was told apart
 A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET-5)) is incomplete
 too, streamed or asked for whole, and never a request that did not get through: the service had the
 request and was still writing. It is not asked for again, since the same reply takes as long again.
+
+**Each ending of a request.** The transport (`bravebot-net`) ends a request in one of these ways,
+and the category follows from which one, chosen from the kind of error and never from a reply, a
+header or an address:
+
+| The request ended because | Error | Told as |
+|---|---|---|
+| the name did not resolve, the connection did not open or was refused, or sending the request timed out | transport | transport |
+| the wait for a streamed reply to begin ran past its bound ([NET-5](network-egress.md#NET-5)) | transport | transport |
+| a reply asked for whole was still being written at the time its request stated for it, before any header arrived | out of time | incomplete |
+| the reply as a whole ran past its bound after its headers arrived, streamed or whole | out of time | incomplete |
+| nothing arrived for longer than the gap allowed ([BACKEND-55](#BACKEND-55)), before any of the body | transport | transport |
+| nothing arrived for longer than the gap allowed, or the connection dropped, after some of the body arrived | transport, told by the client that read it as a reply that stopped | incomplete |
+| a redirect chain did not end or named no location | too many redirects, missing location | transport |
+| the person stopped the request | stopped | not a failure: reported as a stop before a category is chosen |
+
+The first two rows and the idle row before the body are what "transport" means to a person: nothing
+arrived, so the network, proxy or TLS roots are what to check. The `Stopped` ending names the
+withdrawn request. The client reports it as a stop, so it is never told to a person or a planner as
+a category, and the transport mapping of `Stopped` exists only to keep the match exhaustive. A
+delegate that ended after a time near the sum of the connection and reply bounds, or in its third
+round, ended by one of the rows above, and the category it was told is the row's. The category says
+which bound fired and never why the service was slow.
 
 A failure the service reported inside a stream and whose code or type is not on the list this build
 holds is neither a refusal nor a reply that stopped. It is the unrecognised category, the one
@@ -2351,28 +2621,33 @@ of tries: `bravebot auth status` shows the sign-in or key in use and `bravebot d
 endpoint. Every source of that category says it the same way: a status of 401 or 403, a token the
 Google Cloud CLI would not give, a sign-in AWS would not resolve, and a refusal the service reported
 as one of authentication, permission or billing. A failure of a request that carried the stored
-premium key, or of a key that could not be presented, reports that as a closed flag beside its
-category, set by the step that made the request and never read from a reply, and its line names the
-commands of [PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
+premium key reports that as a closed flag beside its category, set by the step that made the
+request and never read from a reply, and its line names the commands of
+[PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
 driver's own, so no text from a reply, header, URL or credential is in them, and a failure of the
 account of a ChatGPT or an xAI sign-in keeps its own sentence. The flag and the commands are for the
 person only: the planner is told the category and the request count and no more.
 
-A failure of the category rate-limited ends with its next step after the status and the count. A
-request sent to a backend that has a `provider` entry is told to raise `maxRetries` in that entry
-([BACKEND-55](#BACKEND-55)) and to set `fallbackModel` ([BACKEND-53](#BACKEND-53)). A request sent to
-any other backend (the Brave endpoint, an AWS account reached through the tier variables, the Vertex
+A failure of the category rate-limited ends with its next step after the status and the count. The
+sentence is one of three, chosen by where the backend states its retry count ([BACKEND-55](#BACKEND-55)).
+A request sent to a backend that has a `provider` entry is told to raise `maxRetries` in that entry
+and to set `fallbackModel` ([BACKEND-53](#BACKEND-53)). A request sent to an AWS account reached
+through the tier variables is told to raise `BRAVEBOT_BEDROCK_MAX_RETRIES` ([BACKEND-33](#BACKEND-33))
+and to set `fallbackModel`. A request sent to any other backend (the Brave endpoint, the Vertex
 service the environment names, and the ChatGPT and xAI accounts) is told `fallbackModel` and to try
-again later, because there is no `maxRetries` for it to raise. A request to a `provider` entry that
-failed on a 429 whose wait is past the two minutes [BACKEND-54](#BACKEND-54) takes is told the same
-two things, because that call ends on its first request and no `maxRetries` changes it. Which
-sentence is said depends on a closed flag the driver sets from the variant that sent the request and
-the configuration it was selected with, and on the parsed wait, never on text from a reply, a header
-or an address. The flag and the wait are for the person only and are not given to the planner.
+again later, because there is no retry count for it to raise. A request to a backend with either
+setting that failed on a 429 whose wait is past the two minutes [BACKEND-54](#BACKEND-54) takes is told
+the same two things as a request to a backend with none, because that call ends on its first request
+and no retry count changes it. Which
+sentence is said depends on a closed setting the driver chooses from the variant that sent the request
+and the configuration it was selected with, and on the parsed wait, never on text from a reply, a
+header or an address. The setting and the wait are for the person only and are not given to the
+planner.
 
 `verified-by: bravebot_session::sessions::a_rate_limit_ends_with_the_setting_that_lengthens_the_wait`
 `verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
-`verified-by: bravebot_agent::backend::only_a_backend_reached_through_a_provider_entry_has_a_retry_setting`
+`verified-by: bravebot_agent::backend::each_backend_names_the_place_it_states_max_retries_in`
+`verified-by: bravebot_agent::backend::each_ending_of_a_request_is_told_as_transport_or_as_incomplete`
 `verified-by: bravebot_config::bedrock::only_an_account_a_block_named_has_a_place_for_max_retries`
 `verified-by: bravebot_config::provider::only_a_provider_written_in_an_entry_has_a_place_for_max_retries`
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
@@ -2431,6 +2706,7 @@ or an address. The flag and the wait are for the person only and are not given t
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure`
+`verified-by: bravebot_aichat::lib::a_body_read_in_the_background_says_what_arrived_and_whether_it_began`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
 `verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
@@ -2440,8 +2716,8 @@ or an address. The flag and the wait are for the person only and are not given t
 `verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
 `verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
-`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
-`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way`
 
 <a id="BACKEND-38"></a>
 ### BACKEND-38: one machine-level file pins a destination above everything a person can set
@@ -2657,8 +2933,8 @@ service". Afterwards the question a person has is why the answers are bad, which
 configuration cannot be reached from.
 
 Refusing rather than letting the request go, for the reason
-[PREM-10](premium-credentials.md#PREM-10) fails a request that cannot present its key rather than
-sending it without one: what comes back from a request that was never going to be served carries no
+[PREM-10](premium-credentials.md#PREM-10) gives against a request that silently loses its key:
+what comes back from a request that was never going to be served carries no
 sign of why, and nothing about a bad session points at where a request went.
 
 Five routes rather than one, and each named by what to type, because a refusal that states the
@@ -2932,6 +3208,8 @@ it and was writing the text when the ceiling fell.
 `verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
 `verified-by: bravebot_aichat::client::a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools`
 `verified-by: bravebot_aichat::client::a_reply_the_ceiling_stopped_before_it_wrote_anything_names_the_ceiling`
+`verified-by: bravebot_aichat::lib::a_reply_the_ceiling_stopped_is_described_in_one_sentence_per_state`
+`verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_is_described_as_the_aichat_client_describes_it`
 `verified-by: bravebot_agent::failure_categories::a_reply_the_ceiling_stopped_before_it_wrote_anything_is_diagnosed_at_its_ceiling`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`
@@ -2981,8 +3259,8 @@ that wants its own level for one run says so with `--effort`, the way [CLI-9](cl
 say `--model`.
 
 [BACKEND-11](#BACKEND-11)'s other half does not transfer: the `model` key sits above the baked-in
-default because every release bakes a model in, and a key ranked below it would change nothing on
-any binary anybody was given. Nothing bakes in a level, so there is no such rung here.
+default because a build made with a default model bakes it in, and a key ranked below it would change
+nothing on any binary made that way. Nothing bakes in a level, so there is no such rung here.
 
 **One rule reads both words.** Both come out of a file somebody may have edited by hand, so a
 settings file naming nonsense is read the way a hand-edited record naming nonsense is, rather than
@@ -3062,7 +3340,7 @@ written.
 `verified-by: bravebot_bedrock::lib::a_streamed_argument_that_does_not_parse_is_handed_on_as_written`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
 `verified-by: bravebot_bedrock::protocol::unparseable_arguments_become_an_empty_object_rather_than_dropping_the_call`
-`verified-by: bravebot_agent::tools::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
+`verified-by: bravebot_agent::tools::tests::arguments::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
 `verified-by: bravebot_aichat::anthropic::protocol::asking_for_arguments_as_written_marks_every_tool_and_nothing_else`
 `verified-by: bravebot_aichat::client::a_whole_anthropic_request_asks_for_neither_a_stream_nor_arguments_as_written`
 `verified-by: bravebot_aichat::client::an_anthropic_stream_refused_on_its_contents_gives_up_the_ask_for_arguments_last`
@@ -3179,7 +3457,9 @@ under [BACKEND-47](#BACKEND-47), and the record is left as it is. The interface,
 and a one-shot run open on the configured model and say which pick they set aside and why. Where the
 configured model is refused as well there is nothing to fall to: nothing is set aside, and the start
 is refused with the file that refused and which of its lists did. A run whose model is refused for any
-other reason is refused the same way.
+other reason is refused the same way. So is a background session's process, whether `bravebot bg`
+started it or `reply`, `attach` or the supervisor started it again: it settles its model when it
+starts, and ends before its first turn where the layer refuses that model.
 
 **Why.** The names this layer may pin decide where a request goes, and after it has pinned the
 endpoint, the AWS switch, the region, the profile and the three tiers, every other model name still
@@ -3228,6 +3508,7 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_agent::backend::a_model_the_managed_layer_refuses_is_served_by_nothing`
 `verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
 `verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`
+`verified-by: bravebot_cli::plain::a_hosted_start_on_a_model_the_managed_layer_refuses_is_ended`
 `verified-by: bravebot_tui::app::the_picker_does_not_offer_a_model_this_machine_may_not_request`
 `verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
@@ -3571,8 +3852,13 @@ in either direction, and does not move the bound on the reply as a whole.
 The block is read from the person's own settings, from the file `--settings` names and from the
 machine-level file, and from no project or local layer ([BACKEND-24](#BACKEND-24)): a layer that
 names a `provider` block with these keys is dropped whole and `doctor` names the file. The model
-Brave's endpoint serves, and an account the tier variables alone configure, have no entry to state
-them in and are held to the defaults. A streamed reply from a gateway on this machine is waited on
+Brave's endpoint serves has no entry to state them in and is held to the defaults. An account the
+tier variables alone configure states the count and the gap with `BRAVEBOT_BEDROCK_MAX_RETRIES` and
+`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` ([BACKEND-33](#BACKEND-33)), which are held to the same bounds
+and states: a count above seven is seven, a count of zero is a statement, a gap above ten minutes
+is ten minutes, and a gap of zero or a value that is not a whole number states nothing. They are
+read from the person's own layers and the environment alone, so a checkout's `env` block cannot
+set them. There is no variable for the window, so that account keeps the default window. A streamed reply from a gateway on this machine is waited on
 through any silence while a person can stop it ([NET-10](network-egress.md#NET-10)), so a stated
 gap does not reach it, and a stated count and window do.
 
@@ -3601,6 +3887,9 @@ figures are read as numbers and set a count and timers, so a service has no say 
 `verified-by: bravebot_config::provider::a_block_states_how_long_a_failed_connection_is_retried_and_an_hour_is_the_most`
 `verified-by: bravebot_config::provider::a_window_replaces_the_count_only_where_nothing_or_a_window_was_stated`
 `verified-by: bravebot_config::provider::an_aws_entry_states_the_same_three_figures`
+`verified-by: bravebot_config::provider::the_tier_variables_state_the_count_and_the_gap_as_an_entry_does`
+`verified-by: bravebot_config::bedrock::a_tier_account_reads_its_retry_count_and_idle_gap_from_its_variables`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_change_the_tier_accounts_retry_count_or_idle_gap`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap`
 `verified-by: bravebot_config::lib::a_managed_gateway_states_its_own_retry_count_and_idle_gap`
 `verified-by: bravebot_aichat::client::a_gateway_stating_no_retries_is_asked_once`
@@ -3724,7 +4013,8 @@ this API is likeliest to refuse them: without the level, with the fallback ceili
 [BACKEND-41](#BACKEND-41), without the lifetime, without the breakpoints and last without the ask for
 arguments ([BACKEND-44](#BACKEND-44)). What answered is remembered as
 [BACKEND-22](#BACKEND-22) remembers the level, and a request refused with every concession given up
-settles nothing.
+settles nothing. The change that holds back the record of the breakpoints, [BACKEND-27](#BACKEND-27),
+is made in the Bedrock client alone: this entry and the gateway remember them on the answer.
 
 A reply is read whole or as server-sent events. A stream is complete once it says so, and one that
 stops before is a reply that did not finish, which is sent again. A failure the service reports part
@@ -4634,6 +4924,7 @@ short rather than refused.
 `verified-by: bravebot_aichat::client::an_ollama_reply_the_ceiling_stopped_is_kept_and_said_to_be_cut_off`
 `verified-by: bravebot_aichat::client::an_error_line_from_ollama_is_reported_rather_than_read_past`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_ollama_model_to_start_writing`
+`verified-by: bravebot_aichat::client::an_ollama_key_goes_to_the_server_the_entry_names_and_not_where_it_redirects`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_is_messages_with_the_window_and_ceiling_in_options`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_request_nobody_asked_anything_of_carries_only_the_conversation`
 `verified-by: bravebot_aichat::ollama_chat::protocol::a_schema_goes_in_format`
@@ -4889,7 +5180,7 @@ cancel kills it rather than asking it to stop.
   because the credential value comes from the person's own environment under names the layer would
   choose, and a file nobody read must not pick either. The `env` names that choose the account a
   request goes to are refused from them too: the six network names, the three Google names, the
-  six Bedrock names and the two endpoints ([BACKEND-33](#BACKEND-33)). A team that shares a
+  six Bedrock names, the two endpoints and `BRAVEBOT_DEFAULT_MODEL` ([BACKEND-33](#BACKEND-33)). A team that shares a
   development endpoint states it in each person's own file, the environment or the build, and not in
   `.bravebot/settings.json`. For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no
@@ -4905,6 +5196,19 @@ cancel kills it rather than asking it to stop.
   Code ([IMPORT-3](import.md#IMPORT-3)) writes the region the file states, so one this refuses is
   imported and then not read, and an `amazon-bedrock` entry from opencode with one is left with the
   reason that it has no region.
+
+- **A project or local layer naming the key id or the signing key on a source build is accepted,
+  and still reaches no host but the person's own.** `SERVICES_KEY_AICHAT` and
+  `BRAVE_SERVICES_KEY_ID` are not in any of the four sets [BACKEND-33](#BACKEND-33) keeps to the
+  person's own layers, so BACKEND-35's rule applies to them like any other name: on a source build,
+  which carries neither, a checkout's `.bravebot/settings.json` may set both. What that costs is a
+  request to Brave's endpoint signed with a credential the checkout chose rather than the person
+  running it, on a build that had none compiled in. It is accepted because the two endpoint names
+  are kept to the person's own layers regardless, so a checkout that supplies the key id and the
+  signing key still cannot choose where a request signed with them is sent: it reaches the host the
+  person's own file, environment or build named, or none at all if a source build has no endpoint
+  anywhere in those layers. A person who runs a source build inside such a checkout is signing
+  requests, if any are sent, with a key id and a key they did not type and may not have read.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
@@ -4967,7 +5271,10 @@ cancel kills it rather than asking it to stop.
 - **An ephemeral cache entry expires on inactivity, and nothing here tracks it.** The lifetime is
   the provider's default of a few minutes unless the `promptCacheTtl` setting chooses one (BACKEND-27,
   BACKEND-32), and the longer one is charged at a higher write rate, which is why nothing is sent until
-  a person chooses. A person who thinks between turns misses more often than the token arithmetic
+  a person chooses. A wait the tool offers is bounded under the lifetime in force (BACKEND-27), so
+  that cost is not paid by a `job_output` wait, and a `run` deadline of five minutes or more is
+  not bounded and its description names the cost. A person who thinks between turns misses more
+  often than the token arithmetic
   suggests, and a miss looks identical to a service that reports nothing: the reply carries a zero
   read either way.
   Neither figure says when the last request was, so nothing can distinguish a prefix that expired
@@ -5222,13 +5529,14 @@ cancel kills it rather than asking it to stop.
   Anthropic's key. A name picked from `/model` is recorded qualified, as
   `openrouter/anthropic/claude-sonnet-4.5`, and is not affected.
 
-- **Brave's endpoint and an account the tier variables alone configure take neither figure of
-  BACKEND-55.** Both figures live in a `provider` entry's `options`. The model Brave's endpoint
-  serves has no entry, and the tier variables of BACKEND-33 have no block to state anything in, so a
-  person reaching either is held to two retries (five after a rate limit that carried no wait) and a
-  two minute gap. Tier words that resolve
-  through an `amazon-bedrock` entry take that entry's figures. Stating them for the tier variables
-  would take a name in BACKEND-33's table or a top-level key, and neither is decided here.
+- **Brave's endpoint takes neither figure of BACKEND-55, and an account the tier variables alone
+  configure takes two of them from variables.** The figures live in a `provider` entry's `options`.
+  The model Brave's endpoint has no entry, so a person reaching it is held to two retries (five after
+  a rate limit that carried no wait) and a two minute gap. The tier variables of BACKEND-33 have no
+  block, so `BRAVEBOT_BEDROCK_MAX_RETRIES` and `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` state the count
+  and the gap for an account they alone configure. There is no variable for the window, so that
+  account keeps the five minute window. Tier words that resolve
+  through an `amazon-bedrock` entry take that entry's figures.
 
 - **A stated gap does not lengthen the bound on a gateway's reply as a whole.** A reply whose
   request states no length is ended ten minutes after it began

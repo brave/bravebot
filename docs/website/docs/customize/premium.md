@@ -83,12 +83,6 @@ Bedrock block, gateway, ChatGPT sign-in or xAI sign-in), does not start. Instead
 service is configured and lists the ways to configure one. The last is Brave's premium service, with
 `bravebot auth login brave`.
 
-A stored key that cannot be presented is reported as:
-
-```
-the premium key could not be used: {detail}. Run `bravebot auth login brave` to replace it, or `bravebot auth logout brave` to send requests to the free endpoint instead
-```
-
 ## Which tier a turn actually ran on
 
 **What `/status` says about the tier is what the last turn actually did**, not what the build was

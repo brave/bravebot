@@ -32,7 +32,7 @@ documented-by: docs/website/docs/customize/configuration.md
 
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
 is written into it. Where [STATE-2](#STATE-2) puts it elsewhere, every statement here is about that
-directory. The prompt history, the model, theme, effort, language and editing choices, the answer to
+directory. The prompt history, the model, theme, effort, language and editing choices, whether the info panel is open, its width and the sections `/sidebar` turned off ([PANEL-5](info-panel.md#PANEL-5), [PANEL-17](info-panel.md#PANEL-17)), the answer to
 the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
 instructions, the premium key, the ChatGPT and xAI sign-ins, the gateway keys, the command lines somebody asked to be remembered past a
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout, the schedules a person stored, `schedules/` ([schedule.md](schedule.md)), the triggers a person registered with their secrets, `triggers/` ([triggers.md](triggers.md)), and the answers to the startup question

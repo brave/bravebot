@@ -305,6 +305,9 @@ pub fn reach<A: Asker + ?Sized>(
         writable: home.writable && asker.records(),
     };
     let mut notes = Vec::new();
+    // An entry of the administrator's lists that cannot be used refuses nothing, so a session says
+    // so before it starts anything (SERVERS-12).
+    notes.extend(crate::mcp::managed_entries_unusable(managed));
     let plans = settle(
         requested,
         project,
@@ -8027,6 +8030,52 @@ for line in sys.stdin:
             !listed().contains(&sandboxed.name),
             "the sandbox outlived the session"
         );
+    }
+
+    /// A managed entry that is neither a host nor a command is named as a session opens, with the
+    /// file, the list and the entry as the file spelled it, and a usable entry is not (SERVERS-12).
+    ///
+    /// Rejects the silent skip, where an administrator's deny entry refuses nothing and nothing says
+    /// so, and a note for every entry, which would bury the one that matters.
+    #[test]
+    fn a_managed_entry_that_cannot_be_used_is_named_as_a_session_opens() {
+        let root = scratch("cli-servers-managed-unusable");
+        let path = root.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp": {"deny": [
+                {"host": "mcp.corp.example:443"},
+                {"command": ["evil-server", "--stdio"]},
+                {"host": "mcp.ok.example"}
+            ]}}"#,
+        )
+        .expect("managed");
+        let reached = reach(
+            &[],
+            &root,
+            &Home {
+                directory: None,
+                writable: false,
+            },
+            &Managed::at(&path),
+            Asking::Bypass,
+            &mut nobody(),
+            Stream::Null,
+        );
+        assert_eq!(reached.notes.len(), 2, "{:?}", reached.notes);
+        let file = path.display().to_string();
+        for entry in [
+            r#"{"host":"mcp.corp.example:443"}"#,
+            r#"{"command":["evil-server","--stdio"]}"#,
+        ] {
+            assert!(
+                reached.notes.iter().any(|note| note.contains(&file)
+                    && note.contains("mcp.deny")
+                    && note.contains(entry)),
+                "{entry}: {:?}",
+                reached.notes
+            );
+        }
     }
 
     /// `list` and `get` hold a server in an image to the managed layer as one, even where it could

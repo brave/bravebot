@@ -120,7 +120,8 @@ Every control character is replaced with a visible glyph on the way to the scree
 as well as the content. Replaced rather than dropped, since a character silently removed is one the
 user cannot tell was ever in the file.
 [VIEW-30](#VIEW-30) is the one exception: a complete colour code in output drawn for reading is
-taken out and counted.
+taken out and counted. The same removal is made on the text of a program's output that the planner
+may read ([RUN-21](tools/run.md#RUN-21)), which no screen draws.
 
 A picture or a PDF held in a slot is shown as the driver's rows about it and never as the first
 lines of the `data:` URI it is held as, which are base64 that tells a person nothing. The rows say
@@ -641,7 +642,9 @@ Where `NO_MOTION` is set to anything but the empty string, the glyph beside a ru
 still instead of cycling, and the pixel face on the opening screen keeps its eyes open and its
 pupils on one side instead of blinking and glancing. The glyph is still drawn, and the elapsed time
 and the token counts change as they always did: a figure that moves when the thing it measures
-moves is information rather than animation.
+moves is information rather than animation. A click on the face
+([MOUSE-56](mouse.md#MOUSE-56)) moves it for a moment where the person has not declined motion, and
+does nothing where they have.
 
 It is read from the environment the way the request for no colour is, and answers to presence the
 same way. Where it is not set, the glyph cycles.
@@ -817,15 +820,15 @@ one place left to say what each of them was for.
 `verified-by: bravebot_cli::progress::a_call_is_printed_with_the_reason_it_was_made`
 `verified-by: bravebot_ui_bridge::wire::a_call_carries_the_reason_it_was_made`
 `verified-by: bravebot_agent::conversation::every_call_in_a_round_is_recounted`
-`verified-by: bravebot_agent::tools::a_stored_call_names_its_command_output_and_file_but_not_a_credential`
+`verified-by: bravebot_agent::tools::tests::activity::a_stored_call_names_its_command_output_and_file_but_not_a_credential`
 `verified-by: bravebot_agent::turn::a_run_call_is_drawn_with_the_command_it_runs`
 `verified-by: bravebot_agent::turn::a_run_call_of_several_lines_is_drawn_as_its_first`
 `verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: bravebot_agent::mcp::a_call_answer_two_lets_through_is_drawn_with_what_it_sends`
 `verified-by: bravebot_agent::mcp::a_call_carrying_a_credential_is_drawn_without_its_arguments`
 `verified-by: bravebot_agent::mcp::a_call_to_a_tool_no_server_offers_is_drawn_as_a_resumed_session_draws_it`
-`verified-by: bravebot_agent::tools::a_servers_call_is_drawn_with_the_arguments_it_is_sent`
-`verified-by: bravebot_agent::tools::a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential`
+`verified-by: bravebot_agent::tools::tests::activity::a_servers_call_is_drawn_with_the_arguments_it_is_sent`
+`verified-by: bravebot_agent::tools::tests::activity::a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential`
 `verified-by: bravebot_tui::render::a_resumed_call_to_a_servers_tool_shows_what_it_sent`
 `verified-by: bravebot_ui_bridge::servers::a_call_to_a_servers_tool_reaches_the_window_with_what_it_sends`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup after the call while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
@@ -863,7 +866,8 @@ word is what an interface is given, so no interface can draw the name as it was 
 
 While the resting view is scrolled off the tail ([VIEW-1](#VIEW-1)), the hint line says it is held,
 how many rows lie below it and the key that returns to the latest. The cue is dim, is dropped whole
-on a terminal with no room for it, and is gone once the view is at the tail.
+on a terminal with no room for it, and is gone once the view is at the tail. The button drawn at the
+bottom of the transcript ([VIEW-45](#VIEW-45)) is beside it and does not replace it.
 
 **Why.** The view stays where it was put while the turn goes on, and a person who scrolled up and
 looked away had no sign on the screen that the turn had moved on, or which key returned to it.
@@ -951,6 +955,13 @@ other, and the terminal is sent no escape.
 It applies to the output of a command typed in shell mode, whether the command is still running
 ([SHELL-7](shell-mode.md#SHELL-7)) or has ended, to the preview in a quarantined block, to the lines
 drawn under a call the planner read, and to the quarantined block a one-shot run writes to stderr.
+The same removal is made on the text of a result that the planner may read
+([RUN-21](tools/run.md#RUN-21)). The code that does it is in `bravebot-core`, so both read the same
+definition of a colour code. The function that finds where a code ends, `code_end` in
+`crates/core/src/colour_codes.rs`, has a Verus contract in `verify/contracts.txt`: for every input
+it reads only offsets inside the text, and any offset it returns is an `m` at or after the two bytes
+of `ESC [` and no further than 64 parameters from them, so the text is cut only on a character
+boundary.
 Everything else draws every byte. That includes a block's heading, where the origin can be a
 filename, a path or a name wherever one is drawn, the hunks of a write, and every prompt that asks a
 person to approve text: a write, a command's output, a read, a message, a server and its tools. A
@@ -964,12 +975,12 @@ erase the margin or ask the terminal something, and a colour code with its escap
 none of those. VIEW-3 replaces a control character and does not drop it so that the person can tell
 it was there, and the count gives the person the same for colour codes.
 
-`verified-by: bravebot_tui::colour_codes::the_codes_of_a_coloured_line_are_taken_out_and_counted`
-`verified-by: bravebot_tui::colour_codes::every_spelling_of_a_colour_code_is_taken_out_whole`
-`verified-by: bravebot_tui::colour_codes::a_sequence_that_is_not_a_colour_code_is_left_in_place`
-`verified-by: bravebot_tui::colour_codes::a_run_of_parameters_longer_than_a_colour_has_is_left_in_place`
-`verified-by: bravebot_tui::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
-`verified-by: bravebot_tui::colour_codes::codes_beside_wide_characters_are_taken_out_cleanly`
+`verified-by: bravebot_core::colour_codes::the_codes_of_a_coloured_line_are_taken_out_and_counted`
+`verified-by: bravebot_core::colour_codes::every_spelling_of_a_colour_code_is_taken_out_whole`
+`verified-by: bravebot_core::colour_codes::a_sequence_that_is_not_a_colour_code_is_left_in_place`
+`verified-by: bravebot_core::colour_codes::a_run_of_parameters_longer_than_a_colour_has_is_left_in_place`
+`verified-by: bravebot_core::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
+`verified-by: bravebot_core::colour_codes::codes_beside_wide_characters_are_taken_out_cleanly`
 `verified-by: bravebot_tui::colour_codes::nothing_is_said_where_nothing_was_taken_out`
 `verified-by: bravebot_tui::marking::colour_codes_in_a_preview_are_counted_and_not_drawn`
 `verified-by: bravebot_tui::marking::only_colour_codes_are_left_out_of_a_preview`
@@ -1339,7 +1350,8 @@ captured, in the scroller or the delegate view, over the search of earlier promp
 screen, or in a pane with fewer than three rows.
 
 The column is chrome and not text: the transcript's pane for selecting and copying ends before it, so
-a drag that reaches it takes no cell of it. The wheel, the arrow keys and the page keys move the view.
+a drag that reaches it takes no cell of it. It runs beside the rows above the button of
+[VIEW-45](#VIEW-45), where one is drawn. The wheel, the arrow keys and the page keys move the view.
 
 What a copy takes and what a click on a link opens are read at the width the lines were wrapped to,
 so a wrapped line copies as one line and an address or a path that wraps is one link, with the bar
@@ -1494,6 +1506,112 @@ service wrote is read to make them, and the line is built from fixed words.
 `verified-by: bravebot_aichat::call::a_retry_governed_by_a_count_names_no_time_to_give_up`
 `verified-by: bravebot_agent::turn::a_turn_survives_a_connection_that_died_mid_request`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/retry-countdown.test.mjs drives the window's own event reducer and word function with the bridge's events: the wait is counted from the moment the event arrives and down to the second it names, a count with no window names no time to give up, the pause being over or the next phase takes the countdown away, and a hook or a check keeps the row; make check-ui runs the test)`
+
+<a id="VIEW-44"></a>
+### VIEW-44: the prompt of the turn at the top of the view is drawn above it once it has scrolled off
+
+Where the first row of the view is not a row of a prompt the person typed, the first row of the
+transcript's pane holds the latest prompt that begins above it, and the view is drawn in the rows
+under it. The row is `> ` and the prompt's words, each run of blanks and line breaks as one space, cut
+with `…` where they do not fit, in the ink the prompt's own rows are drawn in. What is drawn under the
+entries from the session's live state, the reply still arriving among it, belongs to the turn of the
+last prompt.
+
+No prompt is drawn above the view where its first row is a row of a prompt, since that prompt is on
+the screen; where a shell command the person ran is later than the prompt, since what the command
+printed is not an answer to it; where the prompt has no words; in a pane of fewer than four rows or
+sixteen columns, which are the rows left once the button of [VIEW-45](#VIEW-45) has taken its row;
+and over a delegate's view or a request `/request` opened, neither of which holds
+the person's prompts. At the tail a view a row shorter begins a row further down, and a prompt is
+drawn only where one is to be drawn above both the view of the whole pane and that shorter view, so a
+view whose shorter form begins at the next prompt keeps the whole pane. A view held above the tail
+keeps the row it holds at its top, which is then drawn under the prompt. A scroller at the last row
+keeps the last row on the screen instead, as `G` asks, unless rows have arrived below it since the
+frame that left it there ([SCROLL-8](scroller.md#SCROLL-8)). The keys that move the view a screen
+count the rows under the prompt, so a page shows every row.
+
+It is drawn at rest and in the scroller alike, so opening the scroller moves no words
+([SCROLL-1](scroller.md#SCROLL-1)). The row is not one of the transcript's: a selection does not begin
+in it and a copy does not take it, the scroller's search, `v` and an export do not read it, and the
+scrollbar ([VIEW-39](#VIEW-39)) runs beside the rows under it, so its thumb stands for the rows the
+transcript is drawn in. A click on the row puts the prompt at the top of the view
+([MOUSE-54](mouse.md#MOUSE-54)).
+
+**Why.** A reply longer than the pane pushes the prompt that asked for it off the screen, and a person
+reading back through a long transcript sees answers with nothing on the screen to say what they
+answer. The prompt is drawn on one row so that it costs the transcript one row and no more.
+
+The words are the person's own prompt, which the transcript already draws. Which entry is a prompt is
+the speaker the session recorded, and which entry holds the first row of the view is read from the
+layout's row geometry, so the row holds no bytes of a reply, a result or a note.
+
+`verified-by: bravebot_tui::app::tests::pinned::the_prompt_of_the_turn_at_the_top_of_the_view_is_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::a_reply_still_arriving_has_the_prompt_that_asked_for_it_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::what_a_shell_command_printed_has_no_prompt_drawn_above_it`
+`verified-by: bravebot_tui::app::tests::pinned::no_prompt_is_drawn_above_a_delegates_view_or_a_request`
+`verified-by: bravebot_tui::app::tests::pinned::the_prompt_above_the_view_is_drawn_in_the_ink_of_the_prompt`
+`verified-by: bravebot_tui::app::tests::pinned::a_selection_never_begins_on_the_prompt_drawn_above_the_view_or_takes_its_words`
+`verified-by: bravebot_tui::app::tests::pinned::the_scrollbar_runs_beside_the_rows_under_the_prompt_and_reaches_the_end_at_the_tail`
+`verified-by: bravebot_tui::app::tests::pinned::the_scroller_draws_the_prompt_above_its_view_and_opening_it_moves_no_words`
+`verified-by: bravebot_tui::app::tests::pinned::the_scroller_pages_by_the_rows_under_the_prompt_and_reaches_the_last_row`
+`verified-by: bravebot_tui::render::transcript::a_prompt_is_pinned_only_in_a_pane_with_room_and_where_the_shorter_view_has_one_too`
+`verified-by: bravebot_tui::render::transcript::the_prompt_pinned_is_the_latest_one_above_the_first_row_and_not_past_a_shell_command`
+`verified-by: bravebot_tui::render::transcript::a_prompt_on_one_row_joins_its_lines_and_is_cut_to_the_room`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+
+<a id="VIEW-45"></a>
+### VIEW-45: a view held off the tail has a button in the last row of the transcript's pane
+
+While the resting view is off the tail ([VIEW-1](#VIEW-1)), the last row of the transcript's pane
+holds a button drawn in the middle of the columns the text is drawn in, which are the pane's less the
+scrollbar's, in reverse video and bold on the brand colour: `↓ Jump to bottom  ·  12 rows below`. The
+row under it is the status row while a turn or a command runs and one is drawn, and the top of the box
+otherwise. A click on it returns the view to the tail as `ctrl-end` does
+([MOUSE-55](mouse.md#MOUSE-55)). It is drawn in the frame that leaves the tail and is gone once
+the view is back.
+
+The row is taken from the transcript's rows and covers none of them. A view held on a row stays on it,
+the rows above the button are the pane's less its own, and a prompt drawn above the view
+([VIEW-44](#VIEW-44)) takes its row from those that are left. The scrollbar ([VIEW-39](#VIEW-39)),
+a selection and a copy count only the rows above the button, so the button's words are never copied.
+A view one row off the tail whose last row a prompt drawn above the view took has a button as well:
+whether the view is off the tail is read from the rows that are drawn, with that prompt.
+
+The count is how many rows of the transcript lie below the last row the view shows. It is read from the
+layout's row geometry in the frame that draws the button, and the cue on the hint line
+([VIEW-27](#VIEW-27)), which stays, says the same count in that frame. Where the sentence with its count
+does not fit the width of the pane, the words alone are drawn. Where they do not fit either, or the pane
+has fewer than four rows, no button is drawn and no row is taken, and the cue on the hint line is the
+only one.
+
+No button is drawn in the scroller, in a delegate's view, a view of an aside or of what a command
+printed, in the view of a request or in the opening screen. Each has its own way back, and none draws
+the session's transcript in the pane the button is drawn over. A panel drawn over the frame covers it as
+it covers the rest ([MOUSE-45](mouse.md#MOUSE-45)). A question the interface puts to the person draws
+its own frame over the whole screen and reads the keyboard itself, so no button is drawn while one is
+up, and the frame drawn once it is answered holds the view where it was and draws the button again
+([MOUSE-44](mouse.md#MOUSE-44)).
+
+**Why.** Without the button, the only sign that the view is held is a dim sentence under the box, and a
+person who scrolled up and looked away has to know the key or find it there. The button is at the edge of
+the transcript the eye is on, where the rows that arrive go on arriving, and a click on it needs no key.
+
+The label is a sentence of the catalog and a count of rows from the layout, so it holds no bytes of
+what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
+
+`verified-by: bravebot_tui::app::tests::jump::a_view_held_off_the_tail_draws_the_button_above_the_box_with_the_rows_below`
+`verified-by: bravebot_tui::app::tests::jump::at_rest_the_button_is_in_the_row_directly_above_the_box`
+`verified-by: bravebot_tui::app::tests::jump::while_a_turn_runs_the_button_is_in_the_row_directly_above_the_status_row`
+`verified-by: bravebot_tui::app::tests::jump::a_reply_arriving_below_a_held_view_raises_the_count_and_moves_no_text`
+`verified-by: bravebot_tui::app::tests::jump::a_narrow_pane_drops_the_count_and_then_the_button`
+`verified-by: bravebot_tui::app::tests::jump::a_pane_of_fewer_than_four_rows_keeps_every_row_for_the_transcript`
+`verified-by: bravebot_tui::app::tests::jump::a_view_one_row_off_the_tail_whose_last_row_a_pinned_prompt_took_has_the_button_and_its_count`
+`verified-by: bravebot_tui::app::tests::jump::the_button_is_in_the_middle_of_the_text_columns_in_reverse_video_and_bold_on_the_brand_colour`
+`verified-by: bravebot_tui::app::tests::jump::no_button_is_drawn_in_the_scroller_a_delegates_view_or_a_request`
+`verified-by: bravebot_tui::app::tests::jump::no_button_is_drawn_in_the_view_of_what_a_command_printed_an_aside_or_the_opening_screen`
+`verified-by: bravebot_tui::app::tests::jump::the_hint_under_the_box_stays_while_the_button_is_drawn`
+`verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
 
 ## Known costs
 

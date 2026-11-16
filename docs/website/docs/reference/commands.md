@@ -51,6 +51,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/sessions` | | Open the Sessions screen: every session on this machine and what each is doing. Left over an empty box does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
+| `/sidebar` | | Open a checklist that turns each section of the info panel on or off |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/unfinished` | | List what this session left open, and whose move each is |
@@ -58,12 +59,14 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
+| `/prs` | | List the pull requests this session has met |
+| `/issues` | | List the issues this session has met |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/plan` | `[task]` | Enter plan mode, and start on a task if you give one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
-| `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
+| `/mcp` | `[list \| reconnect [alias] \| disable <alias> \| remove <alias>]` | List the MCP servers, start one that is not running, turn one off for the session, or remove one for good |
 | `/lsp` | | Say which language servers this session has started |
 | `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
@@ -77,10 +80,9 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/exit` | | Leave |
 
 Typing `/` offers the list in that order, with your [skills](#skills-after-a-slash) beneath it, and
-Tab completes. The list is one row per command and per skill, and a terminal without the room for all
-of them drops the last ones, skills first: everything is still typeable in full, and a letter or two
-narrows the list back onto the screen, but a short terminal costs you the discovery the list is there
-for.
+Tab completes. The list is one row per command and per skill. Where the room under the box holds
+fewer rows than the list, the list scrolls: the row under the cursor is always drawn, and Down
+reaches the last item.
 
 A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
 it takes appears dimly after the cursor until you start typing one.
@@ -88,6 +90,11 @@ it takes appears dimly after the cursor until you start typing one.
 `exit` and `quit` typed without the slash are prompts, not commands. A line that is only one of them
 is sent at the first Enter like any other prompt, and while the turn it starts runs, the row under
 the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
+
+A command that takes no argument, typed with words after it, is a prompt too: `/model gpt-5` opens no
+picker, `/undo the last change` does not undo, and each is sent at the first Enter. While the turn
+it starts runs, the row under the box says that a prompt was sent, that Ctrl-C stops it and that the
+bare word runs the command.
 
 ## `/status`
 
@@ -217,7 +224,8 @@ them. See [Choosing a model](../customize/model.md).
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
 
-`/model` takes no argument, so `/model foo` is a prompt. A [prompt file](#prompt-files) whose front
+`/model` takes no argument, so `/model foo` is a prompt, and the row under the box says so while its
+turn runs. A [prompt file](#prompt-files) whose front
 matter has a `model` key opens this picker with the cursor on that model, and leaves the file's text
 in the box.
 
@@ -383,7 +391,8 @@ Makes a directory both reachable and trusted, for this session. `--resume` carri
 `/clear` closes it. The path is absolute, starts with `~`, or is relative to the working directory,
 so `/add-dir ../notes` opens the directory beside the project. Where the working directory's name is
 not text, a relative path is refused and the full path is asked for. A directory already inside the
-project is refused. See
+project is refused, and so is a second path to a directory that is already open, such as a macOS
+firmlink or a Linux bind mount to it. See
 [Trusted directories](../security/trust.md#add-dir).
 
 `/add-dir close <path>` closes that one directory and keeps the conversation. A file only it reached
@@ -844,7 +853,24 @@ Shows or hides the info panel on the right of the screen, as Ctrl-X does. The pa
 session's name, directory and branch, the goal, how full the context is with the cache figures, and
 the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
-has the rest.
+has the rest. [`/sidebar`](#sidebar) chooses which sections it draws.
+
+## `/sidebar`
+
+Opens a checklist titled `info panel` with a row for each section of the info panel: Session, Model,
+Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
+`[x]` while the panel draws the section and `[ ]` while it is turned off. Up and Down, or `j` and
+`k`, move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the
+same in one press. The panel follows each change as it is made. Escape closes the checklist and keeps
+what you changed. It works at the prompt and while a turn runs, and the turn is not touched.
+
+The choice is kept in `~/.bravebot/sidebar` and applies to every session. A section the file does not
+name is on, so a section added later is on. A file with a line that is not a section's name leaves
+every section on. With every section off, the panel is still drawn with its last row, the one that
+names the key that hides it. While Context is off, the context reading and the cache hit rate stay on
+the hint line under the box, as they do where the panel is not drawn. `/sidebar` does not open the
+panel, so with the panel closed a change shows the next time it is opened. Nothing typed after the
+word is used: `/sidebar` followed by words is sent as a prompt.
 
 ## `/diff`
 
@@ -874,6 +900,8 @@ Lists what this session left unfinished, found by fixed rules over bravebot's ow
 
 It starts no turn and sends nothing to the model.
 
+A file written into the session's own directory is not counted as a change not built and is not listed under it, since the directory is outside the project and goes when the session ends. A turn whose only writes landed there is not asked whether to build them.
+
 **The line after a turn.** When a turn ends and the set of open loops has changed since the last turn, the session shows one line, such as `open: changes not built, the last command failed, 2 todos (planner); 1 kept checkout (you); 1 job running`. It gives counts only, grouped by whose move each is: the planner's, yours, or a wait. The same set is not repeated every turn, and `open: nothing` says the last one closed. The planner is told the same counts at the start of its next turn, and a resumed session works them out again from its record and the files on disk.
 
 ## `/todos`
@@ -900,7 +928,7 @@ Alt-A does the same and is one of the [chords you can move](../customize/configu
 action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
 the chord in force, where the plan has room for it.
 
-## `/mcp [list | reconnect [alias] | disable <alias>]`
+## `/mcp [list | reconnect [alias] | disable <alias> | remove <alias>]`
 
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
 tools stand, and each server your settings request that is not running, saying whether it was turned
@@ -908,7 +936,23 @@ off. `reconnect` starts every requested server that is not running and was not t
 `reconnect weather` starts that one, including one turned off. A start takes the road a session takes
 as it opens, so a server whose declaration changed, or that nobody approved, is put to you again.
 `disable weather` stops the server and drops its grant. It writes nothing, so the next session starts
-the server as before. Typed while a turn runs, it waits for the turn to end. See
+the server as before.
+
+`remove weather` is the permanent form. It runs `bravebot mcp disable weather` and then `bravebot mcp
+remove weather`, which takes the request out of every settings file that asks for the server and
+deletes its declaration and approval, so no later session starts it or asks about it, and it stops
+the server in this session. If the second program fails, the server keeps running and the failure is
+said. The alias must be an alias (letters, digits, `-` and `_`, starting with a letter or digit), and
+nothing is run in an incognito session or where there is no state directory.
+
+Where `disable` or `remove` takes an alias it also takes a pattern with a `*`, which stands for any
+run of characters. `remove brave-tabs*` removes `brave-tabs-manage` and `brave-tabs-read`, and
+`disable brave-*` turns off every server whose name starts with `brave-`. Each server the pattern
+names is handled as if you had typed it alone, and a failure for one is said and does not stop the
+others. A pattern that names no server changes nothing and says so.
+
+Typed while a turn runs, the bare word and `list` are carried out as you type them, and every other
+form waits for the turn to end. See
 [starting or stopping one during a session](../customize/mcp-servers.md#starting-or-stopping-one-during-a-session).
 
 ## `/caffeinate`
@@ -1104,7 +1148,10 @@ the planner as your own prompt, for instance to ask for a commit with that messa
 Nothing is committed by the command itself.
 
 Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
-that holds what looks like a credential, and the line says which. A diff longer than one read takes is
+that holds what looks like a credential, and the line says which. Where a changed path is one nobody
+has vouched for, the message is still written but the box is left as it was and a note says the draft
+was not offered, since Enter would send a model's words about that path as a line you wrote. The
+[trust](../security/trust.md) page says how to vouch for a path. A diff longer than one read takes is
 drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
 or the session's. Typed while a turn runs it waits for the turn to end.
 
@@ -1236,6 +1283,28 @@ another scheme sets nothing and is not repeated back. Alone, each says what is s
 rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. In the desktop app a chat whose pull request link points at a `/pull/<number>` path shows `PR #<number>` beside its branch on its sidebar row and in a bot's conversation list. Clicking it opens the address in your browser, and typing `PR #<number>` in the row search finds the chat. Typed
 while a turn runs with nothing waiting, each is carried out at once, as `/rename` is. [`--issue` and `--pr`](cli.md#--issue-url-and---pr-url) set the same links when a session opens.
 
+## `/issues` and `/prs`
+
+`/prs` lists the pull requests the session has met, and `/issues` the issues. A line says how many there
+are, and each item follows as `owner/repo#12` and its address. The list is the one the Pull requests
+and Issues sections of the [info panel](../using/sessions.md#telling-sessions-apart) draw, so it
+starts with the link you gave with `/pr` or `/issue` where that is a GitHub address, and then holds
+what the session met in the order it was first met. A session that has met none says so.
+
+A session meets an item when you type a full GitHub address in a line you send, when you
+open it with `--issue` or `--pr`, when the model's own `run`, `fetch_url` or `download_url` call names
+it (`gh pr view 12 --repo owner/repo`, an address, `Closes https://github.com/owner/repo/issues/12` in a commit message), and
+when a file you vouched for names it. Nothing a program printed, a web page said or the model wrote in
+a reply is read, so an address in the output of `gh pr view` is not listed, and an issue the model
+creates with `gh issue create` is listed once a later line or call names its number. An address is listed as the issue or pull request itself, with anything after its number dropped, and the word `owner/repo#12` is not read. A bare `#12` names
+no repository and is read only after `gh pr`, `gh issue` or a word such as `Closes`, in the repository of
+`--repo` or `-R`, else of your own link. Once a page or an untrusted file has been read in a turn, the
+model's later commands add nothing to the list, and what you type still does. The session keeps the
+first 500 and its record keeps them for a resume and a fork. `/clear` starts a session that has met none.
+
+Typed while a turn runs, each answers at once with what the turn has found so far. Neither takes an
+argument: `/issues` or `/prs` followed by words is a prompt, and `/issues` is not `/issue`.
+
 ## `/compact [focus]`
 
 Summarises the conversation so far and keeps the recent part, on demand, at any size, without
@@ -1366,17 +1435,17 @@ does, and `bravebot reply <id> "text"` sends it its next prompt. `bravebot sessi
 
 A background session holds a question it would ask until someone attaches, and a rule in a settings
 file that allows something does not answer for you there. Stopping it, or leaving it idle for an
-hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again in the
-mode every session opens in.
+hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again,
+asking.
 
 Inside an attached session, `/detach` ends the attachment and nothing else. See
 [Sessions in the background](../using/sessions.md#sessions-in-the-background).
 
-It is refused, with a line saying why and the session carrying on, in bypass, in an incognito
+It is refused, with a line saying why and the session carrying on, in bypass or auto, in an incognito
 session, before the session has a record to hand over (send a prompt first), in a session started
 with an option `--bg` also refuses (such as `--no-shell` or `--settings`), and while a loop, a goal
 or a watch is running, which the background session does not run. It is also refused after `/sandbox`
-moved the mode: a background session starts in the mode every session opens in, so the line says
+moved the mode: a background session starts asking, so the line says
 `/bg` is refused because `/sandbox` moved this session, and to run `/sandbox` with the mode that
 session starts in first. Typed while a turn runs it
 waits for the turn to end. The word takes nothing after it: `/bg now` is sent as a prompt.
@@ -1639,7 +1708,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
@@ -1723,7 +1792,8 @@ Review $1 for races, with attention to $ARGUMENTS.
   its key or name. Nothing is chosen until you press Enter on a row, and Esc keeps the current
   model. A name the list lacks is said. Under `--agent` with a definition that names a model the
   picker does not open, as `/model` does not. A file with both `agent` and `model`, or a value of
-  more than one word, is refused. `/model <name>` stays a prompt.
+  more than one word, is refused. `/model <name>` stays a prompt, and the row under the box says so
+  while its turn runs.
 - Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
   and a file whose text begins with a command word or would run an MCP prompt is refused, so no file
   carries out a command.

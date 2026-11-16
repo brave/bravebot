@@ -1318,6 +1318,31 @@ pub fn managed_refusal(managed: &Managed, server: bravebot_config::Server<'_>) -
     })
 }
 
+/// One sentence for each entry of the managed file's `mcp.allow` and `mcp.deny` that is neither a
+/// host nor a command, naming the file, the list and the entry as the file spelled it (SERVERS-12).
+///
+/// The entry is the administrator's own text and is drawn as a picture where it holds a control or
+/// a character that draws as nothing. Nothing is said where the file is absent or every entry is
+/// usable.
+pub fn managed_entries_unusable(managed: &Managed) -> Vec<String> {
+    let Some(path) = managed.path() else {
+        return Vec::new();
+    };
+    let path = crate::confirm::printable_spelled(&path.display().to_string());
+    managed
+        .server_entries_unusable()
+        .map(|(list, entry)| {
+            t!(
+                managed_entry_unusable,
+                path = path.as_str(),
+                list = list,
+                entry = crate::confirm::printable_spelled(entry)
+            )
+            .to_string()
+        })
+        .collect()
+}
+
 /// A managed entry as its file's author would find it again.
 pub fn entry(rule: &Rule) -> String {
     match rule {

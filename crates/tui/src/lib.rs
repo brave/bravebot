@@ -79,6 +79,7 @@ pub mod select;
 pub mod sessions_keys;
 pub mod sessions_screen;
 pub mod sessions_view;
+pub mod sidebar_prompt;
 pub mod skills;
 pub mod state;
 pub mod status;

@@ -137,6 +137,22 @@ fn a_checkout_of_its_own_under(home: &Path) -> PathBuf {
     here
 }
 
+/// The temporary directory a run is given: a sibling of `home`, so it holds none of the stand-ins a
+/// test plants and is not part of the home a test inspects.
+///
+/// The search for programs always leaves out the system temporary directory (SANDBOX-30). From a
+/// checkout under it, as a clone into `$TMPDIR` is, every stand-in under `target/test-scratch`
+/// would be left out with it and not found.
+fn a_temporary_directory_beside(home: &Path) -> PathBuf {
+    let name = home
+        .file_name()
+        .expect("a home with a name")
+        .to_string_lossy();
+    let temporary = home.with_file_name(format!("{name}-tmp"));
+    std::fs::create_dir_all(&temporary).expect("create a temporary directory");
+    temporary
+}
+
 /// The same, started in a directory of the test's choosing.
 ///
 /// The working directory is where a checkout's `.bravebot` is found, and [`bravebot`] leaves it
@@ -184,6 +200,7 @@ fn prepared(
     command
         .env_clear()
         .env("HOME", home)
+        .env("TMPDIR", a_temporary_directory_beside(home))
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
         .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
@@ -4406,11 +4423,13 @@ fn an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not(
     );
 }
 
-/// CLI-1: `--auto` is refused beside the bypass flag, beside `--accept-edits`, and where there is
-/// no one-shot run to open in the mode, each with the argument status and nothing sent to the
-/// gateway.
+/// CLI-1, AUTO-1: `--auto` is refused beside the bypass flag and beside `--accept-edits`, on a line
+/// that starts a session as on one that starts a run, and where there is neither a one-shot run nor a
+/// session in the terminal to open in the mode, each with the argument status and nothing sent to
+/// the gateway. A line that starts a session is refused here too when it also names another mode,
+/// which is what keeps `--auto` from being read as one flag among two.
 #[test]
-fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
+fn auto_is_refused_with_the_other_mode_flags_and_where_nothing_opens_in_it() {
     let gateway = a_gateway_writing("out.txt", "hi");
     let scratch = Scratch::new("cli-running-auto-refused").with_settings(&settings_for(&gateway));
     for (arguments, says) in [
@@ -4422,9 +4441,22 @@ fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
             &["--auto", "--accept-edits", "-p", "x"][..],
             "--accept-edits",
         ),
+        (
+            &["--auto", "--dangerously-skip-permissions"][..],
+            "--dangerously-skip-permissions",
+        ),
+        (&["--auto", "--accept-edits"][..], "--accept-edits"),
+        (
+            &["--auto", "--resume", "--accept-edits"][..],
+            "--accept-edits",
+        ),
         (&["--auto", "--plain"][..], "one-shot"),
         (&["--auto", "--bg", "x"][..], "one-shot"),
-        (&["--auto"][..], "one-shot"),
+        (&["--auto", "doctor"][..], "one-shot"),
+        (
+            &["--auto", "--handle-uri", "bravebot://open"][..],
+            "one-shot",
+        ),
     ] {
         let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, arguments);
         let (_, stderr) = said(&output);
@@ -4440,6 +4472,33 @@ fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
         "a refused line sent a request"
     );
     assert!(!scratch.path.join("out.txt").exists());
+}
+
+/// AUTO-1: `permissions.startInAuto` in the person's own file opens sessions in auto and touches
+/// no one-shot run, which asks as it did, so a write nobody can approve is refused on status 4 and
+/// the file is not written. The fault it rejects is the setting read where a run chooses its mode,
+/// which would let a person's file make every unattended run write.
+#[test]
+fn the_setting_that_opens_sessions_in_auto_leaves_a_one_shot_run_asking() {
+    let gateway = a_gateway_asking_for_a_write();
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings");
+    settings["permissions"] = serde_json::json!({"startInAuto": true});
+    let scratch =
+        Scratch::new("cli-running-start-in-auto-one-shot").with_settings(&settings.to_string());
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a one-shot run wrote under a setting that is for sessions"
+    );
 }
 
 /// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
@@ -5263,6 +5322,62 @@ fn doctor_names_a_top_level_key_it_does_not_read() {
     assert!(
         stdout.contains("AWS_REGION"),
         "the file stopped applying where one of its keys went unread: {stdout}"
+    );
+}
+
+/// BACKEND-36, RUN-28 and SANDBOX-25 from the process that reads the file: each restriction that
+/// names nothing is said by `doctor` with the file that holds it, and the value is not.
+///
+/// One file with the four entries the issue reports: a misspelled key inside each of the three
+/// blocks, Claude Code's `disableBypassPermissionsMode`, and a `denyWrite` that starts with
+/// `$HOME`. The bypass line has to name `permissions.bypassUnreachable`, the key that does the job,
+/// and the `$HOME` entry has to be reported as not in force and not listed as a path that is.
+///
+/// The `scrubEnv` whitespace needs no line: the name is read without it, so the stage loses the
+/// variable, which `a_name_listed_with_trailing_whitespace_is_withheld_as_the_name` holds.
+#[test]
+fn doctor_names_a_restriction_that_names_nothing() {
+    let scratch = Scratch::new("cli-running-unread-inside").with_settings(
+        r#"{"permissions": {"disableBypassPermissionsMode": "disable"},
+            "sandbox": {"filesystem": {"denyread": ["~/.config/gh"],
+                                       "denyWrite": ["$HOME/.config/gh"]}},
+            "run": {"scrubenv": ["a-value-nothing-else-prints"]}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    let file = scratch.path.join(".bravebot").join("settings.json");
+    for key in [
+        "permissions.disableBypassPermissionsMode",
+        "sandbox.filesystem.denyread",
+        "run.scrubenv",
+    ] {
+        assert!(
+            stdout.contains(&format!("{key} in {}", file.display())),
+            "{key} was read and discarded with nothing said: {stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("permissions.bypassUnreachable"),
+        "the bypass key was not pointed at the key that makes bypass unreachable: {stdout}"
+    );
+    assert!(
+        stdout.contains("denyWrite $HOME/.config/gh is not in force"),
+        "a denyWrite that starts with a variable was listed as in force: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a-value-nothing-else-prints"),
+        "the report printed what the key was set to: {stdout}"
     );
 }
 
@@ -6141,6 +6256,7 @@ fn in_a_terminal_command(
     terminal
         .env_clear()
         .env("HOME", home)
+        .env("TMPDIR", a_temporary_directory_beside(home))
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
         .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
@@ -7914,6 +8030,46 @@ fn doctor_names_the_file_of_a_checkouts_endpoints_that_decide_nothing() {
         );
     }
     assert!(!stdout.contains("attacker-"), "{stdout}");
+}
+
+/// BACKEND-33: a checkout's `env` block naming the default model decides nothing, so `doctor`
+/// names the checkout's file as one that is not obeyed and reports the model the person's own
+/// layers and the build settle on, not the one the checkout named.
+#[test]
+fn doctor_names_the_file_of_a_checkouts_default_model_that_decides_nothing() {
+    let scratch = Scratch::new("cli-running-doctor-default-model-checkout");
+    let cwd = a_checkout_saying(
+        &scratch,
+        r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "attacker-chosen-model"}}"#,
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let file = Path::new("checkout")
+        .join(".bravebot")
+        .join("settings.json");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("BRAVEBOT_DEFAULT_MODEL in") && line.contains("is not obeyed"))
+        .unwrap_or_else(|| panic!("doctor did not report the default model: {stdout}{stderr}"));
+    assert!(
+        line.contains(&file.display().to_string()),
+        "the line did not name the checkout's file: {line}"
+    );
+    assert!(
+        !stdout.contains("attacker-chosen-model"),
+        "doctor reported the checkout's model: {stdout}"
+    );
 }
 
 /// A checkout's `summaryModel` is dropped and `doctor` names the checkout's file, so whoever wrote
@@ -15966,6 +16122,11 @@ impl Drop for ShortHome {
     fn drop(&mut self) {
         let _ = bravebot(&self.0, &[], &["sessions", "stop", "3f2a9c1e"]);
         let _ = std::fs::remove_dir_all(&self.0);
+        // The siblings `a_checkout_of_its_own_under` and `a_temporary_directory_beside` make.
+        let name = self.0.file_name().unwrap_or_default().to_string_lossy();
+        for sibling in [format!("{name}-run-here"), format!("{name}-tmp")] {
+            let _ = std::fs::remove_dir_all(self.0.with_file_name(sibling));
+        }
     }
 }
 
@@ -21778,8 +21939,7 @@ const PAST_THE_UNWATCHED_BOUND: usize = bravebot_agent::turn::MAX_TOOL_ROUNDS + 
 /// its own.
 ///
 /// The listing alternates between two spellings of the directory, because the same call three
-/// times in a row is held and put to a person (TURN-9), and a session in lines has no one to
-/// answer.
+/// times in a row is held and not run (TURN-9), and the run would go on refusing it.
 fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
     a_gateway_that_lists_until_reporting(rounds, None)
 }
@@ -25264,6 +25424,44 @@ fn a_link_that_asks_for_more_or_is_switched_off_starts_nothing() {
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stderr.contains("deepLinks"), "{stderr}");
+
+    // A checkout's file may switch links off over a home that says nothing, and may not switch them
+    // on over the person's `false`: both are refused for the setting, before the link is read.
+    for (home_setting, checkout_setting, status, says) in [
+        (
+            r#""deepLinks": false,"#,
+            r#"{"deepLinks": true}"#,
+            3,
+            "deepLinks",
+        ),
+        ("", r#"{"deepLinks": false}"#, 3, "deepLinks"),
+        ("", r#"{"deepLinks": true}"#, 2, "terminal"),
+    ] {
+        let name = format!(
+            "cli-running-handle-uri-checkout-{status}-{}",
+            home_setting.len()
+        );
+        let scratch = Scratch::new(&name)
+            .with_settings(&settings_for(&gateway).replacen('{', &format!("{{{home_setting}"), 1))
+            .with_file("checkout/.bravebot/settings.json", checkout_setting);
+        let cwd = scratch.path.join("checkout");
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--handle-uri", "bravebot://open?prompt=hi"],
+        );
+        let (_, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{home_setting} {checkout_setting}: {stderr}"
+        );
+        assert!(
+            stderr.contains(says),
+            "{home_setting} {checkout_setting}: {stderr}"
+        );
+    }
 
     assert!(
         gateway.asked.try_recv().is_err(),

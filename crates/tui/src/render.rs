@@ -314,22 +314,31 @@ fn placeholder() -> &'static str {
     t!(input_placeholder)
 }
 
-/// Replace control characters, so drawn text cannot move the cursor or recolour the screen.
+/// Draw text so it can neither act on the terminal nor hide or reorder part of a row.
 ///
 /// The interface's structure is drawn by this module: the margin down a quarantine block, the `!`
 /// before a command, the colour that says which is which. An escape sequence in the text would let
 /// the text draw those instead, and a forged margin is worse than no margin, since the whole point
 /// of drawing one is that content cannot.
 ///
-/// Everything the terminal would act on becomes a visible glyph, so what is on the screen stays a
-/// faithful record of the bytes without being able to act. A tab is replaced like the rest, since
-/// ratatui drops it without drawing anything. Callers that lay a tab out as width do so before
-/// this, and lines are already split, so no newline reaches it.
+/// Every control character becomes its picture, so what is on the screen stays a faithful record
+/// of the bytes without being able to act. A tab is replaced like the rest, since ratatui drops it
+/// without drawing anything. Callers that lay a tab out as width do so before this, and lines are
+/// already split, so no newline reaches it.
 ///
-/// This is `bravebot_agent::confirm::printable_with_tab_pictured`, the one implementation the
-/// approval text and the command line share, named `printable` here so the module's callers read
-/// as they did.
-pub(crate) use bravebot_agent::confirm::printable_with_tab_pictured as printable;
+/// Then each character [`bravebot_core::invisible::draws_as_nothing`] holds (a bidirectional
+/// control, a zero-width character, a variation selector, a tag character) is written out as
+/// `‹U+XXXX›` by [`bravebot_core::invisible::spelled`]. None of them is a control character, so
+/// without this a bidirectional control in a name would reorder the row and a zero-width or tag
+/// character would hide in it (LAYER-3). Both steps are
+/// [`bravebot_agent::confirm::printable_spelled_with_tab_pictured`], the tab variant of what the
+/// command line's `progress::printable` and the desktop bridge draw through. An emoji's joiner and
+/// variation selector are written out too.
+///
+/// A map from characters to characters: no branch is taken on the text.
+pub(crate) fn printable(text: &str) -> String {
+    bravebot_agent::confirm::printable_spelled_with_tab_pictured(text)
+}
 
 /// Lay styled text out behind a margin, one drawn row at a time.
 ///
@@ -1038,7 +1047,14 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     frame.render_widget(Paragraph::new(beneath), areas[4]);
     laid.targets
         .extend(queued_prompts(session, width, offered_height, areas[4]));
-    let (hints, taken) = draw_hint(frame, hint_row, session);
+    // Where the frame drew the button that returns to the tail it took a row from the transcript, which
+    // is a row more below the view than the session counted before the frame, so the line says the
+    // count the button does and the two never differ (VIEW-27, VIEW-45).
+    let below = match (laid.jump, laid.window) {
+        (Some(_), Some(window)) => laid.rows.saturating_sub(window.top + window.area.height),
+        _ => session.rows_below(),
+    };
+    let (hints, taken) = draw_hint(frame, hint_row, session, below);
     laid.targets.extend(hints);
     laid.hint_row = Some(crate::state::HintRow {
         area: hint_row,
@@ -1157,11 +1173,28 @@ fn inside_the_border(area: Rect) -> Rect {
 }
 
 /// The part of the transcript's pane a selection can reach. The scrollbar is chrome and not text, so
-/// the column it is in is left out (VIEW-39).
+/// the column it is in is left out (VIEW-39), and so are the row of a prompt drawn above the view
+/// (VIEW-44) and the row of the button that returns to the tail (VIEW-45), which are no rows of the
+/// transcript.
 fn text_beside_the_bar(laid: &Laid, pane: Rect) -> Rect {
-    match laid.bar {
+    let pane = match laid.bar {
         Some(_) => Rect {
             width: pane.width.saturating_sub(1),
+            ..pane
+        },
+        None => pane,
+    };
+    let pane = match laid.pinned {
+        Some(row) => Rect {
+            y: row.bottom(),
+            height: pane.bottom().saturating_sub(row.bottom()),
+            ..pane
+        },
+        None => pane,
+    };
+    match laid.jump {
+        Some(row) => Rect {
+            height: row.y.saturating_sub(pane.y),
             ..pane
         },
         None => pane,
@@ -3360,7 +3393,9 @@ mod tests {
         /// transcript and scrolling it, from the bottom and from every row held above it, at a
         /// width where lines wrap and one where they do not. With the mouse captured the last
         /// column is the scrollbar (VIEW-39), so the picture is the whole transcript wrapped to one
-        /// column fewer, with that column left out.
+        /// column fewer, with that column left out. Where a prompt is drawn above the view
+        /// (VIEW-44), the picture is of the rows under it, and the row above them is that prompt.
+        /// Where a button is drawn under the view (VIEW-45), the picture is of the rows above it.
         #[test]
         fn drawing_the_visible_slice_matches_wrapping_the_whole_transcript() {
             let reference = |session: &Session, width: u16, height: u16| -> String {
@@ -3395,6 +3430,8 @@ mod tests {
                 for width in [40u16, 90] {
                     let height = 12;
                     let text_width = if captured { width - 1 } else { width };
+                    // The rows of the view, from the first row under a prompt drawn above it to the
+                    // last one above the button drawn under it, and the frame's record.
                     let area = |session: &Session| {
                         let mut terminal =
                             Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -3403,28 +3440,50 @@ mod tests {
                             .draw(|frame| laid = draw_transcript(frame, frame.area(), session))
                             .expect("draw succeeds");
                         let buffer = terminal.backend().buffer();
-                        let drawn: String = (0..height)
+                        let first = laid.pinned.map_or(0, |row| row.bottom());
+                        let last = laid.jump.map_or(height, |row| row.y);
+                        let drawn: String = (first..last)
                             .flat_map(|row| (0..text_width).map(move |column| (row, column)))
                             .map(|(row, column)| buffer[(column, row)].symbol())
                             .collect();
+                        if let Some(row) = laid.pinned {
+                            let above: String = (0..text_width)
+                                .map(|column| buffer[(column, row.y)].symbol())
+                                .collect();
+                            assert!(above.starts_with("> prompt "), "{above:?}");
+                        }
+                        if let Some(row) = laid.jump {
+                            let button: String = (0..text_width)
+                                .map(|column| buffer[(column, row.y)].symbol())
+                                .collect();
+                            assert!(
+                                button.trim().starts_with(&t!(jump_to_bottom).to_string()),
+                                "{button:?}"
+                            );
+                        }
                         (drawn, laid)
                     };
                     let (bottom, laid) = area(&session);
                     assert_eq!(
                         bottom,
-                        reference(&session, text_width, height),
+                        reference(&session, text_width, laid.height),
                         "at the bottom, captured {captured}"
                     );
                     session.note_layout(laid);
+                    let (mut pinned, mut jumped) = (0, 0);
                     for held in [1u16, 2, 3, 7, 40, 301, 999] {
                         session.scroll = held;
-                        let (drawn, _) = area(&session);
+                        let (drawn, laid) = area(&session);
+                        pinned += usize::from(laid.pinned.is_some());
+                        jumped += usize::from(laid.jump.is_some());
                         assert_eq!(
                             drawn,
-                            reference(&session, text_width, height),
+                            reference(&session, text_width, laid.height),
                             "held {held} rows up at {width} columns, captured {captured}"
                         );
                     }
+                    assert!(pinned > 0, "no view held a prompt above it");
+                    assert!(jumped > 0, "no view held a button under it");
                     session.scroll = 0;
                 }
             }
@@ -5716,22 +5775,27 @@ mod tests {
     /// sequence and a halfwidth voiced mark each take more than a count of characters says. Rejects:
     /// a cut by characters, which came to more than the room, so a path in wide characters lost the
     /// end of its name to the row's edge and a hover line ran past it. The end of a path and the start
-    /// of an address are what is kept, at every room.
+    /// of an address are what is kept, at every room. Both cuts return the text as [`printable`]
+    /// draws it, so the kept ends are compared with that: an emoji's variation selector is written
+    /// out as `‹U+FE0F›` before the cut is made, and an emoji two cells wide with no selector is
+    /// what still reaches it whole.
     #[test]
     fn a_cut_is_made_by_columns_whatever_the_characters_are() {
         use crate::wrap::display_width;
         let names = [
             "/\u{65e5}\u{672c}\u{8a9e}/\u{30d5}\u{30a1}\u{30a4}\u{30eb}\u{540d}/shot.png",
             "/\u{2764}\u{fe0f}\u{2764}\u{fe0f}\u{2764}\u{fe0f}/\u{2764}\u{fe0f}\u{2764}\u{fe0f}.png",
+            "/\u{1f600}\u{1f600}\u{1f600}/\u{1f600}\u{1f600}.png",
             "/\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}/\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}.png",
             "/e\u{301}e\u{301}e\u{301}e\u{301}/e\u{301}e\u{301}e\u{301}e\u{301}.png",
         ];
         for name in names {
-            let end: String = crate::wrap::cluster_strs(name)
+            let drawn = printable(name);
+            let end: String = crate::wrap::cluster_strs(&drawn)
                 .last()
                 .map(|(cluster, _)| cluster.to_string())
                 .expect("a cluster");
-            let start: String = crate::wrap::cluster_strs(name)
+            let start: String = crate::wrap::cluster_strs(&drawn)
                 .first()
                 .map(|(cluster, _)| cluster.to_string())
                 .expect("a cluster");
@@ -5740,7 +5804,7 @@ mod tests {
                 assert!(display_width(&tail) <= room, "{name:?} in {room}: {tail:?}");
                 let head = head_of(name, room);
                 assert!(display_width(&head) <= room, "{name:?} in {room}: {head:?}");
-                if display_width(name) > room {
+                if display_width(&drawn) > room {
                     assert!(
                         tail.starts_with('\u{2026}') && tail.ends_with(&end),
                         "{tail:?}"
@@ -5750,7 +5814,10 @@ mod tests {
                         "{head:?}"
                     );
                 } else {
-                    assert_eq!((tail.as_str(), head.as_str()), (name, name));
+                    assert_eq!(
+                        (tail.as_str(), head.as_str()),
+                        (drawn.as_str(), drawn.as_str())
+                    );
                 }
             }
         }
@@ -5775,6 +5842,79 @@ mod tests {
                 assert!(display_width(&tail) <= room, "{text:?} in {room}: {tail:?}");
             }
         }
+    }
+
+    /// A bidirectional control, a zero-width character and a tag character draw as no columns raw
+    /// and as `‹U+XXXX›` once written out, eight columns or more each. Rejects: `head_of` or
+    /// `tail_of` measuring the text before it is spelled, which returns a row of them whole because
+    /// its raw width is zero and lets it run past the room, and a cut or `fitting` that leaves one
+    /// of them raw.
+    #[test]
+    fn a_cut_fits_the_room_once_characters_that_draw_as_nothing_are_written_out() {
+        use crate::wrap::display_width;
+        for text in [
+            "\u{202e}\u{200b}".repeat(12),
+            "a\u{2066}b\u{2069}".repeat(12),
+            "\u{e0041}\u{e0042}x".repeat(12),
+        ] {
+            for room in 2..=40 {
+                let head = head_of(&text, room);
+                let tail = tail_of(&text, room);
+                let fit = fitting(&printable(&text), room);
+                for (cut, drawn) in [("head", &head), ("tail", &tail)] {
+                    assert!(
+                        display_width(drawn) <= room,
+                        "{cut} of {text:?} in {room}: {drawn:?}"
+                    );
+                }
+                // `fitting` does not cut: it leaves every cluster no wider than the room, and
+                // `marked_rows` breaks the rest over rows.
+                assert!(
+                    crate::wrap::clusters(&fit).all(|(_, columns)| columns <= room),
+                    "fitting of {text:?} in {room}: {fit:?}"
+                );
+                for (cut, drawn) in [("head", &head), ("tail", &tail), ("fitting", &fit)] {
+                    assert!(
+                        !drawn
+                            .chars()
+                            .any(bravebot_core::invisible::draws_as_nothing),
+                        "{cut} of {text:?} in {room} holds a character that draws as nothing: {drawn:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every character `bravebot_core::invisible::draws_as_nothing` holds is written out by the
+    /// terminal client's `printable`, alone and beside a control character on either side, and
+    /// nothing it draws is a control character or one that draws as nothing. Walks every code point,
+    /// so a character added to the core list is drawn here without being named. Rejects: a
+    /// `printable` that pictures control characters only, and one with its own shorter list.
+    #[test]
+    fn printable_writes_out_every_character_that_draws_as_nothing() {
+        use bravebot_core::invisible::draws_as_nothing;
+        let mut checked = 0;
+        for point in 0..=0x10_FFFF_u32 {
+            let Some(c) = char::from_u32(point) else {
+                continue;
+            };
+            if !draws_as_nothing(c) {
+                continue;
+            }
+            checked += 1;
+            for text in [c.to_string(), format!("\u{1b}{c}\u{85}")] {
+                let drawn = printable(&text);
+                assert!(
+                    !drawn.chars().any(|d| draws_as_nothing(d) || d.is_control()),
+                    "{text:?} is drawn as {drawn:?}"
+                );
+                assert!(
+                    drawn.contains(&format!("U+{point:04X}")),
+                    "{text:?} is drawn as {drawn:?}, which does not name it"
+                );
+            }
+        }
+        assert!(checked > 100, "only {checked} characters were checked");
     }
 
     /// A user about to send a file should be able to see which file: `[Image #1]` alone does not
@@ -6041,6 +6181,115 @@ mod tests {
             let hint = hint_row_at(&session, 80, 24);
             assert!(
                 hint.contains("Sent as a prompt; ctrl-c stops it, /exit leaves"),
+                "{mode:?}: {hint}"
+            );
+            let named =
+                crate::status::named_mode(mode, true).expect("every mode but asking is named");
+            assert!(
+                hint.contains(named),
+                "{mode:?} (vi: {vi}) was cleared by the note: {hint}"
+            );
+            if vi {
+                assert!(hint.contains("INSERT"), "{mode:?} lost the vi mode: {hint}");
+            }
+        }
+    }
+
+    /// A command the table gives no argument, typed with words after it, is a prompt, and the person
+    /// who typed it may have meant the command. The row under the box says the line went to the
+    /// model, and that it was not the command, for as long as the turn it began runs (CMD-2).
+    #[test]
+    fn the_row_under_the_box_says_a_command_given_words_went_to_the_model_as_a_prompt() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let said = "Prompt sent; ctrl-c stops it; bare word runs it";
+        for line in ["/model gpt-5", "/undo the last change", "/lsp servers"] {
+            let mut session = typed(line);
+            let before = hint_row_at(&session, 90, 24);
+            assert!(
+                !before.contains(said),
+                "{line:?}: said before Enter: {before}"
+            );
+
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert!(session.a_turn_is_running(), "{line:?} began no turn");
+            let sent = hint_row_at(&session, 90, 24);
+            assert!(sent.contains(said), "{line:?}: {sent}");
+            assert!(
+                !sent.contains("/exit leaves"),
+                "{line:?} drew the leave word's note: {sent}"
+            );
+
+            session.complete("done", Vec::new(), 0);
+            let after = hint_row_at(&session, 90, 24);
+            assert!(
+                !after.contains(said),
+                "{line:?}: left up after the turn: {after}"
+            );
+        }
+    }
+
+    /// The note is about a command typed with words after it and no other line: the bare command is
+    /// the command and begins no turn, a command that takes an argument takes the words, and a prompt
+    /// that merely contains a command is a question like any other, so a note saying it was
+    /// mistaken for a command would be wrong.
+    #[test]
+    fn the_row_under_the_box_says_nothing_of_a_line_that_is_not_a_command_given_words() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for line in [
+            "/rename foo",
+            "/models gpt-5",
+            "why is /model slow",
+            "how do I exit",
+        ] {
+            let mut session = typed(line);
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+
+            let hint = hint_row_at(&session, 90, 24);
+            assert!(!hint.contains("Prompt sent"), "{line:?}: {hint}");
+        }
+    }
+
+    /// The note takes its room ahead of the parts of the line, as the leave word's does, and one
+    /// permission mode name is the part given up last. A note too wide for eighty columns clears the
+    /// whole left side, so the person reading it would be told it was a prompt and not told that
+    /// every write is going through.
+    #[test]
+    fn the_note_on_a_command_given_words_leaves_the_permission_mode_on_an_eighty_column_row() {
+        use bravebot_agent::PermissionMode;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (mode, vi) in [
+            (PermissionMode::Bypass, false),
+            (PermissionMode::AcceptEdits, true),
+            (PermissionMode::Plan, true),
+        ] {
+            let mut session = Session::new("kernel-enforced").starting_in_bypass();
+            while session.permission_mode() != mode {
+                session.cycle_permission_mode();
+            }
+            if vi {
+                session.choose_editing(crate::vim::Editing::Vi);
+            }
+            for c in "/model gpt-5".chars() {
+                session.type_char(c);
+            }
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert!(session.a_turn_is_running(), "the line did not start a turn");
+
+            let hint = hint_row_at(&session, 80, 24);
+            assert!(
+                hint.contains("Prompt sent; ctrl-c stops it; bare word runs it"),
                 "{mode:?}: {hint}"
             );
             let named =
@@ -7012,6 +7261,256 @@ mod tests {
         assert!(
             hint.contains("esc to cancel"),
             "this is not the shell row: {hint}"
+        );
+    }
+
+    /// Every row of the screen at `width` columns, top to bottom.
+    fn screen_rows(session: &Session, width: u16) -> Vec<String> {
+        let height = 24;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The row above the box that says the session is still active, and the row after it.
+    fn the_still_active_row(session: &Session, width: u16) -> Option<(String, String)> {
+        let rows = screen_rows(session, width);
+        let at = rows
+            .iter()
+            .position(|row| row.contains(&t!(standing_label).to_string()))?;
+        Some((rows[at].clone(), rows[at + 1].clone()))
+    }
+
+    fn a_session_whose_turn_has_ended() -> Session {
+        let mut session = Session::new("kernel-enforced");
+        session.type_char('a');
+        session.submit();
+        session.complete("done", Vec::new(), 0);
+        session
+    }
+
+    /// A turn a loop's first tick started has ended, and the loop is waiting for the next one. The
+    /// tick comes first because it is what starts the turn, and a turn starting is what clears the
+    /// line that says the last one ended.
+    fn a_session_whose_turn_has_ended_in_a_loop() -> Session {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        session
+    }
+
+    fn a_watch_on(session: &mut Session, path: &str) {
+        session.arm_watch(
+            path,
+            "/work",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+    }
+
+    /// The end of a turn says `done`, and a loop that goes on after it was a dim part at the far
+    /// end of the bottom row. The row that says it is the one against the box, under the line that
+    /// says the turn is over, because that is the pair somebody reads to decide whether to walk
+    /// away.
+    #[test]
+    fn a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line() {
+        let session = a_session_whose_turn_has_ended_in_a_loop();
+
+        let rows = screen_rows(&session, 120);
+        let done = rows
+            .iter()
+            .position(|row| row.contains("done ("))
+            .expect("the turn's own line is gone");
+        let (row, below) = the_still_active_row(&session, 120).expect("no row says it is active");
+        assert_eq!(
+            rows[done + 1],
+            row,
+            "the row is not directly under the end of the turn: {rows:?}"
+        );
+        assert!(row.contains("looping, next in"), "{row}");
+        assert!(below.contains('╭'), "the box does not follow it: {below}");
+    }
+
+    /// A session with nothing going on has nothing to add to `done`, and a row that said it was
+    /// active anyway would be the first thing somebody learns to ignore. The same goes for one
+    /// whose loop, watch and job have all ended.
+    #[test]
+    fn a_session_with_nothing_going_on_has_no_still_active_row() {
+        let session = a_session_whose_turn_has_ended();
+        assert_eq!(the_still_active_row(&session, 120), None);
+        assert!(
+            screen_rows(&session, 120)
+                .iter()
+                .any(|row| row.contains("turn 1 done"))
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        job_event(&mut session, started("job:1"));
+        assert!(the_still_active_row(&session, 120).is_some());
+        job_event(
+            &mut session,
+            bravebot_agent::report::JobEvent::Ended {
+                name: "job:1".to_string(),
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+            },
+        );
+        assert_eq!(the_still_active_row(&session, 120), None);
+    }
+
+    /// Each thing that goes on without a key says its own words. A row that named only loops would
+    /// leave a watch or a job, the two the hint line never reported at all or only dimly, as
+    /// invisible as before.
+    #[test]
+    fn each_kind_of_thing_still_active_is_named_in_the_row() {
+        let mut session = a_session_whose_turn_has_ended();
+        job_event(&mut session, started("job:1"));
+        let (row, _) = the_still_active_row(&session, 120).expect("a job is running");
+        assert!(row.contains("1 in the background"), "{row}");
+        assert!(
+            !row.contains("looping") && !row.contains("watching"),
+            "{row}"
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        a_watch_on(&mut session, "build.log");
+        let (row, _) = the_still_active_row(&session, 120).expect("a watch is armed");
+        assert!(row.contains("watching 1 file"), "{row}");
+        assert!(
+            !row.contains("looping") && !row.contains("in the background"),
+            "{row}"
+        );
+        assert!(
+            !row.contains("build.log"),
+            "the row named the path the watch was armed on: {row}"
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        session.start_after(
+            crate::loops::request_after("5m check the deploy"),
+            std::time::Instant::now(),
+        );
+        let (row, _) = the_still_active_row(&session, 120).expect("a line is held");
+        assert!(row.contains("sending in"), "{row}");
+        assert!(
+            !row.contains("looping"),
+            "an /after line was drawn as a loop: {row}"
+        );
+
+        let mut session = a_session_whose_turn_has_ended();
+        a_watch_on(&mut session, "build.log");
+        job_event(&mut session, started("job:1"));
+        let (row, _) = the_still_active_row(&session, 120).expect("both are going on");
+        assert!(
+            row.contains("watching 1 file") && row.contains("1 in the background"),
+            "{row}"
+        );
+    }
+
+    /// While a turn is running the row above the box is the spinner, and the hint line is where a
+    /// loop is named. Both rows at once would read as two things going on. The turn keeps a task
+    /// list, so the area above the box has a row to spare and a wrong implementation that drew the
+    /// row anyway would have somewhere to put it.
+    #[test]
+    fn the_still_active_row_is_not_drawn_while_a_turn_is_running() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.status = Status::Working;
+        session.turns = 1;
+        session.set_todos(bravebot_core::todo::rows(&bravebot_core::todo::List::new(
+            vec![bravebot_core::todo::Item::new(
+                "check the deploy",
+                bravebot_core::todo::Status::Active,
+            )],
+        )));
+        let rows = screen_rows(&session, 120);
+        assert!(
+            rows.iter().any(|row| row.contains("check the deploy")),
+            "the task list was not drawn: {rows:?}"
+        );
+        assert_eq!(the_still_active_row(&session, 120), None);
+    }
+
+    /// A failure leaves the reason under the line that says it failed, and the row that says the
+    /// session is still active sits under both. The reason is the part cut short where the room is
+    /// short, never the row.
+    #[test]
+    fn a_failed_turn_keeps_its_reason_and_gains_the_still_active_row() {
+        let mut session = Session::new("partial");
+        session.type_char('a');
+        session.submit();
+        session.fail(
+            "the model could not be reached",
+            bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        );
+        job_event(&mut session, started("job:1"));
+
+        let rows = screen_rows(&session, 120);
+        let failed = rows
+            .iter()
+            .position(|row| row.contains("turn 1 failed"))
+            .expect("the failure was not reported");
+        let active = rows
+            .iter()
+            .position(|row| row.contains(&t!(standing_label).to_string()))
+            .expect("no row says it is active");
+        assert!(failed < active, "{rows:?}");
+        assert!(
+            rows[failed + 1..active]
+                .iter()
+                .any(|row| row.contains("could not be reached")),
+            "the reason is not between the two: {rows:?}"
+        );
+    }
+
+    /// The row is cut whole at the width. The pointer goes first and a part never loses its end,
+    /// since `1 in the` is a sentence nobody can read; a terminal with room for nothing but the
+    /// label still says the session is active.
+    #[test]
+    fn a_narrow_terminal_gives_up_the_pointer_then_the_parts_whole() {
+        let mut session = a_session_whose_turn_has_ended_in_a_loop();
+        job_event(&mut session, started("job:1"));
+        let pointer = t!(standing_pointer).to_string();
+
+        let (wide, _) = the_still_active_row(&session, 120).expect("room for all of it");
+        assert!(wide.contains(&pointer), "{wide}");
+
+        let (row, _) = the_still_active_row(&session, 70).expect("room for the parts");
+        assert!(!row.contains(&pointer), "{row}");
+        assert!(
+            row.contains("looping, next in") && row.contains("1 in the background"),
+            "{row}"
+        );
+
+        let (row, _) = the_still_active_row(&session, 50).expect("room for one part");
+        assert!(row.contains("looping, next in"), "{row}");
+        assert!(!row.contains("in the background"), "{row}");
+        assert!(!row.contains('…'), "a part was cut at the edge: {row}");
+
+        let (row, _) = the_still_active_row(&session, 20).expect("room for the label");
+        assert!(
+            row.trim_end().ends_with(&t!(standing_label).to_string()),
+            "{row}"
         );
     }
 

@@ -184,7 +184,7 @@ can say so in its answer, where somebody reads it, rather than by going quiet fo
 `verified-by: bravebot_tui::loops::an_interval_within_the_bounds_is_reported_as_unadjusted`
 `verified-by: bravebot_tui::loops::a_wait_a_turn_asked_for_is_held_to_the_bounds`
 `verified-by: bravebot_tui::state::an_interval_outside_the_bounds_is_reported_as_the_one_that_will_happen`
-`verified-by: bravebot_agent::tools::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 
 <a id="LOOP-8"></a>
 ### LOOP-8: where the person gave an interval, the driver keeps it and no turn can change it
@@ -303,12 +303,13 @@ open.
 
 Each tick is announced with the number of its loop, the one `/loop stop` takes, and its own number
 among that loop's ticks, and with how many ticks in a row have reported finding nothing where there
-have been any. Three places say a loop is live, and a session with no loop says nothing about loops in any
+have been any. Four places say a loop is live, and a session with no loop says nothing about loops in any
 of them:
 
 | Where | What it says |
 |---|---|
 | the row under the input box, whichever mode it is in | that a loop is live, or how many are, and when the next tick is due where a moment is known |
+| the row above the box, once a turn has ended ([WATCH-25](watching.md#WATCH-25)) | the same words, with the other things still active and a light that changes every second |
 | `/loop`, with no argument | each loop under its number: the repeated line, the pacing, when its next tick is due, and how to end one |
 | `/status` | a row for each loop under its number where there are several: the repeated line, the pacing, and when its next tick is due |
 
@@ -340,7 +341,7 @@ that has nothing to do, and without it a long watch is twenty identical answers 
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live_in_shell_mode_too`
 `verified-by: bravebot_tui::render::the_loop_part_names_a_moment_only_while_one_is_still_ahead`
-`verified-by: bravebot_tui::app::a_countdown_is_owed_a_frame_once_a_second_and_only_while_a_loop_runs`
+`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_loop_in_a_session_with_none`
 `verified-by: bravebot_tui::state::the_loop_report_says_what_is_repeating_and_how_to_end_it`
 `verified-by: bravebot_tui::state::a_session_with_no_loop_says_so_when_asked`
@@ -515,7 +516,7 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
 `verified-by: bravebot_tui::render::the_hint_line_counts_loops_and_not_a_held_after_line`
 `verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
-`verified-by: bravebot_tui::app::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
+`verified-by: bravebot_tui::app::tests::pasting::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
 `verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_is_due_at_once_when_its_delay_passed_before_the_turn_ended`
 `verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_waits_for_what_is_left_of_its_delay`
 `verified-by: bravebot_tui::app::an_after_line_typed_at_rest_counts_its_delay_from_now`

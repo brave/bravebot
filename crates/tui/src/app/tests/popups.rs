@@ -2,6 +2,8 @@
 //! drawn beneath it.
 
 use super::hints;
+use super::jump;
+use super::pinned;
 use super::scrollbar;
 use super::*;
 use crate::state::Popup;
@@ -193,6 +195,23 @@ pub(super) fn targets() -> Vec<Target> {
             "the scrollbar beside the transcript",
             scrollbar::located_in_the_track,
             scrollbar::bar_acted,
+        ),
+        Target::plain(
+            "the prompt drawn above the view",
+            pinned::located_on_the_pinned_prompt,
+            pinned::went_to_the_prompt,
+        ),
+        Target::plain(
+            "the button that returns a held view to its tail",
+            jump::located_on_the_button,
+            jump::returned_to_the_tail,
+        ),
+        Target::plain(
+            "the face on the opening screen",
+            located_on_the_face,
+            // A click that acted redraws the face. The thread's record of a click is not read here,
+            // since it would carry one session's click into another's check.
+            |_, action| matches!(action, Action::Redraw),
         ),
         Target::plain(
             "a place in the text of the box",
@@ -427,7 +446,7 @@ pub(super) fn targets() -> Vec<Target> {
             "the pull request row of the info panel",
             || {
                 let (session, buffer) = with_a_pull_request_and_an_issue();
-                (session, shown_at(&buffer, "Pull request"))
+                (session, shown_at(&buffer, "brave/bravebot#3200"))
             },
             |_, action| matches!(action, Action::OpenUrl(_)),
         ),
@@ -435,11 +454,28 @@ pub(super) fn targets() -> Vec<Target> {
             "the issue row of the info panel",
             || {
                 let (session, buffer) = with_a_pull_request_and_an_issue();
-                (session, shown_at(&buffer, "Issue"))
+                (session, shown_at(&buffer, "brave/bravebot#2685"))
             },
             |_, action| matches!(action, Action::OpenUrl(_)),
         ),
     ]
+}
+
+/// The opening screen drawn 120 columns by 24 rows, with the face nobody has clicked, and the cell
+/// of the first row of the face that a click finds as the face.
+pub(super) fn located_on_the_face() -> (Session, (u16, u16)) {
+    crate::avatar::reset_pokes();
+    let mut session = Session::new("none");
+    let buffer = drawn(&mut session);
+    let cell = (0..buffer.area.height)
+        .flat_map(|row| (0..buffer.area.width).map(move |column| (row, column)))
+        .find(|&(row, column)| {
+            session
+                .target_at(row, column)
+                .is_some_and(|target| target.hit == crate::state::Hit::Face)
+        })
+        .expect("the opening screen drew no face");
+    (session, cell)
 }
 
 /// A session, 120 columns wide, whose write calls changed `a.rs` `edits` times and then `b.rs` once.

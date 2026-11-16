@@ -27,6 +27,77 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
     path
 }
 
+/// Run `command` in a process group of its own and wait for it to end for at most `deadline`.
+///
+/// A command that has not ended by then is killed together with every program in its group, and the
+/// call panics with `what` in the message, so a program that never exits fails the test that started
+/// it and does not stall the run. The caller names in `what` what was waiting (for example the
+/// variable under test). A command that ends in time returns its status, which the caller judges.
+/// The standard streams are whatever the caller set on `command`.
+///
+/// The group is killed only at the deadline. Whoever starts a program that starts another, as
+/// `xdg-open` starts `xdg-mime`, `xprop` and a handler, gets all of them ended.
+#[cfg(unix)]
+pub(crate) fn status_within(
+    command: &mut std::process::Command,
+    deadline: std::time::Duration,
+    what: &str,
+) -> std::process::ExitStatus {
+    use std::os::unix::process::CommandExt;
+
+    let mut child = command
+        .process_group(0)
+        .spawn()
+        .unwrap_or_else(|error| panic!("{what}: the program did not start: {error}"));
+    let until = std::time::Instant::now() + deadline;
+    loop {
+        if let Some(status) = child.try_wait().expect("the wait on the program") {
+            return status;
+        }
+        if std::time::Instant::now() >= until {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let group = rustix::process::Pid::from_child(&child);
+    let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("{what} did not end within {deadline:?} and was killed with the programs it started");
+}
+
+/// [`status_within`] with the program's standard output and error read back, as
+/// [`std::process::Command::output`] returns them. They are written to files, so a program the
+/// command starts that keeps a stream open after the command ends does not hold the call up.
+#[cfg(unix)]
+pub(crate) fn output_within(
+    command: &mut std::process::Command,
+    deadline: std::time::Duration,
+    what: &str,
+) -> std::process::Output {
+    use std::io::{Read, Seek};
+
+    let mut stdout = tempfile::tempfile().expect("a file for the standard output");
+    let mut stderr = tempfile::tempfile().expect("a file for the standard error");
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout.try_clone().expect("the standard output file"))
+        .stderr(stderr.try_clone().expect("the standard error file"));
+    let status = status_within(command, deadline, what);
+    let read = |file: &mut std::fs::File| {
+        let mut bytes = Vec::new();
+        file.rewind().expect("the start of the file");
+        file.read_to_end(&mut bytes)
+            .expect("what the program wrote");
+        bytes
+    };
+    std::process::Output {
+        status,
+        stdout: read(&mut stdout),
+        stderr: read(&mut stderr),
+    }
+}
+
 /// Foreground inks of the non-space cells on every row of a frame that contains `needle`.
 pub(crate) fn inks_on_row_containing(session: &Session, needle: &str) -> Vec<Color> {
     let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");

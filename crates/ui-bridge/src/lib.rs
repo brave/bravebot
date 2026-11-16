@@ -41,6 +41,7 @@ pub mod allowlist;
 mod answerers;
 pub mod arguments;
 pub mod attached;
+pub mod bots;
 pub mod bridge;
 pub mod bug_report;
 pub mod connectors;

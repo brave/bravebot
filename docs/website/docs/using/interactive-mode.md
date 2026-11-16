@@ -318,6 +318,10 @@ key does not.
 line that is only one of them is sent at the first Enter, and while the turn it starts runs, the row
 beneath the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
 
+A command that takes no argument, typed with words after it, such as `/model gpt-5`, is also sent as
+a prompt at the first Enter, and while its turn runs the row beneath the box says that a prompt was
+sent, that Ctrl-C stops it and that the bare word runs the command.
+
 **A turn you asked to stop says so until it ends.** From the press, the working indicator reads
 "Stopping" ahead of whatever it would otherwise say. A turn ends only once every delegate it started
 has returned, which can take seconds, so while delegates are still running it reads "Stopping, waiting
@@ -397,7 +401,7 @@ Escape still stops the turn.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/todos`, `/thinking`, `/copy`, `/export`, `/btw`, `/loop`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/sidebar`, `/todos`, `/thinking`, `/copy`, `/export`, `/btw`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
@@ -593,6 +597,20 @@ returns. So once the command has run for 10 seconds, the message moves it to the
 key would, and the turn reads your message next. A command, such as `/clear`, or a shell line waiting
 does not move it, since those wait for the turn to end anyway.
 
+**The row above the box says when something is still active.** Once a turn has ended, a live
+[`/loop`](../reference/commands.md#loop-interval-prompt) or `/after` line, a live file watch, or a
+background job still running adds a row under the line that says the turn is done:
+
+```
+  ✓ turn 3 done (12.1k tokens, 41s)
+  ● still active  ·  looping, next in 4m 12s  ·  1 in the background  ·  /status for the list
+```
+
+The light before `still active` goes full and hollow once a second, so the row changes on a screen
+where nothing else does, and it stays full where `NO_MOTION` is set. The row is cut at the width, the
+pointer to `/status` first and then the parts from the end. It names no command, path or output. It is
+not drawn while a turn runs, since the hint line names the same things then.
+
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
@@ -679,7 +697,7 @@ prompt and while a turn runs, and Escape puts it away. Left is the caret's as so
 | Up / Down | move through the list |
 | n / p | in a delegate, step to the next or previous one without going back to the list; in a command, the next or previous command |
 | x | in a delegate that is working, stop that delegate and no other: it answers with what it has and the turn goes on |
-| q, Escape | back to the list from a delegate, then out |
+| q, Escape | back to the list from a row opened from the list, then out. From a row opened without the list (an away recap, a `/recap` or `/btw` answer, a click on a delegate's block) they close the view and put the transcript back where it was, and the footer says `q closes` |
 | Ctrl-C | close the mode, leaving the turn in flight running |
 
 In the transcript itself, each [delegate](../how-it-works.md#delegates) gets a **block of its own**,
@@ -710,7 +728,7 @@ While a turn runs, the newest lines a running job has printed since the model la
 **A command's row says how the run ended**, with the same three marks a delegate's row carries: one
 for a run whose every step exited zero, one for a run a step failed, and the mark of work still going
 for a run stopped at [its deadline](../reference/run-tool.md#a-line-has-a-deadline). Opening
-the row says it in words beside the command, naming the step that failed and its code. A stopped run
+the row says it in words beside the command, naming the step that failed and its code, or the signal that ended it. A step that `SIGPIPE` ended because the next step closed its input is not a failure. A stopped run
 keeps the working mark because that is what it was doing: a server told to serve a page prints as it
 goes and never exits, so a cross beside it would say something about the program that is not true.
 The verdict comes from the exit codes and the clock, never from a line the program printed.

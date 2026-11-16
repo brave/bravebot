@@ -1,4 +1,4 @@
-import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE, readTrust, trustQuestion } from '../../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, BOT_GREETING, COMPOSER_SEND, TRUST_APPROVE, APPROVE_BUTTON, readTrust, trustQuestion } from '../../drive-support.mjs'
 import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
 // A bot, working — which is the only way to show the part that matters.
 //
@@ -43,7 +43,7 @@ export default {
 
     await s.say('Open it', 'A bot has one conversation that carries on, in a folder of its own.', 2.4)
     await s.click(row.locator(BOT_OPEN_BUTTON))
-    await page.locator('[data-test="bot-greeting"]').waitFor()
+    await page.locator(BOT_GREETING).waitFor()
     await page.waitForTimeout(800)
 
     if (await page.locator('.trust').isVisible().catch(() => false)) {
@@ -123,8 +123,8 @@ export default {
       await s.spotlight(card, 2.6)
       await s.unspot()
       await s.shot('13-bot-memory-diff')
-      const approve = card.locator('.confirm-actions .approve:not(.always)').first()
-      await s.click((await approve.count()) ? approve : card.locator('.confirm-actions .approve').first())
+      const approve = card.locator(`${APPROVE_BUTTON}:not(.always)`).first()
+      await s.click((await approve.count()) ? approve : card.locator(APPROVE_BUTTON).first())
       await page.waitForTimeout(900)
     }
 

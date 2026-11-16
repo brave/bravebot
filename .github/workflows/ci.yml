@@ -1070,6 +1070,16 @@ jobs:
             | tee "$RUNNER_TEMP/opener.log"
           grep -q 'test result: ok. 3 passed' "$RUNNER_TEMP/opener.log"
 
+      # INPUT-52 on Windows: the console input records a start-up query read past its replies are
+      # handed to crossterm's event queue in order, and what is no event is counted as lost (#3846).
+      # `1 passed` fails the step if the filter matched nothing after a rename.
+      - name: Test the Windows hand-back of keys read at startup
+        run: |
+          cargo test -p bravebot-tui --locked --lib -- --exact \
+            input::tests::records_a_startup_query_read_are_handed_to_the_event_reader_in_order \
+            | tee "$RUNNER_TEMP/startup-input.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/startup-input.log"
+
   # The tests that ask the volume whether two awkward names are two files, run on the volume that
   # holds names apart that no other host does (#2869, TRUST-2). On every other host `two_files`
   # makes pairs of the names that host holds, so a key step that joins two files NTFS holds apart

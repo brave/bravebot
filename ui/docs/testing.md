@@ -157,6 +157,7 @@ at, that a control keeps keyboard focus through an animation.
 | --- | --- |
 | `pnpm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
 | `pnpm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
+| `node scripts/drive-close-chat.mjs` (after `pnpm run bridge && pnpm exec electron-vite build`) | **Close Chat** on a chat row's right-click menu, through the real menu and command router against a mocked bridge: a chat still working behind the open one is closed from its own row (the agent is told to close its handle, its working mark goes, the open chat stays open), as is a draft behind the open one, whose row id is the draft's and not a record's; the open draft's own row closes it; a row nothing is open for closes nothing |
 | `pnpm run drive:window-fault` | A failure of the page ([DIAG-10](../../docs/specs/diagnostic-log.md#DIAG-10)), in a real window with a real agent and a scratch state directory: the browser refuses one `removeChild` with a `NotFoundError`, as it does when a node React expects to find has gone, and the window shows the fault screen, as an alert, with the error and the components React was drawing, writes one `window.fault` line holding the kind and the error's name and nothing of its message, and comes back on **Reload**. Screenshots in light and dark |
 | `pnpm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
 | `pnpm run drive:columns` | Folding each side column, and what is remembered |
@@ -228,29 +229,58 @@ running it, and do not run one you have not read on a machine whose bots or sess
 about. These launch without `--user-data-dir`. All but `drive`, `drive-packaged` and `drive-smoke`
 launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use the real profile:
 
-`drive`, `drive-ask`, `drive-bot-memory`, `drive-bot-turn`, `drive-bots`, `drive-columns`,
-`drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
-`drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`, `drive-tree` and `drive-turn`.
+`drive`, `drive-ask`, `drive-columns`, `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`,
+`drive-packaged`, `drive-panels`, `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`,
+`drive-tree` and `drive-turn`.
 
 `drive-support.mjs` also exports the selectors the drivers share: the composer's text box
 (`COMPOSER_INPUT`, `COMPOSER_IDLE`, and its accessible name `COMPOSER_NAME`), its send button
 (`COMPOSER_SEND`), the left column's tabs (`SIDEBAR_TAB`), an agent reply in the transcript
-(`ASSISTANT_BUBBLE`), a bot row's open button (`BOT_OPEN_BUTTON`) and the yes on a trust question
-(`TRUST_APPROVE`). A markup change to any of them is made there and in the test that pins them to
-the renderer.
+(`ASSISTANT_BUBBLE`), a bot row's open button (`BOT_OPEN_BUTTON`), the greeting on a bot's page
+(`BOT_GREETING`), the yes on a trust question (`TRUST_APPROVE`), and the answering buttons of a
+question in a `.confirm-actions` row (`CONFIRM_BUTTON`, `APPROVE_BUTTON` and `REJECT_BUTTON`). A markup change to any of them
+is made there and in the test that pins them to the renderer.
+
+It also exports the steps that open the first session: `openFirstSession(app, page, { settle })` skips the
+run when the profile has no session, clicks the first one and answers its trust question, and
+`sessionsOrSkip` and `approveTrustIfAsked` are its two halves for a driver that opens sessions another way.
 
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
-real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), which spends
-credits from whatever backend is configured. `drive-columns`, `drive-panels`, `drive-tree` and
+real profile (and so does `drive-turn`), which spends credits from whatever backend is configured.
+`drive-bot-turn` and `drive-bot-memory` send live model turns as well, from a scratch profile. `drive-columns`, `drive-panels`, `drive-tree` and
 `drive-theme` put back the key they change; do not assume any of the others do.
 
-`drive-bots`, `drive-bot-turn`, `drive-bot-memory` and `drive-theme` write `bravebot-ui.json` through
-`appState` in `scripts/drive-profile.mjs`, the one place that code is written; it changes one key
-at a time, and a driver replaces only its own rows inside a shared key such as `bots`.
+`drive-theme` writes the real `bravebot-ui.json` through `appState` in `scripts/drive-profile.mjs`,
+the one place that code is written; it changes one key at a time.
+
+`drive-bots`, `drive-bot-turn` and `drive-bot-memory` run against `scratchProfile` in the same
+module: a temporary user-data directory, which they pass to `launch`, and a temporary state
+directory, which they set as `BRAVEBOT_HOME` for the app and the agent it starts. None of them reads
+or writes your `bravebot-ui.json`, your bots file or your sessions. They write the scratch
+`bravebot-ui.json` through `appState` and the scratch bots file through `appBots(userData)`, and a
+driver replaces only its own rows in it. `appBots` throws unless `BRAVEBOT_HOME` is set, throws for
+a user-data directory whose `bravebot-ui.json` still holds bots with no bots file in the state
+directory (a launch would move them into that directory and drop them from the file they came
+from), throws on a file that does not parse, and writes through a temporary file renamed into
+place. The refusal stops a driver that is pointed at a real user-data directory.
+
+A scratch state directory starts empty, so the agent in it has no `settings.json`, recorded model or
+subscription. `drive-bot-turn` and `drive-bot-memory` send live turns and ask for a live profile:
+`scratchProfile(name, { live: true })` copies `settings.json`, `model` and `leo-premium.json` from
+your real state directory (the `BRAVEBOT_HOME` the driver was started with, otherwise
+`~/.bravebot`) into the scratch one, skips any that does not exist, writes each copy readable by you
+alone and opens none of your files for writing. Nothing else in that directory is copied. These
+drivers need the backend they call to be configured in those files or in environment variables, and
+`drive-bot-memory` skips when it finds none. The copies are removed with the scratch directory when
+the driver ends, including on an uncaught error, SIGINT, SIGTERM or SIGHUP. A SIGKILL leaves them in
+the temporary directory, so remove a directory named `bravebot-drive-bot-turn-*` or
+`bravebot-drive-bot-memory-*` after killing a driver that way. `drive-bots` spends no tokens and
+copies nothing.
 
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-summon`, `drive-connectors`,
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-memory`,
+`drive-bot-summon`, `drive-bot-turn`, `drive-bots`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
 `drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,

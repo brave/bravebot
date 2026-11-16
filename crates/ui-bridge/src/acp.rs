@@ -143,8 +143,10 @@ impl Acp {
             queued: Vec::new(),
         }));
         let heard = Arc::clone(&shared);
-        let bridge =
-            Bridge::new(Box::new(move |event| on_event(&heard, event))).with_settings(settings);
+        let bridge = Bridge::new(Box::new(move |event| on_event(&heard, event)))
+            .with_settings(settings)
+            .with_front_end(bravebot_agent::FrontEnd::Editor)
+            .opening_in_ask();
         Self { bridge, shared }
     }
 
@@ -290,6 +292,10 @@ impl Acp {
         // directory and asked about before it starts, and an editor's list is neither.
         let made = self.call("session.new", session_params).map_err(failed)?;
         let handle = made["session"].as_str().unwrap_or_default().to_string();
+        // The bridge opens the session asking, where the person's own settings would open a
+        // window's in auto (AUTO-1). An editor's modes are asking, accepting edits and planning, the
+        // editor is the person who answers its questions (ACP-5), and it is not offered auto to move
+        // back to.
         let mut shared = self.lock();
         shared.sessions.insert(
             handle.clone(),

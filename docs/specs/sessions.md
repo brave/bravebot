@@ -154,6 +154,21 @@ loaded are in force from the first turn ([INSTR-14](instructions.md#INSTR-14),
 [INSTR-16](instructions.md#INSTR-16)). They are names only, as the paths in the trust map are. A
 record written before they were kept reads as having none.
 
+The record also holds the issues and pull requests the session has named, which `/issues` and `/prs`
+print ([CMD-31](commands.md#CMD-31)) and the info panel lists ([PANEL-16](info-panel.md#PANEL-16)):
+for each its owner, its repository, its number, its kind, and whether the text it came from named
+the kind or the kind is a guess. They are written with each turn's save, whatever way the turn
+ended. A line typed between two turns reaches the record at the next save, so a session that is
+killed before one loses what it named since the last. A resume restores the list in the order
+written, `bravebot --fork` copies it, `/clear` begins a session with none, and a record written
+before it was kept reads as having none. Each entry is read back through the one constructor of a
+reference, which allows an owner and a repository only the characters GitHub allows in them and a
+number of one to nine digits with no leading zero, so an entry that fails it, or whose kind is not
+`issue` or `pull_request`, is dropped and an edited record cannot put an escape sequence in the
+panel. An entry whose fields do not read at all, such as a negative number, a number written as a
+string or a missing owner, is dropped as well, and the other entries and the record are kept. A kind the record does not say was named reads as a guess, which a later sighting that
+names the kind settles.
+
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
@@ -173,6 +188,12 @@ record written before they were kept reads as having none.
 `verified-by: bravebot_tui::render::sessions_screen::an_empty_list_says_whether_nothing_exists_or_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_references_reads_as_having_none`
+`verified-by: bravebot_session::sessions::the_references_are_written_with_the_save_and_a_resume_and_a_fork_keep_them`
+`verified-by: bravebot_session::sessions::an_entry_that_does_not_read_is_dropped_and_the_record_and_the_other_entries_are_kept`
+`verified-by: bravebot_session::sessions::a_reference_the_record_holds_that_is_not_valid_is_dropped_on_reading`
+`verified-by: bravebot_tui::app::a_cleared_session_has_met_nothing`
+`verified-by: bravebot_tui::app::a_resumed_or_forked_session_has_met_what_its_record_says`
 `verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
 `verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
 
@@ -384,6 +405,15 @@ The status panel does not read them back. It reports the last turn run in this p
 resumed session shows no cache until a turn has run in it
 ([PANEL-8](info-panel.md#PANEL-8)).
 
+The record also keeps the reasoning effort the terminal sent with the last turn it ran, as the word
+of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was sent, as with a model
+that reads none, and a record written before it was kept has none. The list reads the word through
+the fixed set of levels, so a word that names none of them is listed as no effort and the record is
+still listed. The list also reads the record's counts of the calls that changed a file and that ran a
+program and whether the last program ended badly, and the cache figures of the split, so that the
+Sessions screen can say them ([SCREEN-3](sessions-screen.md#SCREEN-3)). A resume keeps the word until
+its next turn replaces it.
+
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
 session, and `schedule history` reads the tokens it spent from the record.
@@ -418,6 +448,9 @@ than the one in force at the time.
 `verified-by: bravebot_session::sessions::a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn`
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
+`verified-by: bravebot_session::sessions::a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it`
+`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
 `verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`
@@ -1954,6 +1987,7 @@ share that is low for one turn is a different fault from one that is low for the
 `verified-by: bravebot_agent::turn::a_turn_counts_its_requests_and_what_they_wrote_and_read_out_of_the_cache`
 `verified-by: bravebot_agent::turn::a_summary_made_during_a_turn_is_counted_as_a_compaction_and_a_request`
 `verified-by: bravebot_agent::turn::a_turn_counts_the_requests_a_delegate_made`
+`verified-by: bravebot_agent::turn::a_delegate_taken_back_at_the_start_of_a_round_is_counted_once`
 `verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
 `verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
 `verified-by: bravebot_agent::turn::compaction_progress_survives_failure`

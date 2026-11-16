@@ -12,8 +12,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// An empty directory under this repository's `target/test-scratch`, which is outside the system
-/// temporary directory: the lookup leaves that directory out whatever a test records,
-/// so a fixture there could not show a directory being left out for the reason under test.
+/// temporary directory when the checkout is: the lookup leaves that directory out whatever a test
+/// records, so a fixture there could not show a directory being left out for the reason under test.
 fn fresh(name: &str) -> PathBuf {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/test-scratch")

@@ -45,13 +45,26 @@ made in your name. It does not lift the second half: the planner's questions are
 too, since they are not permissions. It is a mode for a container with no network and nothing in it
 worth losing. See [modes](../security/permission-modes.md).
 
-**An `allow` rule in your [settings file](../customize/configuration.md#permissions) decides nothing
-here.** A `deny` rule and an `ask` rule still hold, since one refuses before there is anything to
-prompt about and the other turns a write that would have gone through silently into one nobody can
-approve. An `allow` rule says which prompts to stop raising, which is a decision about a session
-somebody is sitting in front of. Read here it would let one line in a file under your home directory
-do what the flag above is named and warned about for. That flag is what lets allow rules decide again.
-Allow lines are still parsed, so one that cannot be read is still named on stderr.
+**Rules in your [settings file](../customize/configuration.md#permissions) hold here as they do in a
+session.** A `deny` rule refuses, an `ask` rule puts a question nobody can answer so the effect is
+refused, and an `allow` rule lets the effect it covers go ahead with no mode flag. Anything no rule
+allows is refused as before. An `allow` rule is read from the same layers a session reads, so with
+`"allow": ["Edit(docs/**)", "Bash(make test)"]` in your own settings, a run can write under `docs/`
+and start `make test` and nothing else. A `deny` rule outranks an `allow` rule that covers the same
+path.
+
+A rule answers only what a rule answers in a session. A write to a protected path, and the other
+questions that are always put to you, are refused whatever a rule says. A write the trust map alone
+would let through is still refused, so `--trust-workspace` does not approve a write on its own. An
+`allow` rule lets a write go ahead only where a rule allows it under every name the file has: the name
+given, the name it lands on once links are followed, and each other name of a file with a hard link. A
+write through a link to a name no rule allows is refused.
+
+An `allow` rule that a checkout's own settings file proposed is in force only where you already
+granted it in that workspace in a session, since nobody can be asked to grant it here. A line
+remembered past a session with `r` or `s` is not read by a one-shot run; write an `allow` rule for a
+line you want such a run to start. A rule that names a tool bravebot does not have, such as `Glob` or
+`WebSearch`, is named on stderr and the rules beside it stay in force.
 
 ## Reaching a second checkout
 
@@ -90,6 +103,10 @@ a pipe has no path for the trust map to have an opinion about.
 The planner can still pass the reference to a processor, feed it to a program's stdin, or write it to
 a file. It just cannot read it. See
 [How Brave Bot works](../how-it-works.md#quarantine-and-references).
+
+The prompt may be left off when something is piped: `cat notes.md | bravebot -p` is a complete
+invocation, and the turn is sent the pipe's reference with no empty message after it. A command line
+with no prompt, no pipe and nothing attached is refused before the turn starts.
 
 To give the agent something it can *read*, name a file instead:
 

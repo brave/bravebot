@@ -33,7 +33,7 @@ this spec.
 | Crate | Purpose | Depends on | Constraint |
 |---|---|---|---|
 | `bravebot-core` | The information-flow kernel: the label lattice, slots, references, capabilities, and every policy gate | none | No I/O, and nothing prints. Owns every decision derived from content, and the only place a declassification witness can be minted |
-| `bravebot-agent` | Task execution: the tools, the turn loop, and the standing watches a session keeps | `core`, `aichat`, `bedrock`, `choice`, `config`, `connector`, `diag`, `filetype`, `i18n`, `lsp`, `mcp`, `net`, `sandbox`, `skus` | Carries labelled values and must not inspect them. `exec` stays argv-only, and `shell` runs only a line a person typed. Offers a started MCP server's tools only once a person vouched for its list as drawn, and calls one only on their answer, a recorded one, a rule, or the mode they named that answers for them. See [mcp-servers.md](mcp-servers.md). Reaches `diag` only in tests, to point the diagnostic log at a scratch directory and read back what a cut or a stopped fetch wrote to it. See [diagnostic-log.md](diagnostic-log.md) |
+| `bravebot-agent` | Task execution: the tools, the turn loop, and the standing watches a session keeps | `core`, `aichat`, `bedrock`, `choice`, `config`, `connector`, `diag`, `filetype`, `i18n`, `lsp`, `mcp`, `net`, `sandbox`, `skus` | Carries labelled values and must not inspect them. `exec` stays argv-only, and `shell` runs only a line a person typed. Offers a started MCP server's tools only once a person vouched for its list as drawn, and calls one only on their answer, a recorded one, a rule, or the mode they named that answers for them. See [mcp-servers.md](mcp-servers.md). Reaches `diag` only in tests, to point the diagnostic log at a scratch directory and read back what a cut or a stopped fetch wrote to it. See [diagnostic-log.md](diagnostic-log.md). Also holds the bots module, which reads and writes the bots file in `~/.bravebot` and, for the move of the rows it held before, reads `bravebot-ui.json` in the data folder its caller names, and nothing else outside the person's own configuration. See [bots.md](bots.md) |
 | `bravebot-net` | The network egress path for everything carrying labelled content | `core`, `diag`, `sandbox` | All agent traffic passes the policy gate here. See the known cost below. Reaches `sandbox` for the one classification of an address as public or not, which the host-list proxy there applies too, so a fetch and a confined program are refused the same addresses |
 | `bravebot-aichat` | Client for the OpenAI-compatible aichat backend and gateways, and for Anthropic's Messages API, and the walk from a conversation to turns of blocks that Bedrock's requests use as well | `core`, `diag`, `config`, `net`, `signing` | Speaks the wire protocols only, and reaches the network through `net`. The walk moves text between shapes and inspects none of it |
 | `bravebot-browser` | Relays tool calls between a stdio MCP server and a Brave extension's native messaging host | none | Not presentation: draws nothing and links no terminal library, because its stdout is native messaging's stream or the MCP protocol. Relays and decides nothing about what it relays: reads a message's `id` to route its reply, a request's `method` and a call's `name` to look the tool up in its own table, and an extension reply's `error`, the `message` of an error and `result` to tell a failure from an answer and to write it as text, and no other field, except that it takes the `data` and `mimeType` of the `image` object in the reply of a tool its table marks as returning a picture, by name and unchanged, into an MCP `image` part, and except that the server started for a group, the confined half, reads the `path` of a call to the tool its table marks as taking a file, looks at the file it leads to inside the `uploads` directory of the directory it was declared with, and sends the file's canonical path, size and name in place of the text or answers with a sentence of a closed list, never opening the file ([BROWSER-45](browser.md#BROWSER-45)). Carries no workspace content. Links no workspace crate, so the half Brave starts unconfined is this crate and nothing else. See [browser.md](browser.md) |
@@ -97,13 +97,28 @@ Everything shown is marked with a margin the renderer draws, and has its control
 replaced, so the content cannot draw its own. A control character is replaced by the mark for it and
 none is dropped: U+0000 to U+001F by the Control Pictures, DEL by `␡`, and each C1 control by
 `‹U+XXXX›`. None draws as one of the enclosed alphanumerics U+2480 to U+249F; a name that holds the
-characters `‹U+0085›` or `␡` itself draws the same as the control it spells. A complete colour code
-in output drawn for
-reading is taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
+characters `‹U+0085›` or `␡` itself draws the same as the control it spells. Both crates also
+write out each character `bravebot_core::invisible::draws_as_nothing` holds (a bidirectional
+control, a zero-width character, a variation selector, a tag character) as `‹U+XXXX›` with
+`bravebot_core::invisible::spelled`, so a bidirectional control cannot reorder a row and a
+zero-width or tag character cannot hide in one. The cost is that an emoji's joiner and variation
+selector are written out as `‹U+XXXX›` too, in every row the terminal client draws through its
+`printable`: code blocks, command output, thinking text, messages and notes, so an emoji sequence
+reads as its parts. A complete colour code in output drawn for
+reading is taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)). So is one in
+the text of a program's output that the planner may read, which `bravebot-core` does for both
+([RUN-21](tools/run.md#RUN-21)).
 
 `verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
 `verified-by: bravebot_tui::render::a_cut_fits_the_room_once_control_characters_are_drawn`
 `verified-by: bravebot_tui::render::transcript::a_mcp_note_quoting_an_alias_with_an_escape_is_drawn_with_the_escape_made_visible`
+`verified-by: bravebot_tui::render::printable_writes_out_every_character_that_draws_as_nothing`
+`verified-by: bravebot_tui::render::a_cut_fits_the_room_once_characters_that_draw_as_nothing_are_written_out`
+`verified-by: bravebot_tui::render::transcript::a_refusal_note_quoting_a_name_with_a_bidirectional_control_is_drawn_with_it_written_out`
+`verified-by: bravebot_tui::render::transcript::a_failure_line_quoting_a_name_with_a_zero_width_or_tag_character_is_drawn_with_it_written_out`
+`verified-by: bravebot_tui::render::transcript::a_mcp_note_quoting_an_alias_with_a_bidirectional_control_is_drawn_with_it_written_out`
+`verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters`
+`verified-by: bravebot_tui::state::a_value_written_out_past_the_most_a_note_shows_is_cut_with_an_ellipsis`
 `verified-by: bravebot_cli::background::the_start_of_an_id_a_line_shows_is_drawn`
 `verified-by: bravebot_cli::mcp::an_alias_pasted_into_approve_or_enable_is_not_printed_with_its_control_characters`
 `verified-by: bravebot_cli::mcp::a_control_character_in_a_name_an_mcp_command_prints_is_drawn_as_its_picture`

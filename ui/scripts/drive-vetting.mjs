@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inheritedEnv, launchWorld, openProject } from './drive-world.mjs'
+import { SHOTS_DIR } from './drive-support.mjs'
 
 async function banner(auto) {
   const root = mkdtempSync(join(tmpdir(), 'bravebot-vetting-'))
@@ -21,8 +22,8 @@ async function banner(auto) {
     const notice = page.locator('.entries .session-banner')
     if (auto) await notice.waitFor()
     const shown = await notice.count() ? await notice.innerText() : null
-    mkdirSync('/tmp/bravebot-ui', { recursive: true })
-    await page.screenshot({ path: `/tmp/bravebot-ui/vetting-${auto ? 'on' : 'off'}.png` })
+    mkdirSync(SHOTS_DIR, { recursive: true })
+    await page.screenshot({ path: `${SHOTS_DIR}/vetting-${auto ? 'on' : 'off'}.png` })
     assert.deepEqual(errors, [])
     return shown
   } finally {
@@ -35,4 +36,4 @@ const on = await banner(true)
 assert.match(on ?? '', /Auto-vetting is on/)
 assert.match(on, /~\/\.bravebot\/vetting/, 'names the file the answer is kept in')
 assert.equal(await banner(false), null, 'asking is the ordinary state and says nothing')
-console.log('Auto-vetting notice verified on and off. Screenshots in /tmp/bravebot-ui/vetting-*.png')
+console.log(`Auto-vetting notice verified on and off. Screenshots in ${SHOTS_DIR}/vetting-*.png`)

@@ -13,7 +13,10 @@ on the window, or pipe it in.
 
 Type `@` and a picker opens over the workspace. Directories come first, a prefix narrows the list, a
 slash descends into a directory, and Tab completes without disturbing the rest of the sentence.
-Version-control and build directories are not offered.
+Version-control and build directories are not offered. A name that holds a tab, a zero-width
+character or another character that draws as nothing or as a space is drawn in quotes with that
+character written as `\u{..}`, so two such names cannot look like the same row. Picking one still
+writes the name itself.
 
 A fragment of a name finds it in any directory below, so `@mainrs` offers `crates/cli/src/main.rs`
 without a walk through `crates` and `cli`. The letters have to appear in the name in that order and

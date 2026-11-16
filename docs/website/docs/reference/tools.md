@@ -370,13 +370,15 @@ author and its subject. With `messages`, the rest of each commit's message follo
 indented. A log that stopped with commits left names the `skip` that lists the next page, and a page
 holds whole commits. `show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
-revision. `diff` compares two commits. Two edits far apart in a file show as two hunks. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
+revision. `diff` compares two commits. Two edits far apart in a file show as two hunks, and a one-line change in a file of up to 4 MiB prints its hunk at the line numbers the file has. A side past 4 MiB, and a file past 1 MiB that a `search` would read, is described by its size and named with `read_file` on the working copy and `run`, each only where the session holds it. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
 `tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision
 only those it reaches, as `--merged` does. `search` prints the lines `pattern` matches in the files
 at a revision, as `git grep -n` does. Both page with `skip` as a log does.
 `status` lists staged, unstaged and untracked paths as `git status --short --no-renames` does. It
 detects no renames, and lists a file an attribute or `core.autocrlf` would convert, or a
-submodule, as not compared.
+submodule, as not compared. A `status` that runs out of time says it can be narrowed with a `path`
+and that `search.maxSeconds` sets the deadline, and names `git status` through `run` where the session
+holds `run`.
 
 **Why not just run git.** git runs programs its configuration names: an alias, a pager, a diff
 driver, `core.fsmonitor`, and `include.path` pulls configuration in from any file. That configuration
@@ -468,6 +470,12 @@ reference holds. It applies only while nothing has written that file since the r
 processor's answer about the file filled, or any write after a `run` line, is put to you as usual, even
 where that `run` line wrote nothing.
 
+**A yes is not spent if the path may have changed while you were asked.** If the file was written, or
+a `run` line started, after the preview was drawn, a yes writes nothing and leaves the file as it was.
+The agent is told the path may have changed while you were being asked, and to read it again and
+repeat the call. Any `run` line that started during the question has this effect, even one that wrote
+nothing. `edit_file` and `download_url` follow the same rule.
+
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
@@ -489,6 +497,11 @@ errors it found and on which lines, and how many warnings. A write never starts 
 server's own messages are never shown, only counts and line numbers. A server that has not finished
 indexing, or that did not answer in a few seconds, is reported as such rather than as "no errors". A
 file written from a `contents_ref` reports nothing.
+
+A destination that is a named pipe is written to as before. It has no earlier contents, so the diff
+shows an empty file and no backup is kept, and a `run` redirection into one is passed over by the scan
+of what the line leaves. Reading the destination does not wait for a writer, so the write does not
+hold up the other file tools.
 
 ## `edit_file`
 
@@ -675,7 +688,7 @@ Refused for a reference to nothing and for a call from a delegate. A
 picture is also refused where the model in use takes no pictures, or where there is nowhere to put a
 copy of it for you to open. A reference to a file nothing has read
 yet is opened rather than refused, since naming one is the ordinary way to ask about a file the planner
-may not read.
+may not read. Under bypass the file is opened with the reach `read_file` has for its path, so a file in a directory beside the workspace is opened without a request, and in any other mode it is refused as outside the workspace.
 
 See [Vetting](../security/vetting.md) for what the check is, what it may say, and what
 [auto-vetting](../security/vetting.md) changes.
@@ -742,9 +755,20 @@ what the job printed since the previous look in one
 answer: where the output is quarantined, that is one reference to that slice, with its count of lines and the earlier references listed as above. `until_exit` with no
 `wait_seconds`, with `kill`, or with anything but `true` or `false`, is refused.
 
-Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
+The same call three times running is refused without asking, as for any tool. A `job_output` call that
+waits with `wait_seconds` for a job that is still running is the exception: it is not refused however
+often it is repeated. A call with no `wait_seconds`, a call that kills the job, and a call
+on a job that has ended are refused at the third. The refusal says that the end of a background
+job arrives in a message of its own and that a shell loop that sleeps is not a way to wait.
+
+Between 1 second and the longest the prompt cache allows, and **a value outside that is refused
+rather than quietly shortened**.
+The longest is 270 seconds with `promptCacheTtl` unset or `5m`, and 10 minutes with `1h` (see
+[`promptCacheTtl`](../customize/configuration.md#promptcachettl)): a wait that outlasts the cache
+lifetime makes the next request write the whole conversation to the cache again, so call again to
+keep watching.
 A wait that was silently cut short would come back with silence, and silence carries no length: a
-caller that asked for ten minutes and got one would report the same nothing as ten minutes of nothing.
+caller that asked for five minutes and got one would report the same nothing as five minutes of nothing.
 [A deadline](run-tool.md#a-line-has-a-deadline) is clamped instead, because a run that ends says how long it took.
 
 The answer says how many seconds were spent watching and that nothing is watching now, so a wait that
@@ -823,7 +847,9 @@ address in the answer is loopback, private, link-local (the cloud metadata addre
 unique-local, carrier-grade NAT or otherwise reserved, the fetch fails before anything is sent and the
 connection is made only to the addresses that were checked. A URL whose host is written as an address,
 such as `http://127.0.0.1:8080/`, is what you approved and is fetched; `localhost` is a name. Behind a
-proxy the proxy resolves the target, so the check does not apply there. A model running on loopback is
+proxy the proxy resolves the target too, so bravebot also looks the host up itself and refuses it on the
+same terms before the request is sent to the proxy. The proxy's own lookup is not seen, so it can still
+answer differently, and what a proxy may reach is its own configuration's. A model running on loopback is
 unaffected, since this applies to `fetch_url` and nothing else.
 
 **A result names the URL you asked for, never where a redirect went.** A fetch that succeeds names it
@@ -981,8 +1007,7 @@ request during the wait instead of one per report. A line you send still wakes t
 does another call reaching its own count. The result of the call says which of these the planner
 is waiting for. A delegate that starts delegates of its own is not woken by a line you send, so
 its description and result leave that out. The figure decides only when the planner is asked again, so you are not asked about
-it. Delegates that end close together are not joined into one wake unless they end within one
-20 ms check, which is left as a cost of the default.
+it. Delegates that end within one 20 ms check are not joined into one wake.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
@@ -1001,6 +1026,8 @@ still answered by the same rules. A delegate started that way is narrowed to wha
 the message that says it has started names what it was started without, for example "It was started
 without writing files, because the run that started it does not hold it." For a call with `each`
 the sentence is said once and begins "Each was".
+
+A delegate that cannot write is refused a `write_file` or `edit_file` call at once, with no prompt, and the audit trail records it under `capability`.
 
 The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
 size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply
@@ -1078,7 +1105,7 @@ Nothing but the report crosses back: the exchange, the tool results and the quar
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
 [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
 to you, replaces nothing on your screen, and reaches no host.
-Naming one of them anyway is refused rather than run, since a model naming a tool it was never offered
+Naming one of those tools anyway is refused rather than run, since a model naming a tool it was never offered
 is ordinary. What it could not settle goes in the report, and the planner asks.
 
 A delegate is offered this tool itself, down to three levels below the turn. One at the bottom is
@@ -1087,8 +1114,7 @@ leaves this one out. A call from either anyway is refused. Every delegate in the
 turn's one ceiling, and each is approved and narrowed by the run that started it.
 
 Fetching is out because a delegate reaching a website would stop you to approve a host for a sub-task
-you never set up. Every kind does reach the network, since a planner is a model call and that request
-is egress like any other, and that is the whole of what the capability buys it.
+you never set up. Every kind still reaches the network, since each planner request is egress.
 
 :::note
 The confirmation for a write shows the path and the diff, as it always does, but it does not say that
@@ -1178,6 +1204,14 @@ answer. Nothing has been sent until you press Enter there. Left goes back a ques
 reopens that question from the review, and either brings back what you had answered. A single
 question has no review.
 
+In the terminal, a question is drawn a line of the box for each line it was written in, with its
+inline markdown styled: bold, emphasis, code and headings lose the markers that make them so, and
+a fenced block is drawn as written. The choices, the typing field and the keys always keep their rows.
+A question taller than what is left of the box keeps at least three rows and scrolls with PgUp and
+PgDn, including while the typing field is open. One row says how many lines are below, or that the end
+is reached and how many are above, and the key hints name PgDn only while the question is cut. A long
+plan put by [`propose_plan`](#propose_plan) is drawn the same way, so every choice stays on the screen.
+
 With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
 that sits that long with no key pressed, and every question behind it. The planner is told that no
 answer was given in the time allowed and that you may be away, not that you declined, and the answers
@@ -1230,7 +1264,7 @@ answer yes or no. The grant and the record of it hold the resolved path, and the
 back, a success as much as a refusal, names the path as the planner typed it, so the name of what a link
 points at does not reach the planner. The path is judged when you answer and again each time a line starts: the grant keeps the directory you approved, so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link, by another directory or by a link to a refused place is given no row when a stage starts, and the grant is still listed. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
-`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
+`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone, and names none where nobody can be asked in the run, such as a one-shot command or a pipeline. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
 the answer is yes without a question, and the directory is also opened for those five tools and
 trusted, as `/add-dir` would, and the result tells the planner whether they now reach it: `/add-dir close` and `/clear` close it, and `--resume` carries it. With permissions bypassed the file tools do not need the
@@ -1428,7 +1462,13 @@ run, the proposal is refused.
 
 The rule is appended as one line, `- <text> (<date>) why: <reason>`, to `~/.bravebot/AGENTS.md` for
 `home` or to the project's `rules.md` for `project`, after the file is backed up, so `/undo` takes it
-back. A call from a context that has met something untrusted is refused before you are asked. Where
+back. A home rule is written only to a file spelled exactly `AGENTS.md`. Where `~/.bravebot` holds
+the file under another spelling, such as `agents.md`, which bravebot does not read as your rules,
+`AGENTS.md` is made beside it and the rule written there, on a volume that tells upper and lower
+case apart. On a volume that does not, the proposal is refused before you are asked, nothing is
+written, and you are told to rename the file to `AGENTS.md`. A link spelled `AGENTS.md` is written
+through to the file it points at. A call from a
+context that has met something untrusted is refused before you are asked. Where
 the text or the reason came from private material, you are offered only refusing or typing the rule
 yourself, and what is written is your wording with `why: typed by the person`.
 

@@ -875,6 +875,7 @@ fn the_environment_is_stated_even_with_no_instructions_to_read() {
         "Working directory:",
         "Is a git repository:",
         "GitHub CLI (gh) on PATH:",
+        "Jenkins CLI (jk) on PATH:",
         "Platform:",
         "OS version:",
         "Shell:",
@@ -924,6 +925,43 @@ fn the_road_a_github_url_takes_is_not_in_the_block_a_delegate_reads() {
     assert_eq!(
         preamble.text.contains("GitHub CLI (gh) on PATH: true"),
         preamble.for_a_person.contains("gh pr view"),
+        "the fact and what it is for disagree about this machine: {} / {}",
+        preamble.text,
+        preamble.for_a_person
+    );
+}
+
+/// The same split for the Jenkins CLI: the sentence naming its commands is in the person's own
+/// turn and never in the block a delegate reads, and it is there exactly when the fact says the
+/// machine has `jk`.
+#[test]
+fn what_the_jenkins_cli_is_for_is_not_in_the_block_a_delegate_reads() {
+    let scratch = Scratch::new("jenkins-road-preamble");
+    let project = scratch.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(
+        !preamble.text.contains("jk run view"),
+        "a delegate was told to run a command it was not offered: {}",
+        preamble.text
+    );
+    assert_eq!(
+        preamble.text.contains("Jenkins CLI (jk) on PATH: true"),
+        preamble.for_a_person.contains("jk run view"),
         "the fact and what it is for disagree about this machine: {} / {}",
         preamble.text,
         preamble.for_a_person

@@ -478,6 +478,6 @@ indistinguishable from the pattern being absent, or, with an `include`, from a g
 result that found matches says the answer may be partial. `repo_map` does not report the count:
 [repo-map.md](repo-map.md).
 
-`verified-by: bravebot_agent::tools::a_search_counts_the_links_it_did_not_enter_and_does_not_name_them`
+`verified-by: bravebot_agent::tools::tests::editing::a_search_counts_the_links_it_did_not_enter_and_does_not_name_them`
 `verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
 `verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`

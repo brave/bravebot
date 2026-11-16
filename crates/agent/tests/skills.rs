@@ -1755,7 +1755,7 @@ fn a_shared_skill_directory_the_person_did_not_name_is_not_read() {
     );
     let workspace = Workspace::new(scratch.workspace())
         .expect("workspace")
-        .with_profile_directory(Some(profile.clone()));
+        .with_home(Some(profile.clone()));
 
     let mut sink = RecordingSink::new();
     let (catalogue, _) = {
@@ -1795,7 +1795,7 @@ fn a_named_shared_skill_directory_is_read_and_the_other_is_not() {
     );
     let workspace = Workspace::new(scratch.workspace())
         .expect("workspace")
-        .with_profile_directory(Some(profile.clone()))
+        .with_home(Some(profile.clone()))
         .with_shared_skill_directories(&["~/.claude/skills/".to_string()]);
 
     let mut sink = RecordingSink::new();
@@ -1832,7 +1832,7 @@ fn a_bravebot_skill_shadows_a_shared_one_and_the_projects_shadows_both() {
     write_skill(&project.join(".bravebot"), "other", "other", "project", "b");
     let workspace = Workspace::new(&project)
         .expect("workspace")
-        .with_profile_directory(Some(profile.clone()))
+        .with_home(Some(profile.clone()))
         .with_shared_skill_directories(&[
             "~/.agents/skills".to_string(),
             "~/.claude/skills".to_string(),
@@ -1867,7 +1867,7 @@ fn the_agents_shared_directory_is_read_before_the_claude_one() {
     write_skill(&profile.join(".claude"), "same", "same", "from-claude", "b");
     let workspace = Workspace::new(scratch.workspace())
         .expect("workspace")
-        .with_profile_directory(Some(profile.clone()))
+        .with_home(Some(profile.clone()))
         .with_shared_skill_directories(&[
             "~/.claude/skills".to_string(),
             "~/.agents/skills".to_string(),
@@ -1898,7 +1898,7 @@ fn a_named_shared_skill_can_be_kept_by_a_definition_and_reaches_its_own_director
     write_skill(&profile.join(".agents"), "dropped", "dropped", "d", "b");
     let workspace = Workspace::new(scratch.workspace())
         .expect("workspace")
-        .with_profile_directory(Some(profile.clone()))
+        .with_home(Some(profile.clone()))
         .with_shared_skill_directories(&["~/.agents/skills".to_string()]);
 
     let mut sink = RecordingSink::new();
@@ -1938,7 +1938,7 @@ fn a_named_shared_skill_directory_reached_through_the_workspace_is_not_read_and_
     std::fs::create_dir_all(profile.join(".claude")).expect("create the shared parent");
     std::os::unix::fs::symlink(&hop, profile.join(".claude/skills")).expect("link in");
     let workspace = workspace
-        .with_profile_directory(Some(profile.clone()))
+        .with_home(Some(profile.clone()))
         .with_shared_skill_directories(&["~/.claude/skills".to_string()]);
 
     let mut sink = RecordingSink::new();
