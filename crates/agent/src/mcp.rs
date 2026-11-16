@@ -11,6 +11,10 @@
 //! this holds is each one's connection, the list it answered with, and what has been decided about
 //! that list.
 
+mod forget;
+
+pub use forget::{Remembered, Unforgotten, UnreadableRecord, forget, project_named, remembered};
+
 use crate::confirm::{
     CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,
 };

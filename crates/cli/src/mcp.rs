@@ -12,6 +12,7 @@
 
 use crate::exit::{Ending, fail};
 use crate::progress::{printable, printable_path};
+use bravebot_agent::mcp::Unforgotten;
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
@@ -21,7 +22,7 @@ use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
     self, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field, Problem, Projects,
-    Standing, Timeouts, Unreadable,
+    Standing, Timeouts,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -1618,39 +1619,37 @@ fn forget<R: BufRead, W: Write>(
 ) -> Result<(), Stopped> {
     let directory = writable(home, "forget")?;
     let project = project(path)?;
-    let unreadable = |file: PathBuf, why: Unreadable| -> Stopped {
-        (
+    let forgotten = bravebot_agent::mcp::forget(directory, &project).map_err(|why| match why {
+        Unforgotten::Incognito => (
+            Ending::Failed,
+            t!(mcp_not_while_incognito, command = "forget"),
+        ),
+        Unforgotten::Unreadable(record) => (
             Ending::Failed,
             t!(
                 mcp_unreadable,
-                path = shown(&file.display().to_string()),
-                reason = bravebot_agent::mcp::unreadable_record(&why)
+                path = shown(&record.path.display().to_string()),
+                reason = bravebot_agent::mcp::unreadable_record(&record.why)
             ),
-        )
-    };
-    let mut projects = Projects::to_change(directory)
-        .map_err(|why| unreadable(mcp::projects_file(directory), why))?;
-    let mut standing = Standing::to_change(directory)
-        .map_err(|why| unreadable(mcp::tools_file(directory), why))?;
-    let every_server = projects.remove(&project);
-    let tools = standing.in_project(&project);
-    standing.forget(&project);
-
-    if every_server {
-        replace(&mcp::projects_file(directory), &projects.to_text())?;
-    }
-    if !tools.is_empty() {
-        replace(&mcp::tools_file(directory), &standing.to_text())?;
-    }
+        ),
+        Unforgotten::NotWritten { path, error } => (
+            Ending::Failed,
+            t!(
+                mcp_not_written,
+                path = printable_path(&path),
+                error = error.to_string()
+            ),
+        ),
+    })?;
 
     let named = shown(&project.display().to_string());
-    if !every_server && tools.is_empty() {
+    if forgotten.is_empty() {
         say(person, t!(mcp_forgot_nothing, path = &named));
     }
-    if every_server {
+    if forgotten.every_server {
         say(person, t!(mcp_forgot_servers, path = &named));
     }
-    for tool in &tools {
+    for tool in &forgotten.tools {
         say(person, t!(mcp_forgot_tool, tool = tool, path = &named));
     }
     Ok(())
@@ -1667,11 +1666,10 @@ fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
             ),
         )
     })?;
-    let typed = match path {
-        Some(path) => here.join(path),
-        None => here,
-    };
-    Ok(typed.canonicalize().unwrap_or(typed))
+    Ok(bravebot_agent::mcp::project_named(
+        &here,
+        path.map(Path::new),
+    ))
 }
 
 /// What became of the question.
