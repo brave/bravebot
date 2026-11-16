@@ -5346,9 +5346,72 @@ shown by running the program, or not entirely:
     value, with the same name naming an installed path still honoured
     (`a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome`).
     That run is of the three names and does not show that no other variable `gio open` reads runs
-    code. The Homebrew and pip `aws` scripts, the asdf and pyenv shims and `kde-open` were not run
-    on Linux, and `osascript` is macOS only, so their lists are as the paragraphs above record them.
-    That is what remains of #3809.
+    code. The Homebrew and pip `aws` scripts, the asdf and pyenv shims and `kde-open` were run on
+    Linux as the next entry records, and `osascript` is macOS only.
+  - **Linux runs of the `aws` scripts, the asdf and pyenv shims and `kde-open`** (Ubuntu 25.10,
+    x86_64, kernel 6.17, bash 5.2.37, Python 3.13.7), with the method of the macOS runs above: `env -i`,
+    a scratch `HOME`, `PATH=/usr/bin:/bin` and a helper that appends to a marker file, planted under
+    one name at a time, and a control with nothing planted that wrote no marker.
+    - **pip `aws`**: `awscli` 1.46.3 in a virtualenv. The helper ran under `AWS_CONFIG_FILE` and
+      `AWS_SHARED_CREDENTIALS_FILE` (a `credential_process`), `HOME` (the same entries in
+      `~/.aws/config`, and a `!` alias in `~/.aws/cli/alias`), `PAGER` and `MANPAGER` (for `aws s3
+      help`), `PYTHONPATH` (a `sitecustomize`, also with `PYTHONSAFEPATH=1`), `PYTHONWARNINGS` together
+      with a `PYTHONPATH` that placed the module, and a `[plugins]` entry with a `PYTHONPATH` that
+      placed the module (without the `PYTHONPATH` the CLI exited with `ModuleNotFoundError`). It ran
+      nothing under `PYTHONWARNINGS` alone, `PYTHONHOME`, `PYTHONEXECUTABLE`, `PYTHONBREAKPOINT`,
+      `PYTHONSTARTUP`, `PYTHONDEVMODE`, `PYTHONTRACEMALLOC`, `BOTOCORE_EXPERIMENTAL__PLUGINS` with a
+      client created, `AWS_PAGER` with piped streams, or `EDITOR`, `VISUAL` and `BROWSER` for `aws
+      configure list`. `usercustomize.py` in `~/.local/lib/python3.13/site-packages` ran under `HOME`,
+      and in `PYTHONUSERBASE`, only in a virtualenv that keeps the user site; the virtualenv of the
+      first runs, which does not, ran neither. The results match the macOS pip run.
+    - **frozen `aws` 2.40.3**: the helper ran under `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`,
+      `HOME` (a `credential_process` and a `!` alias) and `PAGER` and `MANPAGER` for `aws s3 help`. It
+      ran nothing under `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONWARNINGS` or any other `PYTHON*` name
+      tried, as for the frozen 2.37.12 on macOS. The Homebrew `awscli` formula was not run on Linux.
+    - **pyenv** (commit ba617bb of `pyenv/pyenv`, with the shims `pyenv rehash` writes): the helper
+      ran under `PYENV_HOOK_PATH` (a `.bash` file under `<dir>/exec/`), `PYENV_VERSION=../../evil`
+      (resolved to `$PYENV_ROOT/versions/../../evil/bin/python3`; an absolute directory ran nothing),
+      `PYENV_ROOT` when `pyenv exec` is started directly (a hook under `<root>/pyenv.d/exec`; an
+      installed shim sets its own), `HOME` (a hook under `~/.pyenv/pyenv.d/exec`, with `PYENV_ROOT`
+      unset), `SHELLOPTS=xtrace` with a `PS4` that holds a command substitution, `BASH_ENV`, the
+      exported function `BASH_FUNC_pyenv-version-name%%`, and `PYTHONPATH` when the version's `python3`
+      is a real interpreter. It ran nothing under `BASH_FUNC_cp%%`, `BASH_FUNC_readlink%%`, `BASHOPTS`,
+      `PYENV_DIR`, `PYENV_DEBUG` alone, `_PYENV_SHIM_PATH` or a plug-in under `PYENV_ROOT/plugins/*/bin`
+      (for `pyenv version-name`). `PYENV_NATIVE_EXT=1` made the shim exit with `failed to load
+      realpath builtin` and ran nothing. The results match the macOS pyenv run.
+    - **asdf** (release binary v0.20.2, commit cb72590, linux-amd64): the helper ran under
+      `ASDF_DATA_DIR` (a plug-in `exec-env`), `ASDF_CONFIG_FILE` (a `pre_<tool>_<command>` line),
+      `ASDF_<TOOL>_VERSION=path:<dir>`, `HOME` (`~/.asdf/installs/<tool>/<version>/bin/<tool>` with a
+      `.tool-versions` and `ASDF_DATA_DIR` unset), `SHELLOPTS=xtrace` with a `PS4` that holds a command
+      substitution, `BASH_ENV` and `BASH_FUNC_exec%%`. It ran nothing under `ASDF_<TOOL>_VERSION=1.0`,
+      `ASDF_DIR`, `ASDF_CONCURRENCY` or `BASH_FUNC_cp%%`; `ASDF_TOOL_VERSIONS_FILENAME=x` made the shim
+      exit with status 126 because it found no version, and ran nothing. The results match the macOS
+      asdf run.
+    - **`kde-open`** 6.4.5 (`kde-cli-tools` 4:6.4.5-0ubuntu2 and its amd64 dependencies unpacked with
+      `dpkg -x` into a directory, with `LD_LIBRARY_PATH` and `QT_PLUGIN_PATH` set by a wrapper, so no
+      KDE session or desktop was present): `kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
+      ran with `BRAVEBOT_OBSERVE_KDE_OPEN` set, under `dbus-run-session` and with
+      `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` unset, with the same result: the baseline ran the
+      genuine handler, and the planted handler ran under `XDG_DATA_HOME`, `XDG_DATA_DIRS`,
+      `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS` and `HOME` (with the three `XDG_` home names unset, which is
+      when Qt reads `$HOME/.local/share` and `$HOME/.config`), and did not run under `BROWSER`,
+      `GIO_LAUNCH_DESKTOP`, `KDESYCOCA`, `KDEHOME` or `KDEDIRS`. A control with an empty `HOME` and no
+      `XDG_` names found no `applications.menu` and ran nothing. So `kde-open` needed no session bus
+      here: its start of the handler was in forking mode (`Failed to determine systemd version, falling
+      back to extremely legacy forking mode`). All five names that ran are in the opener's list. The
+      test gained the `HOME` row with this change; with `HOME` removed from the list it failed with
+      `HOME made kde-open run a program and the opener does not remove it`. `QT_PLUGIN_PATH`,
+      `QT_QPA_PLATFORM_PLUGIN_PATH`, the other `QT_` names, `XDG_CACHE_HOME` and the `GIO_` module names
+      have no marker form and were not run.
+    - **No variable was added** to any list: every name that ran code is already in the generic table
+      or in the list of the start that runs the program. These runs are of the names above, on one
+      Linux host and one release of each program, and do not show that no other variable selects
+      code ([PATH-008](../best-practices/paths.md#PATH-008)).
+    - **Not run**: the Homebrew `awscli` formula on Linux, `kde-open` in a KDE session (the run above
+      was in no session: `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` were set by the test),
+      `kde-open5` and KIO 5, and a Frameworks release other than 6.4.5 by running. The release the
+      source was read at (6.29.0) is not the release that ran.
+    That is all of #3809.
   - **`kde-open`** cannot run to the point of a handler on macOS. On Linux (ubuntu-latest, under
     `dbus-run-session`, the `ci.yml` step `Run kde-open with each name set to a marker handler`)
     the installed `kde-open` started with the baseline environment of the test and exited with
@@ -5445,10 +5508,11 @@ shown by running the program, or not entirely:
     that. So the four `XDG_` directory names select the program `kde-open` runs, and
     `XDG_CURRENT_DESKTOP` selects among `mimeapps.list` files. `kprocessrunner.cpp` starts the
     program through systemd on the session bus when the bus reports systemd, and otherwise forks it;
-    read so, a session bus may not be required, and the child gets the process environment. This is
-    from source and was not run, and whether `kde-open` needs a session bus is not established. The
-    `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there, and
-    whether a bus is required is not established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
+    read so, a session bus may not be required, and the child gets the process environment. The
+    Linux run recorded above shows `kde-open` needs no session bus: it ran the handler with
+    `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` unset. The `ci.yml` step that runs `kde-open`
+    does so under `dbus-run-session`, so a bus exists there. A run of `kde-open` in a KDE session is
+    tracked by #3884.
 - Five more names `xdg-open` and `xdg-mime` 1.2.1 read, judged from the real scripts (read in full
   for these names, and the first two run) on macOS with `uname` stubbed to print `Linux`, not on a
   Linux host:
@@ -5847,15 +5911,16 @@ shown by running the program, or not entirely:
   select the program stay in the list, since the run tried one command form on one image.
   A variable outside the list and these eleven was not tried, and #3822 owns the rest of the
   opener list.
-  These were not run: `kde-open` and a KDE session
-  (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
-  ran the rest and installing it there with apt would add 152 packages, so what it reads is
-  unobserved (the marker test and CI step are meant to observe it); `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
+  These were not run: `kde-open` in a KDE session
+  (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because no host with one was available. `kde-open` itself
+  was run on Linux outside a session, and the Linux runs entry above records what it showed, so what it
+  reads in a session is unobserved (#3884); `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
   stand-in for `xdg-open` instead; that `kde-open` chooses its handler
   through `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME`
-  and `XDG_CURRENT_DESKTOP`, which is read from source and was not run (Qt's `QDesktopServices` and
+  and `XDG_CURRENT_DESKTOP`, which is read from source (the first four and `HOME` were run on Linux,
+  see the Linux runs entry; `XDG_CACHE_HOME` and `XDG_CURRENT_DESKTOP` were not) (Qt's `QDesktopServices` and
   `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig` are read, see the `kde-open` entry
   above); a start of `kde-open` by a Frameworks release other than 6.29.0
   or by Plasma 5 (only `kde-open5`'s `kioclient.cpp` was read, not KIO 5);
