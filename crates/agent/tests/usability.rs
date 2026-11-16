@@ -226,6 +226,13 @@ fn a_setup_that_fails_is_named_as_setup() {
     assert_eq!(only_failure(&report).code, Some(1));
 }
 
+/// Taken by every test that sets variables in the environment of this process, and by a fixture
+/// that starts a program the variables would break.
+fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Holds the given variables in the environment of this process while it is alive, and puts back
 /// what was there. The tests that read the environment of a program the suite starts share it,
 /// since the environment belongs to the process.
@@ -238,8 +245,7 @@ impl Environment {
     /// Sets each of `set` and removes each of `unset`, after taking the lock the tests that do this
     /// share.
     fn held(set: &[(&'static str, &str)], unset: &[&'static str]) -> Self {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = environment_lock();
         let previous = set
             .iter()
             .map(|(name, _)| *name)
@@ -553,14 +559,19 @@ fn a_login_file_on_the_allow_read_list_passes() {
 /// A `gh` whose `auth token` runs `script` under a shell that keeps the dynamic loader's variables.
 /// macOS removes `DYLD_` names when it starts a program under `/bin/sh`, which would make a stub
 /// there pass whatever the check does, so a copy of the shell signed for this machine runs it
-/// instead. Returns `None` where that copy cannot be made.
-fn loader_fixture(name: &str, script: &str) -> Option<(PathBuf, PathBuf, PathBuf)> {
+/// instead. Returns why where that copy cannot be made.
+///
+/// Signed under the environment lock. Where System Integrity Protection is off, as on the hosted
+/// macOS runners, a `codesign` started while another test holds `DYLD_INSERT_LIBRARIES` tries to
+/// load the file it names and aborts.
+fn loader_fixture(name: &str, script: &str) -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let (run, gh, home) = login_fixture(name, script);
     if !cfg!(target_os = "macos") {
-        return Some((run, gh, home));
+        return Ok((run, gh, home));
     }
     let shell = gh.with_file_name("sh");
-    std::fs::copy("/bin/sh", &shell).ok()?;
+    let _environment = environment_lock();
+    std::fs::copy("/bin/sh", &shell).map_err(|e| format!("/bin/sh was not copied: {e}"))?;
     let signed = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::written_in_source("/usr/bin/codesign"),
         bravebot_sandbox::programs::Inherits::All,
@@ -572,14 +583,17 @@ fn loader_fixture(name: &str, script: &str) -> Option<(PathBuf, PathBuf, PathBuf
     .args(["--force", "--sign", "-"])
     .arg(&shell)
     .output()
-    .ok()?
-    .status
-    .success();
-    if !signed {
-        return None;
+    .map_err(|e| format!("codesign did not start: {e}"))?;
+    if !signed.status.success() {
+        return Err(format!(
+            "codesign failed with {}: {}",
+            signed.status,
+            String::from_utf8_lossy(&signed.stderr).trim()
+        ));
     }
-    std::fs::write(&gh, format!("#!{}\n{script}\n", shell.display())).ok()?;
-    Some((run, gh, home))
+    std::fs::write(&gh, format!("#!{}\n{script}\n", shell.display()))
+        .map_err(|e| format!("the stub was not written: {e}"))?;
+    Ok((run, gh, home))
 }
 
 /// A test that cannot run on this machine says so. On a CI machine it fails instead, since a skip
@@ -604,9 +618,14 @@ fn the_gh_the_login_row_starts_is_not_handed_a_dyld_variable() {
     }
     let script =
         r#"test -z "$DYLD_INSERT_LIBRARIES" && test -z "$DYLD_FALLBACK_LIBRARY_PATH" || exit 1"#;
-    let Some((root, gh, home)) = loader_fixture("login-dyld", script) else {
-        skipped("no shell that keeps DYLD_ names can be made here");
-        return;
+    let (root, gh, home) = match loader_fixture("login-dyld", script) {
+        Ok(fixture) => fixture,
+        Err(why) => {
+            skipped(&format!(
+                "no shell that keeps DYLD_ names can be made here: {why}"
+            ));
+            return;
+        }
     };
     let _environment = Environment::held(
         &[
@@ -632,9 +651,14 @@ fn the_gh_the_login_row_starts_is_not_handed_an_ld_variable() {
         return;
     }
     let script = r#"test -z "$LD_PRELOAD" && test -z "$LD_LIBRARY_PATH" && test -z "$LD_DEBUG" && test -z "$LD_BIND_NOW" || exit 1"#;
-    let Some((root, gh, home)) = loader_fixture("login-ld", script) else {
-        skipped("no shell that keeps loader names can be made here");
-        return;
+    let (root, gh, home) = match loader_fixture("login-ld", script) {
+        Ok(fixture) => fixture,
+        Err(why) => {
+            skipped(&format!(
+                "no shell that keeps loader names can be made here: {why}"
+            ));
+            return;
+        }
     };
     let _environment = Environment::held(
         &[
