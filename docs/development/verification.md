@@ -65,7 +65,8 @@ pub fn meet(self, other: Self) -> Self {
   `derive(Structural)` there too where a contract compares it with `==`.
 - Definitions a contract names, and proofs, go in `crates/core/src/spec.rs` inside `verus! { }`.
   Write them from what the code is for, not by copying the body: a spec copied from the code proves
-  the code equals itself.
+  the code equals itself. A proof of what a spec clause says is cited under the clause as
+  `verified-by: bravebot_core::spec::<proof>`, and `make check-spec` fails if it does not exist.
 - A private field is read in a contract through a `closed spec fn` written beside the type, as
   `spec_label_of` and `spec_value_of` are in `crates/core/src/value.rs`. A spec function exists only
   for Verus, so it opens nothing in a build, and it is not a function of the type's own.

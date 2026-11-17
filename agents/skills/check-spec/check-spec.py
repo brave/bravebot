@@ -433,7 +433,8 @@ def check_coverage(spec, index):
                     spec.rel,
                     ERROR,
                     "verified-by-missing",
-                    f"`{clause.id}` names `{reference}`, and no `#[test]` by that name exists",
+                    f"`{clause.id}` names `{reference}`, and no `#[test]` or Verus `proof fn` "
+                    "by that name exists",
                     clause=clause.id,
                     evidence=f"{spec.rel}:{clause.line}",
                 )

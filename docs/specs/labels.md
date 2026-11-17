@@ -314,6 +314,10 @@ booleans, and no total order may be imposed on it: `Label` implements neither `P
 `verified-by: bravebot_core::label::integrity_meet_is_pessimistic`
 `verified-by: bravebot_core::label::confidentiality_join_is_pessimistic`
 `verified-by: bravebot_core::label::display_matches_the_canonical_notation`
+`verified-by: bravebot_core::spec::degradation_is_a_partial_order`
+`verified-by: bravebot_core::spec::the_middle_labels_are_incomparable`
+`verified-by: bravebot_core::spec::taint_is_the_least_upper_bound`
+`verified-by: bravebot_core::spec::every_two_labels_have_a_greatest_lower_bound`
 `verified-by: by-construction (Label implements neither PartialOrd nor Ord, so two labels cannot be ranked with <, <=, > or >=; the compile_fail doctest on Label in crates/core/src/label.rs pins the < case)`
 
 <a id="LABEL-2"></a>

@@ -288,7 +288,7 @@ A run decides each clause by the record:
 | Every clause carries an anchor so it can be linked to | mechanical | error |
 | A withdrawn clause says what replaced it | mechanical | error |
 | Every clause carries a `verified-by` line | mechanical | error |
-| `verified-by` names a `#[test]` that exists, in the module it says | mechanical | error |
+| `verified-by` names a `#[test]`, or a `proof fn` in a crate Verus verifies, that exists in the module it says | mechanical | error |
 | `by-construction` says what makes the clause hold | mechanical | error |
 | A file a `by-construction` bracket names by its path from a repository-root directory (`ui/`, `crates/`, `docs/` and so on) exists | mechanical | error |
 | `verified-by: none` | mechanical | warning |
