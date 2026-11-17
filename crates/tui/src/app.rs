@@ -429,7 +429,7 @@ fn carry_out_pick(session: &mut Session, config: &mut Config, picked: crate::pic
         Picked::Model(model) => model_picked(session, config, model),
         Picked::Theme(theme) => theme_picked(session, &theme.name),
         Picked::Effort(row) => effort_picked(session, row.0),
-        Picked::Editing(row) => editing_picked(session, row.0),
+        Picked::Editing(row) => config_picked(session, row),
     }
 }
 
@@ -2650,6 +2650,7 @@ impl StartFacts {
 /// server the checkout asked for is absent.
 fn say_startup_notes(
     session: &mut Session,
+    config: &Config,
     settings: &bravebot_config::Settings,
     absent: Vec<String>,
 ) {
@@ -2665,6 +2666,15 @@ fn say_startup_notes(
     if let Some(notice) = crate::crash_notice::at_startup() {
         session.note(notice);
     }
+    // Said once, and before the first usage ping goes, which waits on the record this leaves.
+    if let Some(notice) = bravebot_session::store::take_usage_ping_notice() {
+        session.note(notice);
+    }
+    bravebot_usage_ping::at_startup(
+        bravebot_usage_ping::Surface::Tui,
+        bravebot_usage_ping::backend(config, session.model()),
+        bravebot_usage_ping::premium(config),
+    );
     // Why a server this checkout asked for is not in the session, said where the person starts
     // reading rather than on the plain terminal the screen is about to cover.
     for note in absent {
@@ -2838,7 +2848,7 @@ fn begin_session(
         },
     );
 
-    say_startup_notes(&mut session, &settings, absent);
+    say_startup_notes(&mut session, config, &settings, absent);
 
     adopt_settings(&mut session, &settings, asked.effort);
     // Beside the settings, with the workspace in hand: a style file reached through it is not read.

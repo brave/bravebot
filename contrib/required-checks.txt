@@ -39,4 +39,5 @@ Versions
 Code selectors
 Dependency policy
 Fuzz build and replay
+Verus
 Process narration

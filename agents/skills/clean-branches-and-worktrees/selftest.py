@@ -189,6 +189,34 @@ class Clean(unittest.TestCase):
         self.assertIn("Would delete 1 branch(es).", out)
         self.assertIn("pushed", self.branches())
 
+    def pr_head_only_on_pull_ref(self, name):
+        """A merged head that origin holds only under refs/pull/1/head, built on the local branch."""
+        other = self.root / "other"
+        git("clone", "-q", str(self.origin), str(other), cwd=self.root)
+        git("fetch", "-q", str(self.clone), f"{name}:{name}", cwd=other)
+        git("checkout", "-q", name, cwd=other)
+        git("commit", "-q", "--allow-empty", "-m", "pushed after a force-push", cwd=other)
+        git("push", "-q", "origin", "HEAD:refs/pull/1/head", cwd=other)
+        head = git("rev-parse", "HEAD", cwd=other)
+        self.merged(name, head)
+        self.assertNotEqual(subprocess.run(["git", "cat-file", "-e", head], cwd=self.clone, env=GIT_ENV).returncode, 0)
+
+    def test_deletes_a_branch_behind_a_merged_head_only_on_the_pull_ref(self):
+        self.branch("rewritten", merged=False)
+        self.pr_head_only_on_pull_ref("rewritten")
+        out = self.run_script()
+        self.assertNotIn("rewritten", self.branches(), out)
+
+    def test_keeps_a_branch_with_commits_past_a_merged_head_only_on_the_pull_ref(self):
+        self.branch("rewritten", merged=False)
+        self.pr_head_only_on_pull_ref("rewritten")
+        git("checkout", "-q", "rewritten", cwd=self.clone)
+        git("commit", "-q", "--allow-empty", "-m", "local only", cwd=self.clone)
+        git("checkout", "-q", "main", cwd=self.clone)
+        out = self.run_script()
+        self.assertIn("rewritten", self.branches())
+        self.assertIn("local branch has commits beyond the merged PR head", out)
+
     def test_keeps_the_current_branch_and_unmerged_work(self):
         self.branch("open", merged=False)
         out = self.run_script()

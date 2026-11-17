@@ -151,6 +151,11 @@ pub const DENIED: &[&str] = &[
     "hooks.inspect",
     "language.get",
     "language.set",
+    // The machine's usage ping, which the person at the host decides.
+    "usage_ping.get",
+    "usage_ping.set",
+    "usage_ping.notice_due",
+    "usage_ping.mark_notice_shown",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",

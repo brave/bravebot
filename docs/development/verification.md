@@ -58,7 +58,9 @@ pub fn meet(self, other: Self) -> Self {
 
 - `requires` states what the caller owes, `ensures` what the function returns, and a loop takes
   `invariant` and `decreases` the same way, on the loop.
-- A module that holds a contract imports `vstd::prelude::*` behind `cfg(verus_keep_ghost)`.
+- A module that holds a contract imports `vstd::prelude::*` behind `cfg(verus_keep_ghost)`, and
+  a crate with a contract on a loop enables `proc_macro_hygiene` behind the same cfg, as
+  `crates/core/src/lib.rs` does.
 - A type a contract reads takes `#[cfg_attr(verus_keep_ghost, verus_verify)]`, and
   `derive(Structural)` there too where a contract compares it with `==`.
 - Definitions a contract names, and proofs, go in `crates/core/src/spec.rs` inside `verus! { }`.
@@ -88,13 +90,18 @@ Then:
   each mutation has to be refused, and `verify/history.rs` has to verify and be refused under each
   `before_<commit>` cfg.
 
-CI does not run `make check-verus` yet. Until it does, a change to a function with a contract runs
-it before it is pushed, and the pull request says that it passed.
+CI's `Verus` job runs `make check-verus` on a pull request that changes `crates/core/`, `verify/`
+or the scripts that run them, on the merge queue's branch, and on `main`. It installs the release
+`VERUS_VERSION` names with `make verus-install`, which refuses a download that does not match
+`VERUS_SHA256`, and the toolchain `VERUS_TOOLCHAIN` names. A bump of the release changes all three
+together.
 
 ## Running
 
-Verus ships as a release archive that brings its own Rust toolchain through rustup. Install the
-release `VERUS_VERSION` in the `Makefile` names, put `verus` on `PATH` or set `VERUS`, and run:
+Verus ships as a release archive that runs on the Rust toolchain `VERUS_TOOLCHAIN` names, through
+rustup. On x86_64 Linux, `make verus-install` downloads and checks the release and prints the
+directory to put on `PATH`. Elsewhere, install the release `VERUS_VERSION` names from
+<https://github.com/verus-lang/verus/releases>. Then put `verus` on `PATH` or set `VERUS`, and run:
 
 ```sh
 make check-verus

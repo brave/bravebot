@@ -11,6 +11,7 @@ name: Dependencies
 # and ci.yml is eleven jobs, six of them cross-builds.
 on:
   pull_request:
+  merge_group:
   push:
     branches:
       - main

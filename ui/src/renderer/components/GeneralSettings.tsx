@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { APPEARANCES, type Appearance } from '../../shared/theme'
-import type { LanguageReport, LanguageSaved } from '../../shared/protocol'
+import type { LanguageReport, LanguageSaved, UsagePingReport, UsagePingSaved } from '../../shared/protocol'
 import { t } from '../i18n'
-import { Alert, Button, Dropdown } from '../nala'
+import { Alert, Button, Dropdown, Toggle } from '../nala'
+import { changeUsagePing, lockedLine, reportIn } from '../usage-ping'
 import { SettingsGroup } from './SettingsGroup'
 
 const LABELS: Record<Appearance, () => string> = {
@@ -44,6 +45,7 @@ export function GeneralSettings({ chosen, running, onAppearance }: {
         </div>
       </SettingsGroup>
       <LanguageGroup running={running} />
+      <PrivacyGroup />
     </div>
   )
 }
@@ -116,6 +118,57 @@ function LanguageGroup({ running }: { running: boolean }): React.JSX.Element {
         {(unread || unsaved) && (
           <Alert type="error" role="alert" className="settings-row-alert" data-test="language-error">
             {unread ? t.uiSettingsLanguageUnread() : t.uiSettingsLanguageUnsaved()}
+          </Alert>
+        )}
+      </div>
+    </SettingsGroup>
+  )
+}
+
+/** The daily usage ping, kept where `/config` keeps it. Locked where something stronger decides. */
+function PrivacyGroup(): React.JSX.Element {
+  const [report, setReport] = useState<UsagePingReport | null>(null)
+  const [unread, setUnread] = useState(false)
+  const [unsaved, setUnsaved] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void window.bravebot.request<UsagePingReport>('usage_ping.get').then((answer) => {
+      const read = reportIn(answer)
+      if (!read) return setUnread(true)
+      setReport(read)
+    }, () => setUnread(true))
+  }, [])
+
+  const change = async (enabled: boolean): Promise<void> => {
+    if (!report) return
+    setBusy(true)
+    setUnsaved(false)
+    setReport({ ...report, enabled })
+    const next = await changeUsagePing(
+      (on) => window.bravebot.request<UsagePingSaved>('usage_ping.set', { enabled: on }), report, enabled)
+    setReport(next.report)
+    setUnsaved(next.unsaved)
+    setBusy(false)
+  }
+
+  const locked = report && !report.changeable ? lockedLine(report.reason) : null
+  return (
+    <SettingsGroup title={t.uiSettingsPrivacy()}>
+      <div className="settings-row" data-test="usage-ping-row">
+        <div className="settings-row-text">
+          <h3>{t.uiSettingsUsagePing()}</h3>
+          <p>{t.uiSettingsUsagePingExplained()}</p>
+          {locked && <p data-test="usage-ping-locked">{locked}</p>}
+        </div>
+        <div className="settings-row-control">
+          <Toggle size="small" data-test="usage-ping-control" aria-label={t.uiSettingsUsagePing()}
+            checked={report?.enabled ?? false} disabled={!report || !report.changeable || busy}
+            onChange={({ checked }) => { if (checked !== report?.enabled) void change(checked) }} />
+        </div>
+        {(unread || unsaved) && (
+          <Alert type="error" role="alert" className="settings-row-alert" data-test="usage-ping-error">
+            {unread ? t.uiSettingsUsagePingUnread() : t.uiSettingsUsagePingUnsaved()}
           </Alert>
         )}
       </div>

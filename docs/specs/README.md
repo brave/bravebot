@@ -44,7 +44,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [cli.md](cli.md) | `CLI` | 43 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [schedule.md](schedule.md) | `SCHEDULE` | 8 | what a stored `bravebot schedule` entry does with nobody there: pausing it, stopping at a question, skipping an overlapping firing, which expressions and flags it may hold, where a run's result goes, and `/schedule` in a session |
 | [manifest.md](manifest.md) | `MANIFEST` | 15 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 52 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 53 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 32 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, what `/issues` and `/prs` list, what `/sidebar` opens, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 45 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, the prompt drawn above a view it has scrolled off, the button that returns a held view to its tail, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 13 | the opt-in shared Rust view for fresh local bridge sessions and its bounded snapshot, the message id every send carries and the record and lookup of each send, the stdio TypeScript client that applies it, takes over a session whose controller left, and settles a send whose connection was lost, and the anonymous channel they speak over |
@@ -79,7 +79,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
 | [sessions-screen.md](sessions-screen.md) | `SCREEN` | 17 | the Sessions screen: one list of every session on the machine, opened with Left over an empty box, `/sessions`, `/resume` or `--resume`, its status tabs, grouping, search, pins and the keys and clicks that open, copy, begin, stop, rename, archive and delete one |
 | [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, built: one background session sending text to another, put to a person and never starting a turn |
-| [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
+| [plugins.md](plugins.md) | `PLUGIN` | 13 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and how it is updated, turned off and removed |
 | [state-directory.md](state-directory.md) | `STATE` | 4 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 10 | a file of hosts, statuses, counts and fixed words, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app, and a failure of the desktop window's page |
@@ -91,6 +91,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
 | [herdr.md](herdr.md) | `HERDR` | 12 | telling herdr, a terminal runtime, what a session is doing and how to resume it |
+| [usage-ping.md](usage-ping.md) | `PING` | 11 | the one request a day that counts a launch: the eleven fields it holds, when it is sent and from which launch, where it goes, and how a person or an administrator stops it |
 
 ## The tools
 

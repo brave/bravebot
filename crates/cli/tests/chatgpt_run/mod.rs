@@ -11,12 +11,17 @@
 use crate::chatgpt_stand_in::{CLIENT, CODE, STAND_IN, StandIn, form, url_encoded};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 #[path = "../../../skus/test-support/stored_sign_in.rs"]
 mod stored_sign_in;
+
+/// Where the homes go: outside the system temporary directory when the checkout is inside it, so
+/// a program a test plants in one is found (SANDBOX-30).
+#[path = "../../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
 
 /// The host identifier of a stored sign-in.
 pub const SIGN_IN_HOST: &str = "urn:uuid:placeholder-host-0000";
@@ -27,15 +32,13 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    /// Under `target/test-homes` rather than `target/test-scratch`, since a run under bypass gives
+    /// Under `test-homes` beside the scratch root rather than in it, since a run under bypass gives
     /// its stages a row for each entry of every directory on the way to the home's credential
     /// directories (SANDBOX-28). On macOS the rows are an argument of `sandbox-exec`, and the
-    /// entries `target/test-scratch` holds for every other test made the profile too large for a
+    /// entries the scratch root holds for every other test made the profile too large for a
     /// program to be started with.
     pub fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-homes")
-            .join(name);
+        let path = scratch_root::isolated_dir(&format!("test-homes/{name}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join(".bravebot")).expect("create scratch");
         std::fs::create_dir_all(path.join("work")).expect("create the working directory");
