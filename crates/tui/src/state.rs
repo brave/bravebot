@@ -879,6 +879,14 @@ pub struct Session {
     /// the session asks: a run of two or more events was available in the same instant, so `\x03\x03`
     /// in one write is two key events rather than the two presses that gesture asks for.
     pub key_arrived_alone: bool,
+    /// Whether the next frame is to be preceded by giving the terminal's modes back and asking for
+    /// them again, and drawn in full, which `/redraw` sets (CMD-33).
+    ///
+    /// A terminal that was reset or cleared from outside forgets what the interface asked for, such
+    /// as the alternate screen, mouse reports, bracketed paste and focus reports, and shows nothing
+    /// where the next frame leaves a cell unchanged. No event reports it, so only a person's own
+    /// request repairs it.
+    pub retake_terminal: bool,
     /// Whether there was a picture on the clipboard when it was last looked at.
     ///
     /// Only ever a hint on screen, so a stale answer costs a line that is briefly wrong and nothing
@@ -1518,6 +1526,7 @@ impl Session {
             leave_word_sent: false,
             command_sent_as_prompt: false,
             key_arrived_alone: true,
+            retake_terminal: false,
             image_on_clipboard: false,
             written: 0,
             progress: Default::default(),

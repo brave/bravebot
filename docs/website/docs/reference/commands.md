@@ -56,6 +56,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/unfinished` | | List what this session left open, and whose move each is |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
+| `/redraw` | | Redraw the whole screen, for a terminal that was cleared or reset |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |

@@ -3664,6 +3664,7 @@ command-diff = List the files the session wrote and show every edit to the one h
 command-todos = Print the whole plan, every task with its status
 command-unfinished = List what this session left open, and whose move each is
 command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-redraw = Redraw the whole screen, for a terminal that was cleared or reset
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-schedule = List, add, pause, resume, remove or run scheduled entries
