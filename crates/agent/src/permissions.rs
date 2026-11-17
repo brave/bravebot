@@ -1709,15 +1709,22 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         use std::path::Path;
         let root = Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff"));
-        assert_eq!(beneath(Path::new("/p/dir-\u{FFFD}/a/b"), root, false), None);
-        assert_eq!(
-            beneath(
-                Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff/a/b")),
-                root,
-                false
-            ),
-            Some("a/b".to_string())
-        );
+        for folds_case in [false, true] {
+            assert_eq!(
+                beneath(Path::new("/p/dir-\u{FFFD}/a/b"), root, folds_case),
+                None,
+                "the lossy lookalike was under the root (folds case: {folds_case})"
+            );
+            assert_eq!(
+                beneath(
+                    Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff/a/b")),
+                    root,
+                    folds_case
+                ),
+                Some("a/b".to_string()),
+                "the root's own name was not under it (folds case: {folds_case})"
+            );
+        }
     }
 
     /// PERM-7: a rule prefix and a root that are one name in two Unicode forms are one place, so a
