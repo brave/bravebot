@@ -2983,6 +2983,94 @@ def test_run_files_have_owners():
         "the tree's own workflows run only files with an owner",
         with_cwd(ROOT, lambda: list(audit.check_run_files_have_owners())) == [],
     )
+    # A script run by its shebang has no interpreter word before it. The workflow runs it first
+    # after `run:` on line 4, and after a quoted variable on a later line.
+    shebang = {
+        ".github/workflows/t.yml": (
+            "jobs:\n  j:\n    steps:\n"
+            "      - run: contrib/measure-flakes.py --selftest\n"
+            "      - name: measure\n"
+            "        run: |\n"
+            "          set -eu\n"
+            '          "$PYTHON" contrib/measure-flakes.py --runs 1\n'
+        ),
+        "contrib/measure-flakes.py": "",
+    }
+    found = owned("/.github/workflows/ @a\n/Makefile @a\n", shebang)
+    check(
+        "a script run by its shebang or after a quoted variable with no owner is an error",
+        kinds(found) == ["unowned-workflow-file"]
+        and found[0]["evidence"][0] == ".github/workflows/t.yml:4 runs contrib/measure-flakes.py",
+        str([one["evidence"] for one in found]),
+    )
+    check(
+        "a script run by its shebang is owned by its own entry",
+        owned("/.github/workflows/ @a\n/contrib/measure-flakes.py @a\n", shebang) == [],
+    )
+    for name, steps, line in (
+        ("first in a block", "      - run: |\n          set -eu\n          contrib/measure-flakes.py\n", 6),
+        (
+            "after a quoted variable in a block",
+            '      - run: |\n          set -eu\n          "$PYTHON" contrib/measure-flakes.py\n',
+            6,
+        ),
+        ("after a command separator", "      - run: cd x && contrib/measure-flakes.py\n", 4),
+        ("after a pipe", "      - run: echo x | contrib/measure-flakes.py\n", 4),
+        ("inside a substitution", "      - run: echo $(contrib/measure-flakes.py)\n", 4),
+        ("behind a variable assignment", "      - run: RUNS=1 ./contrib/measure-flakes.py\n", 4),
+        (
+            "on the line after `&&` and a backslash",
+            "      - run: |\n          cargo test && \\\n          contrib/measure-flakes.py\n",
+            6,
+        ),
+    ):
+        tree = {
+            ".github/workflows/t.yml": "jobs:\n  j:\n    steps:\n" + steps,
+            "contrib/measure-flakes.py": "",
+        }
+        found = owned("/.github/workflows/ @a\n", tree)
+        check(
+            f"a script run {name} with no owner is an error",
+            kinds(found) == ["unowned-workflow-file"]
+            and found[0]["evidence"][0] == f".github/workflows/t.yml:{line} runs contrib/measure-flakes.py",
+            str([one["evidence"] for one in found]),
+        )
+    # Words at a command position that are not files in the tree, and a file named only as an
+    # argument, are not scripts a step runs.
+    others = {
+        ".github/workflows/t.yml": (
+            "jobs:\n  j:\n    steps:\n"
+            "      - run: cargo test && echo done; docker build -f contrib/Dockerfile.cross .\n"
+            "      - run: scripts/not-in-this-tree.sh --flag\n"
+            '      - run: file "dist/x" /usr/bin/env ../contrib/measure-flakes.py\n'
+            "      - run: |\n"
+            "          corepack enable\n"
+            "          cargo test \\\n"
+            "            contrib/measure-flakes.py\n"
+            "          git show HEAD:contrib/measure-flakes.py > /dev/null\n"
+            "          echo contrib/measure-flakes.py\n"
+        ),
+        "contrib/measure-flakes.py": "",
+        "contrib/Dockerfile.cross": "",
+    }
+    check(
+        "a command word that is no tracked file, and a file named as an argument, are not read",
+        owned("/.github/workflows/ @a\n", others) == [],
+        str([one["evidence"] for one in owned("/.github/workflows/ @a\n", others)]),
+    )
+    check(
+        "a script behind an interpreter word is still read",
+        kinds(
+            owned(
+                "/.github/workflows/ @a\n",
+                {
+                    ".github/workflows/t.yml": "jobs:\n  j:\n    steps:\n      - run: bash contrib/x.sh\n",
+                    "contrib/x.sh": "",
+                },
+            )
+        )
+        == ["unowned-workflow-file"],
+    )
 
 
 # One job, named the way a check run is named, running a target the documentation makes a promise

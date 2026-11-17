@@ -52,6 +52,20 @@ GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
 CODEOWNERS = Path(".github/CODEOWNERS")
 RUNS_A_FILE = re.compile(r"(?:^|[\s;&|(])(?:python3?|bash|sh|node)\s+([\w./-]+)")
 RUNS_MAKE = re.compile(r"(?:^|[\s;&|(])make\b")
+# A command position is the start of the text, or what follows `;`, `&`, `|`, `(`, a backtick or
+# `$(`, with any `NAME=value` assignments and a `then`, `do` or `else` skipped. The word there is a
+# file the step runs through its shebang when it holds a `/` (a bare word is looked up on PATH, so
+# `cargo` and `file` are not files of the tree) and does not start at the root of the machine.
+COMMAND_POSITION = r"(?:^|[;&|(`]|\$\()\s*(?:\w+=\S*\s+)*(?:(?:then|do|else)\s+)?"
+RUNS_BY_SHEBANG = re.compile(
+    COMMAND_POSITION + r"(?!/)([\w.-]*(?:/[\w.-]+)+)(?=\s|$|[;&|)`])"
+)
+# The word after a variable at a command position, such as `"$PYTHON" contrib/measure-flakes.py`,
+# is the file an interpreter the step chose is given, so it is read as `python3 <path>` is.
+RUNS_AFTER_VARIABLE = re.compile(
+    COMMAND_POSITION + r"""["']?\$\{?\w+\}?["']?\s+([\w./-]+)(?=\s|$|[;&|)`])"""
+)
+BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d*\s*(?:#.*)?$")
 
 # What a job can hold that is worth stealing, and the commands that run bytes nobody here wrote. The
 # grant is a permission to request a token rather than a token, which is the whole of the difference:
@@ -1048,21 +1062,59 @@ def owners_of(path, rules):
     return owners
 
 
+def files_named_as_commands(text, continued=False):
+    """The paths a shell line runs without an interpreter word: the word at a command position, and
+    the word after a variable at one. `continued` is a line that follows one ending in a backslash,
+    whose first word is an argument of the command before it."""
+    if continued:
+        text = "\\ " + text
+    named = RUNS_BY_SHEBANG.findall(text) + RUNS_AFTER_VARIABLE.findall(text)
+    return [one[2:] if one.startswith("./") else one for one in named]
+
+
 def files_workflows_run():
-    """Each file a workflow step runs by path, with where it is named: `python3 <path>`, and the
-    Makefile wherever a step calls `make`."""
+    """Each file a workflow step runs by path, with where it is named, as a file of the tree: the
+    word after `python3`, `python`, `bash`, `sh` or `node`; the word at a command position, which
+    the step runs through its shebang (the first word after `run:`, after `;`, `&&`, `||`, `|` or
+    `(`, and the first word of a line in a `run: |` block); the word after a variable at a command
+    position, such as `"$PYTHON" <path>`; and the Makefile wherever a step calls `make`."""
     found = {}
     if not WORKFLOWS.is_dir():
         return found
     for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        key_column = None
+        continued = False
         for number, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+            where = f"{path}:{number}"
+            if key_column is not None and (
+                not raw.strip() or len(raw) - len(raw.lstrip()) > key_column
+            ):
+                if not raw.lstrip().startswith("#") and raw.strip():
+                    for named in files_named_as_commands(raw.strip(), continued):
+                        if Path(named).is_file():
+                            found.setdefault(named, where)
+                    continued = raw.rstrip().endswith("\\") and not re.search(
+                        r"(?:&&|\|\||[|;])\s*\\$", raw.rstrip()
+                    )
+            else:
+                key_column = None
+                continued = False
             if raw.lstrip().startswith("#"):
                 continue
+            step = RUN.match(raw)
+            if step and key_column is None:
+                value = step.group(1)
+                if BLOCK_SCALAR.match(value):
+                    key_column = raw.index("run:")
+                else:
+                    for named in files_named_as_commands(value):
+                        if Path(named).is_file():
+                            found.setdefault(named, where)
             for named in RUNS_A_FILE.findall(raw):
                 if Path(named).is_file():
-                    found.setdefault(named, f"{path}:{number}")
-            if RUN.match(raw) and RUNS_MAKE.search(raw) and Path("Makefile").is_file():
-                found.setdefault("Makefile", f"{path}:{number}")
+                    found.setdefault(named, where)
+            if step and RUNS_MAKE.search(raw) and Path("Makefile").is_file():
+                found.setdefault("Makefile", where)
     return found
 
 
@@ -1077,7 +1129,11 @@ def check_run_files_have_owners():
     files the same steps run were not.
 
     Only a file a step names is read, so a script a recipe calls in turn is not. That is the
-    Makefile's entry to cover, which is why `make` counts as naming it.
+    Makefile's entry to cover, which is why `make` counts as naming it. A step names a file by
+    the word after an interpreter, by the word at a command position, which runs through its
+    shebang, or by the word after a variable at one (`"$PYTHON" <path>`). A word without a `/`
+    is looked up on `PATH` and is not read, and neither is a word that is no file of the tree.
+    A file named as an argument of another command is not run by the step and is not read.
     """
     rules = code_owner_patterns()
     if rules is None:

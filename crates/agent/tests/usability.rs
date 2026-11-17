@@ -12,10 +12,11 @@ use bravebot_agent::usability::{
 use bravebot_sandbox::rules::{Entry, Lists};
 use std::path::{Path, PathBuf};
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 fn root(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("usability-{name}"))
+    scratch_root::scratch_dir(&format!("usability-{name}"))
 }
 
 fn run(name: &str, workflows: &[Workflow]) -> Report {
