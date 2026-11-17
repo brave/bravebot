@@ -71,8 +71,8 @@ any condition listed in its `BEYOND_THE_OPERATING_SYSTEM` constant (`target_arch
 Adding one means adding a clippy target for it to CI and to this page, then listing it in that test.
 `fuzz/` is a package of its own and is linted by `make check-fuzz`.
 
-`make check` and `make check-scripts` also fail when a Verus contract in `crates/` differs from
-`verify/contracts.txt`.
+`make check` and `make check-scripts` also fail when a Verus contract or assumption in `crates/`
+differs from `verify/contracts.txt`.
 `make check-verus` runs Verus, which brings its own toolchain, so `make check` leaves it to CI's
 `Verus` job, as it leaves `make check-fuzz` to the fuzz job. [verification.md](verification.md)
 says when that job runs and how to run it here.

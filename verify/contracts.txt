@@ -1,9 +1,10 @@
-# The Verus contracts on the code in crates/, one per line, as `path::function: clauses`.
+# The Verus contracts on the code in crates/, one per line, as `path::function: clauses`, then what
+# Verus is told to accept without proof, one per line, as `path::item: assumes <what>`.
 #
-# contrib/check-verus-contracts.py fails when a contract in the tree differs from this file, so a
-# contract that is removed, added or weakened shows in a diff. After changing one, run
-# `python3 contrib/check-verus-contracts.py --write` and say in the pull request why the contract
-# changed. docs/development/verification.md says how a contract is written and run.
+# contrib/check-verus-contracts.py fails when a contract or an assumption in the tree differs from
+# this file, so one that is removed, added or weakened shows in a diff. After changing one, run
+# `python3 contrib/check-verus-contracts.py --write` and say in the pull request why it changed.
+# docs/development/verification.md says how a contract is written and run.
 
 crates/core/src/colour_codes.rs::code_end: r => requires start + 2 <= bytes.len(), ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
@@ -18,3 +19,13 @@ crates/core/src/value.rs::label: r => ensures r == spec_label_of(&self),
 crates/core/src/value.rs::declassify: r => ensures r == spec_value_of(&self),
 crates/core/src/value.rs::into_trusted: r => ensures r is Ok <==> spec_label_of(&self) == crate::spec::trusted_public(), r is Ok ==> r->Ok_0 == spec_value_of(&self), r is Err ==> r->Err_0 == self,
 crates/core/src/value.rs::relabel: r => ensures r is Some <==> crate::spec::degrades(spec_label_of(&self), to), r is Some ==> spec_value_of(&r->Some_0) == spec_value_of(&self), r is Some ==> spec_label_of(&r->Some_0) == to,
+
+# What Verus accepts without proof.
+crates/core/src/policy.rs::Declassification: assumes external_body
+crates/core/src/policy.rs::authorise: assumes external_body
+crates/core/src/policy.rs::ExSink: assumes external_trait_specification
+crates/core/src/policy.rs::ExDenial: assumes external_type_specification
+crates/core/src/policy.rs::ExDenial: assumes external_body
+crates/core/src/policy.rs::Policy: assumes external_body
+crates/core/src/policy.rs::deny: assumes external_body
+crates/core/src/policy.rs::allow: assumes external_body
