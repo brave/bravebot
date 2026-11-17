@@ -2256,9 +2256,13 @@ impl Config {
     pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
         let name = self.model_named(name);
         // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
-        // an entry may name either whichever the model was asked for as.
+        // an entry may name either whichever the model was asked for as. So does an account model,
+        // `chatgpt/gpt-5` being sent to the account as `gpt-5`.
         let Some((provider, wire)) = self.provider_for(&name) else {
-            return self.models.refuses(&name);
+            return match self.chatgpt_model(&name).or_else(|| self.xai_model(&name)) {
+                Some(wire) => self.models.refuses_any(&[&name, wire]),
+                None => self.models.refuses(&name),
+            };
         };
         let qualified = format!("{}/{wire}", provider.id);
         self.models.refuses_any(&[&name, wire, &qualified])
@@ -4975,6 +4979,51 @@ mod tests {
                 Some(ModelRefusal::NotAllowed),
                 "allow {entry}"
             );
+        }
+    }
+
+    /// BACKEND-48: an account model is asked for as `chatgpt/gpt-5` or `xai/grok-4.5` and sent to the
+    /// account as `gpt-5` or `grok-4.5`, and a list entry written either way answers for the one model.
+    ///
+    /// Both accounts, each list and each spelling of the entry. A build that compared only the
+    /// qualified name requests a model whose deny entry is written as the account is sent it, and one
+    /// that handled a single account leaves the other open. A second model of the same account that no
+    /// entry names shows that an allow entry permits one model and not the whole account.
+    #[test]
+    fn an_account_model_is_matched_by_either_of_its_spellings() {
+        let resolved = |name: &str, list: &str| {
+            let managed = managed::scratch(name, &format!(r#"{{"models": {{{list}}}}}"#));
+            let config = resolved_under(&managed, &Settings::parse("{}"), |_| None, complete_env)
+                .expect("configured");
+            (config, managed)
+        };
+        for (account, model) in [("chatgpt", "gpt-5"), ("xai", "grok-4.5")] {
+            let qualified = format!("{account}/{model}");
+            let other = format!("{account}/other-model");
+            for entry in [model, qualified.as_str()] {
+                let (config, _) =
+                    resolved("account-spelling-deny", &format!(r#""deny": ["{entry}"]"#));
+                assert_eq!(
+                    config.model_refused(&qualified).map(|(_, why)| why),
+                    Some(ModelRefusal::Denied),
+                    "deny {entry}, asked {qualified}"
+                );
+                assert_eq!(config.model_refused(&other), None, "deny {entry}");
+                let (config, _) = resolved(
+                    "account-spelling-allow",
+                    &format!(r#""allow": ["{entry}"]"#),
+                );
+                assert_eq!(
+                    config.model_refused(&qualified),
+                    None,
+                    "allow {entry}, asked {qualified}"
+                );
+                assert_eq!(
+                    config.model_refused(&other).map(|(_, why)| why),
+                    Some(ModelRefusal::NotAllowed),
+                    "allow {entry}"
+                );
+            }
         }
     }
 
