@@ -327,8 +327,12 @@ fn the_target_under_the_pointer_is_drawn_underlined_and_bold_and_nothing_else_ch
                 fixture.name
             );
         }
-        if matches!(hovered.hit, Hit::Scrollbar) {
-            assert!(changed.is_empty(), "{}: the track was marked", fixture.name);
+        if matches!(hovered.hit, Hit::Scrollbar | Hit::Face) {
+            assert!(
+                changed.is_empty(),
+                "{}: a picture or a track was marked",
+                fixture.name
+            );
             continue;
         }
         assert!(
