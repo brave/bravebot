@@ -2876,6 +2876,7 @@ command-sidebar = Choisir les sections que le panneau d'informations affiche
 command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
+command-redraw = Redessiner tout l'écran, pour un terminal qui a été effacé ou réinitialisé
 command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-schedule = Lister, ajouter, suspendre, reprendre, supprimer ou lancer des entrées planifiées
