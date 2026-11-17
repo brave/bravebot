@@ -3314,8 +3314,11 @@ ever. The interface that draws looks at its terminal twice a second, from a thre
 because the thread that reads does not come back from a terminal that has gone, and ends with status
 129, which a shell reports for a program ended by SIGHUP, the first time the other end has closed.
 The look begins before the terminal is taken, so the questions asked of it on the way in are
-covered. A key waiting to be read is not a hangup, and nothing is looked at where standard input is
-not a terminal.
+covered. The interface can find the closed terminal before the next look, when a write to it fails
+on the way in or on the way out. It then looks at once, and on a hangup it ends with 129 without
+writing anything more, since a write to the closed terminal from the cursor's restore or a
+message on standard error would end the program with a panic. A key waiting to be read is not a
+hangup, and nothing is looked at where standard input is not a terminal.
 
 **Why.** crossterm takes a read of nothing for no event yet and reads again, so a session whose
 terminal has gone spins at a core's worth of CPU for as long as it lives, and every other process on
@@ -3326,7 +3329,9 @@ the machine slows with it. Sessions left behind this way add up, one core each.
 `verified-by: bravebot_tui::hangup::a_terminal_that_is_idle_or_has_a_key_waiting_has_not_hung_up`
 `verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
 `verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
+`verified-by: bravebot_tui::app::tests::hangup::a_run_whose_terminal_cannot_be_handed_back_asks_whether_it_hung_up`
 `verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`
+`verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_while_it_wrote_ends_with_the_status_of_a_hangup`
 
 <a id="INPUT-52"></a>
 ### INPUT-52: keys typed while the terminal is asked about itself at startup are kept, in order
