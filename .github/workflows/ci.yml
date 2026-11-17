@@ -1,7 +1,11 @@
 name: CI
 
+# merge_group is the run on the merge queue's branch: the pull request squashed onto the latest
+# main. A required check has to report there, since a pass on the pull request's own head does
+# not stand for the combination the queue is about to merge.
 on:
   pull_request:
+  merge_group:
   push:
     branches:
       - main
@@ -99,11 +103,12 @@ jobs:
 
       # The lints the tree has hundreds of sites of cannot be denied yet. This holds each to the
       # number the base has, per crate, by running clippy at both. The base commit is the pull
-      # request's own, fetched because the checkout is the merge commit alone.
+      # request's own, fetched because the checkout is the merge commit alone. In the merge queue
+      # the base is the commit the queue's branch was made on.
       - name: No new sites of the lints held to the base
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           make check-lint-increase
