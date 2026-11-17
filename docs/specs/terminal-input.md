@@ -3372,9 +3372,9 @@ its next key while the rest of a sequence is still to arrive, which a terminal w
 ssh link does, makes ordinary.
 
 **Why.** The terminal is a blocking descriptor, so a read with nothing waiting does not return
-until the next byte arrives. crossterm read again after every read that completed no event, so
-`input::poll` stayed in that read past its timeout: nothing was drawn and a resize was ignored until
-the person typed the rest of the sequence, seconds later or never.
+until the next byte arrives. A read loop that reads again after a read that completes no event, as
+the published crossterm does, stays in that read past the caller's timeout: nothing is drawn and a
+resize is ignored until the person types the rest of the sequence, seconds later or never.
 
 **Known costs.** One extra `ioctl(2)` on the terminal after each read that completed no event.
 
