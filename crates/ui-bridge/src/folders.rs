@@ -13,7 +13,14 @@
 //! the folder its own native picker returned, and a renderer cannot call it at all; whatever path
 //! arrives is still checked as if anybody had typed it.
 
-use super::*;
+use super::{Bridge, rewind_json, rules_json, save, turn_workspace};
+use crate::protocol::{ErrorCode, Failure, Request};
+use crate::running::State;
+use bravebot_agent::Workspace;
+use bravebot_agent::workspace::WorkspaceError;
+use bravebot_config::Settings;
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 impl Bridge {
     /// `session.folders.list`, `session.folders.add` and `session.folders.close`.
@@ -158,11 +165,11 @@ impl Bridge {
             .iter()
             .position(|open| open == Path::new(path))
             .map(|at| state.directories[at].clone());
+        // A folder listed under that name is closed by taking it off the list, which is what every
+        // later turn opens: the workspace here only resolves another name to one listed, and is not
+        // kept, so there is nothing in it to close.
         let closed = match listed {
-            Some(closed) => {
-                let _ = workspace.close_added_directory(path);
-                closed
-            }
+            Some(closed) => closed,
             None => workspace
                 .close_added_directory(path)
                 .map_err(|error| Failure::bad_request(error.to_string()))?,
@@ -242,7 +249,9 @@ fn folders_workspace(
         .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
     workspace.open_scratch(state.scratch.directory());
     for directory in &state.directories {
-        let _ = workspace.add_directory(&directory.display().to_string());
+        workspace
+            .add_directory(&directory.display().to_string())
+            .ok();
     }
     Ok(workspace)
 }
