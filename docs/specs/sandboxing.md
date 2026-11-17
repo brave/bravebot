@@ -3510,6 +3510,16 @@ need a file made in the tree and a refusal that names a file the volume holds ap
 back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
 person did not write.
 
+An entry of `denyRead` or `denyWrite` that names a path that is not on disk keeps the spelling it
+was written in beneath the part that is. A volume that opens a name under every canonically
+equivalent form (APFS) opens a file made there later under either form, so the path of a request and
+an allowance at the path a refusal names are compared with the refusal one name at a time, as
+written or in canonical decomposition, whichever form the entry and the file are in. A name that is not
+text is compared as the bytes it is. Case is not folded, since the entry names one path and not a
+pattern, and a volume that holds the two forms apart is refused more than the entry spells and never
+less. A recorded writable directory and a `PATH` entry that do not exist, spelled in different
+forms, are compared by name only ([SANDBOX-30](#SANDBOX-30)).
+
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
 is, and the result names the key and the entry. Where the backend cannot subtract from a grant
@@ -3572,6 +3582,11 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_deny_glob_still_meets_every_name_it_met_as_written`
 `verified-by: bravebot_sandbox::rules::an_allow_glob_meets_names_exactly`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
+`verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
+`verified-by: bravebot_sandbox::rules::a_denial_of_a_missing_path_refuses_the_file_made_later_in_either_unicode_form`
+`verified-by: bravebot_sandbox::rules::an_allowance_is_overridden_by_a_refusal_spelled_in_the_other_unicode_form`
+`verified-by: bravebot_sandbox::rules::a_denied_path_is_met_in_either_unicode_form_and_no_other_name_is`
+`verified-by: bravebot_sandbox::rules::a_denied_name_that_is_not_text_is_not_met_by_its_lossy_lookalike`
 `verified-by: bravebot_sandbox::rules::a_denial_decides_the_path_it_names_and_a_pinned_one_what_is_beneath`
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
 `verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
