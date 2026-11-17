@@ -96,6 +96,11 @@ or the scripts that run them, on the merge queue's branch, and on `main`. It ins
 `VERUS_SHA256`, and the toolchain `VERUS_TOOLCHAIN` names. A bump of the release changes all three
 together.
 
+`crates/core/src/spec.rs`, `verify/` and the two scripts have code owners in `.github/CODEOWNERS`.
+A contract that is removed or weakened in the crate has to change `verify/contracts.txt` to pass,
+and a definition a contract names lives in `spec.rs`, so either change needs an owner's approval.
+The body a contract holds needs none, because Verus checks it.
+
 ## Running
 
 Verus ships as a release archive that runs on the Rust toolchain `VERUS_TOOLCHAIN` names, through

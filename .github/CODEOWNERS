@@ -72,3 +72,12 @@
 /contrib/measure-mutants.py @bbondy
 /ui/scripts/check-windows-install.mjs @bbondy
 /ui/scripts/windows-installer.mjs @bbondy
+
+# The Verus definitions, the contract ledger, the mutations each contract has to refuse, the copies
+# of fixed defects, and the scripts that check them. A contract is checked against these, so an
+# edit to one can weaken what `make check-verus` and `make check` hold every contract to
+# (docs/development/verification.md).
+/crates/core/src/spec.rs @bbondy @darkdh
+/verify/ @bbondy @darkdh
+/contrib/check-verus.py @bbondy @darkdh
+/contrib/check-verus-contracts.py @bbondy @darkdh
