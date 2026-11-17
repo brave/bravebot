@@ -305,6 +305,10 @@ covers, assumes. `Read(./secrets)`, `Read(./secrets/)` and `Read(secrets/)` cove
 `secrets/key`, and `Edit(./secrets/)` stops a write to `secrets/key`. An `allow` rule keeps its
 reading and covers the place it names alone, since widening a grant would grant files nobody named.
 
+A rule that names a root is a rule about a directory like any other, so `Read(./)`, `Read(.)` and
+`Edit(./)` cover every path in the workspace and `Read(//)` covers every full path, in `deny` and in
+`ask`, quoted or not. As `allow` rules they grant the root alone.
+
 A `..` in a path specifier is resolved when the rule is read, against the place its anchor names, so
 a rule is in the form [TRUST-10](trust-map.md#TRUST-10) gives a call's path. `Read(../sib/.env)` in a
 session working in `/home/someone/proj` is the full path `/home/someone/sib/.env`, which is how a call
@@ -361,6 +365,11 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_core::permissions::a_trailing_double_star_covers_the_directory_it_names`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_a_directory_covers_the_files_under_it`
 `verified-by: bravebot_core::permissions::an_allow_rule_naming_a_directory_grants_that_entry_and_not_what_is_under_it`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_the_workspace_root_covers_every_path_under_it`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_the_filesystem_root_covers_every_path_under_it`
+`verified-by: bravebot_core::permissions::an_allow_rule_naming_a_root_grants_that_place_and_not_what_is_under_it`
+`verified-by: bravebot_core::permissions::a_rule_naming_the_workspace_by_its_full_path_covers_every_file_in_it`
+`verified-by: bravebot_agent::turn::a_managed_rule_naming_the_workspace_root_refuses_a_read_and_hides_every_file_from_a_walk`
 `verified-by: bravebot_core::permissions::a_rule_holding_dot_dot_covers_the_place_a_call_to_it_arrives_as`
 `verified-by: bravebot_core::permissions::a_rule_holding_dot_dot_is_resolved_in_every_list`
 `verified-by: bravebot_agent::permissions::a_directory_rule_and_a_rule_holding_dot_dot_cover_the_files_they_name`
