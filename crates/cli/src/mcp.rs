@@ -1619,6 +1619,7 @@ fn forget<R: BufRead, W: Write>(
 ) -> Result<(), Stopped> {
     let directory = writable(home, "forget")?;
     let project = project(path)?;
+    let named = shown(&project.display().to_string());
     let forgotten = bravebot_agent::mcp::forget(directory, &project).map_err(|why| match why {
         Unforgotten::Incognito => (
             Ending::Failed,
@@ -1632,17 +1633,27 @@ fn forget<R: BufRead, W: Write>(
                 reason = bravebot_agent::mcp::unreadable_record(&record.why)
             ),
         ),
-        Unforgotten::NotWritten { path, error, .. } => (
-            Ending::Failed,
-            t!(
-                mcp_not_written,
-                path = printable_path(&path),
-                error = error.to_string()
-            ),
-        ),
+        Unforgotten::NotWritten {
+            path,
+            error,
+            forgotten,
+        } => {
+            // The projects file is written first, so a tools file that then fails leaves the
+            // answer about servers forgotten, which is said before the failure.
+            if forgotten.every_server {
+                say(person, t!(mcp_forgot_servers, path = &named));
+            }
+            (
+                Ending::Failed,
+                t!(
+                    mcp_not_written,
+                    path = printable_path(&path),
+                    error = error.to_string()
+                ),
+            )
+        }
     })?;
 
-    let named = shown(&project.display().to_string());
     if forgotten.is_empty() {
         say(person, t!(mcp_forgot_nothing, path = &named));
     }
