@@ -19,6 +19,7 @@ use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::value::Labelled;
 use bravebot_ui_bridge::bridge::turn_workspace;
+use bravebot_ui_bridge::rules::reads_stay_in_workspace;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -93,8 +94,7 @@ fn a_turn_searches_under_the_file_cap_the_project_settings_name() {
     }
 
     let settings = settings_of(root);
-    let workspace =
-        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
+    let workspace = turn_workspace(root.to_path_buf(), &settings, false).expect("a workspace");
 
     assert!(
         search_was_partial(&workspace),
@@ -123,8 +123,7 @@ fn a_turn_searches_under_the_time_cap_the_project_settings_name() {
     .expect("a settings file");
 
     let settings = settings_of(root);
-    let workspace =
-        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
+    let workspace = turn_workspace(root.to_path_buf(), &settings, false).expect("a workspace");
 
     assert_eq!(
         workspace.search_caps(),
@@ -144,8 +143,7 @@ fn caps_nobody_named_leave_a_turn_on_the_built_in_ones() {
     let root = held.path();
 
     let settings = settings_of(root);
-    let configured =
-        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
+    let configured = turn_workspace(root.to_path_buf(), &settings, false).expect("a workspace");
     let built_in = Workspace::new(root).expect("a workspace");
 
     assert_eq!(configured.search_caps(), built_in.search_caps());
@@ -162,8 +160,7 @@ fn a_turn_runs_on_the_project_it_was_given() {
     let root: PathBuf = held.path().to_path_buf();
 
     let settings = settings_of(&root);
-    let workspace =
-        turn_workspace(root.clone(), &settings, &Managed::default()).expect("a workspace");
+    let workspace = turn_workspace(root.clone(), &settings, false).expect("a workspace");
 
     assert_eq!(
         workspace.root(),
@@ -470,7 +467,8 @@ mod through_a_turn {
 /// turn, so a restriction that did not arrive would be one this surface silently did without.
 ///
 /// The failure this rejects is a front end that reads the caps out of the settings and leaves this
-/// key behind, which no test of the agent crate can see.
+/// key behind, which no test of the agent crate can see. When the key is read is pinned in
+/// `tests/rules.rs`, which drives a session through the binary (PERM-12).
 #[test]
 fn a_turn_is_held_inside_the_project_where_its_settings_ask_for_it() {
     let held = project("reads-inside");
@@ -483,8 +481,8 @@ fn a_turn_is_held_inside_the_project_where_its_settings_ask_for_it() {
     .expect("a settings file");
 
     let settings = settings_of(root);
-    let workspace =
-        turn_workspace(root.to_path_buf(), &settings, &Managed::default()).expect("a workspace");
+    let asked = reads_stay_in_workspace(&settings, &Managed::default());
+    let workspace = turn_workspace(root.to_path_buf(), &settings, asked).expect("a workspace");
     assert!(
         workspace.reads_stay_inside(),
         "the key the project layer wrote did not reach the workspace a turn runs on"
@@ -492,8 +490,9 @@ fn a_turn_is_held_inside_the_project_where_its_settings_ask_for_it() {
 
     let unasked = project("reads-unasked");
     let alone = settings_of(unasked.path());
+    let asked = reads_stay_in_workspace(&alone, &Managed::default());
     assert!(
-        !turn_workspace(unasked.path().to_path_buf(), &alone, &Managed::default())
+        !turn_workspace(unasked.path().to_path_buf(), &alone, asked)
             .expect("a workspace")
             .reads_stay_inside(),
         "a project that asked for nothing was confined anyway"
@@ -525,8 +524,8 @@ fn a_turn_opens_the_references_the_home_layer_named_and_not_a_projects() {
     .expect("the project layer");
 
     let settings = Settings::layered(Some(home.path().to_path_buf()), Some(held.path()), None);
-    let workspace = turn_workspace(held.path().to_path_buf(), &settings, &Managed::default())
-        .expect("a workspace");
+    let workspace =
+        turn_workspace(held.path().to_path_buf(), &settings, false).expect("a workspace");
 
     let opened: Vec<_> = workspace
         .references()

@@ -54,7 +54,7 @@ impl Bridge {
     /// too while a turn runs, since the turn holds the state, and before the trust question is
     /// answered, since that answer replaces the map this would write the folder's rule into.
     fn add_folder(&mut self, handle: &str, path: &str) -> Result<Value, Failure> {
-        let settings = {
+        let (settings, confined) = {
             let open = self.open.get(handle).ok_or_else(Failure::no_such_session)?;
             open.ready_for_work().map_err(|failure| {
                 if failure.code == ErrorCode::TurnInFlight {
@@ -66,7 +66,10 @@ impl Bridge {
                     failure
                 }
             })?;
-            crate::settings::layers(Some(&open.project), self.settings.as_deref())
+            (
+                crate::settings::layers(Some(&open.project), self.settings.as_deref()),
+                open.reads_stay_in_workspace,
+            )
         };
         // Said here rather than left to the workspace, so the refusal names what was wrong with
         // the request and not a path resolved against wherever this process happens to stand.
@@ -85,7 +88,7 @@ impl Bridge {
             .lock()
             .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
         let state = &mut *guard;
-        let mut workspace = folders_workspace(&project, &settings, state)?;
+        let mut workspace = folders_workspace(&project, &settings, confined, state)?;
         let canonical = workspace
             .resolve_directory(path)
             .map_err(|error| Failure::bad_request(error.to_string()))?;
@@ -119,7 +122,7 @@ impl Bridge {
     /// Refused while a turn runs. Not refused before the trust question is answered: closing only
     /// takes reach away.
     fn close_folder(&mut self, handle: &str, path: &str) -> Result<Value, Failure> {
-        let settings = {
+        let (settings, confined) = {
             let open = self.open.get(handle).ok_or_else(Failure::no_such_session)?;
             if open.running.is_some() {
                 return Err(Failure::new(
@@ -127,7 +130,10 @@ impl Bridge {
                     "Wait for the current turn to finish before closing a folder.",
                 ));
             }
-            crate::settings::layers(Some(&open.project), self.settings.as_deref())
+            (
+                crate::settings::layers(Some(&open.project), self.settings.as_deref()),
+                open.reads_stay_in_workspace,
+            )
         };
         if !Path::new(path).is_absolute() {
             return Err(Failure::bad_request(format!(
@@ -144,7 +150,7 @@ impl Bridge {
             .lock()
             .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
         let state = &mut *guard;
-        let mut workspace = folders_workspace(&project, &settings, state)?;
+        let mut workspace = folders_workspace(&project, &settings, confined, state)?;
         // Matched against the list itself first, so a folder that has since been deleted or moved,
         // which the workspace could not reopen, can still be closed under the name it is listed by.
         let listed = state
@@ -223,17 +229,17 @@ fn open_in(
 
 /// The workspace a turn would open now, with the folders the session already has open, so the
 /// refusals of a folder that overlaps one are the ones a turn would meet.
+///
+/// `confined` is whether the session's file tools are held to the project (PERM-16), as its turns
+/// are.
 fn folders_workspace(
     project: &Path,
     settings: &Settings,
+    confined: bool,
     state: &State,
 ) -> Result<Workspace, Failure> {
-    let mut workspace = turn_workspace(
-        project.to_path_buf(),
-        settings,
-        &bravebot_config::Managed::load(),
-    )
-    .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+    let mut workspace = turn_workspace(project.to_path_buf(), settings, confined)
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
     workspace.open_scratch(state.scratch.directory());
     for directory in &state.directories {
         let _ = workspace.add_directory(&directory.display().to_string());

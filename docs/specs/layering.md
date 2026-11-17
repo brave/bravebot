@@ -107,8 +107,8 @@ selector are written out as `‹U+XXXX›` too, in every row the terminal client
 `printable`: code blocks, command output, thinking text, messages and notes, so an emoji sequence
 reads as its parts. A complete colour code in output drawn for
 reading is taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)). So is one in
-the text of a program's output that the planner may read, which `bravebot-core` does for both
-([RUN-21](tools/run.md#RUN-21)).
+the text of a program's output that the planner may read, which the information-flow kernel does
+for both ([RUN-21](tools/run.md#RUN-21)).
 
 `verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
 `verified-by: bravebot_tui::render::a_cut_fits_the_room_once_control_characters_are_drawn`

@@ -943,6 +943,9 @@ altered a session nobody had configured would be a change to every session.
 `verified-by: bravebot_agent::permissions::no_block_is_no_rules`
 `verified-by: bravebot_config::settings::the_permissions_block_and_the_env_block_do_not_need_each_other`
 `verified-by: bravebot_ui_bridge::rules::a_rule_written_after_a_session_opened_governs_the_next_one`
+`verified-by: bravebot_ui_bridge::rules::removing_reads_stay_in_workspace_does_not_widen_an_open_session`
+`verified-by: bravebot_ui_bridge::rules::adding_reads_stay_in_workspace_confines_the_next_session_and_not_an_open_one`
+`verified-by: bravebot_ui_bridge::rules::a_fork_is_held_to_the_project_where_its_parent_opened_held_to_it`
 
 ## The question
 
