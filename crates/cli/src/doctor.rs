@@ -2002,6 +2002,9 @@ fn whether_anybody_asked(attempt: bravebot_config::Attempt) -> &'static str {
 /// The record is the fact and this is the words for it, so a credential whose record says
 /// something survives and whose report says nothing is a disagreement a test can see.
 pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<&'static str> {
+    if !held.outlives_revocation() {
+        return None;
+    }
     match held {
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
         bravebot_config::Held::ChatgptAccount => Some(t!(doctor_outlives_chatgpt_account)),
@@ -4042,11 +4045,10 @@ mod tests {
     }
 
     /// CRED-25: the third thing a held credential records is what revoking it would not reach, and
-    /// which credentials have one is the record's answer rather than this report's. Kept apart so
-    /// they can disagree, and pinned together so they cannot: a credential given a line here that
-    /// the record says nothing survives for tells somebody to chase a session that does not exist,
-    /// and one the record says something survives for and that is reported without it leaves the
-    /// live credential behind after the leak has been dealt with.
+    /// which credentials have one is the record's answer rather than this report's. The report
+    /// reads the record to decide whether to say anything, so what this catches is a credential the
+    /// record says something survives for and that has no words: it is reported without the line,
+    /// and the live credential is left behind after the leak has been dealt with.
     #[test]
     fn what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one() {
         for held in bravebot_config::Held::all(GATEWAY_HOST) {

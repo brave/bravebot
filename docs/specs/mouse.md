@@ -1921,7 +1921,9 @@ after it is held: the words on the first row it covers, from its first drawn cel
 the rows of an address or a path that was wrapped. The blanks before and after them are left as they
 were, and no cell's text changes. These are the marks an address and the word that copies a block are
 already drawn with, with bold to tell a hovered one from the rest, and neither is a colour, so they
-show in every theme and under `NO_COLOR`. The track of the scrollbar has no text to mark and is not.
+show in every theme and under `NO_COLOR`. The track of the scrollbar has no text to mark and is not, and
+the face on the opening screen is a picture drawn in cells, which an underline would cut across, so it
+is said on the row of hints and not marked.
 
 The row where the frame draws its hints, which is the row under the box, the scroller's footer and the
 footer of a delegate's view, says in one line what a click on the target does, from a message of the
