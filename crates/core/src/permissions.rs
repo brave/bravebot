@@ -152,16 +152,29 @@ pub struct Anchors {
     /// ([`crate::spelling`]).
     pub backslash_separates: bool,
     /// Whether the volume the paths live on holds two spellings that differ only in case as one
-    /// file. Supplied by the caller because this crate asks the host nothing, and false when the
-    /// caller cannot tell: folding reads a rule about `Docs` as also covering `docs`, which on a
-    /// volume that keeps them apart is a different file.
+    /// file. Supplied by the caller because this crate asks the host nothing. False where the volume
+    /// keeps them apart and where the caller cannot tell, which [`Anchors::case_unknown`] separates:
+    /// folding reads a rule about `Docs` as also covering `docs`, which on a volume that keeps them
+    /// apart is a different file.
     pub folds_case: bool,
+    /// Whether the caller could not tell if the volume folds case. A rule in `deny` or `ask` is then
+    /// read as it is on a volume that folds, since reading it byte for byte leaves a file open that
+    /// the person wrote the rule to keep from the planner, and a rule in `allow` is read byte for
+    /// byte, since folding it would grant a file nobody named (PERM-3). Not read where
+    /// [`Anchors::folds_case`] is true.
+    pub case_unknown: bool,
 }
 
 impl Anchors {
     /// Anchors that resolve nothing, for a caller with no settings file.
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Whether a rule in the list `ruling` names is read as on a volume that folds case: where the
+    /// volume does, and for a rule that restricts where the caller could not tell.
+    fn folds_for(&self, ruling: Ruling) -> bool {
+        self.folds_case || (self.case_unknown && ruling != Ruling::Allow)
     }
 }
 
@@ -368,6 +381,12 @@ impl Rule {
             return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
         }
 
+        // A rule that restricts is stored in the fold it is matched in, which is the folding one
+        // wherever the caller could not tell (PERM-3).
+        let anchors = &Anchors {
+            folds_case: anchors.folds_for(ruling),
+            ..anchors.clone()
+        };
         let mut typed_unreadable = None;
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
@@ -816,6 +835,9 @@ pub struct Permissions {
     /// The volume's answer, kept for the same reason: a path arrives folded or not according to
     /// the volume the rules were read for, and the patterns were stored the way it says.
     folds_case: bool,
+    /// Whether the answer could not be had, kept from the anchors. The rules that restrict were
+    /// stored folded and a path is folded for them, and the rules that grant were not.
+    case_unknown: bool,
 }
 
 impl Permissions {
@@ -860,8 +882,15 @@ impl Permissions {
             allow: read(allow, Ruling::Allow),
             backslash_separates: anchors.backslash_separates,
             folds_case: anchors.folds_case,
+            case_unknown: anchors.case_unknown,
         };
         (permissions, rejected)
+    }
+
+    /// Whether the rules in `deny` and `ask` are matched as on a volume that folds case: where it
+    /// does, and where the answer could not be had. The rules in `allow` follow `folds_case` alone.
+    fn restrictions_fold(&self) -> bool {
+        self.folds_case || self.case_unknown
     }
 
     /// Attach to each rule the reason the person gave for writing it (PERM-1).
@@ -993,7 +1022,8 @@ impl Permissions {
     ///
     /// `allow` rules are left as written, since a grant covers only the spelling approved (PERM-7).
     pub fn follow_links(&mut self, land: impl Fn(&str) -> Option<String>) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let (backslash_separates, folds_case) =
+            (self.backslash_separates, self.restrictions_fold());
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.follow_links(&land, backslash_separates, folds_case);
         }
@@ -1026,17 +1056,26 @@ impl Permissions {
     /// in, an allow rule included, since the checkout is the same tree. The rules are the delegate's
     /// own copy, so the copies go when the delegate does.
     pub fn copy_beneath(&mut self, from: &str, to: &str) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
-        let from = split(&key_of(from, backslash_separates, folds_case));
-        let to = split(&key_of(to, backslash_separates, folds_case));
+        // Each list is keyed as its rules are stored: the rules that restrict in the fold they are
+        // matched in, which is the folding one where the answer could not be had, and the rules
+        // that grant in the one the volume's answer gives.
+        let keyed = |folds_case: bool| {
+            (
+                split(&key_of(from, self.backslash_separates, folds_case)),
+                split(&key_of(to, self.backslash_separates, folds_case)),
+            )
+        };
+        let (restricting_from, restricting_to) = keyed(self.restrictions_fold());
+        let (granting_from, granting_to) = keyed(self.folds_case);
         // A rule that restricts is matched in the full fold where the volume folds case, as
         // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
+        let restricting_folds = self.restrictions_fold();
         let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
         for rule in restricting {
-            rule.copy_beneath(&from, &to, true, folds_case);
+            rule.copy_beneath(&restricting_from, &restricting_to, true, restricting_folds);
         }
         for rule in &mut self.allow {
-            rule.copy_beneath(&from, &to, false, folds_case);
+            rule.copy_beneath(&granting_from, &granting_to, false, self.folds_case);
         }
     }
 
@@ -1053,11 +1092,25 @@ impl Permissions {
 
     /// The rule that decides [`Permissions::for_path`], and which list it is in.
     pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
-        let path = key_of(path, self.backslash_separates, self.folds_case);
-        let canonical = crate::trust::canonical_form(&path, self.folds_case);
-        self.deciding(|rule, restricting| {
-            rule.subject == subject
-                && rule.covers_path(&path, &canonical, self.folds_case, restricting)
+        // The path is spelled for each list as that list's rules are stored: folded for the rules
+        // that restrict wherever the answer could not be had, and as the volume's answer gives for
+        // the rules that grant.
+        let spelled = |folds_case: bool| {
+            let path = key_of(path, self.backslash_separates, folds_case);
+            let canonical = crate::trust::canonical_form(&path, folds_case).into_owned();
+            (path, canonical)
+        };
+        let granting = spelled(self.folds_case);
+        let restricting = match self.restrictions_fold() == self.folds_case {
+            true => granting.clone(),
+            false => spelled(true),
+        };
+        self.deciding(|rule, restricts| {
+            let ((path, canonical), folds_case) = match restricts {
+                true => (&restricting, self.restrictions_fold()),
+                false => (&granting, self.folds_case),
+            };
+            rule.subject == subject && rule.covers_path(path, canonical, folds_case, restricts)
         })
     }
 
@@ -2308,6 +2361,7 @@ mod tests {
             workspace: Some("/home/someone/proj".to_string()),
             backslash_separates: false,
             folds_case: false,
+            case_unknown: false,
         }
     }
 
@@ -3738,6 +3792,111 @@ mod tests {
             Decision::Unmatched
         );
         assert!(!Anchors::none().folds_case);
+    }
+
+    /// Rules read where the volume could not be asked.
+    fn rules_where_the_volume_could_not_be_asked(
+        deny: &[&str],
+        ask: &[&str],
+        allow: &[&str],
+    ) -> Permissions {
+        let anchors = Anchors {
+            case_unknown: true,
+            ..anchors()
+        };
+        read_with(&anchors, deny, ask, allow)
+    }
+
+    /// PERM-3. Where the caller could not tell whether the volume folds case, a rule that restricts
+    /// is read as on a volume that folds: `Read(.env)` in `deny` or `ask` covers `.ENV`, since a
+    /// file a folding volume opens under either spelling is otherwise left to the planner, and the
+    /// extra file a refusal covers on a volume that does not fold grants nothing.
+    #[test]
+    fn a_deny_or_ask_rule_folds_case_where_the_volume_could_not_be_asked() {
+        for (written, path) in [
+            ("Read(.env)", ".ENV"),
+            ("Read(src/**)", "SRC/x/y"),
+            ("Read(Docs/**)", "docs/a.md"),
+            ("Read(cla\u{df}.md)", "class.md"),
+        ] {
+            for (ruling, permissions) in [
+                (
+                    Ruling::Deny,
+                    rules_where_the_volume_could_not_be_asked(&[written], &[], &[]),
+                ),
+                (
+                    Ruling::Ask,
+                    rules_where_the_volume_could_not_be_asked(&[], &[written], &[]),
+                ),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(ruling),
+                    "{written} in the {ruling} list did not cover {path:?}"
+                );
+            }
+        }
+    }
+
+    /// PERM-3. The same unknown answer leaves a rule that grants as written, in the spelling it
+    /// names and no other, so a failed probe never grants a file nobody named. A refusal beside it
+    /// still wins over the grant for the spelling it covers.
+    #[test]
+    fn an_allow_rule_compares_bytes_where_the_volume_could_not_be_asked() {
+        let permissions = rules_where_the_volume_could_not_be_asked(&[], &[], &["Edit(Docs/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for path in ["docs/a.md", "DOCS/a.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Unmatched,
+                "{path} may be another file and was granted"
+            );
+        }
+
+        let both = rules_where_the_volume_could_not_be_asked(
+            &["Edit(secret.md)"],
+            &[],
+            &["Edit(Docs/**)"],
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "SECRET.md"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "docs/a.md"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3, CHECKOUT-9. The copy of a rule for a checkout follows the list it is in: a refusal
+    /// written with `Class` is copied under a checkout of `class` where the answer is unknown, and
+    /// a grant is not.
+    #[test]
+    fn a_copy_for_a_checkout_folds_a_refusal_and_not_a_grant_where_the_volume_could_not_be_asked() {
+        let mut permissions = rules_where_the_volume_could_not_be_asked(
+            &["Read(//work/Class/secrets/**)"],
+            &["Read(//work/Class/asked/**)"],
+            &["Read(//work/Class/granted/**)"],
+        );
+        permissions.copy_beneath("/work/class", "/state/c1");
+        for (path, decision) in [
+            ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+            ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+            ("/state/c1/granted/file", Decision::Unmatched),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                decision,
+                "{path} was ruled wrongly under a copy for a checkout of /work/class"
+            );
+        }
     }
 
     /// The documented asymmetry, and the reason for it: a rule that restricts should cover the
@@ -5882,6 +6041,7 @@ mod tests {
             workspace: None,
             backslash_separates: true,
             folds_case: false,
+            case_unknown: false,
         };
         let permissions = read_with(
             &anchors,
