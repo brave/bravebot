@@ -74,11 +74,28 @@ pub(crate) fn forget(project: &Path) -> Result<Value, Failure> {
                 mcp::unreadable_record(&record.why)
             ),
         )),
-        Err(Unforgotten::NotWritten { path, error }) => Err(Failure::new(
-            ErrorCode::StateUnusable,
-            format!("{} could not be written: {error}", shown_path(&path)),
-        )),
+        Err(Unforgotten::NotWritten {
+            path,
+            error,
+            forgotten,
+        }) => Err(not_written(&path, &error, &forgotten)),
     }
+}
+
+/// A record that could not be written, saying what was forgotten before it: the projects file is
+/// written first, so a tools file that then fails leaves the answer about servers forgotten.
+fn not_written(path: &Path, error: &std::io::Error, forgotten: &Remembered) -> Failure {
+    let not_written = format!("{} could not be written: {error}", shown_path(path));
+    Failure::new(
+        ErrorCode::StateUnusable,
+        if forgotten.every_server {
+            format!(
+                "The answer for every server was forgotten, and the tools are still remembered: {not_written}"
+            )
+        } else {
+            format!("Nothing was forgotten: {not_written}")
+        },
+    )
 }
 
 fn incognito() -> Failure {
@@ -103,4 +120,33 @@ fn unreadable(record: &UnreadableRecord) -> Value {
         "shownPath": shown_path(&record.path),
         "reason": mcp::unreadable_record(&record.why),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tools_file_not_written_says_the_server_answer_was_already_forgotten() {
+        let error = std::io::Error::other("disk full");
+        let path = Path::new("/state/mcp-tools");
+        let half = not_written(
+            path,
+            &error,
+            &Remembered {
+                every_server: true,
+                tools: Vec::new(),
+            },
+        );
+        assert!(
+            half.message
+                .starts_with("The answer for every server was forgotten, and the tools are still remembered: "),
+            "{}",
+            half.message
+        );
+        assert!(half.message.ends_with("could not be written: disk full"), "{}", half.message);
+
+        let none = not_written(path, &error, &Remembered::default());
+        assert!(none.message.starts_with("Nothing was forgotten: "), "{}", none.message);
+    }
 }

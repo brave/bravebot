@@ -29,7 +29,7 @@ pub struct UnreadableRecord {
 }
 
 /// Why a project's answers were not forgotten. Nothing was written in any case but the last, and
-/// there only the file named was not.
+/// there only the file named was not: what was already forgotten before it is `forgotten`.
 #[derive(Debug)]
 pub enum Unforgotten {
     /// The session is incognito and writes nothing.
@@ -40,6 +40,9 @@ pub enum Unforgotten {
     NotWritten {
         path: PathBuf,
         error: std::io::Error,
+        /// What was forgotten before `path` failed: the answer about servers, where the projects
+        /// file was written and the tools file then was not, and otherwise nothing.
+        forgotten: Remembered,
     },
 }
 
@@ -67,6 +70,15 @@ pub fn remembered(directory: &Path, project: &Path) -> Result<Remembered, Unread
 /// was dropped. Both records are read before either is written, so one that cannot be read leaves
 /// both as they are. A record nothing is dropped from is not rewritten.
 pub fn forget(directory: &Path, project: &Path) -> Result<Remembered, Unforgotten> {
+    forget_through(directory, project, |path, text| crate::home::replace(path, text))
+}
+
+/// [`forget`], writing each record through `write`.
+fn forget_through(
+    directory: &Path,
+    project: &Path,
+    mut write: impl FnMut(&Path, &str) -> std::io::Result<()>,
+) -> Result<Remembered, Unforgotten> {
     if bravebot_core::incognito::engaged() {
         return Err(Unforgotten::Incognito);
     }
@@ -78,10 +90,23 @@ pub fn forget(directory: &Path, project: &Path) -> Result<Remembered, Unforgotte
     };
     standing.forget(project);
     if forgotten.every_server {
-        write(&records::projects_file(directory), &projects.to_text())?;
+        let path = records::projects_file(directory);
+        write(&path, &projects.to_text()).map_err(|error| Unforgotten::NotWritten {
+            path,
+            error,
+            forgotten: Remembered::default(),
+        })?;
     }
     if !forgotten.tools.is_empty() {
-        write(&records::tools_file(directory), &standing.to_text())?;
+        let path = records::tools_file(directory);
+        write(&path, &standing.to_text()).map_err(|error| Unforgotten::NotWritten {
+            path,
+            error,
+            forgotten: Remembered {
+                every_server: forgotten.every_server,
+                tools: Vec::new(),
+            },
+        })?;
     }
     Ok(forgotten)
 }
@@ -96,13 +121,6 @@ fn records_to_change(directory: &Path) -> Result<(Projects, Standing), Unreadabl
         why,
     })?;
     Ok((projects, standing))
-}
-
-fn write(path: &Path, text: &str) -> Result<(), Unforgotten> {
-    crate::home::replace(path, text).map_err(|error| Unforgotten::NotWritten {
-        path: path.to_path_buf(),
-        error,
-    })
 }
 
 #[cfg(test)]
@@ -261,6 +279,69 @@ mod tests {
         }
         assert_eq!(texts(&directory), (projects, too_large));
         assert!(remembered(&directory, &project).is_err());
+    }
+
+    #[test]
+    fn a_tools_file_that_is_not_written_says_the_server_answer_was_forgotten() {
+        let directory = scratch("half");
+        let project = directory.join("project");
+        answered(
+            &directory,
+            &[&project],
+            &[("weather", "get_forecast", &project)],
+        );
+        let tools = texts(&directory).1;
+
+        let refused = forget_through(&directory, &project, |path, text| {
+            if path == records::tools_file(&directory) {
+                Err(std::io::Error::other("disk full"))
+            } else {
+                std::fs::write(path, text)
+            }
+        });
+        match refused {
+            Err(Unforgotten::NotWritten {
+                path, forgotten, ..
+            }) => {
+                assert_eq!(path, records::tools_file(&directory));
+                assert_eq!(
+                    forgotten,
+                    Remembered {
+                        every_server: true,
+                        tools: Vec::new()
+                    }
+                );
+            }
+            other => panic!("a failed write was not reported as one: {other:?}"),
+        }
+        assert!(!Projects::read(&directory).contains(&project));
+        assert_eq!(texts(&directory).1, tools);
+    }
+
+    #[test]
+    fn a_projects_file_that_is_not_written_forgets_nothing() {
+        let directory = scratch("unwritten");
+        let project = directory.join("project");
+        answered(
+            &directory,
+            &[&project],
+            &[("weather", "get_forecast", &project)],
+        );
+        let before = texts(&directory);
+
+        let refused = forget_through(&directory, &project, |_, _| {
+            Err(std::io::Error::other("disk full"))
+        });
+        match refused {
+            Err(Unforgotten::NotWritten {
+                path, forgotten, ..
+            }) => {
+                assert_eq!(path, records::projects_file(&directory));
+                assert!(forgotten.is_empty());
+            }
+            other => panic!("a failed write was not reported as one: {other:?}"),
+        }
+        assert_eq!(texts(&directory), before);
     }
 
     #[test]

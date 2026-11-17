@@ -1632,7 +1632,7 @@ fn forget<R: BufRead, W: Write>(
                 reason = bravebot_agent::mcp::unreadable_record(&record.why)
             ),
         ),
-        Unforgotten::NotWritten { path, error } => (
+        Unforgotten::NotWritten { path, error, .. } => (
             Ending::Failed,
             t!(
                 mcp_not_written,
