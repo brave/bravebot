@@ -287,6 +287,8 @@ lower case is more than one character left as written, so `Edit(claß.md)` cover
 and a grant must not reach a file that may not be the one approved. The copy of a rule for a
 checkout ([CHECKOUT-9](checkouts.md#CHECKOUT-9)) follows the same split: a `deny` or `ask` rule
 written with `class` is copied under a checkout of `claß`, and an `allow` rule for `class` is not.
+A `deny` or `ask` rule written under one Unicode form of a directory is likewise copied under a
+checkout of it spelled in the other form, and an `allow` rule is not.
 Where a `deny` or `ask` rule and an `allow` rule are copied to one path under the checkout, the
 lists decide as they do under the working directory: the `deny` or `ask` rule wins.
 Where the volume keeps the spellings apart,
@@ -328,6 +330,8 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
 `verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
 `verified-by: bravebot_core::permissions::a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused`
+`verified-by: bravebot_core::permissions::a_refusal_is_copied_from_the_other_unicode_form_of_the_working_directory`
+`verified-by: bravebot_core::permissions::a_rule_is_not_copied_from_another_name_or_a_grant_from_another_unicode_form`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
@@ -584,7 +588,9 @@ at the top of the workspace too, so with `.env` a link, `Read(.env)` covers the 
 `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the workspace also
 covers the place under the workspace-relative name the file tools ask by, so with a session opened
 in the home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`; a rule about a place outside the
-workspace is left as written. The rule stays one rule, and the name it
+workspace is left as written. The workspace is found in the rule's path in whichever Unicode form
+each is spelled in, so a rule spelled `caf\u{e9}-proj/**` covers `secret/key` in a workspace stored as
+`cafe\u{301}-proj`, whether or not the volume folds case. The rule stays one rule, and the name it
 reaches is covered at that place only, not wherever it appears as the written pattern may be
 ([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
 the spelling the person approved.
@@ -647,6 +653,8 @@ answer without declining the rest of it. It holds against a mode that answers ev
 same reason: the refusal comes before there is a prompt, so there is nothing for a mode to answer.
 
 `verified-by: bravebot_agent::tools::tests::confinement::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_covers_a_project_file_whichever_unicode_form_the_workspace_is_spelled_in`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_either_unicode_form`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name`
 `verified-by: bravebot_core::permissions::a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end`
 `verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`

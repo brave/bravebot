@@ -310,25 +310,37 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     });
 }
 
-/// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
-/// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
-/// folding takes text.
+/// `path` relative to `root` where it lies at or under it, with the names after the root spelled as
+/// `path` has them. Names are compared as text in the form every canonically equivalent spelling
+/// shares ([`bravebot_core::trust::canonical_key`]), so `cafe\u{301}` is `caf\u{e9}` whether or
+/// not the volume folds case. A name that is not UTF-8 is compared as the OS holds it, except where
+/// the volume folds case, since folding takes text.
 ///
-/// Two names are one where either fold joins them: the full one
+/// Where the volume folds case, two names are one where either fold joins them: the full one
 /// ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with `class`, and the one-letter
 /// one ([`bravebot_core::trust::fold_simple`]), which joins `cla\u{df}` with `cla\u{1e9e}`. That is
 /// the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given to
 /// [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root spelled
 /// `class` or `cla\u{1e9e}`, and nothing is granted by it.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
-    if !folds_case {
-        let relative = path.strip_prefix(root).ok()?;
-        return Some(tail(relative.components()));
+    use bravebot_core::trust::{canonical_key, fold_simple};
+    fn text(name: &std::ffi::OsStr, folds_case: bool) -> Option<std::borrow::Cow<'_, str>> {
+        match folds_case {
+            true => Some(name.to_string_lossy()),
+            false => name.to_str().map(std::borrow::Cow::Borrowed),
+        }
     }
-    let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| {
-        let (one, other) = (one.to_string_lossy(), other.to_string_lossy());
-        bravebot_core::trust::fold_case(&one) == bravebot_core::trust::fold_case(&other)
-            || bravebot_core::trust::fold_simple(&one) == bravebot_core::trust::fold_simple(&other)
+    let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| match (
+        text(one, folds_case),
+        text(other, folds_case),
+    ) {
+        (Some(one), Some(other)) => {
+            canonical_key(&one, folds_case) == canonical_key(&other, folds_case)
+                || folds_case
+                    && canonical_key(&fold_simple(&one), true)
+                        == canonical_key(&fold_simple(&other), true)
+        }
+        _ => one == other,
     };
     let mut names = path.components();
     for held in root.components() {
@@ -1674,6 +1686,117 @@ mod tests {
             "a rule about a place outside the project covered a project name"
         );
         assert_eq!(permissions.len(), 2);
+    }
+
+    /// The decisions for `secret/key` under its relative name and its full path, in a project whose
+    /// directory is named `dir_form` and a `deny` rule spelling that directory as `rule_form`.
+    /// `None` where the volume does not keep the directory in the form asked for, so it cannot hold
+    /// the case.
+    #[cfg(unix)]
+    fn decisions_for_a_directory_spelled_two_ways(
+        index: usize,
+        dir_form: &str,
+        rule_form: &str,
+    ) -> Option<(Decision, Decision)> {
+        let scratch =
+            crate::testutil::scratch_dir(&format!("permissions-unicode-form-of-root-{index}"));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let project = scratch.join(dir_form);
+        std::fs::create_dir_all(project.join("secret")).unwrap();
+        std::fs::write(project.join("secret").join("key"), "hunter2").unwrap();
+        let root = project.canonicalize().unwrap();
+        if root.file_name() != Some(std::ffi::OsStr::new(dir_form)) {
+            return None;
+        }
+        let rule_root = root.parent().unwrap().join(rule_form);
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(/{}/secret/**)"]}}}}"#,
+            rule_root.display()
+        ));
+        let (permissions, rejected) = from_settings(&settings, None, &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+        Some((
+            permissions.for_path(Subject::Read, "secret/key"),
+            permissions.for_path(
+                Subject::Read,
+                &root.join("secret").join("key").display().to_string(),
+            ),
+        ))
+    }
+
+    /// PERM-7: a full path rule covers a project file by its relative name and by its full path
+    /// whichever Unicode form the workspace directory is stored in and the rule spells it in, and a
+    /// different directory name is not covered.
+    #[cfg(unix)]
+    #[test]
+    fn a_full_path_rule_covers_a_project_file_whichever_unicode_form_the_workspace_is_spelled_in() {
+        let (nfc, nfd) = ("caf\u{e9}-proj", "cafe\u{301}-proj");
+        for (index, (dir_form, rule_form)) in [(nfd, nfc), (nfc, nfd), (nfc, nfc), (nfd, nfd)]
+            .into_iter()
+            .enumerate()
+        {
+            // A volume that normalizes names as it creates them cannot hold the other form.
+            let Some((relative, absolute)) =
+                decisions_for_a_directory_spelled_two_ways(index, dir_form, rule_form)
+            else {
+                continue;
+            };
+            assert_eq!(
+                relative,
+                Decision::Ruled(Ruling::Deny),
+                "a rule spelled {rule_form:?} missed `secret/key` in a workspace stored as {dir_form:?}"
+            );
+            assert_eq!(
+                absolute,
+                Decision::Ruled(Ruling::Deny),
+                "a rule spelled {rule_form:?} missed the full path in a workspace stored as {dir_form:?}"
+            );
+        }
+        if let Some((relative, absolute)) =
+            decisions_for_a_directory_spelled_two_ways(4, nfd, "cafe\u{301}-other")
+        {
+            assert_eq!(
+                (relative, absolute),
+                (Decision::Unmatched, Decision::Unmatched),
+                "a rule about a differently named directory covered the project"
+            );
+        }
+    }
+
+    /// PERM-7: a root and a path that differ only in Unicode form are one place, whether or not the
+    /// volume folds case, and what is left of the path keeps the spelling it had.
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_either_unicode_form() {
+        use std::path::Path;
+        for folds_case in [false, true] {
+            assert_eq!(
+                beneath(
+                    Path::new("/p/cafe\u{301}/r\u{e9}/b"),
+                    Path::new("/p/caf\u{e9}"),
+                    folds_case
+                ),
+                Some("r\u{e9}/b".to_string()),
+                "a path stored decomposed was not under a root spelled precomposed"
+            );
+            assert_eq!(
+                beneath(
+                    Path::new("/p/caf\u{e9}/re\u{301}/b"),
+                    Path::new("/p/cafe\u{301}"),
+                    folds_case
+                ),
+                Some("re\u{301}/b".to_string()),
+                "a path spelled precomposed was not under a root stored decomposed"
+            );
+            assert_eq!(
+                beneath(
+                    Path::new("/p/cafe\u{301}x/a"),
+                    Path::new("/p/caf\u{e9}"),
+                    folds_case
+                ),
+                None,
+                "a longer name was read as the root"
+            );
+        }
     }
 
     /// PERM-7: in a session opened in the home directory, a `~/` rule covers the file as `.ssh/key`.
