@@ -1108,12 +1108,13 @@ jobs:
           cargo test -p bravebot-agent --locked --no-fail-fast --test confine
 
       # The browser opener's Windows start, `rundll32 url.dll,FileProtocolHandler` (#3860). The
-      # run test starts a child of the test binary with the nine names of the list set to a
+      # run test starts a child of the test binary with the eleven names of the list set to a
       # stage-written helper, asserts the opener's start removes them and that the helper does not
-      # run, and prints, for each name and for `PSModulePath`, whether a start with that name put
+      # run, and prints, for each name, whether a start with that name put
       # back ran it. The handler test registers a handler for the current user whose command
       # expands one name of the list, starts the opener through it with the helper reachable only
-      # through that name, and prints which names selected the program. The printed records are
+      # through that name, asserts that the helper does not run for any name but `PATHEXT`, and
+      # prints which names selected the program. The printed records are
       # not asserted and are kept in the step output. `4 passed` fails the step if a test was
       # filtered out.
       - name: Test the browser opener's Windows start
