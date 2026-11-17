@@ -144,6 +144,43 @@ fn a_folder_already_open_is_refused() {
     assert_eq!(listed(&mut bridge, &handle).as_array().unwrap().len(), 1);
 }
 
+/// PATH-002: a picked name that leads to a directory whose name is not text is refused, and the
+/// lookalike a lossy spelling names, beside it, is neither opened nor vouched for. Linux only,
+/// because the name has to exist on disk.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_picked_folder_whose_name_is_not_text_is_refused_and_its_lookalike_is_not_opened() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let project = tempfile::tempdir().unwrap();
+    let beside = tempfile::tempdir().unwrap();
+    let invalid = beside
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"shared-\xff"));
+    let lookalike = beside.path().join("shared-\u{fffd}");
+    std::fs::create_dir(&invalid).unwrap();
+    std::fs::create_dir(&lookalike).unwrap();
+    let link = beside.path().join("shared");
+    std::os::unix::fs::symlink(&invalid, &link).unwrap();
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let handle = open_session(&mut bridge, project.path());
+
+    let refused = add(&mut bridge, &handle, &link).unwrap_err();
+
+    assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
+    assert!(refused.message.contains("not text"), "{}", refused.message);
+    assert_eq!(listed(&mut bridge, &handle), json!([]));
+    assert!(turn_reaches(&bridge, &handle).is_empty());
+    let state = bridge.open[&handle].state.lock().unwrap();
+    assert!(state.directories.is_empty());
+    let mut trust = state.answers.trust.clone();
+    let lookalike = lookalike.canonicalize().unwrap();
+    assert!(
+        !trust.withdraw_trust(&bravebot_agent::workspace::key_of(&lookalike)),
+        "the lookalike was vouched for"
+    );
+}
+
 /// Every name that does not lead to a directory outside the project is refused and opens nothing:
 /// a missing path, a relative one, a file, the project itself and a directory inside it.
 #[test]
