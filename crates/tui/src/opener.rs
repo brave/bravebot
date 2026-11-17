@@ -374,6 +374,15 @@ mod tests {
         assert!(!withheld("BROWSER", "/safe/bin/fire\u{fffd}ox %s"));
     }
 
+    /// The `DISPLAY` the tests give the installed `xdg-open` so that it looks up a handler (it does
+    /// so only when a display is set), and that no X server answers. It names a socket path, so
+    /// `xprop` and every X client fail to open it at once. A bare number such as `:9999` is not
+    /// that: when its local socket is missing, libxcb connects over TCP to `localhost` port 15999,
+    /// and on a host whose `localhost` is an address that does not answer that connect waits for the
+    /// kernel's connection timeout (#4230).
+    #[cfg(unix)]
+    const NO_X_SERVER: &str = "unix:/nonexistent-bravebot-test/X0";
+
     /// How long a test waits for the installed `xdg-open` to end. It ends in well under a second
     /// where it works. A host busy enough to take longer than this is not one the test can judge.
     /// A program that has not ended by then fails the test and is killed with what it started.
@@ -717,7 +726,7 @@ mod tests {
     /// In generic mode `xdg-open` asks `xdg-mime` for the handler of `https` only when it sees a
     /// display (`has_display` in `xdg-open.in`: `DISPLAY` or `WAYLAND_DISPLAY` not empty), so a
     /// generic run that gives no display sets `WAYLAND_DISPLAY` to a name no socket has, and the
-    /// generic-mode test gives `DISPLAY` set to `:9999`, which no X server answers. Nothing
+    /// generic-mode test gives `DISPLAY` set to [`NO_X_SERVER`], which no X server answers. Nothing
     /// connects to a real display on that path: the only programs that could, `xprop` in `detectDE`
     /// and an X client, read `DISPLAY`. `DBUS_SESSION_BUS_ADDRESS` is removed in every run that
     /// sets no `XDG_CURRENT_DESKTOP` so the
@@ -1247,12 +1256,12 @@ mod tests {
             "XDG_DATA_DIRS",
         ] {
             // `xdg-open` 1.2.1 looks up a scheme handler in generic mode only when `DISPLAY` or
-            // `WAYLAND_DISPLAY` is set. `DISPLAY` names a number no X server answers, so `xprop`
+            // `WAYLAND_DISPLAY` is set. `DISPLAY` names a socket no X server answers, so `xprop`
             // in `detectDE` cannot reach a real one. The handlers are scripts that connect to nothing.
             let ran = handler_run_by(
                 "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode",
                 variable,
-                &[("DISPLAY", ":9999")],
+                &[("DISPLAY", NO_X_SERVER)],
                 &opener,
             );
             match ran {
@@ -1268,6 +1277,37 @@ mod tests {
                 ran => assert_eq!(ran, (false, true), "{variable}"),
             }
         }
+    }
+
+    /// The display the generic-mode tests give `xdg-open` is one `xprop` fails to open at once
+    /// (#4230). The regression it rejects: a bare display number such as `:9999`, which libxcb
+    /// opens over TCP to `localhost` when the local socket is missing, so that on a host whose
+    /// `localhost` does not answer `xprop` and with it `xdg-open` waits for the connection timeout
+    /// and the generic-mode test fails at its deadline. The test passes when the installed `xprop`
+    /// ends within five seconds, unable to open the display. It prints `skipped` and passes where
+    /// there is no `xprop`. On a host whose `localhost` answers with a refusal, a bare number also
+    /// fails at once, so only a host whose `localhost` does not answer shows the difference.
+    #[cfg(unix)]
+    #[test]
+    fn the_display_given_to_xdg_open_is_one_xprop_fails_to_open_at_once() {
+        let Some(xprop) = bravebot_sandbox::programs::find(OsStr::new("xprop")) else {
+            println!("skipped: no xprop on this host");
+            return;
+        };
+        let mut command = std::process::Command::new(xprop);
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("DISPLAY", NO_X_SERVER)
+            .args(["-root", "_DT_SAVE_MODE"]);
+        let output = crate::testutil::output_within(
+            &mut command,
+            std::time::Duration::from_secs(5),
+            "xprop on the display the generic-mode tests give xdg-open",
+        );
+        assert!(!output.status.success(), "xprop opened {NO_X_SERVER}");
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(said.contains("unable to open display"), "{said}");
     }
 
     /// The deadline on the installed `xdg-open` (#4230). The regression it rejects: a test that
@@ -1313,7 +1353,7 @@ mod tests {
                 handler_run_by_within(
                     "opener::tests::an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started",
                     "XDG_DATA_HOME",
-                    &[("DISPLAY", ":9999")],
+                    &[("DISPLAY", NO_X_SERVER)],
                     &opener,
                     std::time::Duration::from_secs(1),
                 )
