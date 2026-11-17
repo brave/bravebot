@@ -680,13 +680,14 @@ mod tests {
     #[test]
     fn a_data_folder_that_cannot_be_written_into_a_row_refuses_the_make() {
         let scratch = Scratch::new("data-folder");
-        let mut folders = vec![PathBuf::from("relative/gui")];
         #[cfg(unix)]
-        {
+        let folders = {
             use std::os::unix::ffi::OsStrExt;
             let invalid = std::ffi::OsStr::from_bytes(b"/gui-\xff");
-            folders.push(PathBuf::from(invalid));
-        }
+            vec![PathBuf::from("relative/gui"), PathBuf::from(invalid)]
+        };
+        #[cfg(not(unix))]
+        let folders = vec![PathBuf::from("relative/gui")];
         for folder in folders {
             let refused = make_in(&scratch.home(), &folder, new_bot("Dev"), NOW, WAIT).unwrap_err();
             match refused {
