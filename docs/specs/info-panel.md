@@ -172,7 +172,8 @@ written nothing and keeps its own pointer. Every terminal is told of motion with
 ### PANEL-7: the panel ends with the key that hides it
 
 The panel's last row is `{chord} hide panel`, naming the chord in force, and in the files state the
-keys of that state instead ([FILES-4](files-mode.md#FILES-4)). While the panel is closed
+keys of that state instead ([FILES-4](files-mode.md#FILES-4)), and in the peek state that shows a
+folded paste ([PASTE-13](pasting.md#PASTE-13)) the keys of that state. While the panel is closed
 on a terminal wide enough for it, the hint line has a `{chord} info` part, and that part is the
 first the line drops when the row is short ([INPUT-13](terminal-input.md#INPUT-13)). With the panel
 open, or on a terminal too narrow for it, the line has no such part.

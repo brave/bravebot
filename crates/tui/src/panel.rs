@@ -423,6 +423,12 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) -> Vec<crate::st
 /// name, the bar, the edits and the row of keys, which is the last of the panel, are below it.
 fn wheel_panes(session: &Session, area: Rect) -> Vec<crate::state::Target> {
     use crate::state::{Hit, Scrolled, Target as Placed};
+    if session.peek_state().is_some() {
+        if area.is_empty() {
+            return Vec::new();
+        }
+        return vec![Placed::on_screen(area, Hit::Wheel(Scrolled::Text))];
+    }
     if session.files_state().is_none() || area.is_empty() {
         return Vec::new();
     }
@@ -523,6 +529,8 @@ pub enum Target {
     File(usize),
     /// The `x` in the heading row of the files state: the end of the state, as `q` is (MOUSE-18).
     CloseFiles,
+    /// The `x` in the heading row of the peek state: the end of the state, as `q` is.
+    ClosePeek,
     /// The control for the previous edit in the bar of the files state: the key that goes to it.
     PreviousEdit,
     /// The control for the next edit in the bar of the files state.
@@ -550,7 +558,11 @@ impl Target {
     pub fn is_in_the_files_state(self) -> bool {
         matches!(
             self,
-            Target::File(_) | Target::CloseFiles | Target::PreviousEdit | Target::NextEdit
+            Target::File(_)
+                | Target::CloseFiles
+                | Target::ClosePeek
+                | Target::PreviousEdit
+                | Target::NextEdit
         )
     }
 }
@@ -607,6 +619,11 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
     // None of the ordinary sections is drawn beside the files state (FILES-4).
+    if let Some(state) = session.peek_state() {
+        let (rows, targets) =
+            crate::peek_mode::rows(state, width, u16::try_from(height).unwrap_or(u16::MAX));
+        return (rows, Vec::new(), Vec::new(), targets);
+    }
     if let Some(state) = session.files_state() {
         let files = session.written_files();
         let (rows, targets) = crate::files_mode::rows(
@@ -784,7 +801,7 @@ pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
     // The hint line takes one row and the key that hides the panel another. The files state has no
     // Context section, so the line keeps both figures there (FILES-4).
     drawn(session, columns)
-        && !session.files_open()
+        && !session.panel_state_open()
         && session.panel_sections().shows(Section::Context)
         && head(session, text_width(session.panel_columns(columns)), 0)
             .0

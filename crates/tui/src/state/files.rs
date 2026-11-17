@@ -80,7 +80,7 @@ impl Session {
     }
 
     /// The rectangle the panel was drawn in by the last frame.
-    fn panel_area(&self) -> Option<ratatui::layout::Rect> {
+    pub(super) fn panel_area(&self) -> Option<ratatui::layout::Rect> {
         self.laid
             .panes
             .iter()
@@ -160,6 +160,8 @@ impl Session {
         match pane {
             crate::state::Scrolled::List => self.files_scroll_list(by),
             crate::state::Scrolled::Edits => self.files_scroll(by),
+            // The peek state's pane is `peek_wheel`'s.
+            crate::state::Scrolled::Text => return false,
         }
         true
     }

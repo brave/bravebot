@@ -64,6 +64,7 @@ mod notify;
 pub mod open_command;
 pub mod opener;
 pub mod panel;
+pub mod peek_mode;
 pub mod picking;
 mod pointer;
 mod powershell;

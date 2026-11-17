@@ -1395,6 +1395,7 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
         || session.watching().is_some()
         || session.modal()
         || session.files_open()
+        || session.peeking()
     {
         return Action::None;
     }
@@ -43504,6 +43505,7 @@ mod tests {
     mod jump;
     mod menu;
     mod pasting;
+    mod peeking;
     mod pickers;
     mod pinned;
     mod popups;

@@ -72,6 +72,7 @@ fr:doctor-settings-shared-skill-directories-ignored
 fr:doctor-skills-shared-not-read
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
+fr:hover-panel-close-peek
 fr:lsp-none-started
 fr:lsp-server-running
 fr:lsp-started
@@ -121,6 +122,11 @@ fr:open-loops-uncommitted
 fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use
+fr:peek-close
+fr:peek-heading
+fr:peek-keys
+fr:peek-lines
+fr:peek-too-narrow
 fr:run-allow-and-remember-explained
 fr:run-write-lands-on
 fr:run-write-protected
@@ -297,6 +303,7 @@ fr:sessions-screen-tab-ready
 fr:sessions-screen-tab-working
 fr:sessions-screen-title
 fr:shared-skills-reached-through-the-workspace
+fr:shortcut-peek
 fr:skill-eval-arm-counts
 fr:skill-eval-case
 fr:skill-eval-case-refused

@@ -21,6 +21,7 @@ mod files;
 mod hover;
 mod menu;
 mod open_loops;
+mod peek;
 mod queue;
 mod references;
 mod scheduling;
@@ -545,6 +546,8 @@ pub struct Session {
     /// Beside `panel` rather than in place of it, so that ending the state puts the panel back as it
     /// was: closed if it was closed.
     files: Option<crate::files_mode::State>,
+    /// The paste the info panel is showing whole, while its peek state is open.
+    peek: Option<crate::peek_mode::State>,
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
@@ -1440,6 +1443,7 @@ impl Session {
             show_thinking: false,
             panel: false,
             files: None,
+            peek: None,
             panel_width: crate::panel::WIDTH,
             panel_sections: crate::panel::Sections::default(),
             panel_drag: false,
@@ -1924,6 +1928,7 @@ impl Session {
         self.roster.clear();
         // The edits it listed were in the transcript that is gone (FILES-10).
         self.files = None;
+        self.peek = None;
         self.expandable_lines = 0;
         self.last_request = None;
         self.turns = 0;

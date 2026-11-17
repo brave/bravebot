@@ -45,7 +45,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Fifteen of these chords can be [moved to keys of your own](#moving-a-key), fourteen on Windows. Every chord named on this
+Sixteen of these chords can be [moved to keys of your own](#moving-a-key), fifteen on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -149,7 +149,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Fifteen actions can be moved, and nothing else can** (fourteen on Windows, which has no `suspend`):
+**Sixteen actions can be moved, and nothing else can** (fifteen on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
@@ -164,6 +164,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
 | `todos` | `alt-a` | print the whole plan in the transcript, as [`/todos`](../reference/commands.md#todos) does |
+| `peek` | `alt-v` | open the folded paste the caret is on, to read it whole ([Reading a folded paste](context.md#reading-a-folded-paste)) |
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
 | `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
