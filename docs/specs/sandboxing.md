@@ -4849,7 +4849,7 @@ file. A new spawn that looks a name up through
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
   | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
-  | `PSModulePath` | a list of directories | a handler whose command is `%PSModulePath%\helper.cmd`, as a `REG_EXPAND_SZ` value, ran the helper in the directory the name was set to through the opener's start while this name was not listed (the run under "What a checked start does not cover"). No source read shows this start reading it, and the opener does not start PowerShell |
+  | `PSModulePath` | a list of directories | with the name left set, a handler whose command is `%PSModulePath%\helper.cmd`, as a `REG_EXPAND_SZ` value, runs the helper in the directory the name is set to through the opener's start, which is why the opener removes it (the run under "What a checked start does not cover"). No source read shows this start reading it, and the opener does not start PowerShell |
   | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds. The Windows CI runs removed it and `rundll32` exited with status 0; whether a page opened was not observed |
 
   That is 30 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
@@ -5783,8 +5783,8 @@ shown by running the program, or not entirely:
   version is recorded for the source named. The `sandbox-windows` job ran the start on
   `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in
   three runs of `ci.yml` on main, 43115512926, 43116736884 and 44007981464. In the first two, the
-  opener's start removed the ten names then listed, the batch file did not run, and `rundll32`
-  exited with status 0. A start with only one of the ten names, or only `PSModulePath`, put back
+  opener's start removed the ten names other than `PSModulePath`, the batch file did not run, and
+  `rundll32` exited with status 0. A start with only one of the ten names, or only `PSModulePath`, put back
   on the command did not run the batch file either, with the address of an `https` page and no
   handler that expands a name. That shows that setting a name to a directory a stage may write
   does not by itself make this start run a file in it on that image. An exit status of 0 from
@@ -5824,9 +5824,9 @@ shown by running the program, or not entirely:
   handler, that the helper ran for `windir`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`,
   `APPDATA`, `USERPROFILE` and `PSModulePath`, and did not run for `COMSPEC`, `SystemRoot` or
   `ProgramFiles`. With a `REG_SZ` handler the helper ran for no name, so `ShellExecute` expanded
-  `%name%` only in the expandable type. In that run the opener's list at the time did not hold
-  `PSModulePath`, and the start ran the helper through it with the name left in place: that
-  is the name this change adds. With the name removed and the handler written with the helper's
+  `%name%` only in the expandable type. With `PSModulePath` left set, the start runs the helper
+  through a `REG_EXPAND_SZ` handler that expands `%PSModulePath%`, which is why the opener removes
+  it. With the name removed and the handler written with the helper's
   own path the helper ran for every name but `SystemRoot`, so the start still opens a handler
   without ten of the eleven names, and does not without `SystemRoot`. The three names that did not
   select the program stay in the list, since the run tried one command form on one image.
