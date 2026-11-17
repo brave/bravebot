@@ -2708,8 +2708,8 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_npm_does_not_run_an_init_script_from_the_home`
 `verified-by: bravebot_agent::usability::a_setup_go_does_not_switch_toolchain_from_an_environment_file_in_the_home`
 `verified-by: bravebot_agent::usability::a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one`
-`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
-`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
+`verified-by: bravebot_agent::usability_loader::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
+`verified-by: bravebot_agent::usability_loader::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`

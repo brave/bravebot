@@ -455,7 +455,7 @@ for a name in it that no test starts a stage with and asserts removed; a loop ov
 counts for no name. It does not apply the loader prefixes to other starts, so a start that should
 remove `DYLD_` and `LD_` names and does not is still found by a reviewer. The tests
 `the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start` and the two loader tests in
-`crates/agent/tests/usability.rs` fail when a prefix is dropped.
+`crates/agent/tests/usability_loader.rs` fail when a prefix is dropped.
 
 `make check-narration` fails a pull request whose commit messages, title, body or added lines
 contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)
