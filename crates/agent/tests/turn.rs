@@ -22,6 +22,9 @@ mod aliases;
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{
     self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING,
@@ -34424,9 +34427,11 @@ fn requests_for_one_run_vouching(
 }
 
 /// A file the session's profile does not let a program write, and one it does not let a strict
-/// program read: in the target directory, which is neither the temporary directory nor the home.
+/// program read: under the scratch root, which is neither the temporary directory nor the home.
+/// The root is made here, since a file written into it or a redirect into it needs it to be there.
 fn outside_the_session(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sandbox-mode-{name}"))
+    std::fs::create_dir_all(scratch_root::scratch_root()).expect("the scratch root");
+    scratch_root::scratch_dir(&format!("sandbox-mode-{name}"))
 }
 
 /// SANDBOX-22: `off` starts a program with no profile, so a write the profile refuses lands, and the
@@ -35212,9 +35217,7 @@ fn keeping_a_request_for_every_session_is_read_by_another_session() {
 /// public halves of a key at one of ssh's default names and of `work`, which the ssh configuration
 /// names: two keys ssh could offer.
 fn a_profile_with_two_keys(name: &str) -> std::path::PathBuf {
-    let profile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("turn-two-keys-{name}"));
+    let profile = scratch_root::scratch_dir(&format!("turn-two-keys-{name}"));
     let _ = std::fs::remove_dir_all(&profile);
     std::fs::create_dir_all(profile.join(".ssh")).expect("an .ssh");
     for key in ["id_ed25519.pub", "work.pub"] {
@@ -50567,9 +50570,7 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
         return;
     }
     for (confining, written) in [(false, true), (true, false)] {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("delegate-confined-{confining}"));
+        let top = crate::scratch_root::scratch_dir(&format!("delegate-confined-{confining}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("session")).unwrap();
         std::fs::create_dir_all(top.join("beside")).unwrap();
@@ -50745,9 +50746,7 @@ fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
         (bravebot_sandbox::SandboxMode::WorkspaceWrite, false),
         (bravebot_sandbox::SandboxMode::Off, true),
     ] {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("delegate-mode-{mode}"));
+        let top = crate::scratch_root::scratch_dir(&format!("delegate-mode-{mode}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("session")).unwrap();
         std::fs::create_dir_all(top.join("beside")).unwrap();
@@ -50911,9 +50910,7 @@ fn a_delegate_of_a_strict_turn_cannot_read_what_a_workspace_write_one_reads() {
         (bravebot_sandbox::SandboxMode::WorkspaceWrite, true),
         (bravebot_sandbox::SandboxMode::Strict, false),
     ] {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("delegate-read-{mode}"));
+        let top = crate::scratch_root::scratch_dir(&format!("delegate-read-{mode}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("session")).unwrap();
         std::fs::create_dir_all(top.join("beside")).unwrap();
@@ -89669,16 +89666,14 @@ impl Drop for ArmingWatches {
 }
 
 impl PathPlaces {
-    /// Under `target/test-homes` rather than `target/test-scratch`. Under bypass a stage is given a
+    /// A directory beside the scratch root rather than under it. Under bypass a stage is given a
     /// row for each entry of every directory on the way to the home's credential directories
     /// (SANDBOX-28), and on macOS the rows are in the profile `sandbox-exec` takes as an argument.
-    /// `target/test-scratch` holds an entry for each test that ran before, and with about 8000 of
+    /// The scratch root holds an entry for each test that ran before, and with about 8000 of
     /// them the profile is larger than the arguments a program can be started with, so no stage
     /// starts.
     fn new(name: &str) -> Self {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-homes")
-            .join(format!("path-{name}"));
+        let top = scratch_root::isolated_dir("test-homes").join(format!("path-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let home = top.join("home");
         let beside = top.join("beside");

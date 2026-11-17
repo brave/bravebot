@@ -351,6 +351,7 @@ impl Command {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
             }
+            MCP_COMMAND => format!("[{MCP_LIST} | {MCP_RECONNECT} | {MCP_DISABLE} | {MCP_REMOVE}]"),
             COMMIT_MESSAGE_COMMAND => {
                 use crate::commit_message_command::{RANGE, STAGED};
                 format!("[{STAGED} | {RANGE} <a>..<b>] [format]")
@@ -812,7 +813,7 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: MCP_COMMAND,
-            argument: "[list | reconnect | disable | remove]",
+            argument: "[action]",
             description: t!(command_mcp),
             mid_turn: MidTurn::RunsUnlessItStarts,
         },
@@ -1403,10 +1404,12 @@ mod tests {
         }
     }
 
-    /// The hint drawn for `/mcp` names every subcommand the command takes, in the order the usage
-    /// message lists them. The regression it rejects is a subcommand left out of the hint, which
-    /// leaves `list` undiscoverable from the slash menu, or a hint that drifts from the usage
-    /// message.
+    /// The hint drawn for `/mcp` after its word names every subcommand the command takes, in the
+    /// order the usage message lists them, while the table keeps a short argument so the
+    /// description column stays narrow (CMD-22). The regressions it rejects are a subcommand left
+    /// out of the hint, which leaves `list` undiscoverable, a hint that drifts from the usage
+    /// message, and the long form put back in the table, which widens the column until the
+    /// descriptions of other commands no longer fit at 120 columns.
     #[test]
     fn the_mcp_hint_names_every_subcommand_the_usage_message_names() {
         let command = commands()
@@ -1414,12 +1417,15 @@ mod tests {
             .find(|candidate| candidate.name == MCP_COMMAND)
             .copied()
             .expect("/mcp is in the table");
-        assert_eq!(command.argument, "[list | reconnect | disable | remove]");
-        assert_eq!(command.typed_hint(), command.argument);
+        assert_eq!(command.argument, "[action]");
+        assert_eq!(
+            command.typed_hint(),
+            "[list | reconnect | disable | remove]"
+        );
         let usage = t!(mcp_command_usage);
         let mut after = 0;
         for word in ["list", "reconnect", "disable", "remove"] {
-            assert!(command.argument.contains(word), "the hint names {word}");
+            assert!(command.typed_hint().contains(word), "the hint names {word}");
             let at = usage[after..]
                 .find(word)
                 .unwrap_or_else(|| panic!("the usage message names {word} after byte {after}"));

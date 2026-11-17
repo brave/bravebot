@@ -34,8 +34,7 @@ be treated as holding one.
 
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is optional. The premium host is compiled in, as `DEV_PREMIUM_ENDPOINT`
 and `PROD_PREMIUM_ENDPOINT` in `crates/config/src/lib.rs`, chosen by the free endpoint: one under
-`brave.software` or `bravesoftware.com` gets the dev host and any other gets the prod host. Both are the
-dev host while the premium service is live only in development. The variable, baked into a build or
+`brave.software` or `bravesoftware.com` gets the dev host and any other gets the prod host. The variable, baked into a build or
 exported, replaces the compiled-in host. A value with no scheme, or with a `?` or a `#`, is not used and
 the compiled-in host stands. A build that reaches no Brave backend (Bedrock only) has no premium host.
 `.envrc` sets no premium variable and no key: the premium key is not configuration, and each person

@@ -17812,8 +17812,7 @@ mod tests {
     /// reach finds, and a tool outside both lists that is given one.
     #[test]
     fn a_tool_outside_the_tables_called_after_one_holding_the_reach_gets_none() {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-homes")
+        let top = crate::testutil::scratch_root::isolated_dir("test-homes")
             .join(format!("reach-cleared-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&top);
         let session = top.join("session");

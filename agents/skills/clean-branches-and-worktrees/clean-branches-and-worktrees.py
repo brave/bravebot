@@ -196,10 +196,18 @@ def diff_counts(repo: Path, left: str, right: str) -> tuple[int, int] | None:
     return int(parts[0]), int(parts[1])
 
 
-def branch_matches_merged_pr(repo: Path, branch: str, pr_head_sha: str) -> tuple[bool, str]:
+def fetch_pr_head_if_missing(repo: Path, pr_number: object, pr_head_sha: str) -> None:
+    # A head force-pushed away from the branch is kept only under the pull request's ref.
+    if run_command(["git", "cat-file", "-e", f"{pr_head_sha}^{{commit}}"], repo, check=False).returncode == 0:
+        return
+    run_command(["git", "fetch", "--no-write-fetch-head", "origin", f"refs/pull/{pr_number}/head"], repo, check=False)
+
+
+def branch_matches_merged_pr(repo: Path, branch: str, pr_number: object, pr_head_sha: str) -> tuple[bool, str]:
     local_head = get_branch_head(repo, branch)
     if local_head == pr_head_sha:
         return True, ""
+    fetch_pr_head_if_missing(repo, pr_number, pr_head_sha)
     counts = diff_counts(repo, pr_head_sha, f"refs/heads/{branch}")
     if counts is None:
         return False, f"could not compare local branch against merged PR head {pr_head_sha[:12]}"
@@ -418,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
                 skipped.append((branch, f"{format_pr(pr)} is missing a PR head SHA"))
                 continue
 
-            matches_pr, mismatch_reason = branch_matches_merged_pr(repo, branch, pr_head_sha)
+            matches_pr, mismatch_reason = branch_matches_merged_pr(repo, branch, pr.get("number"), pr_head_sha)
             if not matches_pr:
                 skipped.append((branch, f"{format_pr(pr)}: {mismatch_reason}"))
                 continue

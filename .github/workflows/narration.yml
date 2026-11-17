@@ -5,9 +5,14 @@ name: Narration
 # and body are part of what it reads, and an edit to either has to run it again without running
 # every other job in ci.yml with it. Standard library Python over the checkout, so it needs no
 # toolchain and answers in seconds.
+#
+# The merge queue's run reports the check as skipped. The queue's branch is one squashed commit
+# with no pull request title or body of its own, and the pull request was read before it was
+# queued; a skipped job counts as passing where the check is required.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  merge_group:
 
 permissions:
   contents: read
@@ -21,6 +26,7 @@ concurrency:
 jobs:
   narration:
     name: Process narration
+    if: ${{ github.event_name != 'merge_group' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
