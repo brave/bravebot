@@ -970,9 +970,11 @@ draws the `shown…` fields.
 `permissions.revoke` with `kind: "mcp"` forgets those answers for this project and for no other,
 and returns the updated lists plus `forgotten: { everyServer, tools }`, what was dropped (both
 empty where nothing was remembered, which is not refused). It refuses with `bad_request` in an
-incognito session and with `state_unusable`, naming the file, where a record cannot be read or
-written. A record that cannot be read leaves both as they were; one that cannot be written is the
-one left as it was. A tool's answer is read at each call, so the
+incognito session, with `no_home` where there is no state directory, and with `state_unusable`,
+naming the file, where a record cannot be read or written. A record that cannot be read leaves both
+as they were; one that cannot be written is the one left as it was, and where that is the tools
+file after the projects file was written, the message says the answer about servers was forgotten.
+A tool's answer is read at each call, so the
 next call in this session asks again. The answer about servers is read as a session starts its
 servers: those this session already started keep running, and the next session there asks.
 
