@@ -310,25 +310,30 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     });
 }
 
-/// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
-/// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
-/// folding takes text.
+/// `path` relative to `root` where it lies at or under it. Two names are one where they are the same
+/// bytes or where both are text and [`bravebot_core::trust::canonical_form`] gives them one form, so
+/// a root stored as `cafe` and a combining accent is the root a rule written with the precomposed
+/// letter names (PERM-7). A name that is not text is compared as the bytes it is (PATH-001).
 ///
-/// Two names are one where either fold joins them: the full one
+/// Where the volume folds case two names are also one where either fold joins them: the full one
 /// ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with `class`, and the one-letter
 /// one ([`bravebot_core::trust::fold_simple`]), which joins `cla\u{df}` with `cla\u{1e9e}`. That is
 /// the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given to
 /// [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root spelled
 /// `class` or `cla\u{1e9e}`, and nothing is granted by it.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
-    if !folds_case {
-        let relative = path.strip_prefix(root).ok()?;
-        return Some(tail(relative.components()));
-    }
+    use bravebot_core::trust::{canonical_form, fold_simple};
     let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| {
-        let (one, other) = (one.to_string_lossy(), other.to_string_lossy());
-        bravebot_core::trust::fold_case(&one) == bravebot_core::trust::fold_case(&other)
-            || bravebot_core::trust::fold_simple(&one) == bravebot_core::trust::fold_simple(&other)
+        if one == other {
+            return true;
+        }
+        let (Some(one), Some(other)) = (one.to_str(), other.to_str()) else {
+            return false;
+        };
+        canonical_form(one, folds_case) == canonical_form(other, folds_case)
+            || (folds_case
+                && canonical_form(&fold_simple(one), true)
+                    == canonical_form(&fold_simple(other), true))
     };
     let mut names = path.components();
     for held in root.components() {
@@ -1713,6 +1718,95 @@ mod tests {
             ),
             Some("a/b".to_string())
         );
+    }
+
+    /// PERM-7: a rule prefix and a root that are one name in two Unicode forms are one place, so a
+    /// refusal written in either form covers the project's relative name. Two names the canonical
+    /// form keeps apart stay apart.
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_another_unicode_form() {
+        use std::path::Path;
+        let (composed, decomposed) = ("caf\u{e9}", "cafe\u{301}");
+        for folds_case in [false, true] {
+            for (named, held) in [(composed, decomposed), (decomposed, composed)] {
+                assert_eq!(
+                    beneath(
+                        Path::new(&format!("/p/{named}/a/b")),
+                        Path::new(&format!("/p/{held}")),
+                        folds_case
+                    ),
+                    Some("a/b".to_string()),
+                    "/p/{named} was not under /p/{held} (folds case: {folds_case})"
+                );
+            }
+            for (named, held) in [
+                ("cafe", composed),
+                (composed, "cafe"),
+                ("class", "cla\u{ff53}s"),
+            ] {
+                assert_eq!(
+                    beneath(
+                        Path::new(&format!("/p/{named}/a")),
+                        Path::new(&format!("/p/{held}")),
+                        folds_case
+                    ),
+                    None,
+                    "/p/{named} was read as under /p/{held} (folds case: {folds_case})"
+                );
+            }
+        }
+    }
+
+    /// PERM-7: the project directory is stored in one Unicode form and the rule is written in the
+    /// other. The rule covers the file by its relative name as it does by its full path, whichever
+    /// way round the forms are, and a rule about a sibling directory covers nothing in the project.
+    #[cfg(unix)]
+    #[test]
+    fn a_full_path_rule_covers_a_project_file_by_its_relative_name_in_either_unicode_form() {
+        let (composed, decomposed) = ("caf\u{e9}", "cafe\u{301}");
+        for (stored, written, name) in [
+            (decomposed, composed, "stored-decomposed"),
+            (composed, decomposed, "stored-composed"),
+        ] {
+            let scratch = crate::testutil::scratch_dir(&format!("permissions-unicode-form-{name}"));
+            let _ = std::fs::remove_dir_all(&scratch);
+            let project = scratch.join(stored);
+            std::fs::create_dir_all(project.join("secret")).unwrap();
+            std::fs::write(project.join("secret").join("key"), "hunter2").unwrap();
+            let root = project.canonicalize().unwrap();
+            let written_root = scratch.join(written);
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"deny": ["Read(/{}/secret/**)"], "ask": ["Edit(/{}/ask/**)"]}}}}"#,
+                written_root.display(),
+                written_root.display()
+            ));
+            let (permissions, rejected) = from_settings(&settings, None, &root);
+            assert!(rejected.is_empty(), "{rejected:?}");
+
+            assert_eq!(
+                permissions.for_path(Subject::Read, "secret/key"),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule written under {written:?} missed the relative name in a project stored as {stored:?}"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "ask/notes.md"),
+                Decision::Ruled(Ruling::Ask),
+                "an ask rule written under {written:?} missed the relative name in a project stored as {stored:?}"
+            );
+            assert_eq!(
+                permissions.for_path(
+                    Subject::Read,
+                    &root.join("secret").join("key").display().to_string()
+                ),
+                Decision::Ruled(Ruling::Deny),
+                "the full path stopped being covered"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Read, "other/key"),
+                Decision::Unmatched,
+                "a rule about one directory covered another"
+            );
+        }
     }
 
     /// A deny or ask rule about a place under `cla\u{df}` is also given as a place under a root

@@ -4949,6 +4949,11 @@ because the file index is not in the standard library, so only names are compare
 path is resolved as far as it exists. A recorded directory that does not exist has no identity, so
 another spelling of it is compared by name only until it exists.
 
+A person's `denyRead` or `denyWrite` entry is resolved as far as it exists, so a directory in it is
+held in the form the volume stores. The part that does not exist yet is held as typed, so a file
+created there later under another Unicode form of the same name is compared with the entry by bytes
+(`overridden` and `judged_request` in `crates/sandbox/src/rules.rs`).
+
 Under bypass a program the account owns is left out of the lookup whatever its mode, so a person's
 own read-only program under a row such as `~/.cargo/bin` reads as not installed, as one in a
 directory a stage may write does. A program in directories the account neither owns nor can write,

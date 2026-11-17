@@ -669,7 +669,7 @@ pub fn fold_simple(key: &str) -> String {
 ///
 /// An ASCII key is its own form unless case is folded, which is nearly every key and costs no
 /// allocation.
-pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
+pub fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
     if key.is_ascii() {
         return match folds_case {
             true => Cow::Owned(fold_case(key)),

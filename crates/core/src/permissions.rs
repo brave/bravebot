@@ -516,16 +516,25 @@ impl Rule {
     /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
     /// through a link is, and never floats.
     ///
-    /// `full_fold` is whether the segments are compared in the full case fold, which joins
-    /// `class` with `cla\u{df}`. A rule that restricts is matched that way on a volume that folds
-    /// case, so its copy is made for every checkout it applies to. A rule that grants is compared
-    /// as it is stored, in the fold that leaves such a letter alone, since a copy of a grant under
-    /// a checkout of another file would grant a place nobody approved.
-    fn copy_beneath(&mut self, from: &[String], to: &[String], full_fold: bool) {
+    /// `restricting` is whether this rule is a `deny` or `ask` rule. Its segments are compared in
+    /// the form every canonically equivalent spelling shares, and in the full case fold where
+    /// `folds_case` says the volume folds case, which joins `class` with `cla\u{df}`, so its copy
+    /// is made for every checkout it applies to. A rule that grants is compared as it is stored,
+    /// in the fold that leaves such a letter alone, since a copy of a grant under a checkout of
+    /// another file would grant a place nobody approved.
+    fn copy_beneath(
+        &mut self,
+        from: &[String],
+        to: &[String],
+        restricting: bool,
+        folds_case: bool,
+    ) {
         let copies: Vec<Pattern> = std::iter::once(&self.pattern)
             .chain(&self.landed)
             .filter_map(|pattern| match pattern {
-                Pattern::Absolute(pattern) if is_under(&pattern.segments, from, full_fold) => {
+                Pattern::Absolute(pattern)
+                    if is_under(&pattern.segments, from, restricting, folds_case) =>
+                {
                     let mut segments = to.to_vec();
                     segments.extend_from_slice(&pattern.segments[from.len()..]);
                     Some(Pattern::Absolute(PathPattern {
@@ -980,10 +989,10 @@ impl Permissions {
         // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
         let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
         for rule in restricting {
-            rule.copy_beneath(&from, &to, folds_case);
+            rule.copy_beneath(&from, &to, true, folds_case);
         }
         for rule in &mut self.allow {
-            rule.copy_beneath(&from, &to, false);
+            rule.copy_beneath(&from, &to, false, false);
         }
     }
 
@@ -1489,18 +1498,24 @@ fn fold(path: &str, folds: bool) -> String {
         .join("/")
 }
 
-/// Whether `segments` start with `from`, comparing each segment in the full case fold where
-/// `full_fold` says so and byte for byte otherwise.
+/// Whether `segments` start with `from`. A rule that restricts compares each segment in the form
+/// every canonically equivalent spelling shares, with case folded out as well where `folds_case`
+/// says the volume folds it, as [`PathPattern::canonical`] does for a path, so a rule written in one
+/// Unicode form is under a directory stored in another (PERM-7, CHECKOUT-9). A rule that grants
+/// compares byte for byte, since a copy of a grant under a checkout of another file would grant a
+/// place nobody approved.
 ///
-/// Both are keyed, so each segment is already in the fold a grant is matched in, and the full fold
-/// is taken from there as [`PathPattern::canonical`] takes it for a path.
-fn is_under(segments: &[String], from: &[String], full_fold: bool) -> bool {
-    if !full_fold {
+/// Both are keyed, so each segment is already in the fold a grant is matched in, and the form is
+/// taken from there.
+fn is_under(segments: &[String], from: &[String], restricting: bool, folds_case: bool) -> bool {
+    if !restricting {
         return segments.starts_with(from);
     }
     segments.len() >= from.len()
         && segments.iter().zip(from).all(|(segment, name)| {
-            segment == name || crate::trust::fold_case(segment) == crate::trust::fold_case(name)
+            segment == name
+                || crate::trust::canonical_form(segment, folds_case)
+                    == crate::trust::canonical_form(name, folds_case)
         })
 }
 
@@ -3909,6 +3924,63 @@ mod tests {
                     permissions.for_path(Subject::Read, path),
                     decision,
                     "{path} was ruled wrongly under a copy for a checkout of /work/{checked_out} of rules written with {written}"
+                );
+            }
+        }
+    }
+
+    /// CHECKOUT-9, PERM-7. A deny or ask rule written in one Unicode form of the working directory's
+    /// name is copied to the checkout where the directory is spelled in the other, on a volume that
+    /// folds case and on one that does not, and an allow rule is copied only from the spelling it
+    /// was written in, since a grant covers only what the person approved.
+    #[test]
+    fn a_refusal_is_copied_from_a_working_directory_spelled_in_another_unicode_form() {
+        let (composed, decomposed) = ("caf\u{e9}", "cafe\u{301}");
+        for folds_case in [false, true] {
+            for (written, checked_out) in [(composed, decomposed), (decomposed, composed)] {
+                let mut permissions = rules_on_a_volume_that_folds_case(
+                    folds_case,
+                    &[&format!("Read(//work/{written}/secrets/**)")],
+                    &[&format!("Read(//work/{written}/asked/**)")],
+                    &[&format!("Read(//work/{written}/granted/**)")],
+                );
+                permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+                for (path, decision) in [
+                    ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+                    ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+                    ("/state/c1/granted/file", Decision::Unmatched),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        decision,
+                        "{path} was ruled wrongly under a copy for /work/{checked_out} of rules written under /work/{written} (folds case: {folds_case})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CHECKOUT-9, PERM-7. The canonical form joins the two spellings of one name and nothing else:
+    /// a rule under `cafe` is not under `caf\u{e9}`, and a full-width letter is not the letter.
+    #[test]
+    fn a_rule_is_not_copied_from_a_working_directory_whose_name_is_another_name() {
+        for folds_case in [false, true] {
+            for (written, checked_out) in [
+                ("cafe", "caf\u{e9}"),
+                ("caf\u{e9}", "cafe"),
+                ("class", "cla\u{ff53}s"),
+            ] {
+                let mut permissions = rules_on_a_volume_that_folds_case(
+                    folds_case,
+                    &[&format!("Read(//work/{written}/secrets/**)")],
+                    &[],
+                    &[],
+                );
+                permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+                assert_eq!(
+                    permissions.for_path(Subject::Read, "/state/c1/secrets/key"),
+                    Decision::Unmatched,
+                    "a rule under /work/{written} was copied for a checkout of /work/{checked_out} (folds case: {folds_case})"
                 );
             }
         }

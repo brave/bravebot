@@ -591,7 +591,9 @@ the call is spelled in. Both are compared in the one form every canonically equi
 name shares, so `Read(caf\u{e9}.md)` refuses `cafe\u{301}.md` and the reverse, on a volume that
 opens a file under either form and on one that does not, where covering both costs a refusal and
 never grants one. Compatibility forms are not equivalents: a full-width letter is not the letter. An
-`allow` rule is matched as written.
+`allow` rule is matched as written. The same holds for the workspace the rule is read against: a
+full-path or `~/` rule whose prefix names the workspace in another Unicode form than the one the
+workspace directory is stored in also covers the project file by its workspace-relative name.
 
 Nor is it about the directory a call happened to name, so it holds whichever way a walk arrives at
 the file. A listing or a search consults the rules for every entry its walk reaches as well as for
@@ -702,6 +704,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::permissions::a_rule_naming_a_link_covers_the_file_it_reaches`
 `verified-by: bravebot_agent::permissions::a_full_path_rule_with_no_link_in_it_covers_a_project_file_by_its_relative_name`
 `verified-by: bravebot_agent::permissions::a_home_rule_covers_the_relative_name_in_a_session_opened_in_the_home_directory`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_another_unicode_form`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_covers_a_project_file_by_its_relative_name_in_either_unicode_form`
 `verified-by: bravebot_agent::tools::tests::confinement::a_home_rule_refuses_the_relative_name_in_a_session_opened_in_the_home_directory`
 `verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
 `verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`

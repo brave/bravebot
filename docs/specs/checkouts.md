@@ -639,7 +639,8 @@ Removing a checkout withdraws its rules except those that distrust a path.
 
 A rule's relative specifier ([PERM-3](permissions.md#PERM-3)) is held against the checkout's
 root, so a rule denying a read of `.env` refuses a read of `<checkout>/.env`. An absolute
-specifier under the working directory is copied to the checkout as the trust rules are. What a
+specifier under the working directory is copied to the checkout as the trust rules are, whichever
+Unicode form the rule and the working directory are each spelled in. What a
 person answered about a credential a read turned up
 ([CRED-15](credential-protection.md#CRED-15)) is not copied, as a move with `/cd` drops it
 ([TRUST-13](trust-map.md#TRUST-13)).
@@ -673,6 +674,8 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_agent::turn::a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout`
 `verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
+`verified-by: bravebot_core::permissions::a_refusal_is_copied_from_a_working_directory_spelled_in_another_unicode_form`
+`verified-by: bravebot_core::permissions::a_rule_is_not_copied_from_a_working_directory_whose_name_is_another_name`
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
 `verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
 `verified-by: bravebot_core::permissions::a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused`
