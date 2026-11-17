@@ -275,7 +275,9 @@ the rules miss it the other way round: `Read(//D:/added/**)` refuses nothing, an
 
 Whether two spellings that differ only in case are one file is a fact about the volume the workspace
 is on (the trust map asks it the same way, [trust-map.md](trust-map.md)), so the caller asks the volume and hands the answer to
-the rules, which ask nothing. Where the volume folds case, both the pattern and the path have their
+the rules, which ask nothing. The answer is about the names looked up inside the workspace
+directory, and a filesystem that folds per directory can answer differently for the workspace and
+for its parent, so the workspace's own casefold flag decides where the filesystem reports one. Where the volume folds case, both the pattern and the path have their
 letter case folded segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which
 opens the same file. A rule that restricts, in the `deny` or `ask` list, takes each letter to upper
 case and then to lower case, so `ſrc` meets the `src` APFS opens it as, though `ſ` is its own lower
@@ -329,6 +331,7 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
+`verified-by: bravebot_agent::workspace::a_workspace_that_folds_inside_a_parent_that_does_not_folds_case`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
 `verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`

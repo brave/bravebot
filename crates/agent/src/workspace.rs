@@ -5196,11 +5196,121 @@ mod tests {
 
     const TREE: &[&str] = &["/", "/Users", "/Users/me", "/Users/me/Proj"];
 
+    /// A probe of a filesystem that reports no casefold flags, such as a volume that folds as a
+    /// whole or a host with no way of reading one.
+    fn no_flags(_: &Path) -> Option<bool> {
+        None
+    }
+
+    /// A filesystem that holds the paths it is given, each its own file on volume 1, where only the
+    /// directories in `folding` answer to the other spelling of a name inside them, as ext4 does
+    /// for a directory with the casefold flag. The second function is the flag of each directory.
+    #[allow(
+        clippy::type_complexity,
+        reason = "a pair of closures a test names once"
+    )]
+    fn per_directory(
+        paths: &'static [&'static str],
+        folding: &'static [&'static str],
+    ) -> (
+        impl Fn(&Path) -> io::Result<FileId>,
+        impl Fn(&Path) -> Option<bool>,
+    ) {
+        let folds_in = move |directory: Option<&Path>| {
+            directory.is_some_and(|directory| folding.contains(&directory.to_str().unwrap_or("")))
+        };
+        let id = move |path: &Path| {
+            let spelled = path.to_string_lossy().into_owned();
+            let folds = folds_in(path.parent());
+            paths
+                .iter()
+                .position(|held| {
+                    *held == spelled || (folds && held.to_lowercase() == spelled.to_lowercase())
+                })
+                .map(|n| FileId {
+                    volume: 1,
+                    file: n.to_string(),
+                })
+                .ok_or_else(|| io::ErrorKind::NotFound.into())
+        };
+        let flag = move |directory: &Path| Some(folds_in(Some(directory)));
+        (id, flag)
+    }
+
+    const MIXED: &[&str] = &["/", "/home", "/home/me", "/home/me/Workspace"];
+    const WORKSPACE: &str = "/home/me/Workspace";
+
+    /// Whether a deny rule for `.env` refuses `.ENV` when the rules are read with `answer` as the
+    /// case answer, the way a session reads them.
+    fn deny_env_covers_upper_case(answer: bool) -> bool {
+        use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
+        let anchors = Anchors {
+            folds_case: answer,
+            ..Anchors::none()
+        };
+        let (permissions, rejected) =
+            Permissions::parse(&["Read(.env)".to_string()], &[], &[], &anchors);
+        assert!(rejected.is_empty());
+        assert_eq!(
+            permissions.for_path(Subject::Read, ".env"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        permissions.for_path(Subject::Read, ".ENV") == Decision::Ruled(Ruling::Deny)
+    }
+
+    /// ext4 sets case folding per directory. A workspace carrying the flag inside an ordinary
+    /// parent opens `.ENV` as `.env`, so the answer is that it folds, and a deny rule for `.env`
+    /// refuses `.ENV`. The name of the workspace is looked up in the parent, which keeps the
+    /// spellings apart, and is not evidence for the names inside the workspace.
+    #[test]
+    fn a_workspace_that_folds_inside_a_parent_that_does_not_folds_case() {
+        let (id, flag) = per_directory(MIXED, &[WORKSPACE]);
+        let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
+        assert_eq!(answer, Some(true));
+        assert!(deny_env_covers_upper_case(answer.unwrap()));
+    }
+
+    /// The other two layouts keep their answers: both directories folding folds, and neither
+    /// folding does not.
+    #[test]
+    fn the_other_layouts_of_the_casefold_flag_keep_their_answers() {
+        let (id, flag) = per_directory(MIXED, &["/home/me", WORKSPACE]);
+        assert_eq!(folds_case_by(Path::new(WORKSPACE), &id, &flag), Some(true));
+
+        let (id, flag) = per_directory(MIXED, &[]);
+        let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
+        assert_eq!(answer, Some(false));
+        assert!(!deny_env_covers_upper_case(answer.unwrap()));
+    }
+
+    /// The opposite direction. A parent carrying the flag and an ordinary workspace inside it: the
+    /// name of the workspace folds in the parent, and the names inside the workspace do not, so a
+    /// rule about `Docs` decides nothing about `docs`.
+    #[test]
+    fn a_workspace_that_does_not_fold_inside_a_parent_that_does_does_not_fold_case() {
+        let (id, flag) = per_directory(MIXED, &["/home/me"]);
+        assert_eq!(folds_case_by(Path::new(WORKSPACE), &id, &flag), Some(false));
+    }
+
+    /// A filesystem that reports no flag for the workspace is read by the lookup of its name, as a
+    /// volume that folds as a whole answers.
+    #[test]
+    fn a_filesystem_with_no_flags_is_read_by_the_lookup_of_the_name() {
+        let (id, _) = per_directory(MIXED, &["/home/me"]);
+        assert_eq!(
+            folds_case_by(Path::new(WORKSPACE), &id, &no_flags),
+            Some(true)
+        );
+    }
+
     /// A volume answering to either spelling of `Proj` is one whose rules have to fold.
     #[test]
     fn a_volume_answering_to_either_spelling_folds_case() {
         let id = volume(TREE, true);
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &id), Some(true));
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &id, &no_flags),
+            Some(true)
+        );
     }
 
     /// A volume holding `Proj` and `pROJ` apart is one where a rule about `Docs` must not cover
@@ -5208,7 +5318,10 @@ mod tests {
     #[test]
     fn a_volume_holding_the_spellings_apart_does_not_fold_case() {
         let id = volume(TREE, false);
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &id), Some(false));
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &id, &no_flags),
+            Some(false)
+        );
 
         let both = volume(
             &[
@@ -5221,7 +5334,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj"), &both),
+            folds_case_by(Path::new("/Users/me/Proj"), &both, &no_flags),
             Some(false)
         );
     }
@@ -5237,11 +5350,17 @@ mod tests {
                 volume(TREE, true)(path)
             }
         };
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &denied), None);
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &denied, &no_flags),
+            None
+        );
 
         let nothing =
             |_: &Path| -> io::Result<FileId> { Err(io::ErrorKind::PermissionDenied.into()) };
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &nothing), None);
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &nothing, &no_flags),
+            None
+        );
 
         let mixed = |path: &Path| -> io::Result<FileId> {
             let mut id = volume(TREE, true)(path)?;
@@ -5251,7 +5370,7 @@ mod tests {
             Ok(id)
         };
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj"), &mixed),
+            folds_case_by(Path::new("/Users/me/Proj"), &mixed, &no_flags),
             None,
             "a name held on the volume above was read as the answer for a mount point"
         );
@@ -5269,11 +5388,19 @@ mod tests {
             "/Users/me/Proj/2024",
         ];
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj/2024"), &volume(tree, true)),
+            folds_case_by(
+                Path::new("/Users/me/Proj/2024"),
+                &volume(tree, true),
+                &no_flags
+            ),
             Some(true)
         );
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj/2024"), &volume(tree, false)),
+            folds_case_by(
+                Path::new("/Users/me/Proj/2024"),
+                &volume(tree, false),
+                &no_flags
+            ),
             Some(false)
         );
     }
