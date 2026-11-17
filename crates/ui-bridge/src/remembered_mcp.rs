@@ -139,14 +139,23 @@ mod tests {
             },
         );
         assert!(
-            half.message
-                .starts_with("The answer for every server was forgotten, and the tools are still remembered: "),
+            half.message.starts_with(
+                "The answer for every server was forgotten, and the tools are still remembered: "
+            ),
             "{}",
             half.message
         );
-        assert!(half.message.ends_with("could not be written: disk full"), "{}", half.message);
+        assert!(
+            half.message.ends_with("could not be written: disk full"),
+            "{}",
+            half.message
+        );
 
         let none = not_written(path, &error, &Remembered::default());
-        assert!(none.message.starts_with("Nothing was forgotten: "), "{}", none.message);
+        assert!(
+            none.message.starts_with("Nothing was forgotten: "),
+            "{}",
+            none.message
+        );
     }
 }

@@ -70,7 +70,9 @@ pub fn remembered(directory: &Path, project: &Path) -> Result<Remembered, Unread
 /// was dropped. Both records are read before either is written, so one that cannot be read leaves
 /// both as they are. A record nothing is dropped from is not rewritten.
 pub fn forget(directory: &Path, project: &Path) -> Result<Remembered, Unforgotten> {
-    forget_through(directory, project, |path, text| crate::home::replace(path, text))
+    forget_through(directory, project, |path, text| {
+        crate::home::replace(path, text)
+    })
 }
 
 /// [`forget`], writing each record through `write`.
