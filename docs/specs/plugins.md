@@ -107,14 +107,15 @@ for the person.
 ### PLUGIN-4: the install lists every part in full and asks once
 
 Before anything is copied, the person is shown the plugin's name, version, source and resolved commit
-([PLUGIN-14](#PLUGIN-14)), and then each part: every skill's name and description, every definition's
-name and kind, every hook's moment and argv, every server's transport, argv or url and host, the
-variables it names and the files it may read. Anything the part would reach that
-[network-egress.md](network-egress.md) or [permissions.md](permissions.md) would otherwise ask about (a
-host, a command, a path outside the workspace) is on its own row. A skill or definition that a source
-of higher rank would shadow ([PLUGIN-12](#PLUGIN-12)) is marked as shadowed. The text drawn from the
-plugin is drawn inside the margin untrusted content in a prompt is drawn inside, and is cut by what a
-person can read, with the rest of a long part shown on request and never dropped.
+([PLUGIN-14](#PLUGIN-14)), and then each part: every skill's name, description and the `model` it
+names, every definition's name, kind and the `model` it names, every hook's moment and argv, every
+server's transport, argv or url and host, the variables it names and the files it may read. Anything
+the part would reach that [network-egress.md](network-egress.md) or [permissions.md](permissions.md)
+would otherwise ask about (a host, a command, a path outside the workspace) is on its own row. A skill
+or definition that a source of higher rank would shadow ([PLUGIN-12](#PLUGIN-12)) is marked as
+shadowed. The text drawn from the plugin is drawn inside the margin untrusted content in a prompt is
+drawn inside, and is cut by what a person can read, with the rest of a long part shown on request and
+never dropped.
 
 The answer is yes or no. A yes installs every part, and the prompt says plainly what it does not do:
 a hook is not made to run and a server is not made reachable by it, which each reach through their own
@@ -151,14 +152,23 @@ authors them.
 <a id="PLUGIN-6"></a>
 ### PLUGIN-6: a plugin carries no decision
 
-A plugin declares no permission rule, no allow, ask or deny entry, no grant, no trusted path, no mode,
-no model, no endpoint and no setting. A part that is a skill, a definition or a hook is held to what
-that part already may say: a definition cannot name a capability set beyond its kind, and a hook decides
-nothing. Installing a plugin does not change the permission rules in force, the trust map or the mode
-of any session.
+The manifest declares no permission rule, no allow, ask or deny entry, no grant, no trusted path, no
+mode, no model, no endpoint and no setting. A part that is a skill, a definition or a hook is held to
+what that part already may say: a definition cannot name a capability set beyond its kind, and a hook
+decides nothing. Installing a plugin does not change the permission rules in force, the trust map or
+the mode of any session.
+
+A skill or a definition in a plugin may name a `model` as one in `~/.bravebot` may
+([SKILL-15](skills.md#SKILL-15), [DELEGATE-22](delegation.md#DELEGATE-22)), and it is read the same
+way. The manifest and every other file in the plugin name none. The install shows each such model
+([PLUGIN-4](#PLUGIN-4)), so the person's yes to the listing is the endorsement that a file in their own
+state directory is for the same key. A plugin directory in a workspace is inert
+([PLUGIN-5](#PLUGIN-5)), so no checkout names a model through a plugin.
 
 **Why.** A plugin is outside content a person chose to trust, and the choice was to read what it lists.
 A permission rule is a decision taken from something a person wrote, and a plugin is not that person.
+A model decides which service receives the conversation ([BACKEND-24](backends.md#BACKEND-24)), so a
+plugin may name one only where the listing the person answered showed it.
 
 `verified-by: none`
 
