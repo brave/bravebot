@@ -2462,7 +2462,8 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
 `verified-by: bravebot_tui::app::the_todos_key_prints_nothing_in_the_files_state`
 `verified-by: bravebot_tui::app::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`
-`verified-by: bravebot_tui::model_prompt::an_alt_chord_narrows_the_list_as_the_letter_it_carries``verified-by: bravebot_tui::keybindings::the_panes_chord_is_alt_p_and_can_be_moved`
+`verified-by: bravebot_tui::model_prompt::an_alt_chord_narrows_the_list_as_the_letter_it_carries`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_alt_p_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::the_panes_chord_is_contested_like_every_other`
 `verified-by: bravebot_tui::app::layout_tests::the_shortcut_list_names_the_panes_chord_in_the_bots_layout`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`

@@ -798,7 +798,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
 `verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
 `verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
-`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note``verified-by: bravebot_tui::app::layout_tests::typed_mid_turn_it_is_refused_at_once_and_never_waits`
+`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_tui::app::layout_tests::typed_mid_turn_it_is_refused_at_once_and_never_waits`
 
 ## What a slash word is offered
 

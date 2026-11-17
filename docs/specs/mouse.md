@@ -114,6 +114,7 @@ for a reply, `/copy block` for a fenced block of one and `/copy text` for a repl
 editor ([SCROLL-6](scroller.md#SCROLL-6)). The clauses about what a selection takes and how it is
 made ([MOUSE-2](#MOUSE-2) and [MOUSE-3](#MOUSE-3), [MOUSE-5](#MOUSE-5) to [MOUSE-8](#MOUSE-8) and
 [MOUSE-34](#MOUSE-34) to [MOUSE-39](#MOUSE-39)) are about this one act.
+
 `verified-by: bravebot_tui::app::a_drag_from_the_transcript_never_copies_the_panel`
 `verified-by: bravebot_tui::app::a_drag_from_the_panel_never_copies_the_transcript`
 `verified-by: bravebot_tui::select::a_sweep_past_the_edge_of_its_pane_stops_at_the_edge`
@@ -137,7 +138,8 @@ made ([MOUSE-2](#MOUSE-2) and [MOUSE-3](#MOUSE-3), [MOUSE-5](#MOUSE-5) to [MOUSE
 `verified-by: bravebot_tui::app::a_release_while_a_turn_runs_hands_the_clipboard_what_was_swept`
 `verified-by: bravebot_tui::app::a_click_hands_over_nothing_and_a_refused_copy_is_not_reported`
 `verified-by: bravebot_tui::app::a_drag_in_a_history_search_begins_no_selection_and_copies_nothing`
-`verified-by: bravebot_tui::app::tests::selection::every_loop_that_answers_the_mouse_carries_out_the_copy_a_release_asks_for``verified-by: bravebot_tui::app::layout_tests::a_drag_in_one_pane_never_copies_the_other`
+`verified-by: bravebot_tui::app::tests::selection::every_loop_that_answers_the_mouse_carries_out_the_copy_a_release_asks_for`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_one_pane_never_copies_the_other`
 `verified-by: bravebot_tui::app::layout_tests::a_drag_in_the_list_never_copies_the_prompt_box_and_the_reverse`
 
 <a id="MOUSE-2"></a>
@@ -168,7 +170,8 @@ dragging its border does, since the text then wraps into other rows ([MOUSE-34](
 `verified-by: bravebot_tui::app::a_height_change_drops_the_selection`
 `verified-by: bravebot_tui::app::a_height_only_resize_in_the_scroller_drops_the_selection`
 `verified-by: bravebot_tui::app::a_resize_in_the_middle_of_a_drag_leaves_nothing_to_extend_or_copy`
-`verified-by: bravebot_tui::app::toggling_the_panel_drops_a_selection_of_the_transcript_it_would_leave_over_other_text``verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_pane_is_dropped_when_the_pane_stops_being_drawn`
+`verified-by: bravebot_tui::app::toggling_the_panel_drops_a_selection_of_the_transcript_it_would_leave_over_other_text`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_pane_is_dropped_when_the_pane_stops_being_drawn`
 `verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_list_is_dropped_when_a_resize_below_100_columns_stops_drawing_it`
 
 <a id="MOUSE-4"></a>

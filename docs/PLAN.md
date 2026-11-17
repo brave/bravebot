@@ -117,10 +117,10 @@ The slice differs from its text in these places:
   begins no session. The pane moves a selection through the list, and Enter confirms it with that
   line. Tab moves nothing while one pane is drawn.
 - The action `panes` moves focus between the prompt and the panes. Its default chord is `alt-p` and a
-  settings file can move it ([INPUT-32](specs/terminal-input.md#INPUT-32), which now says fourteen
-  chords). The panel chord is taken and does nothing in the bots layout: it opens and closes nothing
-  and saves nothing. `/panel` and `/files` are refused with a line, and the hint line does not name
-  the panel chord. The owner decided both on 2026-10-27, after `alt-l` was found to contest an
+  settings file can move it ([INPUT-32](specs/terminal-input.md#INPUT-32), which now says seventeen
+  chords where the session can be suspended and sixteen where it cannot). The panel chord is taken
+  and does nothing in the bots layout: it opens and closes nothing and saves nothing. `/panel` and
+  `/files` are refused with a line, and the hint line does not name the panel chord. The owner decided both on 2026-10-27, after `alt-l` was found to contest an
   existing test that moves the `watch` action to it. Any person whose settings file already gives
   `alt-p` to another action gets that action back on its default, as every contested chord does.
 - A layout's claim is consulted last in `claimed_by_a_mode`, so a picker, a delegate view, the

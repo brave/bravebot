@@ -56,7 +56,8 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/sidebar` | | Open a checklist that turns each section of the info panel on or off |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
-| `/unfinished` | | List what this session left open, and whose move each is || `/layout` | `<name>` | End this session and open another layout of the interface |
+| `/unfinished` | | List what this session left open, and whose move each is |
+| `/layout` | `<name>` | End this session and open another layout of the interface |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/redraw` | | Redraw the whole screen, for a terminal that was cleared or reset |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
@@ -1741,7 +1742,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/layout`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end onlywhat the session keeps for itself, so they are carried out as you type them, ahead of anything
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/layout`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config` and `/language` change only how the screen
