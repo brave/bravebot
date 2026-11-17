@@ -130,7 +130,9 @@ fn workspace_key(workspace: &Path) -> String {
     // FNV-1a, because the key has to be the same in every test binary and on every run, which
     // `std::hash::DefaultHasher` does not promise between releases of Rust.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in workspace.to_string_lossy().bytes() {
+    // The bytes of the path, not a lossy rendering, which joins two paths that differ only in bytes
+    // that are not UTF-8 (PATH-001). The name above is for a reader and does not decide the key.
+    for &byte in workspace.as_os_str().as_encoded_bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }

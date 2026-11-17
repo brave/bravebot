@@ -34428,7 +34428,9 @@ fn requests_for_one_run_vouching(
 
 /// A file the session's profile does not let a program write, and one it does not let a strict
 /// program read: under the scratch root, which is neither the temporary directory nor the home.
+/// The root is made here, since a file written into it or a redirect into it needs it to be there.
 fn outside_the_session(name: &str) -> std::path::PathBuf {
+    std::fs::create_dir_all(scratch_root::scratch_root()).expect("the scratch root");
     scratch_root::scratch_dir(&format!("sandbox-mode-{name}"))
 }
 

@@ -60,6 +60,29 @@ fn each_checkout_gets_a_root_of_its_own() {
     );
 }
 
+/// Two checkouts whose paths differ only in bytes that are not UTF-8 do not share a root, nor does
+/// either share one with the checkout whose name is the replacement character those bytes render
+/// as. Rejects a key taken from a lossy rendering of the path, which joins them, so the checkouts
+/// delete each other's fixtures (PATH-001, PATH-003).
+#[cfg(unix)]
+#[test]
+fn checkouts_whose_paths_differ_only_in_bytes_that_are_not_utf8_get_roots_of_their_own() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let (tmp, home) = (Path::new("/bb-fake-tmp"), Path::new("/bb-fake-home/.cache"));
+    let root = |name: &OsStr| scratch_root_for(&tmp.join(name), tmp, Some(home));
+    let (first, second, lookalike) = (
+        root(OsStr::from_bytes(b"one-\xff")),
+        root(OsStr::from_bytes(b"one-\xfe")),
+        root(OsStr::new("one-\u{FFFD}")),
+    );
+
+    assert_ne!(first, second);
+    assert_ne!(first, lookalike);
+    assert_ne!(second, lookalike);
+}
+
 /// With no cache directory outside the temporary directory the default is used, which keeps the
 /// precondition in `docs/development/checks.md`. Rejects a root that is invented under the
 /// temporary directory or in a place nobody said was the account's.
@@ -105,19 +128,20 @@ fn a_directory_beside_the_root_is_not_under_it_and_is_not_shared_between_checkou
 
 /// A link into the temporary directory counts as being in it: on macOS `$TMPDIR` is spelled under
 /// `/var`, which is a link to `/private/var`, and a checkout is as often named by one spelling as
-/// the other. Rejects a comparison of the spellings, which calls the checkout outside.
+/// the other. Rejects a comparison of the spellings, which calls the checkout outside: the link is
+/// spelled outside the temporary directory and only the path it resolves to is inside it.
 #[cfg(unix)]
 #[test]
 fn a_checkout_reached_through_a_link_into_the_temporary_directory_is_inside_it() {
     let real = temporary().join(format!("bb-scratch-root-{}", std::process::id()));
-    let outside = real.join("outside");
-    std::fs::create_dir_all(real.join("checkout")).unwrap();
+    let (temporary_directory, outside) = (real.join("tmp"), real.join("outside"));
+    std::fs::create_dir_all(temporary_directory.join("checkout")).unwrap();
     std::fs::create_dir_all(&outside).unwrap();
-    let link = real.join("link");
-    std::os::unix::fs::symlink(real.join("checkout"), &link).unwrap();
+    let link = outside.join("link");
+    std::os::unix::fs::symlink(temporary_directory.join("checkout"), &link).unwrap();
     let home = Path::new("/bb-fake-home/.cache");
 
-    let through_the_link = scratch_root_for(&link, &real, Some(home));
+    let through_the_link = scratch_root_for(&link, &temporary_directory, Some(home));
     let _ = std::fs::remove_dir_all(&real);
 
     assert!(through_the_link.starts_with(home), "{through_the_link:?}");
