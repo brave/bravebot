@@ -7331,15 +7331,16 @@ mod tests {
     fn a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line() {
         let session = a_session_whose_turn_has_ended_in_a_loop();
 
+        // One draw: the light in the row follows the clock second, so rows from two draws can
+        // differ by it.
         let rows = screen_rows(&session, 120);
         let done = rows
             .iter()
             .position(|row| row.contains("done ("))
             .expect("the turn's own line is gone");
-        let (row, below) = the_still_active_row(&session, 120).expect("no row says it is active");
-        assert_eq!(
-            rows[done + 1],
-            row,
+        let (row, below) = (&rows[done + 1], &rows[done + 2]);
+        assert!(
+            row.contains(&t!(standing_label).to_string()),
             "the row is not directly under the end of the turn: {rows:?}"
         );
         assert!(row.contains("looping, next in"), "{row}");
