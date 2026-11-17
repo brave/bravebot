@@ -4537,8 +4537,7 @@ mod tests {
     /// much a place to plant an `aws` as the project.
     #[test]
     fn a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs() {
-        let granted = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-programs-granted");
+        let granted = crate::testutil::scratch_dir("confine-programs-granted");
         let _ = std::fs::remove_dir_all(&granted);
         std::fs::create_dir_all(&granted).expect("granted directory");
         let granted = granted.canonicalize().expect("canonical");
@@ -5384,8 +5383,7 @@ mod tests {
     /// interpreter, is. Run in a directory of its own so a file the session wrote is a real one.
     #[test]
     fn an_interpreter_handed_a_file_the_plan_could_write_is_not_held() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-script");
+        let root = crate::testutil::scratch_dir("confine-held-script");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5482,8 +5480,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_file_name_holding_a_separator_is_looked_up_as_one_name() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-separator-names");
+        let root = crate::testutil::scratch_dir("confine-held-separator-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5557,8 +5554,7 @@ mod tests {
     /// `=`, which never names `key=value run.sh`.
     #[test]
     fn a_quoted_name_in_a_command_string_names_the_file_it_runs() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-quoted-names");
+        let root = crate::testutil::scratch_dir("confine-held-quoted-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -9426,8 +9422,7 @@ mod tests {
     fn a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries() {
         // A home that exists with its links followed, as a real one is: the list resolves a path
         // through the links of its deepest part on disk, and `/home` is a link on macOS.
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-unit-refusal-home");
+        let home = crate::testutil::scratch_dir("confine-unit-refusal-home");
         std::fs::create_dir_all(&home).expect("home directory");
         let home = home.canonicalize().expect("canonical home");
         let known_hosts = format!("{}/.ssh/known_hosts", home.display());
@@ -9460,8 +9455,7 @@ mod tests {
     /// that the default reaches each.
     #[test]
     fn what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists() {
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-unit-default-reach-home");
+        let home = crate::testutil::scratch_dir("confine-unit-default-reach-home");
         std::fs::create_dir_all(&home).expect("home directory");
         let home = home.canonicalize().expect("canonical home");
         let at = |rest: &str| {
@@ -12185,9 +12179,7 @@ mod tests {
     /// A session directory under the build directory, which no row of the base reaches, and a
     /// confinement of this machine's own over it.
     fn a_session(name: &str) -> (PathBuf, Confinement) {
-        let session = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-unit-{name}"));
+        let session = crate::testutil::scratch_dir(&format!("confine-unit-{name}"));
         let _ = std::fs::remove_dir_all(&session);
         std::fs::create_dir_all(&session).expect("session directory");
         let session = session.canonicalize().expect("canonical session");
@@ -12714,9 +12706,7 @@ mod tests {
         gitconfig: &str,
         files: &[&str],
     ) -> (PathBuf, Confinement) {
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-signing-{name}"));
+        let home = crate::testutil::scratch_dir(&format!("confine-signing-{name}"));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("a home");
         for file in files {
@@ -13332,9 +13322,7 @@ mod tests {
     /// source tree, and without one that repository would be the checkout above the session and
     /// would hold the home and the directory beside.
     fn unasked_places(name: &str) -> (PathBuf, PathBuf) {
-        let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-unit-unasked-{name}"));
+        let top = crate::testutil::scratch_dir(&format!("confine-unit-unasked-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("home/.ssh")).expect("home directory");
         std::fs::create_dir_all(top.join("beside/project/.git")).expect("a directory beside");
@@ -13859,9 +13847,7 @@ mod tests {
     #[cfg(unix)]
     impl IdentityPlaces {
         fn new(name: &str) -> Self {
-            let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/test-scratch")
-                .join(format!("confine-identities-{name}"));
+            let top = crate::testutil::scratch_dir(&format!("confine-identities-{name}"));
             let _ = std::fs::remove_dir_all(&top);
             for file in [
                 "home/.ssh/work",
