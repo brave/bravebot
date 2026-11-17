@@ -932,11 +932,12 @@ jobs:
   #
   # Only the tests written for Windows run. The rest of the sandbox crate's tests use Unix paths
   # and programs, and the agent's other confined-process tests spawn a POSIX shell. The browser
-  # opener's three Windows tests in bravebot-tui also run (the step that follows the confine
+  # opener's four Windows tests in bravebot-tui also run (the step that follows the confine
   # test): `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`,
-  # `a_windows_name_is_removed_in_whatever_case_it_is_set` and
-  # `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`. Target as
-  # in the windows job above.
+  # `a_windows_name_is_removed_in_whatever_case_it_is_set`,
+  # `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it` and
+  # `a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper`. Target
+  # as in the windows job above.
   sandbox-windows:
     name: Sandbox on Windows
     runs-on: windows-latest
@@ -1061,8 +1062,11 @@ jobs:
       # run test starts a child of the test binary with the nine names of the list set to a
       # stage-written helper, asserts the opener's start removes them and that the helper does not
       # run, and prints, for each name and for `PSModulePath`, whether a start with that name put
-      # back ran it. The printed record is not asserted and is kept in the step output. `3 passed`
-      # fails the step if a test was filtered out.
+      # back ran it. The handler test registers a handler for the current user whose command
+      # expands one name of the list, starts the opener through it with the helper reachable only
+      # through that name, and prints which names selected the program. The printed records are
+      # not asserted and are kept in the step output. `4 passed` fails the step if a test was
+      # filtered out.
       - name: Test the browser opener's Windows start
         run: |
           mkdir -p "$RUNNER_TEMP/opener"
@@ -1072,8 +1076,9 @@ jobs:
             opener::tests::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it \
             opener::tests::a_windows_name_is_removed_in_whatever_case_it_is_set \
             opener::tests::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments \
+            opener::tests::a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper \
             | tee "$RUNNER_TEMP/opener.log"
-          grep -q 'test result: ok. 3 passed' "$RUNNER_TEMP/opener.log"
+          grep -q 'test result: ok. 4 passed' "$RUNNER_TEMP/opener.log"
 
       # INPUT-52 on Windows: the console input records a start-up query read past its replies are
       # handed to crossterm's event queue in order, and what is no event is counted as lost (#3846).

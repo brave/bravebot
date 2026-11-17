@@ -5795,10 +5795,22 @@ shown by running the program, or not entirely:
   test reads the records from the lines that begin with that prefix, so the check does not depend
   on where the test harness's own output on the same stream ends; it also asserts that every
   child printed its `start ended` record. The printed
-  record is not asserted. Which names select the program on Windows is still unobserved. #3860
-  owns the run that shows it: a handler registered for the current user whose command expands a
-  listed name, started through the opener, with the helper reachable only through that name.
-  #3822 owns the rest of the opener list.
+  record is not asserted. Which names select the program on Windows is still unobserved.
+  `a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper` is the
+  test that observes it. It registers a handler for the current user
+  for a scheme of its own, as a `REG_EXPAND_SZ` and as a `REG_SZ` value, whose command expands one
+  name (`%COMSPEC%` for `COMSPEC`, `%<name>%\helper.cmd` for each directory name, and the helper's
+  path without an extension for `PATHEXT`) and so reaches a batch file that only creates a marker,
+  in a directory a stage may write. It starts the opener's `rundll32` through the address of that
+  scheme in a child run of the test binary, with the name set to that directory. It asserts that a
+  handler written with the helper's own path runs it through the opener's start, and that the
+  start with each of the nine names other than `PATHEXT` set does not run the helper. The
+  `PATHEXT` handler names the helper by a path in the stage's directory, and on the Windows
+  Server 2025 runner `rundll32` ran it with `PATHEXT` removed and with it put back, so the
+  test prints that case and does not assert it. It prints, for each of the ten
+  names and `PSModulePath`, whether the helper ran with the name removed and with it put back on
+  the command, and whether it ran when the handler is written with the helper's own path and the
+  name is removed. The put-back result says which names select the program. #3822 owns the rest of the opener list.
   These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
@@ -6312,6 +6324,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
 `verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
 `verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
+`verified-by: bravebot_tui::opener::a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
