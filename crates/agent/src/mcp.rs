@@ -13,7 +13,9 @@
 
 mod forget;
 
-pub use forget::{Remembered, Unforgotten, UnreadableRecord, forget, project_named, remembered};
+pub use forget::{
+    Remembered, Unforgotten, UnreadableRecord, forget, forget_through, project_named, remembered,
+};
 
 use crate::confirm::{
     CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,

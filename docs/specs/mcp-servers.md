@@ -2644,6 +2644,7 @@ drop another project's answers.
 `verified-by: bravebot_agent::mcp::forget::lists_what_is_remembered_for_one_project_and_changes_nothing`
 `verified-by: bravebot_agent::mcp::forget::a_name_that_is_not_utf8_is_not_its_lossy_lookalike`
 `verified-by: bravebot_agent::incognito::a_private_session_forgets_no_standing_mcp_answer`
+`verified-by: bravebot_cli::mcp::forget_says_the_server_answer_went_when_the_tools_file_is_then_not_written`
 `verified-by: bravebot_ui_bridge::forgetting_mcp_answers::the_list_says_what_is_remembered_for_the_sessions_project`
 `verified-by: bravebot_ui_bridge::forgetting_mcp_answers::an_unreadable_record_is_reported_and_nothing_is_forgotten`
 `verified-by: bravebot_ui_bridge::forgetting_mcp_answers::revoking_forgets_only_this_projects_answers_and_says_what_went`

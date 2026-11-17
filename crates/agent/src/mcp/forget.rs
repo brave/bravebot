@@ -75,8 +75,8 @@ pub fn forget(directory: &Path, project: &Path) -> Result<Remembered, Unforgotte
     })
 }
 
-/// [`forget`], writing each record through `write`.
-fn forget_through(
+/// [`forget`], writing each record through `write`, so a caller's test can fail one write.
+pub fn forget_through(
     directory: &Path,
     project: &Path,
     mut write: impl FnMut(&Path, &str) -> std::io::Result<()>,

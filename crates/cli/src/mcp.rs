@@ -1617,10 +1617,23 @@ fn forget<R: BufRead, W: Write>(
     home: &Home,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
+    forget_through(path, home, person, |path, text| {
+        bravebot_agent::home::replace(path, text)
+    })
+}
+
+/// [`forget`], writing each record through `write`.
+fn forget_through<R: BufRead, W: Write>(
+    path: Option<&str>,
+    home: &Home,
+    person: &mut Person<R, W>,
+    write: impl FnMut(&Path, &str) -> std::io::Result<()>,
+) -> Result<(), Stopped> {
     let directory = writable(home, "forget")?;
     let project = project(path)?;
     let named = shown(&project.display().to_string());
-    let forgotten = bravebot_agent::mcp::forget(directory, &project).map_err(|why| match why {
+    let written = bravebot_agent::mcp::forget_through(directory, &project, write);
+    let forgotten = written.map_err(|why| match why {
         Unforgotten::Incognito => (
             Ending::Failed,
             t!(mcp_not_while_incognito, command = "forget"),
@@ -4369,6 +4382,63 @@ mod tests {
         assert!(standing.add("weather", "get_forecast", project));
         assert!(standing.add("weather", "get_alerts", elsewhere));
         std::fs::write(mcp::tools_file(directory), standing.to_text()).expect("tools");
+    }
+
+    #[test]
+    fn forget_says_the_server_answer_went_when_the_tools_file_is_then_not_written() {
+        let directory = scratch("cli-mcp-forget-half");
+        let project = directory.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let project = project.canonicalize().expect("canonical");
+        let elsewhere = directory.join("elsewhere");
+        answered_in(&directory, &project, &elsewhere);
+        let tools = mcp::tools_file(&directory);
+        let tools_before = std::fs::read_to_string(&tools).expect("tools");
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: true,
+        };
+        let mut person = Person {
+            answers: "".as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let outcome = forget_through(
+            Some(project.to_str().expect("utf-8")),
+            &home,
+            &mut person,
+            |path, text| {
+                if path == tools {
+                    Err(std::io::Error::other("disk full"))
+                } else {
+                    std::fs::write(path, text)
+                }
+            },
+        );
+        let screen = String::from_utf8(person.screen).expect("utf-8");
+
+        let named = shown(&project.display().to_string());
+        assert_eq!(
+            screen,
+            format!("{}\n", t!(mcp_forgot_servers, path = &named))
+        );
+        assert_eq!(
+            outcome,
+            Err((
+                Ending::Failed,
+                t!(
+                    mcp_not_written,
+                    path = printable_path(&tools),
+                    error = "disk full"
+                )
+            ))
+        );
+        assert!(!Projects::read(&directory).contains(&project));
+        assert_eq!(
+            std::fs::read_to_string(&tools).expect("tools"),
+            tools_before
+        );
     }
 
     #[test]
