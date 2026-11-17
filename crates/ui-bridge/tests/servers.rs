@@ -40,7 +40,7 @@ impl Scratch {
     fn new(name: &str) -> Self {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
-            .join(name);
+            .join(format!("{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("project/.bravebot")).expect("a project directory");
         std::fs::create_dir_all(path.join("home/.bravebot")).expect("a home directory");

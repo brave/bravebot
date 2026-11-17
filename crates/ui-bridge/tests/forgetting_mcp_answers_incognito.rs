@@ -17,7 +17,10 @@ use std::path::Path;
 #[test]
 fn an_incognito_session_lists_the_answers_and_refuses_to_forget_them() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch/bridge-mcp-remembered-incognito");
+        .join(format!(
+            "../../target/test-scratch/bridge-mcp-remembered-incognito-{}",
+            std::process::id()
+        ));
     let _ = std::fs::remove_dir_all(&root);
     let home = root.join("home");
     let state = home.join(".bravebot");
