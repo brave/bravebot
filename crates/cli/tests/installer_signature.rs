@@ -50,7 +50,8 @@ const UTILITIES: &[&str] = &[
 ];
 
 /// Serves a release from `$SERVED` by the last segment of the URL, and fails as `curl -f` does on
-/// a missing file. The newest-release lookup gets a tag of its own.
+/// a missing file. The newest-release lookup answers with `$LATEST_TAG`, or `v0.0.0` where that is
+/// unset, so a test can choose what the tag lookup returns without touching what is served.
 const FAKE_CURL: &str = r#"#!/bin/sh
 out=""
 url=""
@@ -63,7 +64,7 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$REQUESTS" ] || printf '%s\n' "$url" >> "$REQUESTS"
 case "$url" in
-  */releases/latest) printf '{"tag_name": "v0.0.0"}\n'; exit 0 ;;
+  */releases/latest) printf '{"tag_name": "%s"}\n' "${LATEST_TAG:-v0.0.0}"; exit 0 ;;
 esac
 file="$SERVED/${url##*/}"
 [ -f "$file" ] || exit 22
@@ -869,6 +870,39 @@ fn a_version_with_no_release_is_refused_naming_the_version() {
     let install = Install::new(tools, release, "missing").with_arguments(&["9.9.9"]);
     let outcome = install.run(Installer::Script, &[]);
     assert_refused(Installer::Script, &outcome, "v9.9.9");
+}
+
+/// The tag the script looks up is composed into the download URL unchecked, so whoever controls
+/// the answer from the API controls part of that URL. Each of these is what the API returning that
+/// control to somebody else would look like: a tag without the `v` prefix every release has, one
+/// with a suffix `is_version` does not accept, and one built to walk the download path somewhere
+/// else once `curl` collapses the `..` segments in it.
+#[test]
+fn a_newest_release_tag_that_is_not_a_version_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    for tag in [
+        "1.2.3",
+        "v1.2.3\n",
+        "v1.2.3/../x",
+        "../../evil/releases/download/v1.2.3",
+        "v1.2.3-rc.1",
+    ] {
+        let install =
+            Install::new(tools, release, "newest-tag").with_environment("LATEST_TAG", tag);
+        let outcome = install.run(Installer::Script, &[]);
+        assert_refused(
+            Installer::Script,
+            &outcome,
+            "unable to resolve the latest release tag",
+        );
+        assert_eq!(
+            outcome.requests,
+            ["https://api.github.com/repos/brave/bravebot/releases/latest"],
+            "{tag:?} was composed into a download URL"
+        );
+    }
 }
 
 /// Replacing the binary and its checksum together is what the checksum alone cannot catch, since
