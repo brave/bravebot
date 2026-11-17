@@ -67,6 +67,7 @@ pub fn session(
     agent: Option<String>,
     prompts: bravebot_agent::turn::SystemPrompts,
 ) -> ExitCode {
+    crate::say_usage_ping_notice();
     run(skip_permissions, agent, prompts, None)
 }
 
@@ -678,6 +679,10 @@ fn run(
     let mode = mode_of(hosting.as_ref(), skip_permissions);
 
     let (model, set_aside) = model_in_force(&config, &settings);
+    // A hosted session is a background process, which no person started as a launch.
+    if hosting.is_none() {
+        crate::usage_ping(&config, model.as_deref());
+    }
     let (mut asking, mut reply, mut beside, beside_turns) = open_streams(hosting);
     let hosted = beside_turns.is_some();
 

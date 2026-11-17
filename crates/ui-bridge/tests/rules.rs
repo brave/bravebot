@@ -2,7 +2,7 @@
 //! rule refuses before anything is asked (PERM-7), an `allow` rule in the person's own file
 //! answers a prompt (PERM-8), an `ask` rule puts a question that would not have been put, and an
 //! `allow` rule a checkout wrote answers nothing (PERM-14). The rules are read once per session
-//! (PERM-12).
+//! (PERM-12), and `readsStayInWorkspace` (PERM-16) is read with them.
 //!
 //! Driven through the binary against a model service and a website of the test's own. Whether a
 //! fetch went out is read off the website, and whether a write landed is read off the disk.
@@ -674,4 +674,165 @@ fn a_fork_runs_under_the_rules_its_parent_opened_under() {
         "a fork asked about a host its parent's rules deny: {ended}"
     );
     assert!(!run.reached_the_site());
+}
+
+/// The text of the file a test's planner reads beside the project.
+const BESIDE: &str = "the file beside the project";
+
+/// A session whose planner reads a file in a directory beside the project, which every session
+/// it opens asks to have open.
+struct ReadingBeside {
+    front: FrontEnd,
+    scratch: Scratch,
+    /// Every request the planner was sent, in order.
+    rounds: mpsc::Receiver<String>,
+}
+
+/// Start a front end whose planner reads `beside/notes.txt`, with the settings files `write`
+/// wrote.
+fn reading_beside(name: &str, write: impl FnOnce(&Scratch)) -> ReadingBeside {
+    let scratch = Scratch::new(name);
+    std::fs::create_dir_all(scratch.beside()).expect("a directory beside the project");
+    std::fs::write(scratch.beside().join("notes.txt"), BESIDE).expect("a file beside");
+    write(&scratch);
+    let (endpoint, rounds) = a_planner_calling(
+        "read_file",
+        json!({"path": scratch.beside().join("notes.txt").display().to_string()}),
+    );
+    let front = FrontEnd::start(&scratch, &endpoint);
+    ReadingBeside {
+        front,
+        scratch,
+        rounds,
+    }
+}
+
+impl Scratch {
+    /// A directory beside the project, which a session asks to have open as it opens.
+    fn beside(&self) -> PathBuf {
+        self.path.join("beside")
+    }
+}
+
+impl ReadingBeside {
+    /// Open a session in the project with the directory beside it named, and trust it.
+    fn session(&mut self) -> String {
+        let opened = self.front.call(
+            "session.new",
+            json!({
+                "directory": self.scratch.project().display().to_string(),
+                "directories": [self.scratch.beside().display().to_string()],
+            }),
+        );
+        let session = opened["session"].as_str().expect("a handle").to_string();
+        if opened["remembered"].is_null() {
+            self.front
+                .call("trust.reply", json!({"session": session, "trusted": true}));
+        }
+        session
+    }
+
+    /// Run a turn in `session` and return what the planner was told its read came to, and where
+    /// the turn's prompt landed.
+    ///
+    /// The directory beside the project is not one the person vouched for, so a read that reaches
+    /// the file is put to the window first. The window vouches for it, so what the read found is
+    /// what the planner is told.
+    fn read(&mut self, session: &str) -> (String, u64) {
+        let mut ended = self.front.ask(session);
+        if ended["event"] == "vouch.request" {
+            self.front.reply("vouch.reply", session, &ended, "approve");
+            ended = self.front.question_or_the_end();
+        }
+        assert_eq!(ended["event"], "turn.done", "{ended}");
+        let prompt = ended["data"]["prompt"]
+            .as_u64()
+            .expect("where the prompt landed");
+        let told = tool_results(&self.rounds.try_iter().last().expect("a round"));
+        (told, prompt)
+    }
+}
+
+/// Whether the planner was told the read was refused for `readsStayInWorkspace`, rather than
+/// refused for some other reason or answered with the file.
+fn confined(told: &str) -> bool {
+    !told.contains(BESIDE) && told.contains("readsStayInWorkspace")
+}
+
+/// PERM-12 and PERM-16: `readsStayInWorkspace` is read when the session opens. Removing it from
+/// the file afterwards does not widen what the session's next turn reads, and a session opened
+/// after the edit reads as the file says then.
+#[test]
+fn removing_reads_stay_in_workspace_does_not_widen_an_open_session() {
+    let mut run = reading_beside("bridge-rules-reads-inside-removed", |scratch| {
+        scratch.the_checkout_writes(json!({"readsStayInWorkspace": true}));
+    });
+    let session = run.session();
+    run.scratch.the_checkout_writes(json!({}));
+
+    let (told, _) = run.read(&session);
+    assert!(
+        confined(&told),
+        "a session opened confined read beside the project after the key was removed: {told}"
+    );
+
+    let opened_after = run.session();
+    let (told, _) = run.read(&opened_after);
+    assert!(
+        told.contains(BESIDE),
+        "a session opened after the key was removed was still confined: {told}"
+    );
+}
+
+/// PERM-12: adding `readsStayInWorkspace` while a session is open does not narrow its next turn.
+/// The session after the edit is the first one confined.
+#[test]
+fn adding_reads_stay_in_workspace_confines_the_next_session_and_not_an_open_one() {
+    let mut run = reading_beside("bridge-rules-reads-inside-added", |_| {});
+    let open = run.session();
+    run.scratch
+        .the_checkout_writes(json!({"readsStayInWorkspace": true}));
+
+    let (told, _) = run.read(&open);
+    assert!(
+        told.contains(BESIDE),
+        "a session opened unconfined was confined by a key written after it opened: {told}"
+    );
+
+    let opened_after = run.session();
+    let (told, _) = run.read(&opened_after);
+    assert!(
+        confined(&told),
+        "a session opened after the key was written read beside the project: {told}"
+    );
+}
+
+/// A fork carries on the session it was cut from, so it is held to the project when its parent
+/// opened held to it, whatever the file says when the fork is cut. The pattern the rules follow
+/// in `a_fork_runs_under_the_rules_its_parent_opened_under`.
+#[test]
+fn a_fork_is_held_to_the_project_where_its_parent_opened_held_to_it() {
+    let mut run = reading_beside("bridge-rules-reads-inside-fork", |scratch| {
+        scratch.the_checkout_writes(json!({"readsStayInWorkspace": true}));
+    });
+    let parent = run.session();
+    let (told, prompt) = run.read(&parent);
+    assert!(
+        confined(&told),
+        "the parent read beside the project: {told}"
+    );
+
+    // The key is withdrawn. A session opened now would read beside the project.
+    run.scratch.the_checkout_writes(json!({}));
+    let forked = run.front.call(
+        "session.fork",
+        json!({"session": parent, "prompt": prompt, "text": "do the work"}),
+    );
+    let child = forked["session"].as_str().expect("a handle").to_string();
+
+    let (told, _) = run.read(&child);
+    assert!(
+        confined(&told),
+        "a fork read beside the project its parent was held out of: {told}"
+    );
 }

@@ -29,7 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "help", "npm", "deps", "fuzz")
+AREAS = (
+    "rust", "ui", "mobile", "build", "installers", "docs", "help", "npm", "deps", "fuzz", "verus",
+)
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -138,8 +140,8 @@ PACKAGE_FILES = (
 )
 
 # Read by nothing heavier than the checks that always run. verify/ is read by `check-scripts`,
-# which compares the contracts in crates/ with verify/contracts.txt, and by `make check-verus`,
-# which is run by name.
+# which compares the contracts in crates/ with verify/contracts.txt, and by the Verus job, which
+# VERUS_UNDER below selects.
 QUIET = (
     "LICENSE", ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
@@ -148,6 +150,16 @@ QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/", "verify/")
 
 # The crates the desktop app spawns, which it builds, with everything they name, before it runs.
 DESKTOP = ("ui-bridge", "ui-files")
+
+# What the Verus job reads: the crates whose contracts contrib/check-verus.py verifies, the file
+# bravebot-core includes by path, the copies and lists under verify/, and the scripts that run them.
+# The Makefile and the workflows need every job already.
+VERUS_UNDER = ("crates/core/", "verify/")
+VERUS_FILES = frozenset({
+    "crates/ui-files/src/short_name.rs",
+    "contrib/check-verus.py",
+    "contrib/check-verus-contracts.py",
+})
 
 # The package that fuzzes the crates its manifest names, and everything those name. It is a
 # workspace of its own, so no rule below reaches it through crates/.
@@ -176,6 +188,8 @@ def classify(path, desktop, fuzz):
     """The areas a change to `path` could affect, where `desktop` is desktop_crates() and `fuzz`
     is fuzz_crates()."""
     found = classify_by_area(path, desktop, fuzz)
+    if path.startswith(VERUS_UNDER) or path in VERUS_FILES:
+        found = found | {"verus"}
     if path in READ_BY_THE_SEAM_GUARD or path in ALSO_READ_BY_RUST:
         found = found | {"rust"}
     if path in READ_BY_EXTENSION_TESTS:
@@ -197,7 +211,11 @@ def classify_by_area(path, desktop, fuzz):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
-    if path in ("contrib/check-lint-increase.py", "contrib/check-code-selectors.py"):
+    if path in (
+        "contrib/check-lint-increase.py",
+        "contrib/check-code-selectors.py",
+        "contrib/drive_tui.py",
+    ):
         return frozenset({"rust"})
     if path == "contrib/Dockerfile.cross":
         return frozenset({"build"})
@@ -418,6 +436,9 @@ def local(root, base, containers):
     if "fuzz" in because and not containers:
         print("affected-checks: the fuzz job is not run here: make check-fuzz runs it, and needs the "
               "nightly toolchain and cargo-fuzz", file=sys.stderr)
+    if "verus" in because and not containers:
+        print("affected-checks: the Verus job is not run here: make check-verus runs it, and needs "
+              "Verus and the toolchain it pins", file=sys.stderr)
     chosen = targets(because, CONTAINERS) if containers else list(ALWAYS) + targets(because, HOST)
     print(" ".join(chosen))
     return 0
@@ -439,7 +460,14 @@ CASES = (
     ("contrib/check-deny-reasons.py", {"deps"}),
     ("contrib/Dockerfile.cross", {"build", "rust"}),
     ("crates/tui/src/render.rs", {"rust"}),
-    ("crates/core/src/policy.rs", {"rust", "ui", "fuzz"}),
+    ("crates/core/src/policy.rs", {"rust", "ui", "fuzz", "verus"}),
+    ("crates/core/src/spec.rs", {"rust", "ui", "fuzz", "verus"}),
+    ("crates/ui-files/src/short_name.rs", {"rust", "verus"}),
+    ("verify/mutations.txt", {"verus"}),
+    ("verify/contracts.txt", {"verus"}),
+    ("verify/history.rs", {"verus"}),
+    ("contrib/check-verus.py", {"verus"}),
+    ("contrib/check-verus-contracts.py", {"verus"}),
     ("crates/agent/src/regex.rs", {"rust", "fuzz"}),
     ("crates/agent/Cargo.toml", {"rust", "build", "deps", "fuzz"}),
     ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),
@@ -489,6 +517,7 @@ CASES = (
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("contrib/check-lint-increase.py", {"rust"}),
     ("contrib/check-code-selectors.py", {"rust"}),
+    ("contrib/drive_tui.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("extension-trusted/manifest.json", {"rust", "ui"}),
@@ -769,7 +798,7 @@ def selftest():
             checks.append((f"a local run for a change to {path} runs check-security",
                            status == 0 and "check-security" in gates, gates))
 
-    for area in set(AREAS) - {"build", "installers", "fuzz"}:
+    for area in set(AREAS) - {"build", "installers", "fuzz", "verus"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)
         checks.append((f"a local run needing {area} runs a gate for it", bool(runs), runs))
     containers = targets({"rust"}, CONTAINERS)

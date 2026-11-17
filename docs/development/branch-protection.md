@@ -9,7 +9,7 @@ are listed in [../../contrib/required-checks.txt](../../contrib/required-checks.
 
 A job named in that file holds a merge only where the setting requires its context, so a maintainer
 adds the context of each job the file gains. `Fuzz build and replay` is the job that runs
-`make check-fuzz`.
+`make check-fuzz`, and `Verus` is the job that runs `make check-verus`.
 
 ## Pull request reviews
 

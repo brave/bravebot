@@ -100,6 +100,8 @@ export interface ComposerProps {
   onSetup: () => void
   onCheckBackend: () => void
   onDiagnostics: () => void
+  /** A one-time note docked on top of the box, such as the usage ping notice. Memoised by the caller. */
+  notice?: React.ReactNode
   /** Whether files can be attached. A bot view has no session yet, so nothing to attach them to. */
   canAttach?: boolean
   /** The strip under the box: which project this chat runs in, and its branch. */
@@ -134,7 +136,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
-    canAttach = true, footer, starting = false, summonable = NO_BOTS,
+    canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
@@ -268,6 +270,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   return (
     <footer className="composer" data-paste-session={session}>
       <div className="composer-stack">
+        {notice}
         {backendReady === false && <BackendTray onSetup={onSetup} onCheckBackend={onCheckBackend} onDiagnostics={onDiagnostics} />}
         {interjected.length > 0 && (
           <div className="composer-tray interjected-messages" role="group" aria-label="Sent to this turn" data-test="interjected-messages">

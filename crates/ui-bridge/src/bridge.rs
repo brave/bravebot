@@ -73,6 +73,12 @@ struct Open {
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
+    /// Whether the file tools are held to the project (PERM-16). Read with the permission rules
+    /// when the session opens and held for its turns (PERM-12), so a settings file edited while
+    /// the session is open neither widens nor narrows what its next turn reads. A copy of the
+    /// value the session's rules hold, kept here so a request answered while a turn holds the
+    /// session's state builds its workspace under the same answer.
+    reads_stay_in_workspace: bool,
     /// The definition this session's conversation belongs to, once a turn has said so
     /// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
     ///
@@ -124,6 +130,8 @@ impl Open {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting,
+            // Set with the rules, which are read once the session is minted.
+            reads_stay_in_workspace: false,
             definition: None,
             permission_mode: LiveMode::default(),
             sandbox: None,
@@ -404,6 +412,16 @@ impl Bridge {
             "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
+            "usage_ping.get" => Ok(crate::usage_ping::get()),
+            "usage_ping.set" => crate::usage_ping::set(request),
+            "usage_ping.notice_due" => {
+                Ok(json!({"due": bravebot_session::store::usage_ping_notice_due()}))
+            }
+            "usage_ping.mark_notice_shown" => {
+                bravebot_session::store::mark_usage_ping_notice_shown();
+                crate::usage_ping::start(self.settings.as_deref());
+                Ok(json!({"shown": bravebot_session::store::usage_ping_notice_shown()}))
+            }
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {
@@ -636,21 +654,24 @@ impl Bridge {
     /// as a front end reads them.
     ///
     /// Read from the settings files once, here, and kept by the session (PERM-12). `inherited`
-    /// is a parent's rules, which a fork takes in place of reading the files again.
+    /// is a parent's rules, which a fork takes in place of reading the files again. Whether the
+    /// file tools are held to the project comes with them (PERM-16).
     fn open_under_rules(
-        &self,
+        &mut self,
         handle: &str,
         inherited: Option<crate::rules::SettingsRules>,
     ) -> Value {
-        let Some(open) = self.open.get(handle) else {
+        let settings = self.settings.clone();
+        let Some(open) = self.open.get_mut(handle) else {
             return Value::Null;
         };
         let rules = inherited.unwrap_or_else(|| {
             crate::rules::SettingsRules::read(
-                &crate::settings::layers(Some(&open.project), self.settings.as_deref()),
+                &crate::settings::layers(Some(&open.project), settings.as_deref()),
                 &open.project,
             )
         });
+        open.reads_stay_in_workspace = rules.reads_stay_in_workspace;
         let reported = rules.json();
         if let Ok(mut state) = open.state.lock() {
             state.answers.rules = rules;
@@ -2013,12 +2034,9 @@ impl Bridge {
         }
         let project = open.project.clone();
         let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
-        let mut workspace = turn_workspace(
-            project.clone(),
-            &settings,
-            &bravebot_config::Managed::load(),
-        )
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let mut workspace =
+            turn_workspace(project.clone(), &settings, open.reads_stay_in_workspace)
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
         let mut guard = open
             .state
             .lock()
@@ -2562,7 +2580,7 @@ impl Bridge {
             let Ok(mut workspace) = turn_workspace(
                 open.project.clone(),
                 &settings,
-                &bravebot_config::Managed::load(),
+                open.reads_stay_in_workspace,
             ) else {
                 if let Ok(mut watches) = open.watches.lock() {
                     for watch in watches.live() {
@@ -2968,25 +2986,21 @@ fn import_sessions(request: &Request) -> Result<Value, Failure> {
 /// settings file reaches a search here or nowhere. A cap nobody named is `None`, which leaves the
 /// built-in one standing.
 ///
-/// Whether the file tools are held to the project comes over the same way (PERM-16), and from the
-/// managed file as well as the settings layers: both are layers that may ask for it, and the
-/// strictest thing either said is what holds (PERM-18).
+/// Whether the file tools are held to the project (PERM-16) is not read from `settings`. It is
+/// what the session read with its permission rules when it opened (PERM-12), and the caller
+/// passes it as `reads_stay_in_workspace`.
 ///
 /// A function of its own rather than three lines at the call site, so a test can build the
 /// workspace a turn is given without a backend to run one against.
 pub fn turn_workspace(
     project: PathBuf,
     settings: &Settings,
-    managed: &bravebot_config::Managed,
+    reads_stay_in_workspace: bool,
 ) -> Result<Workspace, WorkspaceError> {
     let caps = settings.search();
-    let inside = settings
-        .narrowing()
-        .strictest(managed.narrowing())
-        .keeps_reads_in_the_workspace();
     Ok(Workspace::new(project)?
         .with_search_caps(caps.files, caps.time)
-        .with_reads_kept_inside(inside)
+        .with_reads_kept_inside(reads_stay_in_workspace)
         .with_references(settings.references(), settings.references_unread())
         .with_shared_skill_directories(settings.shared_skill_directories()))
 }
@@ -3060,12 +3074,9 @@ fn workspace_of(
     settings: &Settings,
     take: impl for<'a> FnOnce(&'a Mutex<State>) -> Option<MutexGuard<'a, State>>,
 ) -> Result<Workspace, Failure> {
-    let mut workspace = turn_workspace(
-        open.project.clone(),
-        settings,
-        &bravebot_config::Managed::load(),
-    )
-    .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+    let mut workspace =
+        turn_workspace(open.project.clone(), settings, open.reads_stay_in_workspace)
+            .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
     let (directories, scratch) = take(&open.state)
         .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
@@ -5174,7 +5185,7 @@ mod watch_tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let held = Arc::clone(&events);
         let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
-        bridge.mint(Open {
+        let handle = bridge.mint(Open {
             watches: Arc::clone(&watches),
             state: Arc::clone(&state),
             permission_mode: mode,
@@ -5186,6 +5197,9 @@ mod watch_tests {
                 false,
             )
         });
+        // The settings are read as a session opens, with the rules (PERM-12), so the poll holds
+        // what the file said here.
+        bridge.open_under_rules(&handle, None);
         (bridge, events, watches, state, now, [project, beside])
     }
 

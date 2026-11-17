@@ -2,7 +2,7 @@
 
 use crate::finish::{Finished, report};
 use bravebot_config::Managed;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Reads back what a run would have written, as the two streams it writes to.
 pub(crate) fn written(run: &Finished<'_>) -> (String, String) {
@@ -15,19 +15,23 @@ pub(crate) fn written(run: &Finished<'_>) -> (String, String) {
     )
 }
 
+/// Where a test's scratch directories go, chosen once for every crate that includes the file. The
+/// search for programs leaves the system temporary directory out (SANDBOX-30), so the root is
+/// outside it when the checkout is inside it.
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+pub(crate) mod scratch_root;
+
 /// A scratch directory that removes itself, so tests do not leave state behind.
 ///
-/// Under this crate's own build directory rather than the system temporary one, which is
-/// shared between users and where a name this predictable is somebody else's to create first.
+/// Under the scratch root rather than the system temporary directory, which is shared between
+/// users and where a name this predictable is somebody else's to create first.
 pub(crate) struct Scratch {
     pub(crate) path: PathBuf,
 }
 
 impl Scratch {
     pub(crate) fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
+        let path = scratch_root::scratch_dir(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self {

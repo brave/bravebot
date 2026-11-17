@@ -4,7 +4,14 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-/// An absolute path under the workspace `target/test-scratch/`.
+/// Where a test's scratch directories go, chosen once for every crate that includes the file. The
+/// search for programs leaves the system temporary directory out (SANDBOX-30), so the root is
+/// outside it when the checkout is inside it.
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+pub(crate) mod scratch_root;
+
+/// An absolute path under the scratch root, which is the workspace `target/test-scratch/` unless
+/// the checkout is under the system temporary directory (see `sandbox/test-support/scratch_root.rs`).
 ///
 /// Tests built these under [`std::env::temp_dir`] before. That directory is shared
 /// between users and between processes with different privileges, so a fixed name
@@ -14,14 +21,7 @@ use std::path::PathBuf;
 ///
 /// Nothing is created here: callers make and remove the directory as they already did.
 pub(crate) fn scratch_dir(name: &str) -> PathBuf {
-    // CARGO_MANIFEST_DIR is `<workspace>/crates/<crate>`, so two pops reach the root.
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("target");
-    path.push("test-scratch");
-    path.push(name);
-    path
+    scratch_root::scratch_dir(name)
 }
 
 /// A listening unix socket that stands at `place`.

@@ -18,18 +18,17 @@ use bravebot_lsp::{LspError, Operation, Question};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-/// A scratch directory under `target/`, removed with the test.
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
+/// A scratch directory under the scratch root, removed with the test.
 struct Scratch {
     path: PathBuf,
 }
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        // CARGO_MANIFEST_DIR is `<workspace>/crates/agent`, so two pops reach the root.
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.pop();
-        path.pop();
-        path.extend(["target", "test-scratch", name]);
+        let path = scratch_root::scratch_dir(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
