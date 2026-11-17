@@ -512,7 +512,11 @@ fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
         json!({"session": session, "request": asked["data"]["request"], "granted": false}),
     );
     assert_eq!(answered["granted"], false, "{answered}");
-    assert_eq!(answered["kept"], false, "{answered}");
+    assert_eq!(
+        answered["kept"],
+        Value::Null,
+        "a no keeps nothing: {answered}"
+    );
     let rules = answered["settingsRules"].clone();
     assert_eq!(rules["granted"], json!([]), "{rules}");
     assert_eq!(rules["allow"], json!([]), "{rules}");
