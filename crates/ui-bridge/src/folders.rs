@@ -195,24 +195,30 @@ impl Bridge {
     }
 }
 
-/// Open `typed`, a name as a settings file wrote it, in `workspace` and record it in `state`, as
-/// [`open_in`] does. Returns the directory opened, canonical.
+/// Open `directory`, the canonical directory a person was asked about (or the mode answered for),
+/// in `workspace` and record it in `state`, as [`open_in`] does. Returns it.
 ///
-/// `typed` is read against the project, with a leading `~` the home directory, as the terminal
-/// reads it. A name the workspace refuses (one inside the project already, a credential location,
-/// one the settings keep reads out of, or one that does not exist) opens nothing and records
-/// nothing.
-pub(super) fn open_folder(
+/// Resolved again here, since the question was put: a name along the path swapped for a link since
+/// then would otherwise open, and vouch for, a directory nobody was shown. One that no longer
+/// resolves to `directory` is refused and nothing is recorded, as is one the workspace refuses now
+/// (one deleted since, or one that overlaps a directory opened meanwhile).
+pub(super) fn open_asked_about(
     workspace: &mut Workspace,
     state: &mut State,
-    typed: &str,
+    directory: &Path,
 ) -> Result<PathBuf, WorkspaceError> {
-    let named = bravebot_agent::opening::named_directory(
-        workspace.root(),
-        typed,
-        bravebot_agent::home::profile().as_deref(),
-    )?;
-    open_in(workspace, state, &named)
+    let shown = directory.display().to_string();
+    // What the workspace opened is canonical, and the workspace is this call's own, so a refusal
+    // here leaves nothing open that a turn would reach.
+    let added = workspace.add_directory(&shown)?;
+    if added != directory {
+        return Err(WorkspaceError::Invalid {
+            path: shown,
+            reason: "no longer leads to the directory that was asked about",
+        });
+    }
+    record_open(state, &added);
+    Ok(added)
 }
 
 /// Open `directory` in `workspace` on the terms `/add-dir` opens one (TRUST-9), and record it in
@@ -224,21 +230,29 @@ fn open_in(
     directory: &str,
 ) -> Result<PathBuf, WorkspaceError> {
     let added = workspace.add_directory(directory)?;
-    if !state.directories.contains(&added) {
-        state.directories.push(added.clone());
+    record_open(state, &added);
+    Ok(added)
+}
+
+/// Record `added`, open, in `state`: in its added directories, once, and in its trust map as
+/// vouched for.
+fn record_open(state: &mut State, added: &Path) {
+    if !state.directories.iter().any(|open| open == added) {
+        state.directories.push(added.to_path_buf());
     }
     state
         .answers
         .trust
-        .trust(&bravebot_agent::workspace::key_of(&added));
-    Ok(added)
+        .trust(&bravebot_agent::workspace::key_of(added));
 }
 
 /// The workspace a turn would open now, with the folders the session already has open, so the
 /// refusals of a folder that overlaps one are the ones a turn would meet.
 ///
 /// `confined` is whether the session's file tools are held to the project (PERM-16), as its turns
-/// are.
+/// are. A folder deleted or moved since it was opened cannot be opened again and is left out, as a
+/// turn leaves it out: nothing added now can overlap a directory that is not there, and the list
+/// still names it, so it can be closed under that name.
 fn folders_workspace(
     project: &Path,
     settings: &Settings,

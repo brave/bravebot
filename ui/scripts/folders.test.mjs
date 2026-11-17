@@ -68,6 +68,28 @@ test('a folder the agent listed can be browsed by its name, and not once a list 
   assert.equal(files.list(session, '', beside), null, 'a closed folder stayed browsable')
 })
 
+test('previewing, searching and opening read a folder only while a list names it, and only by that name', async () => {
+  const { files } = load()
+  const { root, beside } = layout()
+  files.noteRoot(session, root)
+  const nested = join(beside, 'docs')
+  const refusedEverywhere = async (folder, subpath, why) => {
+    assert.equal(files.preview(session, subpath, folder), null, `preview read ${why}`)
+    assert.deepEqual(await files.search(session, 'notes', false, folder), { paths: [], incomplete: false }, `search listed ${why}`)
+    assert.equal((await files.open(session, subpath, null, folder)).status, 'failed', `open reached ${why}`)
+  }
+
+  await refusedEverywhere(beside, 'docs/notes.md', 'a folder no list named')
+
+  files.noteFolders(session, [beside])
+  assert.equal(files.preview(session, 'docs/notes.md', beside)?.text, '# notes\n')
+  assert.deepEqual((await files.search(session, 'notes', false, beside)).paths, ['docs/notes.md'])
+  await refusedEverywhere(nested, 'notes.md', 'a directory inside a listed folder named as a folder')
+
+  files.noteFolders(session, [])
+  await refusedEverywhere(beside, 'docs/notes.md', 'a folder after the list closed it')
+})
+
 test('closing the session forgets its folders, and a list that is not one leaves none', () => {
   const { files } = load()
   const { root, beside } = layout()

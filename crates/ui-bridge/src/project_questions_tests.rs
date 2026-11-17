@@ -717,6 +717,126 @@ fn each_named_directory_is_asked_about_on_its_own() {
     );
 }
 
+/// TRUST-9: a yes to a directory removed since it was asked about opens nothing and vouches for
+/// nothing. The reply says why, the directory is said among the ones not opened and is still
+/// named in the rules, and the next directory is still asked about.
+#[test]
+fn a_yes_to_a_directory_removed_since_it_was_asked_about_opens_nothing() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, other) = naming(
+        "removed-named",
+        json!({"additionalDirectories": ["../removed-named-beside", "../removed-named-other"]}),
+    );
+    let (mut bridge, events) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    let first = settled["folderQuestion"].clone();
+    assert_eq!(first["directory"], json!(shown(&beside)), "{first}");
+    std::fs::remove_dir_all(&beside).unwrap();
+
+    let answered = answer_folder(&mut bridge, &session, &first, true);
+    assert_eq!(answered["opened"], false, "{answered}");
+    assert!(
+        answered["problem"]
+            .as_str()
+            .is_some_and(|said| !said.is_empty()),
+        "{answered}"
+    );
+    assert_eq!(answered["folders"], json!([]), "{answered}");
+    let second = answered["folderQuestion"].clone();
+    assert_eq!(second["directory"], json!(shown(&other)), "{answered}");
+    assert_eq!(sent(&events, "folder.request").last(), Some(&second));
+    assert_eq!(holds(&bridge, &session, &beside), (vec![], false));
+
+    answer_folder(&mut bridge, &session, &second, false);
+    let listed = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
+    let refused = listed["foldersRefused"].as_array().unwrap();
+    assert_eq!(refused.len(), 1, "{listed}");
+    assert_eq!(refused[0]["directory"], json!(shown(&beside)), "{listed}");
+    assert_eq!(
+        listed["settingsRules"]["directories"],
+        json!(["../removed-named-beside", "../removed-named-other"]),
+        "{listed}"
+    );
+    assert!(bridge.open[&session].ready_for_work().is_ok());
+}
+
+/// TRUST-9: a directory whose name was swapped for a link after it was asked about is not
+/// opened, so a yes never vouches for a directory the person was not shown.
+#[cfg(unix)]
+#[test]
+fn a_yes_to_a_directory_swapped_for_a_link_opens_nothing() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, other) = naming(
+        "swapped-named",
+        json!({"additionalDirectories": ["../swapped-named-beside"]}),
+    );
+    let (mut bridge, _) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    let question = settled["folderQuestion"].clone();
+    assert_eq!(question["directory"], json!(shown(&beside)), "{question}");
+    std::fs::remove_dir_all(&beside).unwrap();
+    std::os::unix::fs::symlink(&other, &beside).unwrap();
+
+    let answered = answer_folder(&mut bridge, &session, &question, true);
+    assert_eq!(answered["opened"], false, "{answered}");
+    assert!(
+        answered["problem"]
+            .as_str()
+            .is_some_and(|said| said.contains("asked about")),
+        "{answered}"
+    );
+    assert_eq!(answered["folders"], json!([]), "{answered}");
+    assert_eq!(holds(&bridge, &session, &other), (vec![], false));
+    assert_eq!(holds(&bridge, &session, &beside), (vec![], false));
+}
+
+/// Bypass opens the named directories unasked, and one it cannot open, here one removed after it
+/// was resolved, is said among the ones not opened rather than dropped, and nothing of it is opened
+/// or vouched for.
+#[test]
+fn bypass_says_a_named_directory_it_could_not_open() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (project, beside, other) = naming("bypass-refuses", json!({}));
+    let (mut bridge, _) = hearing();
+    let (session, _) = opened_and_trusted(&mut bridge, &project);
+    std::fs::remove_dir_all(&beside).unwrap();
+    let folders = vec![
+        crate::project_questions::Named {
+            directory: shown(&beside),
+            names: vec!["../bypass-refuses-beside".to_string()],
+        },
+        crate::project_questions::Named {
+            directory: shown(&other),
+            names: vec!["../bypass-refuses-other".to_string()],
+        },
+    ];
+    let settings = crate::settings::layers(Some(&project), None);
+    let open = bridge.open.get_mut(&session).unwrap();
+    assert!(open_unasked(open, &settings, folders));
+    assert_eq!(open.folders, std::slice::from_ref(&other));
+    assert_eq!(
+        holds(&bridge, &session, &beside),
+        (vec![other.clone()], false)
+    );
+
+    let listed = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
+    let refused = listed["foldersRefused"].as_array().unwrap();
+    assert_eq!(refused.len(), 1, "{listed}");
+    assert_eq!(refused[0]["directory"], json!(shown(&beside)), "{listed}");
+    assert!(
+        refused[0]["problem"]
+            .as_str()
+            .is_some_and(|said| !said.is_empty()),
+        "{listed}"
+    );
+}
+
 /// The directories are asked about after the rules, whatever the rules were answered.
 #[test]
 fn the_named_directories_are_asked_about_after_the_rules() {

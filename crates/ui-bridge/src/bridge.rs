@@ -800,16 +800,9 @@ impl Bridge {
         };
         open.refused_folders = refused;
         if unasked {
-            let mut opened_any = false;
-            for folder in folders.drain(..) {
-                match open_named_folder(open, &settings, &folder) {
-                    Ok(_) => opened_any = true,
-                    Err(problem) => open.refused_folders.push(problem),
-                }
-            }
+            let opened_any = open_unasked(open, &settings, std::mem::take(&mut folders));
             if let Ok(mut state) = open.state.lock() {
                 state.answered_by_mode |= whence == Whence::Unasked && opened_any;
-                open.folders.clone_from(&state.directories);
             }
         }
 
@@ -3447,6 +3440,27 @@ fn workspace_of(
     Ok(workspace)
 }
 
+/// Open each of `folders`, directories the settings files named that nobody is asked about, in the
+/// session `open`. One that cannot be opened is said among the ones not opened, with why. Returns
+/// whether any was opened.
+fn open_unasked(
+    open: &mut Open,
+    settings: &Settings,
+    folders: impl IntoIterator<Item = crate::project_questions::Named>,
+) -> bool {
+    let mut opened_any = false;
+    for folder in folders {
+        match open_named_folder(open, settings, &folder) {
+            Ok(_) => opened_any = true,
+            Err(problem) => open.refused_folders.push(problem),
+        }
+    }
+    if let Ok(state) = open.state.lock() {
+        open.folders.clone_from(&state.directories);
+    }
+    opened_any
+}
+
 /// Open a directory the settings files named, which the person (or the mode) said yes to, in the
 /// session `open`, on the terms `/add-dir` opens one (TRUST-9). The names that reached it are no
 /// longer reported as not opened. A directory that cannot be opened now, one deleted since it was
@@ -3466,7 +3480,7 @@ fn open_named_folder(
         .state
         .lock()
         .map_err(|_| refused("session state is poisoned".to_string()))?;
-    let added = folders::open_folder(&mut workspace, &mut state, &folder.directory)
+    let added = folders::open_asked_about(&mut workspace, &mut state, Path::new(&folder.directory))
         .map_err(|problem| refused(problem.to_string()))?;
     state
         .answers
@@ -3888,8 +3902,7 @@ fn work(work: Work) {
     let injected_facts = completed.decisions.injected_facts.clone();
     if !injected_facts.is_empty() {
         state
-            .handle
-            .get_or_insert_with(|| Handle::begin(&project, crate::FRONT, crate::agent_build()))
+            .handle_or_begin(&project)
             .set_injected_facts(injected_facts);
     }
     keep_the_links_of(&mut state, &project, &mut completed);
