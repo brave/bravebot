@@ -193,6 +193,9 @@ For the full run on macOS, start Docker Desktop and run `make check-all` from th
 you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
 neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
 default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+`make test` and `make check` run the tests with `cargo nextest` when `cargo-nextest` is installed,
+as CI does (`cargo install cargo-nextest --locked`), and with `cargo test` otherwise. nextest runs
+the test binaries side by side, where `cargo test` runs them one after another.
 The test binaries that start a mock server per test (`browser_group_servers` and `mcp` in
 `crates/agent/tests`, and `running` in `crates/cli/tests`) raise their own soft open-file limit to
 8192, or to the hard limit where that is lower, through `crates/agent/test-support/open_files.rs`,
