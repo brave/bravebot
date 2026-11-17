@@ -56,3 +56,7 @@ replace: while taken < room && taken <= most { => while taken < room {
 mutation: code_end returns the offset of a byte that is not the m ending the code
 file: crates/core/src/colour_codes.rs
 replace: if byte == b'm' { => if true {
+
+mutation: taint takes the first input's confidentiality, so a private second input comes out public
+file: crates/core/src/spec.rs
+replace: confidentiality: join(a.confidentiality, b.confidentiality), => confidentiality: a.confidentiality,

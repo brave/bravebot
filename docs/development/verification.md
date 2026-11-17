@@ -10,7 +10,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | Item | Contract |
 |---|---|
 | `Integrity::meet`, `Confidentiality::join` | Each returns the pessimistic answer |
-| `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a partial order with `(T,priv)` and `(U,pub)` incomparable |
+| `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a lattice with `(T,priv)` and `(U,pub)` incomparable, in which the taint of two labels is their least upper bound |
 | `Label::is_trusted`, `Label::is_public` | Each reads its axis |
 | `Labelled::label`, `Labelled::declassify` | Each returns the label or the value held |
 | `Labelled::into_trusted` | The value comes out exactly when the label is `(T,pub)`, and otherwise the labelled value comes back unchanged |
