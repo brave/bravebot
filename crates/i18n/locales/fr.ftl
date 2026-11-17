@@ -4759,6 +4759,62 @@ ui-usage-ping-notice-more = Plus…
 ui-usage-ping-notice-less = Moins
 ui-usage-ping-notice-settings = Ouvrir les réglages
 ui-usage-ping-notice-dismiss = Fermer l'avis sur le signal d'utilisation
+ui-folders-heading = Dossiers
+ui-folders-about = Dossiers ouverts à côté du projet dans cette conversation. L'agent peut lire et modifier leurs fichiers jusqu'à ce que vous les fermiez.
+ui-folders-empty = Seul le projet est ouvert.
+ui-folders-add = Ajouter un dossier…
+ui-folders-close = Fermer { $name }
+ui-folders-close-explained = Fermer { $name } · L'agent ne peut plus y accéder
+ui-folders-wait = Attendez la fin du tour
+ui-folders-not-added = Le dossier n'a pas pu être ajouté.
+ui-folders-not-closed = Le dossier n'a pas pu être fermé.
+ui-folders-added = Dossier ajouté
+ui-folders-closed = Dossier fermé
+ui-project-rules-title = Règles du projet
+ui-project-rules-subtitle = Accorder les règles d'autorisation que ce projet propose ?
+ui-project-rules-about = Les fichiers de réglages de ce projet proposent ces règles d'autorisation. Une règle accordée répond à sa question à votre place : l'agent fait ce qu'elle couvre sans demander.
+ui-project-rules-list = Règles proposées
+ui-project-rules-from = de { $file }
+ui-project-rules-granted-before = { $count ->
+    [one] { $count } règle de ces fichiers a déjà été accordée et le reste :
+   *[other] { $count } règles de ces fichiers ont déjà été accordées et le restent :
+    }
+ui-project-rules-keeping = L'accord est conservé dans { $path } : les prochaines conversations ici ne redemandent pas ces règles. Une règle modifiée depuis est redemandée.
+ui-project-rules-this-chat = L'accord ne vaut que pour cette conversation et n'est pas écrit.
+ui-project-rules-decline-about = Continuer à demander : chaque action que couvrent ces règles vous est d'abord demandée, comme sans elles.
+ui-project-rules-decline = Continuer à demander
+ui-project-rules-grant = { $count ->
+    [one] Accorder { $count } règle
+   *[other] Accorder { $count } règles
+    }
+ui-project-rules-not-kept = Accordé pour cette conversation seulement : l'accord n'a pas pu être écrit dans { $path }, la prochaine conversation ici redemandera.
+ui-project-folder-title = Ouvrir un dossier
+ui-project-folder-subtitle = Ouvrir ce dossier à côté du projet ?
+ui-project-folder-named = Les réglages de ce projet le nomment
+ui-project-folder-open-about = Ouvrez-le, et l'agent peut lire et modifier ses fichiers dans cette conversation, comme avec Ajouter un dossier. Il figure sous Dossiers, où vous pouvez le fermer.
+ui-project-folder-decline-about = Ne l'ouvrez pas, et l'agent ne peut pas l'atteindre depuis cette conversation.
+ui-project-folder-remaining = { $count ->
+    [one] Encore { $count } dossier à demander après celui-ci.
+   *[other] Encore { $count } dossiers à demander après celui-ci.
+    }
+ui-project-folder-open = Ouvrir le dossier
+ui-project-folder-decline = Ne pas ouvrir
+ui-project-folder-not-opened = { $path } n'a pas été ouvert : { $problem }
+ui-project-questions-waiting-trust = Répondez à la question de confiance avant d'envoyer.
+ui-project-questions-waiting-rules = Répondez à la question sur les règles de ce projet avant d'envoyer.
+ui-project-questions-waiting-folder = Répondez à la question sur un dossier que nomme ce projet avant d'envoyer.
+ui-project-questions-stale = Cette question avait déjà reçu une réponse, la vôtre n'a donc pas été utilisée. Ce qui attend maintenant est affiché.
+ui-rules-note-granted-summary = { $count ->
+    [one] { $count } règle du projet accordée.
+   *[other] { $count } règles du projet accordées.
+    }
+ui-rules-note-granted = Ces règles d'autorisation que proposent les réglages du projet sont accordées, et donc en vigueur :
+ui-rules-note-granted-before = accordée auparavant
+ui-rules-note-granted-record = L'accord est conservé dans { $path } : les prochaines conversations ici ne les redemandent pas. Une règle que le projet modifie est redemandée.
+ui-rules-note-granted-this-chat = Elles ne sont accordées que pour cette conversation.
+ui-rules-note-proposed = Ces règles d'autorisation que proposent les réglages du projet n'ont pas été accordées. Une règle d'autorisation répond à une question à votre place : seule une règle que vous accordez, ou une de votre propre fichier de réglages, est en vigueur. On vous demandera encore :
+ui-rules-note-directories = Un fichier de réglages nomme ces dossiers, et ils ne sont pas ouverts :
+ui-rules-note-refused = Ces dossiers qu'un fichier de réglages nomme ne peuvent pas être ouverts :
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton

@@ -362,7 +362,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
-`verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
+`verified-by: bravebot_agent::opening::bypassing_asks_nothing_and_writes_nothing`
+`verified-by: bravebot_ui_bridge::project_questions_tests::bypass_opens_the_named_directories_unasked`
+`verified-by: bravebot_ui_bridge::project_questions_tests::bypass_says_a_named_directory_it_could_not_open`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`

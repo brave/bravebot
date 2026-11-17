@@ -286,7 +286,10 @@ fn remember(front: &mut FrontEnd, directory: &Path) -> PathBuf {
         "trust.reply",
         json!({"session": handle(&opened), "trusted": true}),
     );
-    assert_eq!(answered, json!({"trusted": true, "kept": true}));
+    assert_eq!(
+        the_answer(&answered),
+        json!({"trusted": true, "kept": true})
+    );
     keeping
 }
 
@@ -332,7 +335,10 @@ fn a_remembered_yes_settles_the_next_session_started_there() {
         "trust.reply",
         json!({"session": handle(&opened), "trusted": true}),
     );
-    assert_eq!(answered, json!({"trusted": true, "kept": true}));
+    assert_eq!(
+        the_answer(&answered),
+        json!({"trusted": true, "kept": true})
+    );
     assert!(Path::new(&keeping).is_file(), "nothing was written down");
     drop(front);
 
@@ -521,7 +527,7 @@ fn a_no_is_not_kept_and_the_next_session_asks() {
     assert!(question.is_some(), "a fresh session was not asked");
     let session = handle(&opened);
     assert_eq!(
-        front.call("trust.reply", json!({"session": session, "trusted": false})),
+        the_answer(&front.call("trust.reply", json!({"session": session, "trusted": false}))),
         json!({"trusted": false, "kept": null})
     );
     assert!(!scratch.records().exists(), "a no was written down");
@@ -549,7 +555,7 @@ fn a_yes_where_keeping_is_not_offered_trusts_this_session_and_writes_nothing() {
         assert_eq!(question["data"]["keeping"], Value::Null, "{question}");
         let session = handle(&opened);
         assert_eq!(
-            front.call("trust.reply", json!({"session": session, "trusted": true})),
+            the_answer(&front.call("trust.reply", json!({"session": session, "trusted": true}))),
             json!({"trusted": true, "kept": null})
         );
         assert_eq!(front.turn(&session)["event"], "turn.done");
@@ -594,7 +600,7 @@ fn a_yes_is_written_once_and_an_unreadable_answer_answers_nothing() {
     assert!(!scratch.records().exists(), "a refused answer was kept");
 
     assert_eq!(
-        front.call("trust.reply", json!({"session": session, "trusted": true})),
+        the_answer(&front.call("trust.reply", json!({"session": session, "trusted": true}))),
         json!({"trusted": true, "kept": true})
     );
     let record = Store::new(&scratch.home().join(".bravebot"), &scratch.project())
@@ -662,10 +668,10 @@ fn a_yes_from_a_window_that_showed_the_sentence_is_kept_saying_so() {
     assert_eq!(opened["confinedLines"], sentence, "{opened}");
     assert!(sentence.contains("without asking"), "{sentence}");
     assert_eq!(
-        front.call(
+        the_answer(&front.call(
             "trust.reply",
             json!({"session": handle(&opened), "trusted": true, "confinedLines": true})
-        ),
+        )),
         json!({"trusted": true, "kept": true})
     );
     let store = Store::new(&scratch.home().join(".bravebot"), &scratch.project());
@@ -690,7 +696,7 @@ fn an_answer_that_cannot_be_kept_is_still_a_yes_for_this_session() {
     let (opened, _) = front.begin(&scratch.project());
     let session = handle(&opened);
     assert_eq!(
-        front.call("trust.reply", json!({"session": session, "trusted": true})),
+        the_answer(&front.call("trust.reply", json!({"session": session, "trusted": true}))),
         json!({"trusted": true, "kept": false})
     );
     assert_eq!(front.turn(&session)["event"], "turn.done");
@@ -875,4 +881,10 @@ fn a_trust_answer_cannot_be_changed_after_a_turn_has_used_it() {
     );
     let listed = front.call("permissions.list", json!({"session": session}));
     assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
+}
+
+/// What `trust.reply` said about the trust question itself, without what it says about the
+/// questions put after it.
+fn the_answer(replied: &Value) -> Value {
+    json!({"trusted": replied["trusted"], "kept": replied["kept"]})
 }

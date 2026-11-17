@@ -146,7 +146,10 @@ impl Acp {
         let bridge = Bridge::new(Box::new(move |event| on_event(&heard, event)))
             .with_settings(settings)
             .with_front_end(bravebot_agent::FrontEnd::Editor)
-            .opening_in_ask();
+            .opening_in_ask()
+            // ACP has no request to put the questions about a checkout's settings with, so its
+            // sessions grant none of the rules proposed and open none of the directories named.
+            .not_putting_project_questions();
         Self { bridge, shared }
     }
 

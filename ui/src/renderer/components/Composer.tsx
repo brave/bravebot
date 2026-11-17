@@ -43,8 +43,13 @@ export interface ComposerProps {
   session: string
   model: string | null
   running: boolean
-  /** A trust question is open, and nothing may be sent until it is answered. */
+  /**
+   * A question asked before the first turn is open (trust, the rules a checkout proposes, or a
+   * directory it names), and nothing may be sent until it is answered.
+   */
   askingTrust: boolean
+  /** Why, in words, while one is: said above the box so a person is not left wondering why Send does nothing. */
+  waiting?: string | null
   compacting: boolean
   contextTokens?: number
   archived?: number
@@ -319,6 +324,12 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               <Button size="tiny" kind="plain" data-test="enhance-put-back" onClick={() => { props.onRestoreEnhanced() }}>Put back mine</Button>
             )}
             <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissEnhancement} />
+          </div>
+        )}
+        {askingTrust && props.waiting && (
+          <div className="composer-tray composer-notice question-waiting" role="status" data-test="question-waiting">
+            <Icon name="shield-done" />
+            <span className="notice-text">{props.waiting}</span>
           </div>
         )}
         {refusal && (
