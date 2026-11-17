@@ -639,11 +639,12 @@ docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
 # The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
-# or skipped, whose latest review by REVIEWER is an approval, and with no latest review by anyone
-# that requests changes. REPO names another repository, REVIEWER another account and LIMIT raises
-# how many are read. GitHub reports mergeable as UNKNOWN for every open pull request after main
-# moves, until each has been read, so contrib/review-ready.py reads the list again every few seconds
-# while an approved, passing, non-draft pull request is UNKNOWN, for WAIT seconds in total, and
+# or skipped, whose latest review by REVIEWER is an approval, with no latest review by anyone that
+# requests changes, and that is not in the merge queue. REPO names another repository, REVIEWER
+# another account and LIMIT raises how many are read. GitHub reports mergeable as UNKNOWN for every
+# open pull request after main moves, until each has been read, so contrib/review-ready.py reads the
+# list again every few seconds while an approved, passing, non-draft pull request is UNKNOWN, for
+# WAIT seconds in total, and
 # names on stderr any still UNKNOWN at the end. The ready pull requests are printed after the last
 # read, the one that has waited longest first and the most recent last. A pull request waits from the
 # reviewer's latest approval, or from when it was opened if that has no time.
