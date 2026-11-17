@@ -1169,7 +1169,7 @@ fn draw_without_a_session(frame: &mut Frame, session: &Session) -> Laid {
     let offered = session.offered();
     let room = body.height.saturating_sub(input_height + 1);
     let beneath = lines_beneath_the_box(session, body.width, &offered);
-    let offered_height = (beneath.len() as u16).min(room);
+    let offered_height = u16::try_from(beneath.len()).unwrap_or(room).min(room);
     let [list, input, offered_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

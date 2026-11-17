@@ -345,7 +345,7 @@ fn entry_lines(
 pub(crate) fn read_for_a_row(text: &str, room: usize) -> &str {
     let most = room.saturating_mul(2).saturating_add(64);
     match text.char_indices().nth(most) {
-        Some((end, _)) => &text[..end],
+        Some((end, _)) => text.get(..end).unwrap_or(text),
         None => text,
     }
 }

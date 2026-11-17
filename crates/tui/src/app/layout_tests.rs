@@ -978,7 +978,7 @@ mod no_session {
 
     fn keys_that_could_act() -> Vec<KeyEvent> {
         let bindings = Session::new("none").bindings().clone();
-        let bound = [
+        let mut names = vec![
             bindings.background_name(),
             bindings.stash_name(),
             bindings.scroller_name(),
@@ -991,16 +991,18 @@ mod no_session {
             bindings.scope_name(),
             bindings.panes_name(),
             bindings.undo_name(),
-            bindings.suspend_name(),
-            bindings.enhance_name(),
-        ]
-        .iter()
-        .map(|name| {
-            let chord = crate::keybindings::KeyChord::parse(name)
-                .unwrap_or_else(|| panic!("{name} is not a chord"));
-            KeyEvent::new(chord.code, chord.modifiers)
-        })
-        .collect::<Vec<_>>();
+        ];
+        #[cfg(unix)]
+        names.push(bindings.suspend_name());
+        names.push(bindings.enhance_name());
+        let bound = names
+            .iter()
+            .map(|name| {
+                let chord = crate::keybindings::KeyChord::parse(name)
+                    .unwrap_or_else(|| panic!("{name} is not a chord"));
+                KeyEvent::new(chord.code, chord.modifiers)
+            })
+            .collect::<Vec<_>>();
         let letters = ('a'..='z').flat_map(|letter| {
             [
                 KeyModifiers::CONTROL,

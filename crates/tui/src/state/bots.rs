@@ -1,5 +1,12 @@
 //! BOT-17.
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::wildcard_imports,
+        reason = "a child of state.rs, which holds Session and the types every sibling shares"
+    )
+)]
 use super::*;
 use crate::bots_pane::{Focus, State, drawn};
 

@@ -98,6 +98,10 @@ const OTHER_STARTS: [&str; 10] = [
     "--plain",
 ];
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one flag's presence, and naming them is what replaces positional booleans: incognito, agent, issue, pull request, and an optional system prompt"
+)]
 pub(crate) struct TakenOut<'a> {
     pub incognito: bool,
     pub agent: bool,
