@@ -22430,7 +22430,7 @@ fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_b
             )],
         ),
     );
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -43224,7 +43224,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
         ),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut shown = ShownAfterAVet::new(true);
@@ -44407,7 +44407,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
@@ -44647,7 +44647,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
     let shown = confirmer.shown.clone();
@@ -73743,7 +73743,8 @@ fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpo
     let mut c = bravebot_agent::Conversation::new();
     let mut r = bravebot_agent::report::RecordingReporter::default();
     let _ = take_a_turn_reporting(
-        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET")),
+        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET"))
+            .with_patience(three_requests_and_no_more()),
         &workspace,
         &mut c,
         Task::new("REVIEW-PARENT-LEAK"),
@@ -99191,7 +99192,7 @@ fn fetch_script_turn(
         Some(checks) => serve_sequence_answering_checks_with(checks, script),
         None => serve_sequence_losing_every_check(script),
     };
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut inner = ApprovesFetchesAndWrites::default();

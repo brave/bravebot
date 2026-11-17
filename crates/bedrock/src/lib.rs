@@ -5636,7 +5636,10 @@ mod tests {
                 }
             });
 
-            let config = config();
+            let config = config().with_patience(bravebot_config::provider::Patience {
+                max_retries: Some(2),
+                ..bravebot_config::provider::Patience::default()
+            });
             let bound = if stopped {
                 Duration::from_secs(4)
             } else {
