@@ -8412,6 +8412,26 @@ mod tests {
         }
     }
 
+    /// CMD-22. On a terminal 120 columns wide every row of the slash list shows its whole
+    /// description. The description column starts after the widest hint, so a long argument in the
+    /// table clips the descriptions of other commands at this width.
+    #[test]
+    fn every_slash_row_shows_its_whole_description_at_120_columns() {
+        let mut session = Session::new("none");
+        session.type_char('/');
+        let height = crate::command_table::commands().len() as u16 + 6;
+        let output = rendered_at(&session, 120, height);
+
+        for command in crate::command_table::commands() {
+            assert!(
+                output.contains(command.description),
+                "{} does not show its whole description at 120 columns: {:?}",
+                command.name,
+                command.description
+            );
+        }
+    }
+
     /// SKILL-21. The mode in force is named on the box for as long as it is in force, and the box
     /// of a session in none says nothing of one.
     #[test]
@@ -8755,6 +8775,18 @@ mod tests {
         let row = input_row(&typed("/sandbox "), 90);
         assert!(
             row.ends_with("/sandbox  [strict | read-only | workspace-write | off]"),
+            "{row}"
+        );
+    }
+
+    /// `/mcp` spells out its subcommands once the word is typed, while the completion list keeps
+    /// `[action]`. With the long form in the table the description column starts so far right that
+    /// the longer descriptions are cut off at 120 columns.
+    #[test]
+    fn the_mcp_command_offers_its_subcommands_after_its_word() {
+        let row = input_row(&typed("/mcp "), 90);
+        assert!(
+            row.ends_with("/mcp  [list | reconnect | disable | remove]"),
             "{row}"
         );
     }
