@@ -1925,7 +1925,8 @@ pub fn run(
     let early = bravebot_config::Settings::load();
     let mouse = early.tui_mouse() != Some(false);
     let mut stdout = io::stdout();
-    take_over_terminal(&mut stdout, mouse)?;
+    take_over_terminal(&mut stdout, mouse)
+        .inspect_err(|_| crate::hangup::end_if_the_terminal_hung_up())?;
     // After the takeover, which has finished asking about the background, and before the first
     // event is read, so the reply to this question cannot be taken for a keystroke.
     crate::preview::sense(terminal_answers_queries());
@@ -1936,7 +1937,8 @@ pub fn run(
     let mut terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
         Ok(terminal) => terminal,
         Err(failure) => {
-            hand_back_terminal(&mut io::stdout())?;
+            hand_back_terminal(&mut io::stdout())
+                .inspect_err(|_| crate::hangup::end_if_the_terminal_hung_up())?;
             return Err(failure);
         }
     };
@@ -1997,7 +1999,11 @@ pub fn run(
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
     // alternate screen is worse than the original error.
-    end_the_run(&mut terminal, hand_back_terminal)?;
+    end_the_run(
+        &mut terminal,
+        hand_back_terminal,
+        crate::hangup::end_if_the_terminal_hung_up,
+    )?;
 
     result
 }
@@ -2010,12 +2016,19 @@ pub fn run(
 /// to hand the terminal back so that a test does not ask the terminal the test binary runs in about
 /// its keyboard modes or take it out of raw mode. A process outside the terminal's foreground group
 /// is stopped by the terminal at either, and a test that is stopped never finishes.
+///
+/// `hung_up` is called where the terminal cannot be handed back, while `terminal` is still alive.
+/// A terminal whose other end has closed fails here, and the session then ends with the status of a
+/// hangup (INPUT-51) instead of dropping `terminal`. The drop shows the cursor again, and on a
+/// closed terminal that fails and is reported with `eprintln!`, which panics.
 fn end_the_run<W: Write>(
     terminal: &mut Terminal<CrosstermBackend<W>>,
     hand_back: impl FnOnce(&mut CrosstermBackend<W>) -> io::Result<()>,
+    hung_up: impl FnOnce(),
 ) -> io::Result<()> {
-    leave(terminal.backend_mut(), hand_back)?;
-    terminal.show_cursor()
+    leave(terminal.backend_mut(), hand_back)
+        .and_then(|()| terminal.show_cursor())
+        .inspect_err(|_| hung_up())
 }
 
 /// Sign in to the backend the next request will use, where it needs one and has none.
@@ -43742,6 +43755,7 @@ mod tests {
     mod command_history;
     mod completions;
     mod dropping;
+    mod hangup;
     #[cfg(unix)]
     mod herdr;
     mod hints;
