@@ -110,16 +110,21 @@ same binary started again, and each fails for a reason that is not in the code u
 `crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
 marked `// shared-temp-name: <why>` on its line or the line above.
 
-Run the tests from a checkout outside the system temporary directory (`std::env::temp_dir()`,
-which is `$TMPDIR` or `/tmp`). The search for programs always leaves that directory out
-([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), and many tests plant a program under
-`target/test-scratch` and expect it to be found, so from a clone under `$TMPDIR` they fail with
-the planted program not found. `crates/ui-bridge/tests/language_server.rs` and
+The search for programs always leaves the system temporary directory (`std::env::temp_dir()`,
+which is `$TMPDIR` or `/tmp`) out ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), so a test
+that plants a program must not plant it there. The tests of `bravebot-sandbox` and
+`bravebot-agent` take their scratch directories from
+`crates/sandbox/test-support/scratch_root.rs`. The root is `target/test-scratch` when the
+checkout is not under the temporary directory. When the checkout is under it, as a clone into
+`$TMPDIR` is, the root is `bravebot-test-scratch/<checkout name>-<hash of its path>` in
+`$XDG_CACHE_HOME` or `$HOME/.cache` (`%LOCALAPPDATA%` on Windows), so the tests pass from there
+too. The directories in the cache are not removed after a run, so delete
+`bravebot-test-scratch` there when the clone is gone. When the cache directory is also under the
+temporary directory, the root stays `target/test-scratch`, and the tests that plant a program
+fail from that checkout with the planted program not found. Run them from a checkout outside the
+temporary directory in that case. `crates/ui-bridge/tests/language_server.rs` and
 `crates/cli/tests/running.rs` give the programs they start a `TMPDIR` of their own and pass from
-either. The tests that call the search in their own process, such as
-`crates/sandbox/tests/checkout_in_search.rs` and the unit tests of `bravebot-sandbox` and
-`bravebot-agent`, read the test process's own temporary directory and still fail from a clone under
-`$TMPDIR` (#4130).
+either.
 
 ## Before pushing
 
@@ -170,7 +175,8 @@ stops on one that is in neither that list nor `NAMED_NOT_READ`. A file outside `
 The changes job runs the classifier from the pull request's base commit, not from the pull request,
 so a change to the classifier is judged by the copy it replaces. The classifier and the Makefile are
 in `.github/CODEOWNERS`, and `make check-security` fails when a file a workflow step runs by path
-(`python3 <path>`, or the Makefile behind `make`) matches no entry there.
+(`python3 <path>`, `<path>` at a command position such as the first word after `run:`, `"$PYTHON"
+<path>`, or the Makefile behind `make`) matches no entry there.
 
 `make check-affected` makes that choice locally, against the merge base with `upstream/main`, or
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
@@ -368,8 +374,9 @@ literals repeated across files, files and functions past a length, functions nes
 several booleans, files that use many other modules, public functions no test names, files holding
 a lot of shared mutable state, commented-out code, and functions returning string errors. rustc
 warns about none of the first kind in a library crate, and no check compares one file with another.
-The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It is the
-deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
+The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It leaves out
+`third_party/`, whose crates are kept close to their release
+([third_party/README.md](../../third_party/README.md)). It is the deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
 reviewers read each candidate and draft an issue for the ones worth fixing. The skill also runs
 clippy's opinionated lints over the code that ships, which `make check-maintenance` does not, since
 it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches

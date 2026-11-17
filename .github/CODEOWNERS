@@ -68,6 +68,7 @@
 /contrib/affected-checks.py @bbondy
 /Makefile @bbondy
 /contrib/check-pnpm-lockfiles.py @bbondy
+/contrib/measure-flakes.py @bbondy
 /contrib/measure-mutants.py @bbondy
 /ui/scripts/check-windows-install.mjs @bbondy
 /ui/scripts/windows-installer.mjs @bbondy

@@ -31,6 +31,8 @@ use std::time::Duration;
 
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
 mod support;
 
 use support::Inbox;
@@ -50,9 +52,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
+        let path = scratch_root::scratch_dir(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("project")).expect("a project directory");
         std::fs::create_dir_all(path.join("home/.bravebot")).expect("a home directory");

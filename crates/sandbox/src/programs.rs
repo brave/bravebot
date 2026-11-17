@@ -1631,8 +1631,8 @@ mod tests {
     fn a_relative_path_entry_is_never_searched() {
         let system = scratch_dir("programs-relative");
         executable(&system, "aws");
-        // Tests run from the crate's directory, two below the workspace's `target`.
-        let relative = Path::new("../../target/test-scratch/programs-relative");
+        // Tests run from the crate's directory, so the entry is relative to that.
+        let relative = crate::testutil::relative_to_the_crate(&system);
         assert!(
             relative
                 .join(if cfg!(windows) { "aws.exe" } else { "aws" })
@@ -1640,7 +1640,10 @@ mod tests {
             "the relative entry reaches the program, so only the rule leaves it out"
         );
 
-        assert_eq!(find_in(OsStr::new("aws"), &path_of(&[relative]), &[]), None);
+        assert_eq!(
+            find_in(OsStr::new("aws"), &path_of(&[&relative]), &[]),
+            None
+        );
     }
 
     #[test]
@@ -2044,12 +2047,10 @@ mod tests {
         let linked = elsewhere.join("bin");
         std::fs::create_dir_all(session.join("bin")).unwrap();
         std::os::unix::fs::symlink(session.join("bin"), &linked).unwrap();
-        executable(
-            &scratch_dir("programs-restrict-relative"),
-            "bravebot-restrict-probe",
-        );
-        // Tests run from the crate's directory, two below the workspace's `target`.
-        let relative = Path::new("../../target/test-scratch/programs-restrict-relative");
+        let relative_probe = scratch_dir("programs-restrict-relative");
+        executable(&relative_probe, "bravebot-restrict-probe");
+        // Tests run from the crate's directory, so the entry is relative to that.
+        let relative = crate::testutil::relative_to_the_crate(&relative_probe);
         assert!(
             relative.join("bravebot-restrict-probe").exists(),
             "the relative entry reaches the probe, so only the rule leaves it out"
@@ -2067,7 +2068,7 @@ mod tests {
                 true,
                 "a sibling that shares a name prefix",
             ),
-            (relative.to_path_buf(), false, "a relative entry"),
+            (relative.clone(), false, "a relative entry"),
             (PathBuf::new(), false, "an empty entry"),
             (temporary.clone(), false, "the system temporary directory"),
             (linked, false, "a link into a directory a stage may write"),

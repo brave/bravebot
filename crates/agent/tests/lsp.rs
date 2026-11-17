@@ -33,7 +33,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
-/// A scratch directory under `target/`, and a directory beside it for the fake server, both removed
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
+/// A scratch directory under the scratch root, and a directory beside it for the fake server, both removed
 /// with the test.
 ///
 /// Not [`std::env::temp_dir`]: that directory is shared between users and between processes with
@@ -49,11 +52,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        // CARGO_MANIFEST_DIR is `<workspace>/crates/agent`, so two pops reach the root.
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.pop();
-        path.pop();
-        path.extend(["target", "test-scratch", name]);
+        let path = scratch_root::scratch_dir(name);
         let programs = path.with_file_name(format!("{name}-programs"));
         for directory in [&path, &programs] {
             let _ = std::fs::remove_dir_all(directory);

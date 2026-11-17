@@ -2513,10 +2513,12 @@ and `python3` reading an environment file or a `usercustomize.py` from the home.
 suite chose are removed and no file is read. `makefile` stays where it is the workflow's `Makefile`
 on a volume that ignores case. The files and the programs' versions are in
 [SANDBOX-30](#SANDBOX-30). The parents of the session directory are not cleaned. The root of the
-suite is the state directory's `doctor-sandbox`, and `target/test-scratch` in the tests. Neither is
-under the system temp directory a confined stage may write while the state directory and the
-checkout are outside it, and the tests are run from a checkout outside it
-([checks.md](../development/checks.md#before-a-commit)). The stage writes the session
+suite is the state directory's `doctor-sandbox`, and the scratch root of the tests, which is
+`target/test-scratch` for a checkout outside the system temp directory and a directory under the
+user's cache directory for a checkout inside it. Neither is under the system temp directory a
+confined stage may write while the state directory is outside it and the tests have a root
+outside it ([checks.md](../development/checks.md#before-a-commit), which says what happens when
+none exists). The stage writes the session
 directory and not its parent, which
 `a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one` shows,
 so a `.cargo/config.toml` that `cargo` finds in a parent does not come from a stage. Each attempt,
