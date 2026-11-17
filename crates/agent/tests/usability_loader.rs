@@ -64,10 +64,11 @@ impl Drop for Environment {
     }
 }
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 fn root(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("usability-{name}"))
+    scratch_root::scratch_dir(&format!("usability-{name}"))
 }
 
 /// A scratch home holding a credential file the sandbox refuses and one it allows, and a `gh`
