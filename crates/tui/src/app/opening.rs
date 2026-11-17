@@ -58,7 +58,7 @@ fn grant_proposed_rules(
     if !carried.is_empty() {
         session.paste_text(&carried);
     }
-    Some(question.answer(granting?, grants, id))
+    Some(question.answer(granting?, grants, id).granted)
 }
 
 /// The rules in force for a workspace whose layers read as `settings`, or `None` where the person

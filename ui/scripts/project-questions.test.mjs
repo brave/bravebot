@@ -196,6 +196,16 @@ test('a yes the grant record could not keep is still a yes, and says the next ch
   assert.ok(problems[0]?.includes('for this chat only'), problems[0])
 })
 
+test('a yes with nothing to keep, and a no, say nothing about the grant record', async () => {
+  for (const [granted, shownKeeping] of [[true, null], [false, '~/.bravebot/granted/abc.json']]) {
+    const { answering, problems } = harness({ askingTrust: null, ...questions.reported({ rulesQuestion: rulesQuestion({ keeping: shownKeeping, shownKeeping }) }) }, [
+      { method: 'rules.reply', result: { granted, kept: null, settingsRules: rules(), folderQuestion: null } },
+    ])
+    await questions.replyRules(answering, 's1', granted)
+    assert.deepEqual(problems, [], `granted ${granted}: ${problems[0]}`)
+  }
+})
+
 test('a yes that could not open its folder says why, and the note lists it', async () => {
   const { answering, problems, now } = harness({ askingTrust: null, ...questions.reported({ folderQuestion: folderQuestion({ remaining: 0 }) }) }, [
     { method: 'folder.reply', result: { open: true, folder: '/home/someone/shared', shownFolder: '/home/someone/shared', problem: 'it is no longer a directory', folders: [], folderQuestion: null } },

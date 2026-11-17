@@ -2640,18 +2640,23 @@ impl Bridge {
             unreachable!("matched above");
         };
         let store = crate::project_questions::grant_record(&open.project);
-        let kept = granted && crate::project_questions::keeps(store.as_ref());
         let held = question.held.clone();
+        // The grant names the session the yes was given in, as the terminal's does. A session with
+        // no record yet is named now, and its record is written under that name when it is.
+        let named = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?
+            .id(&open.project);
+        // Written with the state let go: nothing else takes it while this question is out, since
+        // a turn is refused until it is answered.
+        let answered = question.answer(granted, store.as_ref(), &named);
+        let kept = answered.kept;
+        let in_force = answered.granted;
         let mut state = open
             .state
             .lock()
             .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
-        let named = state
-            .handle
-            .as_ref()
-            .map(|handle| handle.id().to_string())
-            .unwrap_or_default();
-        let in_force = question.answer(granted, store.as_ref(), &named);
         state.answers.rules = crate::rules::SettingsRules::read_granting(
             &settings,
             &open.project,
@@ -4233,10 +4238,7 @@ fn keep_the_links_of(
 ) {
     let links = std::mem::take(&mut completed.decisions.links);
     if !links.is_empty() {
-        state
-            .handle
-            .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()))
-            .apply_links(&links);
+        state.handle_or_begin(project).apply_links(&links);
     }
 }
 
@@ -4329,9 +4331,10 @@ pub(crate) fn save(
     turn: usize,
     trail: &bravebot_session::audit::Trail,
 ) -> usize {
+    let named = state.named.take();
     let handle = state
         .handle
-        .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
+        .get_or_insert_with(|| crate::running::begin_named(named, project));
 
     let checkouts = state
         .kept

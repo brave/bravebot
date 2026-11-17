@@ -203,10 +203,14 @@ fn a_yes_to_the_proposed_rules_holds_for_the_session_alone() {
 
     let question = rules_to_grant(Whence::Asked, Some(&scratch.grants()), &rules);
     assert_eq!(question.asking, rules);
+    let answered = question.answer(true, Some(&scratch.grants()), "a-private-session");
     assert_eq!(
-        question.answer(true, Some(&scratch.grants()), "a-private-session"),
-        rules,
+        answered.granted, rules,
         "the rules the person granted are not in force"
+    );
+    assert_eq!(
+        answered.kept, None,
+        "an incognito yes was reported as written, or as a failed write"
     );
     assert!(
         !scratch.grants().path().exists(),

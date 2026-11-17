@@ -213,7 +213,11 @@ fn a_no_grants_none_and_the_session_still_opens() {
     let (session, settled) = opened_and_trusted(&mut bridge, &project);
     let answered = reply(&mut bridge, &session, &settled["rulesQuestion"], false);
     assert_eq!(answered["granted"], false);
-    assert_eq!(answered["kept"], false);
+    assert_eq!(
+        answered["kept"],
+        Value::Null,
+        "a no had something to keep: {answered}"
+    );
     assert_eq!(answered["settingsRules"]["allow"], json!([]));
     assert_eq!(answered["settingsRules"]["granted"], json!([]));
     assert_eq!(texts(&answered["settingsRules"]["proposed"]), [THE_RULE]);
@@ -236,7 +240,11 @@ fn an_incognito_yes_grants_the_rules_for_the_session_alone() {
     let question = settled["rulesQuestion"].clone();
     assert_eq!(question["keeping"], Value::Null, "{question}");
     let answered = reply(&mut bridge, &session, &question, true);
-    assert_eq!(answered["kept"], false, "{answered}");
+    assert_eq!(
+        answered["kept"],
+        Value::Null,
+        "an incognito yes was said to be written, or to have failed: {answered}"
+    );
     assert!(allows(&bridge, &session, "example.test"));
     assert!(
         !grant_record(&project).exists(),
@@ -245,6 +253,62 @@ fn an_incognito_yes_grants_the_rules_for_the_session_alone() {
 
     let (_, again) = opened_and_trusted(&mut bridge, &project);
     assert_eq!(texts(&again["rulesQuestion"]["rules"]), [THE_RULE]);
+}
+
+/// PERM-15: a yes that cannot be written to the grant record still grants the rules for this
+/// session, and the reply says it was not kept, so the window can say the next session will ask
+/// again. The next session does.
+#[test]
+fn a_yes_the_record_cannot_take_holds_for_the_session_and_says_so() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = proposing("unwritable-grant", &[THE_RULE]);
+    let record = grant_record(&project);
+    // A file where the record's directory would be, which no write gets past whoever runs this.
+    let blocked = record.parent().unwrap();
+    std::fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+    std::fs::write(blocked, "").unwrap();
+    let (mut bridge, _) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    let answered = reply(&mut bridge, &session, &settled["rulesQuestion"], true);
+    std::fs::remove_file(blocked).unwrap();
+    assert_eq!(answered["granted"], true, "{answered}");
+    assert_eq!(answered["kept"], false, "{answered}");
+    assert!(allows(&bridge, &session, "example.test"));
+    assert!(bridge.open[&session].ready_for_work().is_ok());
+    assert!(!record.exists(), "the record was written after all");
+
+    let (_, again) = opened_and_trusted(&mut bridge, &project);
+    assert_eq!(texts(&again["rulesQuestion"]["rules"]), [THE_RULE]);
+}
+
+/// PERM-15: a grant names the session it was given in, as the terminal's does, also for a
+/// session that has no record yet: the name written is the one its record is written under.
+#[test]
+fn a_grant_names_the_session_before_it_has_a_record() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = proposing("grant-names-session", &[THE_RULE]);
+    let (mut bridge, _) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    assert!(bridge.open[&session].state.lock().unwrap().handle.is_none());
+    reply(&mut bridge, &session, &settled["rulesQuestion"], true);
+
+    let line: Value = serde_json::from_str(
+        std::fs::read_to_string(grant_record(&project))
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let named = line["session"].as_str().unwrap().to_string();
+    assert!(!named.is_empty(), "the grant named no session: {line}");
+    let mut state = bridge.open[&session].state.lock().unwrap();
+    assert!(state.handle.is_none(), "answering wrote a record");
+    assert_eq!(state.handle_or_begin(&project).id(), named);
 }
 
 /// RPCVIEW-6: a reply answers the question stored under its id and nothing else. An id that is

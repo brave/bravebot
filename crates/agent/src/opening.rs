@@ -121,22 +121,37 @@ impl RuleQuestion {
         !self.asking.is_empty()
     }
 
-    /// The rules in force once the person answered `yes` or no, recording a yes in `store`.
+    /// The rules in force once the person answered `yes` or no, recording a yes in `store`, and
+    /// whether the yes was written down.
     ///
     /// A no leaves only what held without asking. A yes is written through [`Store::grant`], which
     /// adds nothing in an incognito session ([`crate::granted::may_be_added_to`]), so there the
     /// rules hold for this session alone.
-    pub fn answer(self, yes: bool, store: Option<&Store>, session: &str) -> Vec<Proposed> {
+    pub fn answer(self, yes: bool, store: Option<&Store>, session: &str) -> Answered {
         let mut granted = self.granted;
         if !yes || self.asking.is_empty() {
-            return granted;
+            return Answered {
+                granted,
+                kept: None,
+            };
         }
-        if let Some(store) = store {
-            store.grant(&self.asking.iter().collect::<Vec<_>>(), session);
-        }
+        let kept = store
+            .filter(|_| crate::granted::may_be_added_to())
+            .map(|store| store.grant(&self.asking.iter().collect::<Vec<_>>(), session));
         granted.extend(self.asking);
-        granted
+        Answered { granted, kept }
     }
+}
+
+/// The answer to a [`RuleQuestion`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answered {
+    /// The rules in force.
+    pub granted: Vec<Proposed>,
+    /// Whether a yes was written to the record: `Some(true)` where it was, `Some(false)` where
+    /// writing it failed, so the yes holds for this session only, and `None` where nothing was to be
+    /// written: a no, nothing asked, no record, or a session that may not add to it.
+    pub kept: Option<bool>,
 }
 
 /// What needs asking about `proposed` for a session that opened this way, reading `store`.
@@ -366,11 +381,9 @@ mod tests {
         for whence in [Whence::Asked, Whence::Resumed, Whence::Unasked] {
             let question = rules_to_grant(whence, Some(&scratch.store()), &[]);
             assert!(!question.needs_asking());
-            assert!(
-                question
-                    .answer(true, Some(&scratch.store()), "s")
-                    .is_empty()
-            );
+            let answered = question.answer(true, Some(&scratch.store()), "s");
+            assert!(answered.granted.is_empty());
+            assert_eq!(answered.kept, None, "nothing asked was kept");
         }
         assert!(!scratch.store().path().exists(), "a record was written");
     }
@@ -387,7 +400,10 @@ mod tests {
         assert_eq!(question.asking, rules);
         assert_eq!(
             question.answer(true, Some(&scratch.store()), "first"),
-            rules
+            Answered {
+                granted: rules.clone(),
+                kept: Some(true),
+            }
         );
 
         let again = rules_to_grant(Whence::Asked, Some(&scratch.store()), &rules);
@@ -406,11 +422,9 @@ mod tests {
         let rules = proposed(&["Bash(bash scripts/check.sh)"]);
 
         let question = rules_to_grant(Whence::Asked, Some(&scratch.store()), &rules);
-        assert!(
-            question
-                .answer(false, Some(&scratch.store()), "s")
-                .is_empty()
-        );
+        let answered = question.answer(false, Some(&scratch.store()), "s");
+        assert!(answered.granted.is_empty());
+        assert_eq!(answered.kept, None, "a no was reported as kept or not kept");
         assert!(scratch.store().granted(&rules).is_empty());
     }
 
@@ -420,9 +434,11 @@ mod tests {
         let scratch = Scratch::new("opening-edited");
         let kept = proposed(&["Edit(src/**)"]);
         let before = proposed(&["Bash(bash scripts/check.sh)"]);
-        scratch
-            .store()
-            .grant(&kept.iter().chain(&before).collect::<Vec<_>>(), "earlier");
+        assert!(
+            scratch
+                .store()
+                .grant(&kept.iter().chain(&before).collect::<Vec<_>>(), "earlier")
+        );
 
         let now = proposed(&["Edit(src/**)", "Bash(bash scripts/deploy.sh)"]);
         let question = rules_to_grant(Whence::Asked, Some(&scratch.store()), &now);
@@ -440,7 +456,13 @@ mod tests {
 
         let question = rules_to_grant(whence, Some(&scratch.store()), &rules);
         assert!(!question.needs_asking());
-        assert_eq!(question.answer(true, Some(&scratch.store()), "s"), rules);
+        assert_eq!(
+            question.answer(true, Some(&scratch.store()), "s"),
+            Answered {
+                granted: rules.clone(),
+                kept: None,
+            }
+        );
         assert!(scratch.store().granted(&rules).is_empty());
         assert_eq!(
             named_directories(whence, &["notes".to_string()]),
@@ -473,7 +495,36 @@ mod tests {
         let rules = proposed(&["Edit(src/**)"]);
         let question = rules_to_grant(Whence::Asked, None, &rules);
         assert_eq!(question.asking, rules);
-        assert_eq!(question.answer(true, None, "s"), rules);
+        assert_eq!(
+            question.answer(true, None, "s"),
+            Answered {
+                granted: rules,
+                kept: None,
+            }
+        );
+    }
+
+    /// PERM-15: a yes whose line cannot be written still grants the rules for this session, and
+    /// says it was not kept, so a front can say the next session will ask again.
+    #[test]
+    fn a_yes_that_cannot_be_written_holds_for_the_session_and_says_so() {
+        let scratch = Scratch::new("opening-unwritable");
+        // A file where the record's directory would be, which no write can get past.
+        std::fs::write(scratch.path.join("granted"), "").expect("a blocking file");
+        let rules = proposed(&["Edit(src/**)"]);
+
+        let question = rules_to_grant(Whence::Asked, Some(&scratch.store()), &rules);
+        assert_eq!(
+            question.answer(true, Some(&scratch.store()), "s"),
+            Answered {
+                granted: rules.clone(),
+                kept: Some(false),
+            }
+        );
+        assert!(
+            rules_to_grant(Whence::Asked, Some(&scratch.store()), &rules).needs_asking(),
+            "a yes that was not written was in force in the next session"
+        );
     }
 
     /// Each directory a file named is asked about where the person was asked about the workspace.
