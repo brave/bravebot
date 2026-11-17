@@ -220,14 +220,24 @@ pub fn named_directories(whence: Whence, named: &[String]) -> Named {
 }
 
 /// [`crate::workspace::named_directory`], with a leading `~` expanded against `home` first
-/// (TRUST-9). Where no home is known, the name is read as typed, under the working directory.
+/// (TRUST-9). Where no home is known, the name is read as typed, under the working directory. A
+/// home that is not text is refused rather than spelled lossily, which would name its lookalike
+/// (PATH-002).
 pub fn named_directory(
     root: &Path,
     typed: &str,
     home: Option<&Path>,
 ) -> Result<String, WorkspaceError> {
     let expanded = match crate::workspace::expand_home(typed, home) {
-        Ok(Some(path)) => path.to_string_lossy().into_owned(),
+        Ok(Some(path)) => match path.to_str() {
+            Some(text) => text.to_string(),
+            None => {
+                return Err(WorkspaceError::Invalid {
+                    path: typed.to_string(),
+                    reason: "expands to a path that is not text",
+                });
+            }
+        },
         Ok(None) | Err(_) => typed.to_string(),
     };
     crate::workspace::named_directory(root, &expanded)
@@ -244,6 +254,8 @@ pub struct NamedToOpen {
 
 /// Resolve `named` against `workspace`, so what a person is shown is what they would be granting:
 /// a name is canonicalized when it is opened, so `shared` pointing elsewhere shows where it points.
+/// What it resolves to is the name a yes opens, so one that is not text is refused here, before it
+/// is asked about, rather than asked about as the lookalike a lossy spelling names (PATH-002).
 pub fn named_to_open(workspace: &Workspace, named: &[String], home: Option<&Path>) -> NamedToOpen {
     let mut resolved = NamedToOpen::default();
     for directory in named {
@@ -251,9 +263,18 @@ pub fn named_to_open(workspace: &Workspace, named: &[String], home: Option<&Path
             .and_then(|candidate| workspace.resolve_directory(&candidate))
         {
             Ok(path) => {
-                let shown = path.display().to_string();
-                if !resolved.paths.contains(&shown) {
-                    resolved.paths.push(shown);
+                let Some(text) = path.to_str() else {
+                    resolved.refused.push((
+                        directory.clone(),
+                        WorkspaceError::Invalid {
+                            path: directory.clone(),
+                            reason: "leads to a directory whose name is not text",
+                        },
+                    ));
+                    continue;
+                };
+                if !resolved.paths.iter().any(|listed| listed == text) {
+                    resolved.paths.push(text.to_string());
                 }
             }
             Err(problem) => resolved.refused.push((directory.clone(), problem)),
@@ -566,6 +587,41 @@ mod tests {
         assert_eq!(resolved.paths, [canonical.display().to_string()]);
         assert_eq!(resolved.refused.len(), 1);
         assert_eq!(resolved.refused[0].0, "../missing");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PATH-002: a name that leads to a directory whose name is not text is refused before it is
+    /// asked about, and a lookalike spelled with U+FFFD beside it is never what is asked about.
+    /// Linux only, because the name has to exist on disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_leading_to_a_directory_that_is_not_text_is_refused_not_asked_about() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = crate::testutil::scratch_dir("opening-named-not-text");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir(root.join(std::ffi::OsStr::from_bytes(b"shared-\xff"))).unwrap();
+        std::fs::create_dir(root.join("shared-\u{fffd}")).unwrap();
+        std::os::unix::fs::symlink(
+            root.join(std::ffi::OsStr::from_bytes(b"shared-\xff")),
+            root.join("shared"),
+        )
+        .unwrap();
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        let resolved = named_to_open(&workspace, &["../shared".to_string()], None);
+        assert_eq!(resolved.paths, Vec::<String>::new());
+        assert_eq!(resolved.refused.len(), 1);
+        assert_eq!(resolved.refused[0].0, "../shared");
+
+        let home = root.join(std::ffi::OsStr::from_bytes(b"home-\xff"));
+        assert!(matches!(
+            named_directory(&project, "~/notes", Some(home.as_path())),
+            Err(WorkspaceError::Invalid { .. })
+        ));
 
         std::fs::remove_dir_all(&root).ok();
     }

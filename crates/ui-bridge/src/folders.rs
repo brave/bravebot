@@ -105,7 +105,9 @@ impl Bridge {
                 canonical.display()
             )));
         }
-        let added = open_in(&mut workspace, state, &canonical.display().to_string())
+        // Opened as what it resolved to just now, and refused if it no longer leads there, or if
+        // its name is not text, which a lossy spelling would open the lookalike of.
+        let added = open_asked_about(&mut workspace, state, &canonical)
             .map_err(|error| Failure::bad_request(error.to_string()))?;
         // A point holds a trust map without this folder's rule, while the folder would stay open.
         state.rewind.close();
@@ -195,41 +197,37 @@ impl Bridge {
     }
 }
 
-/// Open `directory`, the canonical directory a person was asked about (or the mode answered for),
-/// in `workspace` and record it in `state`, as [`open_in`] does. Returns it.
+/// Open `directory`, the canonical directory a person was asked about, picked, or the mode
+/// answered for, in `workspace` on the terms `/add-dir` opens one (TRUST-9), and record it in
+/// `state`: in its added directories, once, so every later turn, a rewind and a resume open it
+/// again, and in its trust map as vouched for. Returns it.
 ///
-/// Resolved again here, since the question was put: a name along the path swapped for a link since
-/// then would otherwise open, and vouch for, a directory nobody was shown. One that no longer
-/// resolves to `directory` is refused and nothing is recorded, as is one the workspace refuses now
-/// (one deleted since, or one that overlaps a directory opened meanwhile).
+/// Resolved again here, since it was shown: a name along the path swapped for a link since then
+/// would otherwise open, and vouch for, a directory nobody was shown. One that no longer resolves
+/// to `directory` is refused and nothing is recorded, as is one the workspace refuses now (one
+/// deleted since, or one that overlaps a directory opened meanwhile), and one whose name is not
+/// text, since the workspace opens a name and a lossy spelling names a lookalike (PATH-002).
 pub(super) fn open_asked_about(
     workspace: &mut Workspace,
     state: &mut State,
     directory: &Path,
 ) -> Result<PathBuf, WorkspaceError> {
     let shown = directory.display().to_string();
+    let Some(text) = directory.to_str() else {
+        return Err(WorkspaceError::Invalid {
+            path: shown,
+            reason: "has a name that is not text",
+        });
+    };
     // What the workspace opened is canonical, and the workspace is this call's own, so a refusal
     // here leaves nothing open that a turn would reach.
-    let added = workspace.add_directory(&shown)?;
+    let added = workspace.add_directory(text)?;
     if added != directory {
         return Err(WorkspaceError::Invalid {
             path: shown,
             reason: "no longer leads to the directory that was asked about",
         });
     }
-    record_open(state, &added);
-    Ok(added)
-}
-
-/// Open `directory` in `workspace` on the terms `/add-dir` opens one (TRUST-9), and record it in
-/// `state`: in its added directories, once, so every later turn, a rewind and a resume open it
-/// again, and in its trust map as vouched for. Returns the directory opened, canonical.
-fn open_in(
-    workspace: &mut Workspace,
-    state: &mut State,
-    directory: &str,
-) -> Result<PathBuf, WorkspaceError> {
-    let added = workspace.add_directory(directory)?;
     record_open(state, &added);
     Ok(added)
 }
