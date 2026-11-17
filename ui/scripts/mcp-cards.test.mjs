@@ -135,7 +135,7 @@ test('the server card offers no, yes and the project-wide yes, each its own pres
   const markup = draw(server())
   assert.deepEqual(buttons(markup), ['Continue without it', 'Use it and all future servers in this project', 'Use this server'])
   // The standing answer says what it covers where it can be pressed, not only after.
-  assert.ok(markup.includes('until you run bravebot mcp forget here'), markup)
+  assert.ok(markup.includes('until you forget them in Permissions'), markup)
 })
 
 test('an answered server card says which of the three answers was given', () => {
@@ -181,6 +181,8 @@ test('the call card shows each argument as the model wrote it', () => {
 
 test('the call card offers to stop asking only where that can be recorded', () => {
   assert.deepEqual(buttons(draw(call())), ['Don’t call', 'Call, and stop asking for get_forecast here', 'Call once'])
+  // The standing answer names where it is taken back: the Permissions dialog, not only a terminal.
+  assert.ok(draw(call()).includes('until you forget it in Permissions'), draw(call()))
   const unrecorded = draw(call({ mayStand: false }))
   assert.deepEqual(buttons(unrecorded), ['Don’t call', 'Call once'])
   assert.ok(unrecorded.includes('cannot stop asking'), unrecorded)

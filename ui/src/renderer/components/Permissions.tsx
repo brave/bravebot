@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
-import type { FilesystemKey, KeptTrust, SettingsRules } from '../../shared/protocol'
+import type { FilesystemKey, ForgottenMcp, KeptTrust, RememberedMcp, SettingsRules } from '../../shared/protocol'
 import { Alert, Button, Icon } from '../nala'
+import { t } from '../i18n'
 import { IconButton } from './IconButton'
 import { ago } from './Sessions'
 import { middleTruncate } from '../truncate'
@@ -24,21 +25,36 @@ interface Grants {
   remembered?: KeptTrust | null
   /** The rules this conversation opened under. Absent from an older bridge. */
   settingsRules?: SettingsRules | null
+  /** The project's standing MCP answers, read when this was asked; null with no state directory, absent from an older bridge. */
+  mcpRemembered?: RememberedMcp | null
+  /** What a revoke of kind `mcp` dropped, on that answer only. */
+  forgotten?: ForgottenMcp
 }
+/**
+ * The Forget refusal still shown once `params` is asked for: a list or another revoke keeps it, so
+ * a refresh does not wipe what the person was told, and only the next Forget clears it. Closing the
+ * dialog drops it with the rest of the dialog's state.
+ */
+export const mcpProblemAsked = (shown: string, params: Record<string, unknown>): string => params.kind === 'mcp' ? '' : shown
+
 export function Permissions({ session, onClose, onRemembered }: { session: string; onClose: () => void; onRemembered?: (kept: KeptTrust | null) => void }): React.JSX.Element {
   const [grants, setGrants] = useState<Grants | null>(null)
   const [problem, setProblem] = useState('')
+  // A refusal of Forget for the MCP answers is said in their section, beside the button pressed.
+  const [mcpProblem, setMcpProblem] = useState('')
   const [busy, setBusy] = useState(false)
   const request = async (method: string, params: Record<string, unknown> = {}) => {
-    setBusy(true); setProblem('')
+    const mcp = params.kind === 'mcp'
+    const refused = mcp ? setMcpProblem : setProblem
+    setBusy(true); setProblem(''); setMcpProblem((shown) => mcpProblemAsked(shown, params))
     try {
       const answer = await window.bravebot.request<Grants>(method, { session, ...params })
-      if (answer.error) setProblem(answer.error.message)
+      if (answer.error) refused(answer.error.message)
       else if (answer.ok) {
         setGrants(answer.ok)
         if ('remembered' in answer.ok) onRemembered?.(answer.ok.remembered ?? null)
       }
-    } catch { setProblem('Permissions could not be loaded. Try again.') }
+    } catch { refused(mcp ? t.uiPermissionsMcpFailed() : 'Permissions could not be loaded. Try again.') }
     finally { setBusy(false) }
   }
   useEffect(() => { void request('permissions.list') }, [session])
@@ -65,6 +81,8 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
       {grants?.remembered && <RememberedHere kept={grants.remembered} busy={busy} onForget={() => void request('permissions.revoke', { kind: 'remembered' })} />}
       {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />Nothing is kept for this directory.</p>}
     </section>
+    {grants && grants.mcpRemembered !== undefined && <RememberedMcpAnswers remembered={grants.mcpRemembered} forgotten={grants.forgotten ?? null}
+      problem={mcpProblem} busy={busy} onForget={() => void request('permissions.revoke', { kind: 'mcp' })} />}
     <RulesInForce rules={grants?.settingsRules ?? null} />
   </Modal>
 }
@@ -87,6 +105,65 @@ export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy
     </div>
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
+}
+
+/**
+ * The project's standing MCP answers: answer 2 at a server's question, which starts every server
+ * the project requests, and at a tool call's, which calls that tool without asking. They belong to
+ * every conversation started in the project, and Forget drops them all, as `bravebot mcp forget`
+ * does in a terminal. Whether that can be done is the bridge's `forgettable`; a refusal is said
+ * as the bridge worded it.
+ */
+export function RememberedMcpAnswers({ remembered, forgotten, problem, busy, onForget }: {
+  remembered: RememberedMcp | null
+  forgotten: ForgottenMcp | null
+  problem: string
+  busy: boolean
+  onForget: () => void
+}): React.JSX.Element {
+  const tools = remembered?.tools ?? []
+  const any = Boolean(remembered?.everyServer) || tools.length > 0
+  // Not forgettable with a record that can be read is an incognito session, which writes nothing.
+  const incognito = remembered !== null && !remembered.forgettable && !remembered.unreadable
+  const open = Boolean(remembered?.forgettable) && any && !busy
+  return <section className="grant-section" data-test="mcp-remembered">
+    <h3>{t.uiPermissionsMcpHeading()}</h3>
+    {remembered && <p className="grant-note">{t.uiPermissionsMcpNote({ project: remembered.shownProject })}</p>}
+    {problem && <Alert type="error" data-test="mcp-forget-error">{problem}</Alert>}
+    {forgotten && <Alert type="success" data-test="mcp-forgotten">
+      {forgotten.everyServer || forgotten.tools.length > 0
+        ? <>{t.uiPermissionsMcpForgotten()}<ul className="grant-forgotten">
+          {forgotten.everyServer && <li>{t.uiPermissionsMcpEveryServer()}</li>}
+          {forgotten.tools.map((tool) => <li key={tool.tool}><code>{tool.shownTool}</code></li>)}
+        </ul>{t.uiPermissionsMcpAfter()}</>
+        : t.uiPermissionsMcpForgotNothing()}
+    </Alert>}
+    {remembered?.unreadable && <Alert type="warning" data-test="mcp-unreadable">
+      {t.uiPermissionsMcpUnreadable({ path: remembered.unreadable.shownPath, reason: remembered.unreadable.reason })}
+    </Alert>}
+    {any && <ul className="grant-list">
+      {remembered?.everyServer && <li className="grant-row" data-test="mcp-every-server">
+        <Icon name="plug" />
+        <div className="grant-text">
+          <span className="grant-title">{t.uiPermissionsMcpEveryServer()}</span>
+          <span className="grant-meta">{t.uiPermissionsMcpEveryServerMeta()}</span>
+        </div>
+      </li>}
+      {tools.map((tool) => <li className="grant-row" key={tool.tool} data-test="mcp-tool">
+        <Icon name="plug" />
+        <div className="grant-text">
+          <GrantName name={tool.shownTool} />
+          <span className="grant-meta">{t.uiPermissionsMcpToolMeta()}</span>
+        </div>
+      </li>)}
+    </ul>}
+    {remembered === null && <p className="grant-empty"><Icon name="plug" />{t.uiPermissionsMcpNoState()}</p>}
+    {remembered && !remembered.unreadable && !any && <p className="grant-empty" data-test="mcp-empty"><Icon name="plug" />{t.uiPermissionsMcpEmpty()}</p>}
+    {remembered && !remembered.unreadable && <div className="grant-actions">
+      <Button size="small" kind="outline" isDisabled={!open} aria-disabled={!open} onClick={onForget} data-test="mcp-forget"
+        data-tooltip={incognito ? t.uiPermissionsMcpIncognito() : undefined}>{t.uiPermissionsMcpForget()}</Button>
+    </div>}
+  </section>
 }
 
 /** The root is the empty name, which a person is shown in words; any other rule is drawn as the agent spelled it. */

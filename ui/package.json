@@ -40,6 +40,7 @@
     "drive:permission-mode": "pnpm run bridge && electron-vite build && node scripts/drive-permission-mode.mjs",
     "drive:sandbox-mode": "pnpm run bridge && electron-vite build && node scripts/drive-sandbox-mode.mjs",
     "drive:remembered-trust": "pnpm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
+    "drive:mcp-forget": "pnpm run bridge && electron-vite build && node scripts/drive-mcp-forget.mjs",
     "drive:run": "pnpm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "pnpm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "drive:at-mentions": "pnpm run bridge && electron-vite build && node scripts/drive-at-mentions.mjs",

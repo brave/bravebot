@@ -9,6 +9,7 @@ import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
+import { t as words } from '../i18n'
 import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -2607,7 +2608,7 @@ function Card({
             reject="Continue without it"
             approve="Use this server"
             always="Use it and all future servers in this project"
-            alwaysTooltip="Servers this project requests from now on start without asking, until you run bravebot mcp forget here"
+            alwaysTooltip={words.uiMcpServerAlwaysTooltip()}
           />}
         >
 
@@ -2784,7 +2785,7 @@ function Card({
             reject="Don’t call"
             approve="Call once"
             always={request.mayStand ? `Call, and stop asking for ${request.tool} here` : null}
-            alwaysTooltip="Later calls to this tool in this project are made without asking, until you run bravebot mcp forget here"
+            alwaysTooltip={words.uiMcpToolAlwaysTooltip()}
           />}
         >
 

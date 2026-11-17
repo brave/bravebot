@@ -826,3 +826,36 @@ fn a_private_session_refuses_to_write_the_bots_and_says_why() {
     assert!(refused.to_string().contains("incognito"), "{refused}");
     assert!(!scratch.home.join("bots.json").exists());
 }
+
+/// A private session forgets no standing MCP answer, since forgetting is a write, and still lists
+/// what an ordinary one left.
+#[test]
+fn a_private_session_forgets_no_standing_mcp_answer() {
+    use bravebot_config::mcp::{Projects, Standing, projects_file, tools_file};
+    let scratch = Scratch::new("mcp-forget");
+    let project = Path::new("/work");
+    let mut projects = Projects::default();
+    assert!(projects.add(project));
+    std::fs::write(projects_file(&scratch.home), projects.to_text()).expect("projects");
+    let mut standing = Standing::default();
+    assert!(standing.add("weather", "get_forecast", project));
+    std::fs::write(tools_file(&scratch.home), standing.to_text()).expect("tools");
+
+    let refused = bravebot_agent::mcp::forget(&scratch.home, project).expect_err("refused");
+
+    assert!(
+        matches!(refused, bravebot_agent::mcp::Unforgotten::Incognito),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(projects_file(&scratch.home)).unwrap(),
+        projects.to_text()
+    );
+    assert_eq!(
+        std::fs::read_to_string(tools_file(&scratch.home)).unwrap(),
+        standing.to_text()
+    );
+    let remembered = bravebot_agent::mcp::remembered(&scratch.home, project).expect("listed");
+    assert!(remembered.every_server);
+    assert_eq!(remembered.tools, ["weather:get_forecast"]);
+}

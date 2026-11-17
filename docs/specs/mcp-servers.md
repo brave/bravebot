@@ -30,6 +30,8 @@ governs:
   - crates/tui/src/mcp_command.rs
   - crates/ui-bridge/src/connectors.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/remembered_mcp.rs
+  - crates/agent/src/mcp/forget.rs
   - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
@@ -177,7 +179,8 @@ a person sees.
 
 The cost is real and worth stating: the record no longer travels with the checkout, so a second
 machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets the answer.
-`bravebot mcp forget <path>` is how a person drops it instead.
+`bravebot mcp forget <path>`, or Forget in the window's Permissions dialog
+([SERVERS-26](#SERVERS-26)), is how a person drops it instead.
 
 ## The command line
 
@@ -228,7 +231,8 @@ links followed, as answer 2 recorded it, and one that no longer resolves, a dele
 taken as typed and made absolute. It drops that project from `mcp-projects` and every standing
 answer about a tool in it from `mcp-tools`, says a line for each answer it dropped or that nothing
 was recorded, and leaves every other project's as it was. An incognito session writes nothing, so
-`forget` is refused there.
+`forget` is refused there. The window drops the same records for its session's project from the
+Permissions dialog ([SERVERS-26](#SERVERS-26)).
 
 ### Coming from Claude Code
 
@@ -252,8 +256,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 |---|---|---|---|
 | A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds, and the HTTP headers read from environment variables | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
-| "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
-| "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
+| "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` or the Permissions dialog's Forget ([SERVERS-26](#SERVERS-26)) |
+| "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` or the Permissions dialog's Forget ([SERVERS-26](#SERVERS-26)) |
 | What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
 | A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` or `.bravebot/settings.local.json` beside the work, or `~/.bravebot/settings.json` | that checkout, or every session | until `mcp disable` or an edit takes it out |
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
@@ -2085,8 +2089,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   for. It reaches only a request for an alias the person's own `mcp.json` declares
   ([SERVERS-1](#SERVERS-1)), and not one whose declaration was approved as something else.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
-  asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
-  accidental one.
+  asks again and a wiped workspace does not forget. `mcp forget` and the Permissions dialog's Forget
+  ([SERVERS-26](#SERVERS-26)) are the deliberate roads; there is no accidental one.
 - **The plain interface cannot stop asking.** Its call question is a line answered yes or no, and
   its yes is answer 1, so answer 2 is given in the full-screen interface or not at all.
 - **A run nobody can be asked in still checks a list.** A one-shot run makes
@@ -2601,3 +2605,50 @@ the server wrote. A change of one of them to `Stream::Inherited` is found by a r
 `verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
+
+<a id="SERVERS-26"></a>
+### SERVERS-26: the window's Permissions dialog lists and forgets its project's standing answers, and no other project's
+
+The window's Permissions dialog lists what the state directory remembers for the session's project:
+whether answer 2 at [SERVERS-4](#SERVERS-4)'s question stands there, and each tool answer 2 at
+[SERVERS-7](#SERVERS-7)'s question stopped asking about there. The project is the session's
+directory as the absolute path it resolves to, which is the path answer 2 recorded. The records are
+read each time the dialog asks, since another session in the project may have added to them. Its
+Forget drops exactly what `bravebot mcp forget` drops for that path, and nothing recorded for any
+other project, and says what it dropped or that nothing was remembered. It takes no path: only the
+session's own project is forgotten from the window.
+
+An incognito session writes nothing, so it lists the answers and its Forget is refused, and the
+refusal is said beside the button. A record that is there and cannot be read is said to be
+unreadable, with its path and why, and is neither listed as empty nor written: both records are read
+before either is written, so Forget leaves both as they are. Where the projects file is written and
+the tools file then is not, the refusal says the answer about servers was already forgotten.
+
+A forgotten tool answer is read from the record at each call, so the next call to that tool asks
+again in the same session. The answer about servers is read only as a session starts its servers,
+so a server already started keeps running until the session ends, and the next session started in
+the project asks.
+
+**Why.** The window offers answer 2 at both questions, and a standing answer a person can give in one
+place and only take back by typing a command in another is one most people will never take back.
+Taking no path keeps the dialog to the project the person is looking at, so it cannot be steered to
+drop another project's answers.
+
+`verified-by: bravebot_agent::mcp::forget::forgets_the_servers_alone`
+`verified-by: bravebot_agent::mcp::forget::forgets_the_tools_alone`
+`verified-by: bravebot_agent::mcp::forget::forgets_both_and_leaves_other_projects_as_they_were`
+`verified-by: bravebot_agent::mcp::forget::forgetting_nothing_writes_nothing`
+`verified-by: bravebot_agent::mcp::forget::leaves_a_record_it_cannot_read_as_it_is`
+`verified-by: bravebot_agent::mcp::forget::a_tools_file_that_is_not_written_says_the_server_answer_was_forgotten`
+`verified-by: bravebot_agent::mcp::forget::a_projects_file_that_is_not_written_forgets_nothing`
+`verified-by: bravebot_agent::mcp::forget::lists_what_is_remembered_for_one_project_and_changes_nothing`
+`verified-by: bravebot_agent::mcp::forget::a_name_that_is_not_utf8_is_not_its_lossy_lookalike`
+`verified-by: bravebot_agent::incognito::a_private_session_forgets_no_standing_mcp_answer`
+`verified-by: bravebot_cli::mcp::forget_says_the_server_answer_went_when_the_tools_file_is_then_not_written`
+`verified-by: bravebot_ui_bridge::forgetting_mcp_answers::the_list_says_what_is_remembered_for_the_sessions_project`
+`verified-by: bravebot_ui_bridge::forgetting_mcp_answers::an_unreadable_record_is_reported_and_nothing_is_forgotten`
+`verified-by: bravebot_ui_bridge::forgetting_mcp_answers::revoking_forgets_only_this_projects_answers_and_says_what_went`
+`verified-by: bravebot_ui_bridge::forgetting_mcp_answers_incognito::an_incognito_session_lists_the_answers_and_refuses_to_forget_them`
+`verified-by: bravebot_ui_bridge::remembered_mcp::a_tools_file_not_written_says_the_server_answer_was_already_forgotten`
+`verified-by: bravebot_ui_bridge::servers::a_forgotten_call_answer_is_asked_again_in_the_same_session`
+`verified-by: by-construction (ui/scripts/remembered-mcp-list.test.mjs asserts that the dialog draws the answers, the refusal and what was forgotten as the bridge sent them, opens Forget only where the bridge says it can forget and something is remembered, and keeps a refused Forget said until the next Forget; it runs with the rest of the node tests in ui/scripts)`

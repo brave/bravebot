@@ -65,6 +65,7 @@ pub mod manifest;
 pub mod mentions;
 pub mod models;
 pub mod protocol;
+mod remembered_mcp;
 pub mod rules;
 pub mod running;
 mod schedule_command;

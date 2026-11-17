@@ -40,7 +40,7 @@ impl Scratch {
     fn new(name: &str) -> Self {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
-            .join(name);
+            .join(format!("{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("project/.bravebot")).expect("a project directory");
         std::fs::create_dir_all(path.join("home/.bravebot")).expect("a home directory");
@@ -535,4 +535,59 @@ fn a_request_nobody_declared_is_said_when_the_first_turn_starts_servers() {
         notes.contains("weather") && notes.contains(".bravebot/settings.json"),
         "{notes}"
     );
+}
+
+/// Answer 2 at a server's question and at a call's, then forgotten from the Permissions channel:
+/// the list says both were remembered for this project, the revoke says both were forgotten, and
+/// the next call in the same session is asked about again, since a tool's answer is read from the
+/// record at each call and the session keeps no copy of it.
+#[test]
+fn a_forgotten_call_answer_is_asked_again_in_the_same_session() {
+    let scratch = Scratch::new("bridge-mcp-forgotten");
+    let (url, _received) = weather_server();
+    scratch.declare(&url);
+    let mut front = FrontEnd::start(&scratch.home());
+    let session = front.session(&scratch.project());
+
+    let first = front.turn(
+        &session,
+        &[
+            ("mcp-server.request", "approve", true),
+            ("mcp-tools.request", "approve", false),
+            ("mcp-call.request", "approve", true),
+        ],
+    );
+    assert_eq!(first.last().unwrap()["event"], "turn.done", "{first:?}");
+
+    let second = front.turn(&session, &[]);
+    assert_eq!(second.last().unwrap()["event"], "turn.done", "{second:?}");
+    assert!(
+        named(&second, "mcp-call.request").is_empty(),
+        "a call answered with answer 2 was asked again: {second:?}"
+    );
+
+    let listed = front.call("permissions.list", json!({"session": session}));
+    let remembered = &listed["mcpRemembered"];
+    assert_eq!(
+        remembered["project"],
+        scratch.project().display().to_string()
+    );
+    assert_eq!(remembered["everyServer"], true, "{listed}");
+    assert_eq!(remembered["tools"][0]["tool"], "weather:get_forecast");
+
+    let revoked = front.call(
+        "permissions.revoke",
+        json!({"session": session, "kind": "mcp"}),
+    );
+    assert_eq!(revoked["forgotten"]["everyServer"], true, "{revoked}");
+    assert_eq!(
+        revoked["forgotten"]["tools"],
+        json!([{"tool": "weather:get_forecast", "shownTool": "weather:get_forecast"}])
+    );
+    assert_eq!(revoked["mcpRemembered"]["everyServer"], false);
+    assert_eq!(revoked["mcpRemembered"]["tools"], json!([]));
+
+    let third = front.turn(&session, &[("mcp-call.request", "reject", false)]);
+    assert_eq!(third.last().unwrap()["event"], "turn.done", "{third:?}");
+    assert_eq!(named(&third, "mcp-call.request").len(), 1, "{third:?}");
 }

@@ -957,6 +957,27 @@ session's map as it is. It returns the updated lists, and refuses `kind: "rememb
 `bad_request` where nothing is kept. These methods refuse with `turn_in_flight` while the
 session is running. Revocation can reduce existing grants; it cannot add trust.
 
+`permissions.list` also returns `mcpRemembered`, the standing MCP answers for the session's
+project as `bravebot mcp forget` would drop them, read from the state directory when the list is
+asked for, or `null` where there is no state directory. It is
+`{ project, shownProject, everyServer, tools, forgettable }`: `everyServer` is whether answer 2
+was given at a server's question there, and each `tools` entry is `{ tool, shownTool }`, a tool
+answer 2 was given about at a call's question, as `alias:tool`. A record that is there and
+cannot be read is reported rather than listed as empty: the value is then
+`{ project, shownProject, unreadable: { path, shownPath, reason }, forgettable: false }`, with no
+`everyServer` or `tools`. `forgettable` is false there and in an incognito session. A client
+draws the `shown…` fields.
+`permissions.revoke` with `kind: "mcp"` forgets those answers for this project and for no other,
+and returns the updated lists plus `forgotten: { everyServer, tools }`, what was dropped (both
+empty where nothing was remembered, which is not refused). It refuses with `bad_request` in an
+incognito session, with `no_home` where there is no state directory, and with `state_unusable`,
+naming the file, where a record cannot be read or written. A record that cannot be read leaves both
+as they were; one that cannot be written is the one left as it was, and where that is the tools
+file after the projects file was written, the message says the answer about servers was forgotten.
+A tool's answer is read at each call, so the
+next call in this session asks again. The answer about servers is read as a session starts its
+servers: those this session already started keep running, and the next session there asks.
+
 ### 7.3 Trust and diagnostics
 
 #### Connectors
@@ -1436,8 +1457,9 @@ responses of `session.new`, `session.open` and `session.fork` carry `shownDirect
 - A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
 - What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
-- MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
-  import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
+- MCP configuration (declaring, approving ahead of time and enabling), subscription import and
+  skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first. A project's
+  remembered MCP answers are forgotten from the Permissions dialog (`permissions.revoke`).
 - File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
   completion is `mentions.offer` and `mentions.named`, what a dropped file is comes from
   `drops.classify`, and whether a paste fits from `pastes.check`.

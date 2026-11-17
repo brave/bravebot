@@ -242,6 +242,30 @@ export interface KeptTrust {
   shownRoot?: string
 }
 
+/** A tool answer 2 was given about at a call's question, as `alias:tool`. Draw `shownTool`. */
+export interface RememberedMcpTool {
+  tool: string
+  /** `tool` spelled as text, so a character that draws as nothing is visible (PROMPT-1). */
+  shownTool: string
+}
+
+/** What `permissions.revoke` with `kind: "mcp"` dropped: both empty where nothing was remembered. */
+export interface ForgottenMcp {
+  everyServer: boolean
+  tools: RememberedMcpTool[]
+}
+
+/**
+ * `mcpRemembered` in `permissions.list`: the project's standing MCP answers, read from the state
+ * directory when the list was asked for (`bravebot mcp forget` in the terminal drops the same).
+ * A record that is there and cannot be read carries `unreadable` and no `everyServer` or `tools`.
+ * `forgettable` is false there and in an incognito session. Draw the `shown…` fields.
+ */
+export type RememberedMcp = { project: string; shownProject: string; forgettable: boolean } & (
+  | { everyServer: boolean; tools: RememberedMcpTool[]; unreadable?: undefined }
+  | { unreadable: { path: string; shownPath: string; reason: string }; everyServer?: undefined; tools?: undefined }
+)
+
 /** Why file backups may not account for everything a turn did (§7.1 `session.rewind`). */
 export type RewindGap = 'command' | 'hook' | 'scratch' | 'language-server' | 'desktop' | 'backup-unavailable' | 'unknown'
 

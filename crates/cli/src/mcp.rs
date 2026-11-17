@@ -12,6 +12,7 @@
 
 use crate::exit::{Ending, fail};
 use crate::progress::{printable, printable_path};
+use bravebot_agent::mcp::Unforgotten;
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
@@ -21,7 +22,7 @@ use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
     self, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field, Problem, Projects,
-    Standing, Timeouts, Unreadable,
+    Standing, Timeouts,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -1616,41 +1617,63 @@ fn forget<R: BufRead, W: Write>(
     home: &Home,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
+    forget_through(path, home, person, |path, text| {
+        bravebot_agent::home::replace(path, text)
+    })
+}
+
+/// [`forget`], writing each record through `write`.
+fn forget_through<R: BufRead, W: Write>(
+    path: Option<&str>,
+    home: &Home,
+    person: &mut Person<R, W>,
+    write: impl FnMut(&Path, &str) -> std::io::Result<()>,
+) -> Result<(), Stopped> {
     let directory = writable(home, "forget")?;
     let project = project(path)?;
-    let unreadable = |file: PathBuf, why: Unreadable| -> Stopped {
-        (
+    let named = shown(&project.display().to_string());
+    let written = bravebot_agent::mcp::forget_through(directory, &project, write);
+    let forgotten = written.map_err(|why| match why {
+        Unforgotten::Incognito => (
+            Ending::Failed,
+            t!(mcp_not_while_incognito, command = "forget"),
+        ),
+        Unforgotten::Unreadable(record) => (
             Ending::Failed,
             t!(
                 mcp_unreadable,
-                path = shown(&file.display().to_string()),
-                reason = bravebot_agent::mcp::unreadable_record(&why)
+                path = shown(&record.path.display().to_string()),
+                reason = bravebot_agent::mcp::unreadable_record(&record.why)
             ),
-        )
-    };
-    let mut projects = Projects::to_change(directory)
-        .map_err(|why| unreadable(mcp::projects_file(directory), why))?;
-    let mut standing = Standing::to_change(directory)
-        .map_err(|why| unreadable(mcp::tools_file(directory), why))?;
-    let every_server = projects.remove(&project);
-    let tools = standing.in_project(&project);
-    standing.forget(&project);
+        ),
+        Unforgotten::NotWritten {
+            path,
+            error,
+            forgotten,
+        } => {
+            // The projects file is written first, so a tools file that then fails leaves the
+            // answer about servers forgotten, which is said before the failure.
+            if forgotten.every_server {
+                say(person, t!(mcp_forgot_servers, path = &named));
+            }
+            (
+                Ending::Failed,
+                t!(
+                    mcp_not_written,
+                    path = printable_path(&path),
+                    error = error.to_string()
+                ),
+            )
+        }
+    })?;
 
-    if every_server {
-        replace(&mcp::projects_file(directory), &projects.to_text())?;
-    }
-    if !tools.is_empty() {
-        replace(&mcp::tools_file(directory), &standing.to_text())?;
-    }
-
-    let named = shown(&project.display().to_string());
-    if !every_server && tools.is_empty() {
+    if forgotten.is_empty() {
         say(person, t!(mcp_forgot_nothing, path = &named));
     }
-    if every_server {
+    if forgotten.every_server {
         say(person, t!(mcp_forgot_servers, path = &named));
     }
-    for tool in &tools {
+    for tool in &forgotten.tools {
         say(person, t!(mcp_forgot_tool, tool = tool, path = &named));
     }
     Ok(())
@@ -1667,11 +1690,10 @@ fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
             ),
         )
     })?;
-    let typed = match path {
-        Some(path) => here.join(path),
-        None => here,
-    };
-    Ok(typed.canonicalize().unwrap_or(typed))
+    Ok(bravebot_agent::mcp::project_named(
+        &here,
+        path.map(Path::new),
+    ))
 }
 
 /// What became of the question.
@@ -4360,6 +4382,63 @@ mod tests {
         assert!(standing.add("weather", "get_forecast", project));
         assert!(standing.add("weather", "get_alerts", elsewhere));
         std::fs::write(mcp::tools_file(directory), standing.to_text()).expect("tools");
+    }
+
+    #[test]
+    fn forget_says_the_server_answer_went_when_the_tools_file_is_then_not_written() {
+        let directory = scratch("cli-mcp-forget-half");
+        let project = directory.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let project = project.canonicalize().expect("canonical");
+        let elsewhere = directory.join("elsewhere");
+        answered_in(&directory, &project, &elsewhere);
+        let tools = mcp::tools_file(&directory);
+        let tools_before = std::fs::read_to_string(&tools).expect("tools");
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: true,
+        };
+        let mut person = Person {
+            answers: "".as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let outcome = forget_through(
+            Some(project.to_str().expect("utf-8")),
+            &home,
+            &mut person,
+            |path, text| {
+                if path == tools {
+                    Err(std::io::Error::other("disk full"))
+                } else {
+                    std::fs::write(path, text)
+                }
+            },
+        );
+        let screen = String::from_utf8(person.screen).expect("utf-8");
+
+        let named = shown(&project.display().to_string());
+        assert_eq!(
+            screen,
+            format!("{}\n", t!(mcp_forgot_servers, path = &named))
+        );
+        assert_eq!(
+            outcome,
+            Err((
+                Ending::Failed,
+                t!(
+                    mcp_not_written,
+                    path = printable_path(&tools),
+                    error = "disk full"
+                )
+            ))
+        );
+        assert!(!Projects::read(&directory).contains(&project));
+        assert_eq!(
+            std::fs::read_to_string(&tools).expect("tools"),
+            tools_before
+        );
     }
 
     #[test]
