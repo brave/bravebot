@@ -123,6 +123,20 @@ pub fn said_in_a_session(rejected: &Rejected, described: String) -> String {
     }
 }
 
+/// The sentence for the file `--settings` named where it is read as a checkout's file because this
+/// platform's sandbox cannot hold it back from a directory a stage may write (#2599), or `None`
+/// where it is read as the person's own. Every client says the same words: `doctor`, the plain and
+/// terminal openings, the desktop's rules report and an editor's session.
+#[must_use]
+pub fn named_withheld_said(settings: &Settings) -> Option<String> {
+    settings.named_withheld().map(|path| {
+        t!(
+            session_settings_named_withheld,
+            path = crate::confirm::shown_path(path)
+        )
+    })
+}
+
 /// Every entry of the four filesystem lists with why it is not in force, or `None` where it is.
 ///
 /// An entry that resolved is still not in force where the backend cannot subtract from a grant and

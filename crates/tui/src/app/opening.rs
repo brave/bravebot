@@ -94,6 +94,9 @@ pub(super) fn rules_from(
             bravebot_agent::permissions::describe(problem),
         ));
     }
+    if let Some(said) = bravebot_agent::permissions::named_withheld_said(settings) {
+        session.note(said);
+    }
     // And said out loud for the same reason: an `allow` entry a checkout wrote that nobody granted
     // is dropped, so the prompt it was meant to answer still appears. Somebody told nothing reads
     // that prompt as a second fault rather than as the rule not being in force. One this session

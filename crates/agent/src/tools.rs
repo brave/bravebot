@@ -784,6 +784,7 @@ impl<'a> Tools<'a> {
                         ),
                 )
                 .with_withheld_writes(self.workspace.checkout_exclusions())
+                .with_named_settings(self.workspace.named_settings_paths())
                 .with_host_grants(&self.workspace.granted_hosts())
                 .with_identities(bravebot_config::git_identities::settled())
                 .with_state_directory(self.home.map(std::path::Path::to_path_buf));
@@ -5419,6 +5420,7 @@ pub(crate) fn write_needs_approval<S: Sink>(
     destination: Destination,
 ) -> bool {
     policy.write_needs_approval(path, contents, destination)
+        || workspace.is_the_named_settings_file(path)
         || workspace.landing(path).is_some_and(|landed| {
             policy.write_needs_approval(&landed, contents, Destination::Named)
         })
@@ -5462,6 +5464,7 @@ pub(crate) fn put_where_nobody_can_be_asked<S: Sink>(
 /// names could not all be found is protected: one of them may be a protected path.
 pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
     bravebot_core::protected::is_protected(path)
+        || workspace.is_the_named_settings_file(path)
         || workspace
             .landing(path)
             .is_some_and(|landed| bravebot_core::protected::is_protected(&landed))
@@ -5482,6 +5485,12 @@ pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
 pub(crate) fn redirection_is_protected(workspace: &Workspace, path: &std::path::Path) -> bool {
     let mut reached = workspace.paths_reached(path);
     reached.push(path.to_path_buf());
+    if reached
+        .iter()
+        .any(|name| workspace.reaches_the_named_settings_file(name))
+    {
+        return true;
+    }
     // A name that is not UTF-8 has no spelling a rule can be written about, and its lossy
     // rendering is the name of a different file, so the file it opens could be a hard link to a
     // protected one. It is protected, as a file whose other names could not all be found is
@@ -23199,6 +23208,10 @@ mod tests {
     /// refuses the call before anything is approved or run, and the trail records the refusal
     /// under the name the planner is told.
     mod confinement;
+
+    /// PERM-9 for the settings file named with `--settings`, which a session reads as a layer that
+    /// grants and which a write must therefore ask about as it does for `.bravebot`.
+    mod named_settings;
 
     /// LABEL-5 over a tool's arguments, at the three tools that take a decision from one and had
     /// been releasing it through a display witness instead.

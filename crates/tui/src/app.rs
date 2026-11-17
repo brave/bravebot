@@ -2391,8 +2391,17 @@ fn restore_resumed(
     // The other half of `/add-dir`, which the map cannot carry: a directory has to be
     // open for an absolute path in it to resolve at all. Restored here so the rule and
     // the reach come back together, rather than the rule alone.
+    let already_open = workspace.added_directories();
     for note in record.reopen_added_directories(workspace) {
         session.note(note);
+    }
+    // Counted for the settings layered from here on, as `/add-dir` counts one, so the file
+    // `--settings` named is judged against the directories this resume made writable (#2599).
+    // Only the directories this call opened are counted: the others were counted when opened.
+    for reopened in workspace.added_directories() {
+        if !already_open.contains(&reopened) {
+            bravebot_config::add_writable_directory(reopened);
+        }
     }
     // Beside them, the checkouts the session's delegates were given: their rules came
     // back with the map, and the list and the candidate paths come back here (CHECKOUT-16).
@@ -39487,8 +39496,9 @@ mod tests {
     }
 
     /// PERM-14: a file `--settings` named is the person's own wherever it sits, so one inside the
-    /// directory the session opened in grants its rule there and after `/cd` leaves it, and nothing
-    /// is put to the person about it.
+    /// directory the session opened in grants its rule there and after `/cd` leaves it where the
+    /// platform holds the file back from a stage, and nothing is put to the person about it.
+    /// Elsewhere it is read as a checkout's file and grants nothing.
     #[test]
     fn a_named_file_inside_the_directory_left_behind_still_grants_after_moving() {
         use bravebot_core::permissions::{Decision, Ruling};
@@ -39510,15 +39520,25 @@ mod tests {
             Some(&tooling),
         );
         let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
-        assert_eq!(
-            answers
-                .rules
-                .permissions
-                .for_command(&["bash", "scripts/check.sh"]),
-            Decision::Ruled(Ruling::Allow),
-            "a named file inside the working directory was withheld"
-        );
-
+        let first = answers
+            .rules
+            .permissions
+            .for_command(&["bash", "scripts/check.sh"]);
+        if bravebot_sandbox::holds_one_file_back() {
+            assert_eq!(
+                first,
+                Decision::Ruled(Ruling::Allow),
+                "a named file inside the working directory was withheld"
+            );
+        } else {
+            // Linux and Windows cannot hold the file back from a stage that may write `a`, so it
+            // is read as a checkout's file there and its allow rule is only proposed (#2599).
+            assert_ne!(
+                first,
+                Decision::Ruled(Ruling::Allow),
+                "a named file inside the working directory granted where it cannot be held back"
+            );
+        }
         let mut offered = Vec::new();
         assert_eq!(
             change_directory(
@@ -39656,6 +39676,52 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// #2599: a session opened with a `--settings` file that grants nothing, because the platform
+    /// cannot hold it back from a directory a stage may write, says so and names the file. Where
+    /// the platform can hold it back the session says nothing about it. Rejects an opening that
+    /// leaves the withholding unsaid, or says it for a file that grants.
+    #[test]
+    fn the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing() {
+        let root = crate::testutil::scratch_dir("bravebot-named-withheld-note");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let root = std::fs::canonicalize(&root).expect("canonical scratch");
+        let file = root.join("override.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("named file");
+        let opened = |can_hold_one_file_back: bool| {
+            let settings = bravebot_config::Settings::layered_reaching(
+                None,
+                Some(&root),
+                Some(&file),
+                std::slice::from_ref(&root),
+                can_hold_one_file_back,
+            );
+            let mut session = Session::new("none");
+            rules_from(
+                &mut session,
+                &settings,
+                &root,
+                None,
+                Whence::Asked,
+                "a-session",
+                |_, _| Some(false),
+            )
+            .expect("nobody left");
+            notes_of(&session).join("\n")
+        };
+        let withheld = opened(false);
+        let held_back = opened(true);
+        std::fs::remove_dir_all(&root).ok();
+
+        assert!(withheld.contains("override.json"), "{withheld}");
+        assert!(withheld.contains("--settings"), "{withheld}");
+        assert!(
+            withheld.contains("read as a checkout's file is"),
+            "{withheld}"
+        );
+        assert!(!held_back.contains("override.json"), "{held_back}");
     }
 
     /// Both halves of what `/cd` does, together: the working directory moves, and the directory

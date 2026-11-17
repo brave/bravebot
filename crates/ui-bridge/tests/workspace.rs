@@ -537,3 +537,28 @@ fn a_turn_opens_the_references_the_home_layer_named_and_not_a_projects() {
         [library.path().canonicalize().unwrap()]
     );
 }
+
+/// PERM-9 for a desktop session: the settings file the process was started on, which the bridge
+/// hands its layers as the selected file, is carried by the settings into the workspace a turn
+/// reads through, and a session started on none holds none. A wiring that dropped it would leave
+/// the desktop with a named file no tool asks about.
+#[test]
+fn a_turn_workspace_holds_the_settings_file_the_session_was_started_on() {
+    let held = project("named-settings");
+    let outside = project("named-settings-file");
+    let named = outside.path().join("grant.json");
+    std::fs::write(&named, "{}\n").unwrap();
+
+    let settings = Settings::layered(None, Some(held.path()), Some(&named));
+    let workspace =
+        turn_workspace(held.path().to_path_buf(), &settings, false).expect("a workspace");
+    assert!(
+        workspace
+            .named_settings_paths()
+            .contains(&named.canonicalize().unwrap())
+    );
+
+    let alone = turn_workspace(held.path().to_path_buf(), &settings_of(held.path()), false)
+        .expect("a workspace");
+    assert!(alone.named_settings_paths().is_empty());
+}

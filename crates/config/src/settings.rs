@@ -830,6 +830,15 @@ pub struct Settings {
     /// Kept so that a machine whose only permission rules are pinned reads as having no settings
     /// of its own, which is what `doctor` says about the files it names.
     layers_said_no_permissions: Option<bool>,
+    /// The file the command line named, made absolute against the directory [`Settings::layered`]
+    /// read it from, so a later change of directory does not move it. Kept whether or not the file
+    /// exists, since one created later is the named file. A session holds it as a protected path
+    /// because it is read as a layer that grants wherever it sits (PERM-14).
+    named_file: Option<PathBuf>,
+    /// The named file, where it was read and granted nothing because the platform cannot hold it
+    /// back from a stage and it lies inside a directory a stage may write. See
+    /// [`Settings::layered_reaching`].
+    named_withheld: Option<PathBuf>,
     /// The layers that named a key of [`HOME_ONLY`] and were not obeyed, weakest first, by key, for
     /// `doctor`.
     ///
@@ -1179,6 +1188,8 @@ pub fn local_settings_file(checkout: &Path) -> PathBuf {
 /// [`LayerFacts::apply`] puts what was collected on the settings.
 #[derive(Default)]
 struct LayerFacts {
+    /// The named file, read and withheld from granting. See [`Settings::layered_reaching`].
+    named_withheld: Option<PathBuf>,
     /// The file that last set each environment name, and the files that overrode an earlier one.
     winner: BTreeMap<String, PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -1782,6 +1793,31 @@ impl Settings {
     /// flag is typed by the person running this invocation, and whatever gets them to type it could
     /// get them to type any other command (PERM-14).
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
+        let mut roots: Vec<PathBuf> = cwd.map(Path::to_path_buf).into_iter().collect();
+        roots.extend(crate::named_reach::added_writable_directories());
+        Self::layered_reaching(
+            home,
+            cwd,
+            named,
+            &roots,
+            bravebot_sandbox::holds_one_file_back(),
+        )
+    }
+
+    /// As [`Settings::layered`], for the directories a stage may write and whether this platform's
+    /// sandbox can hold one file back from a stage, so a test states both without the host.
+    ///
+    /// The named file grants nothing while the platform cannot hold it back and it lies inside one
+    /// of `writable_roots`: a stage could rewrite it, and the next run would read the rewrite as the
+    /// person's own (#2599). It is recorded in [`Settings::named_withheld`] for `doctor` and the
+    /// session to say so.
+    pub fn layered_reaching(
+        home: Option<PathBuf>,
+        cwd: Option<&Path>,
+        named: Option<&Path>,
+        writable_roots: &[PathBuf],
+        can_hold_one_file_back: bool,
+    ) -> Self {
         let home_layer = home.map(|home| user_settings_file(&home));
         // A found layer the command line also named is left out here and read at the end, since
         // reading it at its own position would let a later found layer beat it (BACKEND-24).
@@ -1840,7 +1876,17 @@ impl Settings {
                 facts.unreadable_file(&path, own);
                 continue;
             };
-            let named_here = Some(&path) == named_path.as_ref();
+            let named_file_here = Some(&path) == named_path.as_ref();
+            // The home layer is the person's own file and no stage is handed it as a file of the
+            // checkout, so only another file is withheld.
+            let withheld = named_file_here
+                && !own
+                && crate::named_reach::withholds(&path, writable_roots, can_hold_one_file_back);
+            if withheld {
+                facts.named_withheld = Some(path.clone());
+            }
+            // A withheld file is read as a checkout's file is: it names no key a checkout may not.
+            let named_here = named_file_here && !withheld;
             // Whether a rule that *grants* may be read from this layer: the home layer and the file
             // the command line named. The project and local layers arrive with the clone, so an
             // `allow` entry or an `off` read out of one would let whoever last edited the
@@ -1857,7 +1903,7 @@ impl Settings {
             facts.git_identities(&root, &path, granting);
             // One of the checkout's two files is one however the command line reached it, so naming
             // it does not move where its rules start.
-            let a_checkouts_file = !own && (!named_here || is_a_checkouts_file(&path, cwd));
+            let a_checkouts_file = !own && (!named_file_here || is_a_checkouts_file(&path, cwd));
             let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
             facts.allow_rules(&root, &path, own, granting, &anchor);
             facts.misshapen_rules(&root, &path);
@@ -1872,6 +1918,8 @@ impl Settings {
 
         let mut settings = Self::from_map(&merged);
         settings.layers = found;
+        settings.named_file = named_path.map(|named| std::path::absolute(&named).unwrap_or(named));
+        settings.named_withheld = facts.named_withheld.take();
         facts.apply(&mut settings);
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
@@ -2888,6 +2936,23 @@ impl Settings {
     /// that exist are the hard part to find.
     pub fn layers(&self) -> impl Iterator<Item = &Path> {
         self.layers.iter().map(PathBuf::as_path)
+    }
+
+    /// The file the command line named, as an absolute path whether or not it exists, for a session
+    /// to hold as a protected path. `None` where none was named.
+    ///
+    /// Read off these settings rather than off the process-wide [`named_settings_file`], so a front
+    /// end that hands its layers a path without registering it (the desktop) holds the same file the
+    /// layers read.
+    pub fn named_settings_file(&self) -> Option<&Path> {
+        self.named_file.as_deref()
+    }
+
+    /// The named file where it was read and granted nothing, because this platform's sandbox cannot
+    /// hold one file back from a stage and the file lies inside a directory a stage may write.
+    /// `None` otherwise, including everywhere on macOS.
+    pub fn named_withheld(&self) -> Option<&Path> {
+        self.named_withheld.as_deref()
     }
 
     /// The names of [`crate::env_var::NETWORK`] a layer entitled to state them stated, with their
@@ -5933,7 +5998,17 @@ mod tests {
             self
         }
 
+        /// The layers as a platform that can hold one file back from a stage reads them, with the
+        /// working directory the one root a stage may write. A named file inside the working
+        /// directory therefore grants, on every host: the platform answer is stated here and not
+        /// taken from the machine the tests run on. [`Layers::read_on_this_platform`] takes it
+        /// from the machine and [`Layers::read_reaching`] states both values.
         fn read(&self) -> Settings {
+            self.read_reaching(std::slice::from_ref(&self.cwd), true)
+        }
+
+        /// The layers as `Settings::layered` reads them on the machine running the tests.
+        fn read_on_this_platform(&self) -> Settings {
             Settings::layered(
                 Some(self.home.clone()),
                 Some(&self.cwd),
@@ -6021,9 +6096,226 @@ mod tests {
         assert_eq!(inside.run_network_ignored().count(), 0);
     }
 
+    const NAMED_GRANTS_ALL: &str = r#"{
+        "permissions": {"allow": ["Bash(bash scripts/check.sh)"]},
+        "sandbox": {"mode": "off"},
+        "run": {"network": "open"}}"#;
+
+    impl Layers {
+        /// [`Layers::read`] with the directories a stage may write and the platform answer stated.
+        fn read_reaching(&self, roots: &[PathBuf], can_hold_one_file_back: bool) -> Settings {
+            Settings::layered_reaching(
+                Some(self.home.clone()),
+                Some(&self.cwd),
+                self.named.as_deref(),
+                roots,
+                can_hold_one_file_back,
+            )
+        }
+    }
+
+    /// #2599, R13-R15: where the sandbox cannot hold one file back, a named file inside a directory
+    /// a stage may write grants no allow rule, no sandbox mode and no run.network, and is reported.
+    /// Rejects a `granting` that ignores where the file sits, which lets a stage rewrite the file
+    /// and have the next run read the rewrite as the person's own.
+    #[test]
+    fn a_named_file_inside_a_writable_root_grants_nothing_where_one_file_cannot_be_held_back() {
+        use bravebot_sandbox::network::Network;
+        let layers = Layers::new("withheld-inside").named_inside_the_workspace(NAMED_GRANTS_ALL);
+        let settings = layers.read_reaching(std::slice::from_ref(&layers.cwd), false);
+        assert!(
+            settings.permissions().allow.is_empty(),
+            "an allow rule was granted"
+        );
+        assert_eq!(settings.allow_ignored().count(), 1);
+        assert_eq!(settings.sandbox(), None, "sandbox.mode was obeyed");
+        assert_eq!(settings.sandbox_ignored().count(), 1);
+        assert_ne!(
+            settings.run_network(),
+            Some(Network::Open),
+            "run.network was obeyed"
+        );
+        assert_eq!(settings.run_network_ignored().count(), 1);
+        assert_eq!(
+            settings.named_withheld(),
+            layers.named.as_deref(),
+            "the withheld file is not reported"
+        );
+    }
+
+    /// The same file, in a directory `--add-dir` or `/add-dir` opened and the working directory does
+    /// not hold, is withheld the same way. Rejects roots made of the working directory alone.
+    #[test]
+    fn a_named_file_inside_an_added_directory_grants_nothing_where_one_file_cannot_be_held_back() {
+        let layers = Layers::new("withheld-added").named(NAMED_GRANTS_ALL);
+        let added = layers
+            .named
+            .as_deref()
+            .and_then(Path::parent)
+            .expect("a parent")
+            .to_path_buf();
+        let alone = layers.read_reaching(std::slice::from_ref(&layers.cwd), false);
+        assert!(
+            !alone.permissions().allow.is_empty(),
+            "outside every root it grants"
+        );
+        assert_eq!(alone.named_withheld(), None);
+        let with_added = layers.read_reaching(&[layers.cwd.clone(), added], false);
+        assert!(with_added.permissions().allow.is_empty());
+        assert_eq!(with_added.sandbox(), None);
+        assert_eq!(with_added.run_network(), None);
+        assert!(with_added.named_withheld().is_some());
+    }
+
+    /// R18, R19: where the platform can hold the file back it keeps granting wherever it sits, and a
+    /// root changes nothing. Rejects a refusal of every named file inside a writable root, which
+    /// brings back the refusal #4133 removed for #3509.
+    #[test]
+    fn a_named_file_inside_a_writable_root_keeps_granting_where_one_file_can_be_held_back() {
+        use bravebot_sandbox::network::Network;
+        let layers = Layers::new("kept-inside").named_inside_the_workspace(NAMED_GRANTS_ALL);
+        let settings = layers.read_reaching(std::slice::from_ref(&layers.cwd), true);
+        assert_eq!(
+            settings.permissions().allow,
+            ["Bash(bash scripts/check.sh)"]
+        );
+        assert_eq!(settings.allow_ignored().count(), 0);
+        assert!(settings.sandbox().is_some());
+        assert_eq!(settings.run_network(), Some(Network::Open));
+        assert_eq!(settings.named_withheld(), None);
+    }
+
+    /// The home file is the person's own and no stage is handed it as a checkout's file, so naming
+    /// it is never withheld, whatever roots hold it. Rejects a check that does not exempt it.
+    #[test]
+    fn the_home_file_named_by_the_flag_is_never_withheld() {
+        let layers = Layers::new("withheld-home")
+            .global(NAMED_GRANTS_ALL)
+            .naming_the_home_layer();
+        let settings = layers.read_reaching(std::slice::from_ref(&layers.home), false);
+        assert_eq!(
+            settings.permissions().allow,
+            ["Bash(bash scripts/check.sh)"]
+        );
+        assert_eq!(settings.named_withheld(), None);
+    }
+
+    /// R25: the project's own file named by the flag grants where the platform holds files back and
+    /// is withheld where it does not, since it lies in the working directory. Rejects a check that
+    /// reads the platform answer wrongly for a file that is also a found layer.
+    #[test]
+    fn the_project_file_named_by_the_flag_follows_the_platform_answer() {
+        let rule = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+        let layers = Layers::new("withheld-project")
+            .project(rule)
+            .naming_the_project_layer();
+        let held = layers.read_reaching(std::slice::from_ref(&layers.cwd), true);
+        assert_eq!(held.permissions().allow, ["Bash(bash scripts/check.sh)"]);
+        let loose = layers.read_reaching(std::slice::from_ref(&layers.cwd), false);
+        assert!(loose.permissions().allow.is_empty());
+        assert_eq!(loose.allow_ignored().count(), 1);
+    }
+
+    /// R25: the managed file keeps adding its `deny` rules over a withheld named file, and a named
+    /// file outside every root, which may be the managed file itself, grants as it did before
+    /// where the platform cannot hold files back. Rejects a withholding that reaches past the
+    /// named file inside a root, or one that drops the administrator's rules.
+    #[test]
+    fn the_managed_file_is_handled_as_before_beside_a_withheld_named_file() {
+        let managed = pinned(
+            "withheld-managed",
+            r#"{"permissions": {"deny": ["Bash(ls)"]}}"#,
+        );
+        let layers = Layers::new("withheld-managed").named_inside_the_workspace(NAMED_GRANTS_ALL);
+        let settings = layers
+            .read_reaching(std::slice::from_ref(&layers.cwd), false)
+            .under(&managed);
+        assert!(settings.permissions().allow.is_empty());
+        assert!(settings.named_withheld().is_some());
+        assert_eq!(settings.permissions().deny, ["Bash(ls)"]);
+
+        let mut outside = Layers::new("withheld-managed-named");
+        let file = outside
+            .home
+            .parent()
+            .expect("the scratch root")
+            .join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"], "deny": ["Bash(ls)"]}}"#,
+        )
+        .expect("managed file");
+        outside.named = Some(file.clone());
+        let settings = outside
+            .read_reaching(std::slice::from_ref(&outside.cwd), false)
+            .under(&crate::Managed::at(&file));
+        assert_eq!(
+            settings.permissions().allow,
+            ["Bash(bash scripts/check.sh)"]
+        );
+        assert_eq!(settings.named_withheld(), None);
+    }
+
+    /// R18, R19: `Settings::layered` reads the platform answer from the sandbox, so the named file
+    /// inside the working directory grants where this platform holds one file back (macOS) and
+    /// grants nothing where it does not. Rejects a `layered` that passes a constant answer.
+    #[test]
+    fn layered_asks_the_sandbox_whether_it_can_hold_one_file_back() {
+        let layers = Layers::new("layered-platform").named_inside_the_workspace(NAMED_GRANTS_ALL);
+        let settings = layers.read_on_this_platform();
+        if bravebot_sandbox::holds_one_file_back() {
+            assert_eq!(
+                settings.permissions().allow,
+                ["Bash(bash scripts/check.sh)"]
+            );
+            assert_eq!(settings.named_withheld(), None);
+        } else {
+            assert!(settings.permissions().allow.is_empty());
+            assert!(settings.named_withheld().is_some());
+        }
+    }
+
+    /// A file nobody named is a checkout's file whatever the roots say, so the answer never reports
+    /// one withheld. Rejects a report of every project file as the named one.
+    #[test]
+    fn a_found_layer_is_never_reported_as_a_withheld_named_file() {
+        let layers = Layers::new("withheld-found").project(NAMED_GRANTS_ALL);
+        let settings = layers.read_reaching(std::slice::from_ref(&layers.cwd), false);
+        assert_eq!(settings.named_withheld(), None);
+    }
+
     const FILESYSTEM_WIDE: &str = r#"{"sandbox": {"filesystem": {
         "allowRead": ["/wide/read"], "allowWrite": ["/wide/write"],
         "denyRead": ["/deny/read"], "denyWrite": ["/deny/write"]}}}"#;
+
+    /// The file the command line named is reported as an absolute path, whether it exists or not,
+    /// so a session protecting it holds the path the layers read and a later change of directory
+    /// does not move it. Settings that were handed no file report none.
+    #[test]
+    fn the_settings_report_the_named_file_as_an_absolute_path() {
+        let settings = Layers::new("named-reported")
+            .global("{}")
+            .named("{}")
+            .read();
+        let named = settings.named_settings_file().expect("the named file");
+        assert!(named.is_absolute(), "{}", named.display());
+        assert!(
+            named.exists(),
+            "the file the layers read is the one reported"
+        );
+        assert!(
+            Layers::new("named-none")
+                .global("{}")
+                .read()
+                .named_settings_file()
+                .is_none()
+        );
+
+        let missing = Settings::layered(None, None, Some(Path::new("not-written-yet.json")));
+        let reported = missing.named_settings_file().expect("a file not there yet");
+        assert!(reported.is_absolute());
+        assert!(reported.ends_with("not-written-yet.json"));
+    }
 
     fn paths_of(entries: &[bravebot_sandbox::rules::Entry]) -> Vec<&str> {
         entries.iter().map(|entry| entry.path.as_str()).collect()
@@ -6533,7 +6825,13 @@ mod tests {
             .join("tooling")
             .join("bravebot.json");
 
-        let settings = Settings::layered(Some(state), Some(&layers.cwd), Some(&through_a_parent));
+        let settings = Settings::layered_reaching(
+            Some(state),
+            Some(&layers.cwd),
+            Some(&through_a_parent),
+            std::slice::from_ref(&layers.cwd),
+            true,
+        );
         let rules = settings.permissions();
         assert_eq!(rules.deny, ["Read(./state/secrets/**)"]);
         assert_eq!(rules.ask, ["Edit(./tooling/notes.md)"]);

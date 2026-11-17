@@ -96272,6 +96272,16 @@ fn a_turn_allowing_every_edit<C: bravebot_agent::confirm::Confirmer + Send>(
     calls: Vec<String>,
 ) {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    a_turn_allowing_every_edit_in(&workspace, mode, inner, calls);
+}
+
+/// [`a_turn_allowing_every_edit`] in a workspace the caller built.
+fn a_turn_allowing_every_edit_in<C: bravebot_agent::confirm::Confirmer + Send>(
+    workspace: &Workspace,
+    mode: bravebot_agent::PermissionMode,
+    inner: &mut C,
+    calls: Vec<String>,
+) {
     let mut replies = calls;
     replies.push(reply_with("understood"));
     let (endpoint, _received) = serve_sequence(replies);
@@ -96280,7 +96290,7 @@ fn a_turn_allowing_every_edit<C: bravebot_agent::confirm::Confirmer + Send>(
     turns::run_with_trust(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
-        &workspace,
+        workspace,
         &Task::new("set the hooks up")
             .with_permission_mode(mode)
             .with_permissions(rules(&[], &[], &["Edit(**)"])),
@@ -96414,6 +96424,105 @@ fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later(
             "{file}: bypassing did not write"
         );
     }
+}
+
+/// MODE-2 and PERM-9 for the settings file named with `--settings`. A session reads it as a layer
+/// that grants an `allow` rule, a sandbox mode and a network setting wherever it sits, so a write to
+/// it through a tool is put to the person under accepting edits and under an `Edit(**)` allow rule,
+/// as a write to `.bravebot/settings.json` is, and is refused where nobody can be asked. A write to
+/// another file beside it is answered by the mode and the rule, so both are live.
+#[test]
+fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_to_the_named_settings_file() {
+    use bravebot_agent::PermissionMode;
+
+    let setup = |name: &str| {
+        let scratch = Scratch::new(name);
+        std::fs::create_dir(scratch.path.join("tooling")).unwrap();
+        std::fs::write(scratch.path.join("tooling/grant.json"), "{\"old\":1}\n").unwrap();
+        std::fs::write(scratch.path.join("tooling/other.json"), "{\"old\":1}\n").unwrap();
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_named_settings_file(Some(&scratch.path.join("tooling/grant.json")));
+        (scratch, workspace)
+    };
+    let edit = |path: &str| {
+        tool_request_2(
+            "edit_file",
+            &format!(r#"{{"path":"{path}","old_text":"old","new_text":"new"}}"#),
+        )
+    };
+    let calls = || vec![edit("tooling/other.json"), edit("tooling/grant.json")];
+    let read = |scratch: &Scratch, name: &str| {
+        std::fs::read_to_string(scratch.path.join("tooling").join(name)).unwrap()
+    };
+
+    // A person behind accepting edits is asked about the named file and not the other.
+    let (scratch, workspace) = setup("named-settings-accept-edits-asked");
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit_in(
+        &workspace,
+        PermissionMode::AcceptEdits,
+        &mut person,
+        calls(),
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| (request.path.as_str(), request.protected))
+            .collect::<Vec<_>>(),
+        [("tooling/grant.json", true)],
+        "only the edit of the named settings file should reach the person"
+    );
+    assert!(
+        read(&scratch, "other.json").contains("new"),
+        "an ordinary edit was not answered"
+    );
+
+    // Nobody behind it: refused, and the ordinary edit still goes through.
+    let (scratch, workspace) = setup("named-settings-accept-edits-unattended");
+    a_turn_allowing_every_edit_in(
+        &workspace,
+        PermissionMode::AcceptEdits,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(read(&scratch, "other.json").contains("new"), "control");
+    assert!(
+        read(&scratch, "grant.json").contains("old"),
+        "an edit of the named settings file nobody was asked about landed under accepting edits"
+    );
+
+    // Asking with an `Edit(**)` rule and nobody to ask: the rule answers nothing here.
+    let (scratch, workspace) = setup("named-settings-ask-unattended");
+    a_turn_allowing_every_edit_in(
+        &workspace,
+        PermissionMode::Ask,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(read(&scratch, "other.json").contains("new"), "control");
+    assert!(
+        read(&scratch, "grant.json").contains("old"),
+        "an allow rule answered an edit of the named settings file"
+    );
+
+    // Without the file named, the same turn writes it: the named flag is what protects it.
+    let (scratch, _named) = setup("named-settings-control");
+    a_turn_allowing_every_edit(
+        &scratch,
+        PermissionMode::AcceptEdits,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(read(&scratch, "grant.json").contains("new"), "control");
+
+    // Bypassing is the person's flag and answers it.
+    let (scratch, workspace) = setup("named-settings-bypass");
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit_in(&workspace, PermissionMode::Bypass, &mut person, calls());
+    assert!(person.asked.is_empty(), "{:?}", person.asked);
+    assert!(read(&scratch, "grant.json").contains("new"));
 }
 
 /// A definition naming the delegates it may start (DELEGATE-30) is offered those and no others by

@@ -3940,6 +3940,12 @@ session-model-pick-refused = ignoring { $model }, picked with /model: { $reason 
 session-permission-allow-ignored =
     not granting the allow rule { $rule } from { $path }: an allow rule answers a prompt, so a
     project's file proposes one and you grant it
+# The file --settings named, inside a directory a stage may write, on a platform whose sandbox cannot
+# refuse writes to one file there: a stage could rewrite it and the next run would read the rewrite
+# as the person's own, so it is read as a checkout's file. Said by doctor and at the start of a
+# session, by every client.
+session-settings-named-withheld =
+    { $path } is named by --settings and lies in a directory a stage may write, which this platform cannot hold it back from, so it is read as a checkout's file is: its allow rules, sandbox mode and run.network, and every other key a checkout's file may not set, are ignored (name a file outside the working and added directories to grant)
 # Said where a rule this project proposed was granted in an earlier session here, so the box does not
 # ask about it again. Names the rule rather than counting, for the reason the line above it does, and
 # names the file the answer is in: deleting a line from that file is the way back from having granted

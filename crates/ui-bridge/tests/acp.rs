@@ -48,7 +48,16 @@ impl Editor {
         settings["provider"] = json!({"acp-test": {
             "options": {"baseURL": endpoint}, "models": {"test": {}}
         }});
-        let settings_file = project.join("test-settings.json");
+        // Beside the project and not in it: a file inside a directory a stage may write is read as
+        // a checkout's file where the sandbox cannot hold one file back (PERM-14), which would
+        // drop the model and the gateway this file names.
+        let settings_file = project.with_file_name(format!(
+            "{}-test-settings.json",
+            project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
+        ));
         std::fs::write(&settings_file, settings.to_string()).unwrap();
         let settings = settings_file;
         let (sent, written) = mpsc::channel();

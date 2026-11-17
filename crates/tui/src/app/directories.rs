@@ -89,6 +89,7 @@ pub(super) fn add_directory(
     session.adopt_workspace(workspace);
     match outcome {
         Ok(added) => {
+            bravebot_config::add_writable_directory(added.clone());
             trust.trust(&bravebot_agent::workspace::key_of(&added));
             session.note_done(t!(
                 session_directory_added,
@@ -134,6 +135,7 @@ pub(super) fn close_directory(
     session.adopt_workspace(workspace);
     match outcome {
         Ok(closed) => {
+            bravebot_config::close_writable_directory(&closed);
             let directory = closed.display().to_string();
             // Where no trusted rule went, the directory answers as it did before the close, so
             // saying trust was withdrawn would tell the person something that did not happen.

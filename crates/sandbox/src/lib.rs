@@ -85,6 +85,17 @@ pub use process::{
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 
+/// Whether this platform's backend can refuse writes to one named file beneath a write row
+/// (SANDBOX-14). The macOS profile can. Landlock and the Windows backend grant a directory or
+/// nothing, so a file inside a writable directory is writable (#2599).
+///
+/// The one place the platform split is written, so a caller that depends on it takes the answer as
+/// a value and a test can pass either.
+#[must_use]
+pub const fn holds_one_file_back() -> bool {
+    cfg!(target_os = "macos")
+}
+
 #[derive(Debug)]
 pub enum SandboxError {
     /// No confinement mechanism is available on this platform or kernel.

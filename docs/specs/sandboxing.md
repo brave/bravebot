@@ -979,6 +979,21 @@ checks before the line starts ([PERM-9](permissions.md#PERM-9)). This clause hol
 the names on macOS; a stage's own write on Linux and a `ln` or `cp` a stage runs are not decided by
 the driver's check, which reads the redirection destinations of the plan.
 
+The file `--settings` named is held back on macOS too, as a path rather than as a name: the profile
+refuses a stage every write to it, in every mode, under every row whatever granted it, `--add-dir`
+rows and the whole-machine row of bypassing among them, and under the lift below. It is refused
+under the spelling typed made absolute and under the path it lands on after links are followed, and
+whether or not the file exists: where it does not, a stage may not create it or the first missing
+directory above it. A stage cannot rename or remove a directory that holds it, make a new hard link
+to it, rename another file over it or move it away. Reading it is allowed. The paths are the ones
+`Workspace::named_settings_paths` returns, which is also the list the file tools hold back
+([PERM-9](permissions.md#PERM-9)). A stage does not start while the file has a second hard link,
+since a profile rule is by path and cannot name the inode, and the sentence refusing it names the
+file. On Linux and Windows nothing holds one file back from a stage that may write the directory it
+sits in, which is a known cost ([#2599](https://github.com/brave/bravebot/issues/2599)): the file
+is read as a checkout's file there while it lies inside such a directory, which is
+[PERM-14](permissions.md#PERM-14)'s rule and is what the person is told.
+
 Every other write a row grants is granted.
 A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
@@ -1001,13 +1016,27 @@ names, a `.husky` script and the project's own `.bravebot` settings are run or l
 person's rights the same way. A confined process that may write one of these may therefore run code
 outside its confinement. Seatbelt lets the last rule matching a path decide, so the refusal follows
 the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
-the case of the name does not matter.
+the case of the name does not matter. The settings file named with `--settings` is read at the next
+launch as the person's own, with its `allow` rules, `sandbox.mode` and `run.network`, so a stage
+that could rewrite it would run unasked and unconfined the next time the flag is used
+([#4319](https://github.com/brave/bravebot/issues/4319)). Its refusal does not depend on a row or on
+the git lift because the file can be anywhere, including inside a row the stage was given.
 
 **What it costs.** A gitdir that is not named `.git`, such as one `--separate-git-dir` made, is
 written as any other directory, and so is a directory a process lays out as a repository itself, a
 `HEAD` file beside `objects` and `refs` directories, which git started inside it opens. A stage
 that has to write a `.husky` or `.bravebot` file under a row, such as an installer of hooks, is
-refused, and the person makes that edit through a tool that asks.
+refused, and the person makes that edit through a tool that asks. A stage that has to write the
+settings file named with `--settings` is refused the same way, and so is a stage that would start
+while that file has a second hard link; the person edits the file through a tool that asks or
+removes the extra link. A refusal of one file is by path, so the rest of its directory stays
+writable under the row that covers it. On Linux and Windows the file is not held back, and the
+withholding of its grants replaces the hold: a named file in a directory a stage may write grants
+nothing, and a person who wants its rules in force names a file outside the working directory and
+the directories added with `--add-dir`, `/add-dir` or `--sandbox-allow-write`. The temporary,
+scratch, state and cache directories a policy writes are not counted as directories a stage may
+write for this, so a named file inside one of them is not withheld on Linux and Windows although a
+stage can write it there.
 
 A person's trust of a directory lets a plain line run there without asking only where every stage of it
 is held back from a protected name by this clause, so on macOS and for a stage that is not git ([RUN-5](tools/run.md#RUN-5)).
@@ -1025,6 +1054,17 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_is_not_changed_by_any_stage_write`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_is_kept_through_a_link_to_its_directory`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_that_does_not_exist_yet_cannot_be_made_or_reached`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_stays_kept_for_a_stage_that_may_write_git_directories`
+`verified-by: bravebot_agent::confine::a_stage_cannot_change_the_named_settings_file_the_session_row_would_grant`
+`verified-by: bravebot_agent::confine::the_named_settings_file_is_kept_in_an_added_directory_and_under_bypass`
+`verified-by: bravebot_agent::confine::a_git_stage_cannot_write_the_named_settings_file`
+`verified-by: bravebot_agent::confine::a_stage_cannot_create_a_named_settings_file_that_is_not_there_yet`
+`verified-by: bravebot_agent::confine::a_stage_does_not_start_while_the_named_settings_file_has_another_hard_link`
+`verified-by: bravebot_agent::protected_names::the_sandbox_keeps_the_paths_the_file_tools_hold_back`
+`verified-by: bravebot_cli::running::a_stage_cannot_rewrite_the_settings_file_named_by_the_flag`
 
 <a id="SANDBOX-15"></a>
 ### SANDBOX-15: a toolchain's list is keyed on the file its program resolved to, and names a cache and never the token beside it

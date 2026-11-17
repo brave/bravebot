@@ -1699,7 +1699,7 @@ export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsR
   const ignored = rules.filesystemIgnored ?? []
   const granted = rules.granted ?? []
   const { closed, refused: unlisted } = unopened(rules, folders)
-  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length
+  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length + (rules.namedWithheld ? 1 : 0)
   return (
     <details className="rules-banner" role="note" data-test="rules-note">
       <summary className="session-notice">
@@ -1733,6 +1733,7 @@ export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsR
           </p>
         </div>
       )}
+      {rules.namedWithheld && <p>{rules.namedWithheld}</p>}
       {rules.unreadable.length > 0 && (
         <>
           <p>These entries could not be read as rules, so they decide nothing:</p>

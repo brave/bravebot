@@ -195,6 +195,8 @@ export interface SettingsRules {
   /** The checkout's grant record, where it proposed rules and one is kept. Draw `shownGrantedRecord`. */
   grantedRecord?: string | null
   shownGrantedRecord?: string | null
+  /** The agent's sentence for the file `--settings` named where it is read as a checkout's file, or null. Absent from an older bridge. */
+  namedWithheld?: string | null
 }
 
 export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'

@@ -158,6 +158,11 @@ pub struct Confinement {
     /// Directories no stage of this confinement is given a row for, which a delegate in a checkout
     /// holds: the working directory and every other checkout (CHECKOUT-7, SANDBOX-28).
     withheld_writes: Vec<PathBuf>,
+    /// The settings file the person named on the command line, as typed made absolute and where it
+    /// lands after links. The next launch reads allow rules and sandbox settings from it wherever
+    /// it sits, so no stage may write, replace or link it (SANDBOX-14). Held on macOS, where a row
+    /// for the directory holding it would otherwise grant it.
+    named_settings: Vec<PathBuf>,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`
     /// (SANDBOX-24), added to the allowed set of every stage that is held to a proxy.
     host_grants: Vec<String>,
@@ -380,6 +385,7 @@ impl Confinement {
             path_reach: Vec::new(),
             unasked_writes: false,
             withheld_writes: Vec::new(),
+            named_settings: Vec::new(),
             host_grants: Vec::new(),
             requested: Vec::new(),
             requests_offered: false,
@@ -626,6 +632,18 @@ impl Confinement {
     #[must_use]
     pub fn with_withheld_writes(mut self, directories: Vec<PathBuf>) -> Self {
         self.withheld_writes = directories;
+        self
+    }
+
+    /// This confinement holding the settings file the person named on the command line, under each
+    /// of `paths` (the workspace's list, which the file tools read too). On macOS no stage writes
+    /// the file wherever a row would otherwise grant it, whether the session was opened on the
+    /// directory holding it or `--add-dir` named it, and none renames it, replaces it, links to it
+    /// or replaces a directory above it, in every mode and for a `git` stage. A file that is not
+    /// there yet is held at the same names.
+    #[must_use]
+    pub fn with_named_settings(mut self, paths: &[PathBuf]) -> Self {
+        self.named_settings = paths.to_vec();
         self
     }
 
@@ -1773,6 +1791,16 @@ impl Confinement {
             policy = policy.deny_write(self.temporary.clone());
         }
         policy = self.deny_writes_beneath_read_refusals(policy, unasked.is_empty());
+        // Not skipped for a stage that lifts the `.git` hold-back: these are refusals of their own
+        // and not protected names (SANDBOX-14).
+        if self.prelude == Prelude::MacOs {
+            for named in &self.named_settings {
+                if !policy.unwritable.contains(named) {
+                    policy = policy.deny_write(named.clone());
+                }
+                policy = policy.keep_in_place(named.clone());
+            }
+        }
         let machine: Vec<PathBuf> = unasked
             .into_iter()
             .filter(|row| !held.contains(row))
@@ -2410,9 +2438,38 @@ impl Confinement {
             .then_some(temporary)
     }
 
+    /// The named settings file, where it is a file that another name on this machine leads to as
+    /// well. A refusal of writes is by path and a second link to the file is written through, so
+    /// on macOS a stage cannot be kept from the file while one exists.
+    #[cfg(unix)]
+    fn named_settings_with_another_link(&self) -> Option<&Path> {
+        use std::os::unix::fs::MetadataExt;
+        if self.prelude != Prelude::MacOs {
+            return None;
+        }
+        self.named_settings
+            .iter()
+            .map(PathBuf::as_path)
+            .find(|named| {
+                std::fs::metadata(named).is_ok_and(|found| found.is_file() && found.nlink() > 1)
+            })
+    }
+
+    #[cfg(not(unix))]
+    fn named_settings_with_another_link(&self) -> Option<&Path> {
+        None
+    }
+
     /// Why a stage cannot be started because of a session, scratch or temporary directory, if it
     /// cannot (SANDBOX-18).
     fn directory_refusal(&self) -> Option<String> {
+        if let Some(path) = self.named_settings_with_another_link() {
+            return Some(format!(
+                "the settings file `{}` named on the command line has another hard link, which a \
+                 stage is not kept from writing through; remove the link, or name another file",
+                path.display()
+            ));
+        }
         if let Some((root, location)) = self.root_reaching_credentials() {
             return Some(match self.prelude {
                 Prelude::Windows => format!(

@@ -102,6 +102,7 @@ mod bypass;
 mod carry;
 mod checkouts;
 mod error;
+mod named_settings;
 #[path = "../../ui-files/src/names.rs"]
 mod names;
 mod other_names;
@@ -114,6 +115,9 @@ mod volume;
 
 use error::{ENDS_CHECKOUTS, io_detail, read_failure};
 pub use error::{Remedy, WorkspaceError};
+use named_settings::{
+    landed_path, lexically_clean, named_settings_names, names_one_path, same_file,
+};
 pub(crate) use other_names::OtherKeys;
 #[cfg(unix)]
 use other_names::directory_identity;
@@ -386,6 +390,11 @@ pub struct Workspace {
     /// The directories the person's settings named in `sharedSkillDirectories`, as written
     /// (INSTR-17). Empty until a front end supplies them, which reads none.
     shared_skills: Vec<String>,
+    /// The settings file the person named with `--settings`, as typed made absolute and as it lands
+    /// after links are followed. Empty where none was named. A write that reaches it asks and is
+    /// refused where nobody can be asked, as `.bravebot` is (PERM-9), because the next launch reads
+    /// its allow rules and sandbox settings.
+    named_settings: Vec<PathBuf>,
 }
 
 /// A session's checkouts, with the numbers and the write log they are judged by, for a front end
@@ -555,6 +564,72 @@ impl Workspace {
             references: Vec::new(),
             reference_problems: Vec::new(),
             shared_skills: Vec::new(),
+            named_settings: Vec::new(),
+        })
+    }
+
+    /// Hold the settings file named on the command line as a protected path, or stop holding one.
+    ///
+    /// The path is what the person typed, so a relative one is read against the working directory
+    /// of the process. It need not exist: a file created there later is the named one.
+    #[must_use]
+    pub fn with_named_settings_file(mut self, named: Option<&Path>) -> Self {
+        self.named_settings = named.map(named_settings_names).unwrap_or_default();
+        self
+    }
+
+    /// The names the named settings file is held under: the spelling typed made absolute, then the
+    /// path it lands on. The one list the file tools and the sandbox policy both read, so a row
+    /// that denies writes to these is the same question as [`Workspace::is_the_named_settings_file`].
+    #[must_use]
+    pub fn named_settings_paths(&self) -> &[PathBuf] {
+        &self.named_settings
+    }
+
+    /// Whether `path`, spelled as the file tools take it, is the named settings file: by its
+    /// spelling, by where it lands after links, or by being the same file under another hard link.
+    pub(crate) fn is_the_named_settings_file(&self, path: &str) -> bool {
+        if self.named_settings.is_empty() {
+            return false;
+        }
+        let expanded = self.expanded(path);
+        self.reaches_the_named_settings_file(Path::new(&expanded))
+    }
+
+    /// [`Workspace::is_the_named_settings_file`] for a path that is not text.
+    pub(crate) fn reaches_the_named_settings_file(&self, path: &Path) -> bool {
+        self.reaches_the_named_settings_file_where(path, &volume_folds_case)
+    }
+
+    /// [`Workspace::reaches_the_named_settings_file`] with the answer to whether the volume holding
+    /// a directory folds case given, so a test states it on any host.
+    pub(crate) fn reaches_the_named_settings_file_where(
+        &self,
+        path: &Path,
+        volume_folds: &dyn Fn(&Path) -> bool,
+    ) -> bool {
+        if self.named_settings.is_empty() {
+            return false;
+        }
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let cleaned = lexically_clean(&absolute);
+        let landed = landed_path(&absolute);
+        let cleaned_landed = landed_path(&cleaned);
+        let spellings = [&absolute, &cleaned, &landed, &cleaned_landed];
+        self.named_settings.iter().any(|named| {
+            // A volume that folds case holds `Grant.json` and `grant.json` as one file, which a
+            // write to a file not made yet reaches by either spelling, and `same_file` cannot
+            // tell for a file that is not there.
+            let folds = named.parent().is_some_and(volume_folds);
+            spellings
+                .iter()
+                .any(|spelled| names_one_path(spelled, named, folds))
+                || same_file(named, &absolute)
+                || same_file(named, &cleaned)
         })
     }
 

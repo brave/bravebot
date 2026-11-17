@@ -296,10 +296,19 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // of the session, and a line started under one answer and the next under another would make
     // them a property of the line. The flags are the person's own act for this run, so they add to
     // what their settings say.
-    bravebot_config::settle_sandbox_filesystem(
-        &take_sandbox_filesystem(args)
-            .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?,
+    let sandbox_lists = take_sandbox_filesystem(args)
+        .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
+    // Counted before the settings are layered, which decides whether the file `--settings` named
+    // may grant where the sandbox cannot hold it back from a directory the run may write.
+    crate::workspace::count_written_roots(
+        &sandbox_lists
+            .allow_write
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>(),
+        true,
     );
+    bravebot_config::settle_sandbox_filesystem(&sandbox_lists);
 
     // The host list a stage is held to and the key each owner's repositories are pushed with,
     // settled with the lists above for the same reason.
@@ -1154,6 +1163,7 @@ fn prepare_the_run(
     // matched, because the model it asks for is the definition's where the definition names one.
     // A continued session may be recorded as having worked under one, which is not known until its
     // record is read.
+    crate::workspace::count_written_roots(&directories, false);
     let settings = bravebot_config::Settings::load();
     // The `agent` setting stands in for `--agent` where there is none, except in a manifest run,
     // which no definition addresses (ADDRESS-13).
