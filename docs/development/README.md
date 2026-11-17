@@ -4,7 +4,7 @@ Requires a recent stable Rust toolchain.
 
 ```sh
 cargo build
-cargo test
+make test      # the workspace tests, with cargo-nextest when installed (cargo install cargo-nextest --locked)
 make check     # fmt, clippy -D warnings, tests, and toolchain age: what CI enforces
 ```
 
