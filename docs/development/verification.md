@@ -58,7 +58,9 @@ pub fn meet(self, other: Self) -> Self {
 
 - `requires` states what the caller owes, `ensures` what the function returns, and a loop takes
   `invariant` and `decreases` the same way, on the loop.
-- A module that holds a contract imports `vstd::prelude::*` behind `cfg(verus_keep_ghost)`.
+- A module that holds a contract imports `vstd::prelude::*` behind `cfg(verus_keep_ghost)`, and
+  a crate with a contract on a loop enables `proc_macro_hygiene` behind the same cfg, as
+  `crates/core/src/lib.rs` does.
 - A type a contract reads takes `#[cfg_attr(verus_keep_ghost, verus_verify)]`, and
   `derive(Structural)` there too where a contract compares it with `==`.
 - Definitions a contract names, and proofs, go in `crates/core/src/spec.rs` inside `verus! { }`.
