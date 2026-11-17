@@ -11078,10 +11078,11 @@ five
         let refusal = policy
             .write_belongs_here("summary.txt", &scratch, &unnamed, &slots)
             .expect_err("an answer over a file and a page, naming neither, is for no document");
-        assert!(
-            refusal.message.contains("never told which document"),
-            "unexpected refusal: {}",
-            refusal.message
+        assert_eq!(
+            refusal.message,
+            "ref:3 came from a processor that was never told which document its answer \
+             is for, so it may be written nowhere. Ask about the one document you mean, \
+             and one answer will have one destination."
         );
         for answer in [&named, &alone] {
             policy
