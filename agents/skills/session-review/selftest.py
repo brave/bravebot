@@ -341,6 +341,13 @@ class Work(unittest.TestCase):
             with self.subTest(kind=kind, area=area):
                 self.assertEqual(sr.labels_for(dict(PROBLEM, kind=kind, area=area)), labels)
 
+    def test_every_area_the_prompt_offers_becomes_an_area_label(self):
+        for area in ("sandbox", "mcp", "browser", "connectors", "background", "plugins", "desktop", "acp", "remote", "release"):
+            with self.subTest(area=area):
+                self.assertEqual(
+                    sr.labels_for(dict(PROBLEM, kind="bug", area=area)), [f"area/{area}", "bug", "session-analysis"]
+                )
+
     def test_a_session_is_marked_only_once_every_problem_in_it_is_settled(self):
         self.analysis("a", [PROBLEM, PROBLEM])
         self.check("a-p1", verdict="confirmed")

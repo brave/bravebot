@@ -21,7 +21,7 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
       "gain": "what this buys an attacker who owns the bytes",
       "evidence": ["crates/.../file.rs:123 what is there", "docs/specs/x.md:45 the clause"],
       "clause": "LABEL-4, where a clause is involved, else omit",
-      "area": "one of: trust, tools, turns, interface, cli, delegation, backends, infrastructure (what a maintainer's tooling runs)",
+      "area": "one of: trust, sandbox, tools, mcp, browser, connectors, turns, background, delegation, plugins, backends, interface, desktop, acp, remote, cli, release, infrastructure (what a maintainer's tooling runs)",
       "impact": "high | medium | low",
       "fix": "what should happen instead, in a sentence",
       "screen": "what a person would be looking at when it happens, where the interface shows it",
