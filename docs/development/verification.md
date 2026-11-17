@@ -120,5 +120,9 @@ make check-verus
 - What a gate emits or records. `Policy::allow` and `Policy::deny` build their messages with
   `format!` and are `external_body`, so `read_trusted_content` is proved to refuse exactly when it
   should, and not proved to emit the event it does.
+- What `read_trusted_content` returns. It returns a clone of the value, and Verus has no
+  specification for the `Clone` that `Labelled` derives. A `Clone` written out with a contract is
+  code with access to the private fields, which `check_labelled_impls` in the security-audit skill
+  refuses.
 - That a closure handed to `render_in_place` or `render_pair_in_place` decides nothing.
 - Any gate without a row above.
