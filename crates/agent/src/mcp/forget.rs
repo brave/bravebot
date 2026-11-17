@@ -346,6 +346,44 @@ mod tests {
         assert_eq!(texts(&directory), before);
     }
 
+    /// A project whose name is not UTF-8 is not the one its replacement-character spelling names:
+    /// answers recorded under the lookalike are neither listed nor forgotten for it.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_utf8_is_not_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let directory = scratch("lossy");
+        let lookalike = directory.join(OsStr::new("project-\u{FFFD}"));
+        let raw = directory.join(OsStr::from_bytes(b"project-\xff"));
+        answered(
+            &directory,
+            &[&lookalike],
+            &[("weather", "get_forecast", &lookalike)],
+        );
+        let before = texts(&directory);
+
+        assert_ne!(project_named(&directory, Some(&raw)), lookalike);
+        assert_eq!(
+            remembered(&directory, &raw).expect("listed"),
+            Remembered::default()
+        );
+        assert!(
+            forget(&directory, &raw)
+                .expect("nothing to forget")
+                .is_empty()
+        );
+        assert_eq!(texts(&directory), before);
+        assert_eq!(
+            remembered(&directory, &lookalike).expect("listed"),
+            Remembered {
+                every_server: true,
+                tools: vec!["weather:get_forecast".to_string()]
+            }
+        );
+    }
+
     #[test]
     fn lists_what_is_remembered_for_one_project_and_changes_nothing() {
         let directory = scratch("list");
