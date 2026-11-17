@@ -889,6 +889,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_caffeinate();
         return Action::Redraw;
     }
+    // For a terminal that was reset or cleared from outside, which no event reports.
+    if line.trim() == REDRAW_COMMAND {
+        session.retake_terminal = true;
+        return Action::Redraw;
+    }
     if let Some(argument) = argument_to(line, CHECKOUTS_COMMAND) {
         return match crate::checkouts_command::parse(argument) {
             crate::checkouts_command::Asked::List => Action::ListCheckouts,
@@ -1455,6 +1460,20 @@ fn redraw(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) -> io::Result<()> {
+    // `/redraw`: the terminal may have been reset or cleared from outside, so its modes are given
+    // back and asked for again, and the screen is cleared so the draw below sends every cell
+    // instead of the difference from a screen that is no longer there (CMD-33).
+    if std::mem::take(&mut session.retake_terminal) {
+        // Only writes: nothing is read back, so this is safe while the terminal's reader runs.
+        // Given back first so the keyboard flags are popped before they are pushed again.
+        give_back_modes(terminal.backend_mut(), enhanced_keys())?;
+        ask_for_modes(
+            terminal.backend_mut(),
+            enhanced_keys(),
+            session.mouse_captured(),
+        )?;
+        terminal.clear()?;
+    }
     let mut laid = crate::state::Laid::default();
     terminal
         .draw(|frame| laid = render::draw(frame, session))
@@ -17326,6 +17345,24 @@ mod tests {
         );
     }
 
+    /// CMD-2: `/redraw` is a command only as the whole line, so a question about it, a longer word
+    /// that starts with it, and the word followed by others are each a prompt.
+    #[test]
+    fn redraw_is_a_command_only_as_the_whole_line() {
+        for line in ["what does /redraw do", "/redrawn", "/redraw now"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+            assert!(!session.retake_terminal, "{line} retook the terminal");
+        }
+    }
+
     /// CMD-2: `/caffeinate` is a command only as the whole line, so a question about it is a prompt.
     #[test]
     fn a_prompt_containing_the_caffeinate_command_is_still_a_prompt() {
@@ -26580,6 +26617,7 @@ mod tests {
                 PANEL_COMMAND,
                 PR_COMMAND,
                 PRS_COMMAND,
+                REDRAW_COMMAND,
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 SANDBOX_COMMAND,
@@ -26594,6 +26632,29 @@ mod tests {
                 VARIANT_COMMAND,
                 WATCH_COMMAND,
             ]
+        );
+    }
+
+    /// `/redraw` asks for the terminal's modes again and a full frame, and changes nothing else, so
+    /// it is carried out as typed, mid-turn included (CMD-33).
+    #[test]
+    fn the_redraw_command_retakes_the_terminal_and_runs_mid_turn() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            commands()
+                .into_iter()
+                .find(|command| command.name == REDRAW_COMMAND)
+                .map(|command| command.mid_turn),
+            Some(MidTurn::Runs)
+        );
+        assert!(!session.retake_terminal);
+        assert_eq!(
+            dispatch_command(&mut session, commanded(REDRAW_COMMAND)),
+            Action::Redraw
+        );
+        assert!(
+            session.retake_terminal,
+            "/redraw did not ask for the modes again"
         );
     }
 
@@ -31195,10 +31256,11 @@ mod tests {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,
                 // The bare word opens a picker or the Sessions screen, which are modes of the session and
-                // say nothing.
+                // say nothing. `/redraw` answers by drawing the screen again, so it says nothing either.
                 _ if [
                     CONFIG_COMMAND,
                     MODEL_COMMAND,
+                    REDRAW_COMMAND,
                     SESSIONS_COMMAND,
                     SIDEBAR_COMMAND,
                 ]
