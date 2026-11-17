@@ -30,6 +30,13 @@ interface Grants {
   /** What a revoke of kind `mcp` dropped, on that answer only. */
   forgotten?: ForgottenMcp
 }
+/**
+ * The Forget refusal still shown once `params` is asked for: a list or another revoke keeps it, so
+ * a refresh does not wipe what the person was told, and only the next Forget clears it. Closing the
+ * dialog drops it with the rest of the dialog's state.
+ */
+export const mcpProblemAsked = (shown: string, params: Record<string, unknown>): string => params.kind === 'mcp' ? '' : shown
+
 export function Permissions({ session, onClose, onRemembered }: { session: string; onClose: () => void; onRemembered?: (kept: KeptTrust | null) => void }): React.JSX.Element {
   const [grants, setGrants] = useState<Grants | null>(null)
   const [problem, setProblem] = useState('')
@@ -39,7 +46,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
   const request = async (method: string, params: Record<string, unknown> = {}) => {
     const mcp = params.kind === 'mcp'
     const refused = mcp ? setMcpProblem : setProblem
-    setBusy(true); setProblem(''); setMcpProblem('')
+    setBusy(true); setProblem(''); setMcpProblem((shown) => mcpProblemAsked(shown, params))
     try {
       const answer = await window.bravebot.request<Grants>(method, { session, ...params })
       if (answer.error) refused(answer.error.message)

@@ -34,7 +34,7 @@ const plainButton = {
   },
 }
 
-const { RememberedMcpAnswers } = await loadComponents('src/renderer/components/Permissions.tsx', [plainButton])
+const { RememberedMcpAnswers, mcpProblemAsked } = await loadComponents('src/renderer/components/Permissions.tsx', [plainButton])
 
 const project = { project: '/work/app', shownProject: '/work/app' }
 const kept = (overrides = {}) => ({
@@ -128,4 +128,12 @@ test('a refusal is said in the bridge’s words, beside the button', () => {
 
 test('Forget is shut while a request is out', () => {
   assert.ok(shut(render(kept(), { busy: true })))
+})
+
+test('a refused Forget stays said through a list or another revoke, and the next Forget clears it', () => {
+  const refused = 'Nothing was forgotten: ~/.bravebot/mcp-tools could not be written: disk full'
+  assert.equal(mcpProblemAsked(refused, {}), refused, 'a list refresh keeps it')
+  assert.equal(mcpProblemAsked(refused, { kind: 'path', path: 'src' }), refused, 'another revoke keeps it')
+  assert.equal(mcpProblemAsked(refused, { kind: 'mcp' }), '', 'the next Forget clears it')
+  assert.ok(render(kept(), { problem: refused }).includes('data-test="mcp-forget-error"'), 'a kept refusal is drawn')
 })
