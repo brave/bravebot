@@ -398,8 +398,8 @@ prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, 
 with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
 typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the rows of the
 Pull requests and Issues sections, which are the items [PANEL-16](#PANEL-16) collects from the lines
-the person typed, from the planner's own tool-call arguments once the gate that reads them has said the
-context is trusted, the driver's own counters (the context
+the person typed and from the planner's own tool-call arguments once the gate that reads them has said the
+context is trusted; the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
