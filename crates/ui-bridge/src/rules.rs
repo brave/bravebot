@@ -2,7 +2,8 @@
 //! files (docs/specs/permissions.md).
 //!
 //! The rules are read once, when a session opens, and held for its turns and its manifest runs
-//! (PERM-12). A file edited afterwards describes the next session.
+//! (PERM-12). A file edited afterwards describes the next session. `readsStayInWorkspace`
+//! (PERM-16) is read with them and held the same way.
 //!
 //! Which rules take effect is the agent's to decide, and this module asks it:
 //!
@@ -20,7 +21,7 @@
 //!   reported with the file that wrote it and, where it is not in force, why. The window shows
 //!   them and edits nothing.
 
-use bravebot_config::Settings;
+use bravebot_config::{Managed, Settings};
 use bravebot_core::permissions::Permissions;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,18 @@ pub struct SettingsRules {
     pub filesystem: Vec<FilesystemEntry>,
     /// `allowRead` and `allowWrite` a checkout wrote, which are not in force, as `(key, file)`.
     pub filesystem_ignored: Vec<(String, PathBuf)>,
+    /// Whether the file tools are held to the project (PERM-16), as the files said when the
+    /// session opened. A file edited afterwards changes nothing about this session (PERM-12).
+    pub reads_stay_in_workspace: bool,
+}
+
+/// Whether a settings layer or the managed file asks for the file tools to stay inside the
+/// workspace (PERM-16). The strictest thing any of them said is what holds (PERM-18).
+pub fn reads_stay_in_workspace(settings: &Settings, managed: &Managed) -> bool {
+    settings
+        .narrowing()
+        .strictest(managed.narrowing())
+        .keeps_reads_in_the_workspace()
 }
 
 /// One entry of `sandbox.filesystem.<key>`.
@@ -141,6 +154,7 @@ impl SettingsRules {
                 .sandbox_filesystem_ignored()
                 .map(|(file, key)| (key.to_string(), file.to_path_buf()))
                 .collect(),
+            reads_stay_in_workspace: reads_stay_in_workspace(settings, &Managed::load()),
         }
     }
 
@@ -223,7 +237,7 @@ fn filesystem(
             bravebot_config::resolve_sandbox_filesystem(
                 &bravebot_sandbox::rules::Lists::default(),
                 settings,
-                &bravebot_config::Managed::load(),
+                &Managed::load(),
             )
         });
     let rules = resolve(

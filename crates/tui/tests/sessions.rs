@@ -4677,21 +4677,38 @@ mod preserved_history {
                 &mut conversation,
                 root,
                 &config_for(&endpoint),
-                &bravebot_agent::Task::new("next request"),
+                &bravebot_agent::Task::new("follow-up request"),
                 &Cancel::new(),
             );
-            let request = requests
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
-            for text in ["initial request", "accepted correction", "next request"] {
-                assert_eq!(request.matches(text).count(), 1);
+            let request: serde_json::Value = serde_json::from_str(
+                &requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+            // Only the conversation counts: a tool description may quote any of these words.
+            let messages = serde_json::to_string(&request["messages"]).unwrap();
+            for text in [
+                "initial request",
+                "accepted correction",
+                "follow-up request",
+            ] {
+                assert_eq!(
+                    messages.matches(text).count(),
+                    1,
+                    "{text:?} should appear once in the request messages: {messages}"
+                );
             }
             let record = save(root, &session, &conversation);
             let reopened = reopen(root, &record);
             assert_eq!(reopened.turns, 2);
             assert_eq!(
                 user_lines(&reopened),
-                ["initial request", "accepted correction", "next request"]
+                [
+                    "initial request",
+                    "accepted correction",
+                    "follow-up request"
+                ]
             );
             assert_eq!(
                 serde_json::to_value(&reopened.turn_history()[0]).unwrap(),
@@ -4703,7 +4720,7 @@ mod preserved_history {
             );
             assert_eq!(
                 reopened.turn_history()[1].prompt.as_deref(),
-                Some("next request")
+                Some("follow-up request")
             );
             assert!(matches!(
                 reopened.turn_history()[1].outcome,
