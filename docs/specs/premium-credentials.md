@@ -200,10 +200,10 @@ the premium host chose, and the key is a bearer secret meant for the host it was
 
 The premium host is compiled in, so no variable or settings file decides where a key a person typed
 is sent. A build whose free endpoint is under `brave.software` or `bravesoftware.com` has the
-development host, and every other build has the production host. The two are one value while the
-premium service is live only in development. Both are `https://ai-gateway-api.bsg.brave.software`,
-the host that accepts a key. `ai-chat-premium.bsg.brave.software` answers a request carrying one with
-a 401, so it is not used. A build that names no premium host has the one compiled in, and a build
+development host, and every other build has the production host. The development host is
+`https://ai-gateway-api.bsg.brave.software` and the production host is
+`https://ai-gateway-api.bsg.brave.com`, the hosts that accept a key. `ai-chat-premium` answers a
+request carrying one with a 401, so it is not used. A build that names no premium host has the one compiled in, and a build
 that reaches no Brave backend has none, since it has no free endpoint to say whose environment it is
 in.
 

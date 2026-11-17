@@ -64,7 +64,14 @@ pub(crate) fn variable_names_received_by(child: &mut ConfinedChild) -> Vec<Strin
         .collect()
 }
 
-/// An absolute path under the workspace `target/test-scratch/`.
+/// The shared choice of where a test's scratch directories go. The search for programs leaves
+/// the system temporary directory out (SANDBOX-30), so the root is outside it when the checkout
+/// is inside it. The file says how it chooses and is included by the crates that need it.
+#[path = "../test-support/scratch_root.rs"]
+mod scratch_root;
+
+/// An absolute path under the scratch root, which is the workspace `target/test-scratch/` unless
+/// the checkout is under the system temporary directory (see `test-support/scratch_root.rs`).
 ///
 /// Tests built these under [`std::env::temp_dir`] before. That directory is shared
 /// between users and between processes with different privileges, so a fixed name
@@ -74,14 +81,13 @@ pub(crate) fn variable_names_received_by(child: &mut ConfinedChild) -> Vec<Strin
 ///
 /// Nothing is created here: callers make and remove the directory as they already did.
 pub(crate) fn scratch_dir(name: &str) -> PathBuf {
-    // CARGO_MANIFEST_DIR is `<workspace>/crates/<crate>`, so two pops reach the root.
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("target");
-    path.push("test-scratch");
-    path.push(name);
-    path
+    scratch_root::scratch_dir(name)
+}
+
+/// `path`, which exists, spelled relative to the directory the tests run in, which is the
+/// crate's own. For a test that needs a relative `PATH` entry reaching a fixture.
+pub(crate) fn relative_to_the_crate(path: &std::path::Path) -> PathBuf {
+    scratch_root::relative_to_current_directory(path)
 }
 
 /// A new directory under the temporary directory holding `dirs`, with its links followed.

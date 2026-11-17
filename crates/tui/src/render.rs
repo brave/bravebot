@@ -7331,15 +7331,16 @@ mod tests {
     fn a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line() {
         let session = a_session_whose_turn_has_ended_in_a_loop();
 
+        // One draw: the light in the row follows the clock second, so rows from two draws can
+        // differ by it.
         let rows = screen_rows(&session, 120);
         let done = rows
             .iter()
             .position(|row| row.contains("done ("))
             .expect("the turn's own line is gone");
-        let (row, below) = the_still_active_row(&session, 120).expect("no row says it is active");
-        assert_eq!(
-            rows[done + 1],
-            row,
+        let (row, below) = (&rows[done + 1], &rows[done + 2]);
+        assert!(
+            row.contains(&t!(standing_label).to_string()),
             "the row is not directly under the end of the turn: {rows:?}"
         );
         assert!(row.contains("looping, next in"), "{row}");
@@ -8415,6 +8416,26 @@ mod tests {
         }
     }
 
+    /// CMD-22. On a terminal 120 columns wide every row of the slash list shows its whole
+    /// description. The description column starts after the widest hint, so a long argument in the
+    /// table clips the descriptions of other commands at this width.
+    #[test]
+    fn every_slash_row_shows_its_whole_description_at_120_columns() {
+        let mut session = Session::new("none");
+        session.type_char('/');
+        let height = crate::command_table::commands().len() as u16 + 6;
+        let output = rendered_at(&session, 120, height);
+
+        for command in crate::command_table::commands() {
+            assert!(
+                output.contains(command.description),
+                "{} does not show its whole description at 120 columns: {:?}",
+                command.name,
+                command.description
+            );
+        }
+    }
+
     /// SKILL-21. The mode in force is named on the box for as long as it is in force, and the box
     /// of a session in none says nothing of one.
     #[test]
@@ -8758,6 +8779,18 @@ mod tests {
         let row = input_row(&typed("/sandbox "), 90);
         assert!(
             row.ends_with("/sandbox  [strict | read-only | workspace-write | off]"),
+            "{row}"
+        );
+    }
+
+    /// `/mcp` spells out its subcommands once the word is typed, while the completion list keeps
+    /// `[action]`. With the long form in the table the description column starts so far right that
+    /// the longer descriptions are cut off at 120 columns.
+    #[test]
+    fn the_mcp_command_offers_its_subcommands_after_its_word() {
+        let row = input_row(&typed("/mcp "), 90);
+        assert!(
+            row.ends_with("/mcp  [list | reconnect | disable | remove]"),
             "{row}"
         );
     }

@@ -3387,3 +3387,21 @@ the questions hold the first frame for as long as they wait.
 `verified-by: bravebot_tui::preview::the_graphics_query_waits_no_longer_than_the_keyboard_query`
 `verified-by: bravebot_tui::trust_prompt::the_loop_says_when_it_refused_keys_that_arrived_together`
 `verified-by: bravebot_cli::startup_queries::an_unanswered_keyboard_query_is_not_waited_on_for_two_seconds`
+
+<a id="INPUT-53"></a>
+### INPUT-53: the first bytes of a sequence do not hold the interface in a read of the terminal
+
+A read of the terminal that completes no event, such as the first two bytes of `ESC [`, goes back
+to waiting with the timeout the caller of `input::poll` gave, and reads again only where more input
+is already waiting. The interface therefore draws, handles a change of the window's size and reads
+its next key while the rest of a sequence is still to arrive, which a terminal writing slowly, as an
+ssh link does, makes ordinary.
+
+**Why.** The terminal is a blocking descriptor, so a read with nothing waiting does not return
+until the next byte arrives. A read loop that reads again after a read that completes no event, as
+the published crossterm does, stays in that read past the caller's timeout: nothing is drawn and a
+resize is ignored until the person types the rest of the sequence, seconds later or never.
+
+**Known costs.** One extra `ioctl(2)` on the terminal after each read that completed no event.
+
+`verified-by: bravebot_cli::partial_sequence::a_window_resized_while_half_a_sequence_is_waiting_is_drawn_again`

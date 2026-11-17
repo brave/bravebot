@@ -4680,15 +4680,24 @@ mod preserved_history {
                 &bravebot_agent::Task::new("follow-up request"),
                 &Cancel::new(),
             );
-            let request = requests
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
+            let request: serde_json::Value = serde_json::from_str(
+                &requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+            // Only the conversation counts: a tool description may quote any of these words.
+            let messages = serde_json::to_string(&request["messages"]).unwrap();
             for text in [
                 "initial request",
                 "accepted correction",
                 "follow-up request",
             ] {
-                assert_eq!(request.matches(text).count(), 1);
+                assert_eq!(
+                    messages.matches(text).count(),
+                    1,
+                    "{text:?} should appear once in the request messages: {messages}"
+                );
             }
             let record = save(root, &session, &conversation);
             let reopened = reopen(root, &record);

@@ -13,10 +13,12 @@
 
 #[path = "../test-support/message_ids.rs"]
 mod message_ids;
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -30,9 +32,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
+        let path = scratch_root::scratch_dir(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("project")).expect("a project directory");
         std::fs::create_dir_all(path.join("home/.bravebot")).expect("a home directory");

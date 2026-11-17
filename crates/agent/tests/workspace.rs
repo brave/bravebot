@@ -13,6 +13,9 @@ mod repository;
 #[path = "../test-support/aliases.rs"]
 mod aliases;
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Match, Matches, Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -1171,8 +1174,7 @@ fn each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_look
         if recorded == spelled {
             continue;
         }
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("bravebot-alias-program-{index}"));
+        let root = scratch_root::scratch_dir(&format!("bravebot-alias-program-{index}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         let _removed = Removed(root.clone());
@@ -1248,8 +1250,7 @@ fn each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_
         if recorded == spelled {
             continue;
         }
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("bravebot-alias-selector-{index}"));
+        let root = scratch_root::scratch_dir(&format!("bravebot-alias-selector-{index}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         let _removed = Removed(root.clone());
