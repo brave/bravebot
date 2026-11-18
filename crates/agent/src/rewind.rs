@@ -138,7 +138,7 @@ fn restore_with(
     mut write: impl FnMut(&Path, &Before) -> Result<(), WorkspaceError>,
 ) -> Vec<PathBuf> {
     *current = current.meet(target);
-    let folds = current.folds_case();
+    let folds = current.case_folding().restricts();
     let mut refused = Vec::new();
     let mut restored = Vec::new();
     for backup in backups {

@@ -4442,7 +4442,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 crate::memory::trusted_again(
                     workspace.memories(),
                     &policy.file_authority().key(&keyed),
-                    crate::workspace::volume_folds_case(workspace.root()),
+                    crate::workspace::volume_case_folding(workspace.root()).restricts(),
                 );
             }
         }
@@ -12293,7 +12293,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
     let mut standing: Vec<Standing> = Vec::new();
-    let folds = crate::workspace::volume_folds_case(tools.workspace.root());
+    let folds = crate::workspace::volume_case_folding(tools.workspace.root()).restricts();
     tools
         .workspace
         .mark_rewind_gap(crate::rewind::CoverageGap::Command);

@@ -370,7 +370,7 @@ fn reject_asking<S: Sink>(
         return Err(Refused::Changed);
     }
 
-    let folds = trust.folds_case();
+    let folds = trust.case_folding().restricts();
     let previous = trust.clone();
     trust.distrust(&key);
     match write(&backup.path, text.into_bytes()) {

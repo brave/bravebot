@@ -228,7 +228,7 @@ pub(super) fn change_directory(
     *exposed = bravebot_core::credentials::Exposed::new();
     *trust = trust.rebased(
         std::path::Path::new(&bravebot_agent::workspace::key_of(&moved.root)),
-        bravebot_agent::workspace::volume_folds_case(&moved.root),
+        bravebot_agent::workspace::volume_case_folding(&moved.root),
     );
     trust.trust(".");
     // The servers go, and LSP-5 is why: what a person approved was a server reading *that* tree,

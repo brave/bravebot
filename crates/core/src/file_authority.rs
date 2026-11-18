@@ -46,7 +46,10 @@ impl State {
     /// with `\u{1e9e}`: the map reads a refusal about either as about the other, so a writer to
     /// one is a second writer to the other.
     fn slot(&self, key: &str) -> String {
-        match self.trust.folds_case() {
+        // Where the volume could not be asked the slot is shared as it would be on a volume that
+        // folds, since a reservation only refuses a second writer and a spelling that was not
+        // reserved is a write nobody refused.
+        match self.trust.case_folding().restricts() {
             true => {
                 crate::trust::canonical_form(&crate::trust::fold_simple(key), true).into_owned()
             }
@@ -1183,6 +1186,28 @@ mod tests {
                 "the effect never entered once the reader was done"
             );
         });
+    }
+
+    /// A volume that could not be asked about case may hold `.env` and `.ENV` as one file, so a
+    /// second writer under the other spelling is refused, as it is where the volume is known to fold.
+    /// Where the volume is known to hold them apart, it is two files and the second writer enters.
+    #[test]
+    fn a_second_writer_is_refused_under_the_other_case_where_the_volume_could_not_be_asked() {
+        use crate::trust::CaseFolding;
+        for (case, refused) in [
+            (CaseFolding::Keeps, false),
+            (CaseFolding::Folds, true),
+            (CaseFolding::Unknown, true),
+        ] {
+            let authority = FileAuthority::new(TrustStore::new("/ws").with_case_folding(case));
+            let first = authority.capture().begin(".env");
+            assert!(first.is_some(), "{case:?}");
+            assert_eq!(
+                authority.capture().begin(".ENV").is_none(),
+                refused,
+                "{case:?}: a second writer under the other case"
+            );
+        }
     }
 
     /// An effect entering keeps a reader out until it has published its distrust, so the reader
