@@ -621,7 +621,7 @@ fn a_proxy() -> (String, mpsc::Receiver<String>) {
 const UNREACHABLE_GATEWAY: &str = r#""provider": {
         "openrouter": {
             "env": ["OPENROUTER_API_KEY"],
-            "options": {"baseURL": "http://gateway.invalid/api/v1"},
+            "options": {"baseURL": "http://gateway.invalid/api/v1", "maxRetries": 2},
             "models": {"z-ai/glm-4.6": {}}
         }
     },
@@ -7634,7 +7634,7 @@ fn a_run_asks_for_an_exported_default_where_no_file_names_a_model() {
     let settings = format!(
         r#"{{"provider": {{"openrouter": {{
             "env": ["OPENROUTER_API_KEY"],
-            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1", "maxRetries": 2}}
         }}}}}}"#,
         gateway.port
     );
@@ -11618,7 +11618,7 @@ fn a_gateway_listing_a_chatgpt_name_does_not_take_a_turn_chosen_as_the_accounts(
     let settings = format!(
         r#"{{"provider": {{"openrouter": {{
             "env": ["OPENROUTER_API_KEY"],
-            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}},
+            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1", "maxRetries": 2}},
             "models": {{"chatgpt/gpt-5.5": {{}}}}
         }}}}}}"#,
         gateway.port

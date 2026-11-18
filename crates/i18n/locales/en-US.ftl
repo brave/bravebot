@@ -3664,6 +3664,7 @@ command-diff = List the files the session wrote and show every edit to the one h
 command-todos = Print the whole plan, every task with its status
 command-unfinished = List what this session left open, and whose move each is
 command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-redraw = Redraw the whole screen, for a terminal that was cleared or reset
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-schedule = List, add, pause, resume, remove or run scheduled entries
@@ -5929,6 +5930,70 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
+# The Folders section of the Files tab, and the More menu item that adds one: folders open beside the
+# project in one chat, as /add-dir opens them in the terminal. $name is a folder's own name.
+ui-folders-heading = Folders
+ui-folders-about = Folders open beside the project in this chat. The agent can read and change files in them until you close them.
+ui-folders-empty = Only the project is open.
+ui-folders-add = Add folder…
+ui-folders-close = Close { $name }
+ui-folders-close-explained = Close { $name } · The agent can no longer reach it
+ui-folders-wait = Wait for the turn to finish
+ui-folders-not-added = The folder could not be added.
+ui-folders-not-closed = The folder could not be closed.
+ui-folders-added = Folder added
+ui-folders-closed = Folder closed
+# The questions a chat asks once its trust question is answered, about what the checkout's settings
+# files ask for (PERM-15, TRUST-9): whether to grant the allow rules they propose, and whether to
+# open each directory they name. $count is a number, $file and $path are paths, $problem is the
+# agent's sentence about why a folder could not be opened.
+ui-project-rules-title = Project rules
+ui-project-rules-subtitle = Grant the allow rules this project proposes?
+ui-project-rules-about = This project's settings files propose these allow rules. A granted rule answers its question for you, so the agent does what the rule covers without asking.
+ui-project-rules-list = Proposed rules
+ui-project-rules-from = from { $file }
+ui-project-rules-granted-before = { $count ->
+    [one] { $count } rule from these files was granted before and stays granted:
+   *[other] { $count } rules from these files were granted before and stay granted:
+    }
+ui-project-rules-keeping = A grant is kept in { $path }, so later chats here are not asked about these rules again. A rule edited since is asked about again.
+ui-project-rules-this-chat = A grant lasts for this chat only and is not written down.
+ui-project-rules-decline-about = Keep asking me, and each action these rules cover asks you first, as it would without them.
+ui-project-rules-decline = Keep asking me
+ui-project-rules-grant = { $count ->
+    [one] Grant { $count } rule
+   *[other] Grant { $count } rules
+    }
+ui-project-rules-not-kept = Granted for this chat only: the grant could not be written to { $path }, so the next chat here will ask again.
+ui-project-folder-title = Open a folder
+ui-project-folder-subtitle = Open this folder beside the project?
+ui-project-folder-named = This project's settings name it as
+ui-project-folder-open-about = Open it, and the agent can read and change files in it in this chat, as with Add folder. It is listed under Folders, where you can close it.
+ui-project-folder-decline-about = Don't open it, and the agent cannot reach it from this chat.
+ui-project-folder-remaining = { $count ->
+    [one] { $count } more folder to ask about after this one.
+   *[other] { $count } more folders to ask about after this one.
+    }
+ui-project-folder-open = Open folder
+ui-project-folder-decline = Don't open
+ui-project-folder-not-opened = { $path } was not opened: { $problem }
+ui-project-questions-waiting-trust = Answer the trust question before sending.
+ui-project-questions-waiting-rules = Answer the question about this project's rules before sending.
+ui-project-questions-waiting-folder = Answer the question about a folder this project names before sending.
+ui-project-questions-stale = That question had been answered already, so the answer was not used. What is waiting now is shown.
+# The folded note above a chat about what its settings files wrote, for the parts the questions
+# above changed.
+ui-rules-note-granted-summary = { $count ->
+    [one] { $count } project rule granted.
+   *[other] { $count } project rules granted.
+    }
+ui-rules-note-granted = These allow rules this project's settings propose are granted, so they are in force:
+ui-rules-note-granted-before = granted before
+ui-rules-note-granted-record = The grant is kept in { $path }, so later chats here are not asked about them. A rule the project edits is asked about again.
+ui-rules-note-granted-this-chat = They are granted for this chat only.
+ui-rules-note-proposed = These allow rules this project's settings propose were not granted. An allow rule answers a question for you, so only one you grant, or one in your own settings file, is in force. You will still be asked:
+ui-rules-note-directories = A settings file named these directories, and they are not open:
+ui-rules-note-refused = These directories a settings file named cannot be opened:
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

@@ -206,6 +206,12 @@ pub(crate) const TODOS_COMMAND: &str = "/todos";
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
 
+/// The line that gives the terminal's modes back, asks for them again and draws the whole screen.
+///
+/// For a terminal that was reset or cleared from outside, such as by a shortcut of the emulator,
+/// which leaves the screen blank wherever nothing changed and reports nothing to repair it from.
+pub(crate) const REDRAW_COMMAND: &str = "/redraw";
+
 /// The line that shows or hides the model's thinking as it arrives.
 ///
 /// Answered by the screen alone: it changes what is drawn and sends nothing to the model.
@@ -677,6 +683,12 @@ pub fn commands() -> Vec<Command> {
             name: CAFFEINATE_COMMAND,
             argument: "",
             description: t!(command_caffeinate),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: REDRAW_COMMAND,
+            argument: "",
+            description: t!(command_redraw),
             mid_turn: MidTurn::Runs,
         },
         Command {

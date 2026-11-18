@@ -292,7 +292,11 @@ impl View {
                 rows.push(self.row(kind, Some(event.name), event.data.clone()));
                 return Some(self.changed(rows));
             }
-            name if name.ends_with(".request") && name != "trust.request" => {
+            // The questions a session opens with are put before any turn and answered on their
+            // own methods, so they are no approval a turn waits on.
+            name if name.ends_with(".request")
+                && !matches!(name, "trust.request" | "rules.request" | "folder.request") =>
+            {
                 // The request id and event name are written by BridgeConfirmer, never by content.
                 let request = event.data["request"].as_u64()?;
                 let kind = name.trim_end_matches(".request");

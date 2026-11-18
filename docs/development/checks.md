@@ -71,8 +71,8 @@ any condition listed in its `BEYOND_THE_OPERATING_SYSTEM` constant (`target_arch
 Adding one means adding a clippy target for it to CI and to this page, then listing it in that test.
 `fuzz/` is a package of its own and is linted by `make check-fuzz`.
 
-`make check` and `make check-scripts` also fail when a Verus contract in `crates/` differs from
-`verify/contracts.txt`.
+`make check` and `make check-scripts` also fail when a Verus contract or assumption in `crates/`
+differs from `verify/contracts.txt`.
 `make check-verus` runs Verus, which brings its own toolchain, so `make check` leaves it to CI's
 `Verus` job, as it leaves `make check-fuzz` to the fuzz job. [verification.md](verification.md)
 says when that job runs and how to run it here.
@@ -193,6 +193,9 @@ For the full run on macOS, start Docker Desktop and run `make check-all` from th
 you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
 neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
 default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+`make test` and `make check` run the tests with `cargo nextest` when `cargo-nextest` is installed,
+as CI does (`cargo install cargo-nextest --locked`), and with `cargo test` otherwise. nextest runs
+the test binaries side by side, where `cargo test` runs them one after another.
 The test binaries that start a mock server per test (`browser_group_servers` and `mcp` in
 `crates/agent/tests`, and `running` in `crates/cli/tests`) raise their own soft open-file limit to
 8192, or to the hard limit where that is lower, through `crates/agent/test-support/open_files.rs`,
@@ -431,8 +434,8 @@ opener's, the `powershell` starts' or the usability suite's file has no `CODE_SE
 as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
 `ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
 does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
-read them and Electron reaches the session bus through the last two, and the ten Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
-`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
+read them and Electron reaches the session bus through the last two, and the eleven Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
+`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, `PSModulePath`),
 which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). Without `HOME`, `gio` reads the account's
 passwd home, which is a further reason for `HOME`
 ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)). An options variable needs only the second. `make check` runs it and so does CI. It
@@ -455,7 +458,7 @@ for a name in it that no test starts a stage with and asserts removed; a loop ov
 counts for no name. It does not apply the loader prefixes to other starts, so a start that should
 remove `DYLD_` and `LD_` names and does not is still found by a reviewer. The tests
 `the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start` and the two loader tests in
-`crates/agent/tests/usability.rs` fail when a prefix is dropped.
+`crates/agent/tests/usability_loader.rs` fail when a prefix is dropped.
 
 `make check-narration` fails a pull request whose commit messages, title, body or added lines
 contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)

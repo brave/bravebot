@@ -24,6 +24,7 @@ import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
 import { shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
+import { FolderPrompt, RulesPrompt } from './components/ProjectQuestions'
 import { Unconfigured } from './components/Unconfigured'
 import { Notice, releaseNotesNotice, type ReleaseNotes } from './components/Notice'
 import { TooltipLayer } from './components/TooltipLayer'
@@ -44,6 +45,7 @@ import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
 import { useAudit } from './use-audit'
 import { useExport } from './use-export'
+import { useFolders } from './use-folders'
 import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
@@ -157,7 +159,7 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, answerRules, answerFolder, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
@@ -624,6 +626,11 @@ export function App(): React.JSX.Element {
       return false
     }
   }, [noting, updateSession])
+
+  const { addFolder, closeFolder } = useFolders({ handle: live?.handle, handleRef, updateSession, setProblem })
+  const addFolderFromPanel = useCallback(() => { void addFolder('panel') }, [addFolder])
+  const addFolderFromMenu = useCallback(() => { void addFolder('menu') }, [addFolder])
+  const closeFolderFromPanel = useCallback((path: string) => { void closeFolder(path) }, [closeFolder])
 
   const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
@@ -1121,6 +1128,7 @@ export function App(): React.JSX.Element {
         onOpenSummon={stableOpenSummon}
         footer={footer}
         noProject={noProject}
+        onAddFolder={addFolderFromMenu}
       />
       <Gutter
         side="right"
@@ -1131,7 +1139,8 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote} />
+      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote}
+        onAddFolder={addFolderFromPanel} onCloseFolder={closeFolderFromPanel} />
       </div>
       </div>
       {agentsOpen && (
@@ -1187,6 +1196,13 @@ export function App(): React.JSX.Element {
       })()}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.shownKeepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
+      )}
+      {/* Keyed by request id, so a question that follows another starts with nothing yet read. */}
+      {live && !live.askingTrust && live.rulesQuestion && (
+        <RulesPrompt key={`rules-${live.handle}-${live.rulesQuestion.request}`} question={live.rulesQuestion} onAnswer={(granted) => void answerRules(granted)} />
+      )}
+      {live && !live.askingTrust && !live.rulesQuestion && live.folderQuestion && (
+        <FolderPrompt key={`folder-${live.handle}-${live.folderQuestion.request}`} question={live.folderQuestion} onAnswer={(open) => void answerFolder(open)} />
       )}
       <TooltipLayer />
     </div>

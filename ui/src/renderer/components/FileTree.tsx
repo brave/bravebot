@@ -1,12 +1,13 @@
 import { FilePreview } from './FilePreview'
 import type { FileSearch } from '../../shared/files'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
 import { useDelayedFlag } from '../hooks'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
 import { Alert, Icon, Input, ProgressRing } from '../nala'
 import { IconButton } from './IconButton'
+import { treeRoots, type TreeRoot } from '../folders'
 
 /**
  * The folder the session is working in.
@@ -28,20 +29,23 @@ import { IconButton } from './IconButton'
 export function FileTree({
   session,
   root,
+  folders = NO_FOLDERS,
   running,
 }: {
   /** The session's handle. What a relative path is relative to, as far as the main process. */
   session: string
   /** The directory itself, for the one line that says which folder this is. */
   root: string
+  /**
+   * The folders the chat has open beside its project, as the agent last listed them. Each is a
+   * root of its own after the project's, and its paths are relative to it: the main process is
+   * told which folder by the name the agent gave it, and reads under it only while the agent's
+   * last list has it.
+   */
+  folders?: readonly string[]
   /** Whether a turn is in flight. The falling edge is when the tree is worth re-reading. */
   running: boolean
 }): React.JSX.Element {
-  const [listings, setListings] = useState<ReadonlyMap<string, Listing>>(new Map())
-  /** The directories that are open. Held here rather than per row so a refresh can re-read them. */
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
-  /** Directories asked about that answered nothing — permissions, or gone since. */
-  const [unreadable, setUnreadable] = useState<ReadonlySet<string>>(new Set())
   const [hidden, setHidden] = useState(false)
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -69,62 +73,37 @@ export function FileTree({
     host.addEventListener('keydown', keys as EventListener, true)
     return () => host.removeEventListener('keydown', keys as EventListener, true)
   }, [searchOpen])
-  const [results, setResults] = useState<FileSearch | null>(null)
+
+  // Keyed by what the list holds rather than by the array, so a new array naming the same folders
+  // is the same roots and nothing below is read again for it.
+  const foldersKey = folders.join('\0')
+  const roots = useMemo(() => treeRoots(root, foldersKey ? foldersKey.split('\0') : []), [root, foldersKey])
+  const many = roots.length > 1
+
+  const [results, setResults] = useState<{ root: TreeRoot; found: FileSearch }[] | null>(null)
   const [searching, setSearching] = useState(false)
   const showSearching = useDelayedFlag(searching)
-  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewing, setPreviewing] = useState<{ path: string; folder?: string; shown: string } | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
   useEffect(() => {
     if (!search.trim()) { setResults(null); setSearching(false); return }
     let gone = false
     setResults(null)
     // Searching starts with the request, so the ring's 150ms are the request's and not the debounce's.
-    const timer = setTimeout(() => { setSearching(true); void window.bravebot.searchFiles(session, search, hidden).then((value) => {
-      if (!gone) setResults(value)
-    }).catch(() => { if (!gone) setProblem('Project search failed. Try again.') }).finally(() => { if (!gone) setSearching(false) }) }, 180)
+    // Every root is searched, each under its own name, so a folder's results are read under it.
+    const timer = setTimeout(() => {
+      setSearching(true)
+      void Promise.all(roots.map((each) => window.bravebot.searchFiles(session, search, hidden, each.folder).then((found) => ({ root: each, found }))))
+        .then((value) => { if (!gone) setResults(value) })
+        .catch(() => { if (!gone) setProblem('Project search failed. Try again.') })
+        .finally(() => { if (!gone) setSearching(false) })
+    }, 180)
     return () => { gone = true; clearTimeout(timer) }
-  }, [session, search, hidden])
-  const [problem, setProblem] = useState<string | null>(null)
+  }, [session, search, hidden, roots])
 
-  /**
-   * Read one directory.
-   *
-   * A listing that comes back `null` is recorded as such rather than left absent: absent means
-   * "not asked yet", and a row that says nothing under a directory somebody just expanded is the
-   * panel implying the folder is empty when it could not read it.
-   */
-  const load = useCallback(
-    async (path: string) => {
-      const listing = await window.bravebot.listFiles(session, path)
-      if (listing === null) {
-        setUnreadable((old) => new Set(old).add(path))
-        setListings((old) => {
-          const next = new Map(old)
-          next.delete(path)
-          return next
-        })
-        return
-      }
-      setUnreadable((old) => {
-        if (!old.has(path)) return old
-        const next = new Set(old)
-        next.delete(path)
-        return next
-      })
-      setListings((old) => new Map(old).set(path, listing))
-    },
-    [session],
-  )
-
-  // The root, once. Everything below it waits to be asked for.
-  useEffect(() => {
-    void load('')
-  }, [load])
-
-  /** Read the root and every open directory again. */
-  const refresh = useCallback(async () => {
-    setProblem(null)
-    await Promise.all([load(''), ...[...open].map((path) => load(path))])
-  }, [load, open])
+  /** Bumped to read every root and every open directory again. */
+  const [generation, setGeneration] = useState(0)
+  const refresh = useCallback(() => { setProblem(null); setGeneration((n) => n + 1) }, [])
 
   // A turn that has just finished is the moment the folder can have changed, so every directory
   // currently on screen is read again. Cheaper than watching the tree, and quiet when nothing is
@@ -136,40 +115,31 @@ export function FileTree({
   useEffect(() => {
     const finished = wasRunning.current && !running
     wasRunning.current = running
-    if (finished) void refresh()
+    if (finished) refresh()
   }, [running, refresh])
 
-  const toggle = useCallback(
-    (path: string) => {
-      setOpen((old) => {
-        const next = new Set(old)
-        if (next.has(path)) next.delete(path)
-        else next.add(path)
-        return next
-      })
-      // Read on the way open, and only the first time: a directory already listed opens instantly,
-      // and the turn-end refresh above is what keeps it honest afterwards.
-      if (!open.has(path) && !listings.has(path)) void load(path)
-    },
-    [listings, load, open],
-  )
+  /** The roots folded shut, by key. Only a choice while there is more than one. */
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
+  const fold = (key: string) => setFolded((old) => {
+    const next = new Set(old)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
 
-  const show = useCallback(
-    async (path: string) => {
-      // Checked here as well as in the main process. This one cannot be the whole of the promise —
-      // it runs in the process that would be doing the asking — but it means a bug in this file
-      // fails as a message rather than as a request.
-      if (!isSubpath(path) || path === '') return
-      setPreviewPath(path)
-    },
-    [session],
-  )
+  const show = useCallback((path: string, each: TreeRoot) => {
+    // Checked here as well as in the main process. This one cannot be the whole of the promise —
+    // it runs in the process that would be doing the asking — but it means a bug in this file
+    // fails as a message rather than as a request.
+    if (!isSubpath(path) || path === '') return
+    setPreviewing({ path, folder: each.folder, shown: each.folder ? `${each.name}/${path}` : path })
+  }, [])
 
-  const rootListing = listings.get('')
   // Every whitespace-separated term has to appear, in any order, as a plain substring — the same
   // bargain the session filter strikes, and for the same reason: a fuzzy score on a folder listing
   // mostly buys the right to return rows the reader cannot account for.
   const terms = search.toLowerCase().split(/\s+/).filter(Boolean)
+  const found = results?.flatMap(({ root: each, found: answer }) => answer.paths.map((path) => ({ each, path }))) ?? null
 
   return (
     <div className="tree">
@@ -185,7 +155,7 @@ export function FileTree({
           onClick={() => { if (searchOpen) closeSearch(); else { setQuery(''); setSearchOpen(true) } }} />
         <IconButton icon={hidden ? 'eye-on' : 'eye-off'} label="Dotfiles" tooltip={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
           className="tree-tool dotfiles" size="tiny" pressed={hidden} onClick={() => setHidden(!hidden)} />
-        <IconButton icon="refresh" label="Read the folder again" className="tree-tool" size="tiny" onClick={() => void refresh()} />
+        <IconButton icon="refresh" label="Read the folder again" className="tree-tool" size="tiny" onClick={refresh} />
       </div>
 
       {searchOpen && <div className="tree-search">
@@ -210,35 +180,150 @@ export function FileTree({
       <div className="tree-body">
         {terms.length > 0 ? <div className="file-search-results">
           {searching && <p className="tree-status" role="status" data-delayed={!showSearching || undefined}><span className="tree-spinner" aria-hidden="true"><ProgressRing mode="indeterminate" /></span>Searching project…</p>}
-          {!searching && results?.paths.length === 0 && <p className="tree-empty">No matching files.</p>}
-          {results?.paths.map((path) => (
-            <button key={path} type="button" className="search-result" onClick={() => setPreviewPath(path)} data-tooltip={`Preview ${path}`}>
-              <FileGlyph name={path} />
-              <span className="tree-name"><Highlighted text={path} terms={terms} /></span>
-            </button>
-          ))}
+          {!searching && found?.length === 0 && <p className="tree-empty">No matching files.</p>}
+          {found?.map(({ each, path }) => {
+            // A folder's results carry its name in front, so two roots' README.md are told apart.
+            const shown = many ? `${each.name}/${path}` : path
+            return (
+              <button key={`${each.key}\0${path}`} type="button" className="search-result" onClick={() => show(path, each)} data-tooltip={`Preview ${shown}`}>
+                <FileGlyph name={path} />
+                <span className="tree-name"><Highlighted text={shown} terms={terms} /></span>
+              </button>
+            )
+          })}
           <p className="tree-note">Search skips .git, node_modules, target and dist. Symbolic-link directories are not followed.</p>
-          {results?.incomplete && <p className="tree-note" role="status">Results are limited or some folders could not be read. Narrow the search.</p>}
-        </div> : rootListing === undefined ? (
-          <p className="tree-empty">{unreadable.has('') ? 'That folder cannot be read.' : 'Reading…'}</p>
+          {results?.some(({ found: answer }) => answer.incomplete) && <p className="tree-note" role="status">Results are limited or some folders could not be read. Narrow the search.</p>}
+        </div> : many ? (
+          // More than one root: each is a row of its own at the top of the tree, the project first,
+          // with what it holds one level in. Keyed by the folder, so one closed takes its rows with it.
+          <ul className="tree-list" role="tree" data-test="tree-roots">
+            {roots.map((each) => {
+              const expanded = !folded.has(each.key)
+              return (
+                <li key={each.key} role="treeitem" aria-expanded={expanded} aria-level={1} data-test="tree-root-item">
+                  <button className="tree-row directory tree-root-row" style={{ '--depth': 0 } as React.CSSProperties}
+                    data-tooltip={each.path} onClick={() => fold(each.key)}>
+                    <span className={`chevron ${expanded ? 'open' : ''}`} aria-hidden="true"><Icon name="carat-right" /></span>
+                    <span className="tree-glyph folder" aria-hidden="true"><Icon name={expanded ? 'folder-open' : 'folder'} /></span>
+                    <span className="tree-name">{each.name}</span>
+                  </button>
+                  <Fold open={expanded}>
+                    <RootTree session={session} root={each} generation={generation} hidden={hidden} terms={terms} depth={1} onOpen={show} />
+                  </Fold>
+                </li>
+              )
+            })}
+          </ul>
         ) : (
-          <Rows
-            path=""
-            listing={rootListing}
-            listings={listings}
-            open={open}
-            unreadable={unreadable}
-            hidden={hidden}
-            depth={0}
-            terms={terms}
-            onToggle={toggle}
-            onOpen={show}
-            tree
-          />
+          <RootTree session={session} root={roots[0]!} generation={generation} hidden={hidden} terms={terms} depth={0} onOpen={show} tree />
         )}
       </div>
-      {previewPath && <FilePreview session={session} path={previewPath} onClose={() => setPreviewPath(null)} />}
+      {previewing && <FilePreview session={session} path={previewing.path} folder={previewing.folder} shown={previewing.shown} onClose={() => setPreviewing(null)} />}
     </div>
+  )
+}
+
+const NO_FOLDERS: readonly string[] = []
+
+/**
+ * One root of the tree: the project, or a folder open beside it.
+ *
+ * Every path here is relative to the root, and the main process is told which root by `folder`,
+ * which is absent for the project. Listed a directory at a time, when somebody expands one.
+ */
+function RootTree({ session, root, generation, hidden, terms, depth, onOpen, tree = false }: {
+  session: string
+  root: TreeRoot
+  /** Changes when every open directory should be read again. */
+  generation: number
+  hidden: boolean
+  terms: readonly string[]
+  /** How deep this root's own rows sit: one in, under a row naming the root, when there are several. */
+  depth: number
+  onOpen: (path: string, root: TreeRoot) => void
+  /** Whether this root's list is the tree itself rather than a group under a root's row. */
+  tree?: boolean
+}): React.JSX.Element {
+  const [listings, setListings] = useState<ReadonlyMap<string, Listing>>(new Map())
+  /** The directories that are open. Held here rather than per row so a refresh can re-read them. */
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
+  /** Directories asked about that answered nothing — permissions, or gone since. */
+  const [unreadable, setUnreadable] = useState<ReadonlySet<string>>(new Set())
+  const folder = root.folder
+
+  /**
+   * Read one directory.
+   *
+   * A listing that comes back `null` is recorded as such rather than left absent: absent means
+   * "not asked yet", and a row that says nothing under a directory somebody just expanded is the
+   * panel implying the folder is empty when it could not read it.
+   */
+  const load = useCallback(
+    async (path: string) => {
+      const listing = await window.bravebot.listFiles(session, path, folder)
+      if (listing === null) {
+        setUnreadable((old) => new Set(old).add(path))
+        setListings((old) => {
+          const next = new Map(old)
+          next.delete(path)
+          return next
+        })
+        return
+      }
+      setUnreadable((old) => {
+        if (!old.has(path)) return old
+        const next = new Set(old)
+        next.delete(path)
+        return next
+      })
+      setListings((old) => new Map(old).set(path, listing))
+    },
+    [session, folder],
+  )
+
+  // The root on mount, and the root with every open directory again whenever the tree is
+  // refreshed. Everything below it waits to be asked for.
+  const opened = useRef(open)
+  opened.current = open
+  useEffect(() => {
+    void Promise.all([load(''), ...[...opened.current].map((path) => load(path))])
+  }, [load, generation])
+
+  const toggle = useCallback(
+    (path: string) => {
+      setOpen((old) => {
+        const next = new Set(old)
+        if (next.has(path)) next.delete(path)
+        else next.add(path)
+        return next
+      })
+      // Read on the way open, and only the first time: a directory already listed opens instantly,
+      // and the turn-end refresh above is what keeps it honest afterwards.
+      if (!open.has(path) && !listings.has(path)) void load(path)
+    },
+    [listings, load, open],
+  )
+
+  const show = useCallback((path: string) => onOpen(path, root), [onOpen, root])
+
+  const rootListing = listings.get('')
+  if (rootListing === undefined) {
+    return <p className="tree-empty">{unreadable.has('') ? 'That folder cannot be read.' : 'Reading…'}</p>
+  }
+  return (
+    <Rows
+      path=""
+      listing={rootListing}
+      listings={listings}
+      open={open}
+      unreadable={unreadable}
+      hidden={hidden}
+      depth={depth}
+      terms={terms}
+      onToggle={toggle}
+      onOpen={show}
+      tree={tree}
+    />
   )
 }
 

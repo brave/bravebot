@@ -307,6 +307,10 @@ covers, assumes. `Read(./secrets)`, `Read(./secrets/)` and `Read(secrets/)` cove
 `secrets/key`, and `Edit(./secrets/)` stops a write to `secrets/key`. An `allow` rule keeps its
 reading and covers the place it names alone, since widening a grant would grant files nobody named.
 
+A rule that names a root is a rule about a directory like any other, so `Read(./)`, `Read(.)` and
+`Edit(./)` cover every path in the workspace and `Read(//)` covers every full path, in `deny` and in
+`ask`, quoted or not. As `allow` rules they grant the root alone.
+
 A `..` in a path specifier is resolved when the rule is read, against the place its anchor names, so
 a rule is in the form [TRUST-10](trust-map.md#TRUST-10) gives a call's path. `Read(../sib/.env)` in a
 session working in `/home/someone/proj` is the full path `/home/someone/sib/.env`, which is how a call
@@ -365,6 +369,11 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_core::permissions::a_trailing_double_star_covers_the_directory_it_names`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_a_directory_covers_the_files_under_it`
 `verified-by: bravebot_core::permissions::an_allow_rule_naming_a_directory_grants_that_entry_and_not_what_is_under_it`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_the_workspace_root_covers_every_path_under_it`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_naming_the_filesystem_root_covers_every_path_under_it`
+`verified-by: bravebot_core::permissions::an_allow_rule_naming_a_root_grants_that_place_and_not_what_is_under_it`
+`verified-by: bravebot_core::permissions::a_rule_naming_the_workspace_by_its_full_path_covers_every_file_in_it`
+`verified-by: bravebot_agent::turn::a_managed_rule_naming_the_workspace_root_refuses_a_read_and_hides_every_file_from_a_walk`
 `verified-by: bravebot_core::permissions::a_rule_holding_dot_dot_covers_the_place_a_call_to_it_arrives_as`
 `verified-by: bravebot_core::permissions::a_rule_holding_dot_dot_is_resolved_in_every_list`
 `verified-by: bravebot_agent::permissions::a_directory_rule_and_a_rule_holding_dot_dot_cover_the_files_they_name`
@@ -876,8 +885,12 @@ directory a person typed from being reachable on different terms.
 
 `verified-by: bravebot_agent::permissions::the_directories_a_file_named_come_back_in_order`
 `verified-by: bravebot_tui::trust_prompt::a_directory_a_file_named_is_opened_only_where_the_person_accepts_it`
-`verified-by: bravebot_tui::app::a_person_asked_about_the_workspace_is_asked_about_each_named_directory`
-`verified-by: bravebot_tui::app::a_resume_that_brought_its_own_map_opens_no_directory_a_file_named`
+`verified-by: bravebot_agent::opening::a_person_asked_about_the_workspace_is_asked_about_each_named_directory`
+`verified-by: bravebot_agent::opening::a_resume_opens_no_directory_a_file_named`
+`verified-by: bravebot_ui_bridge::project_questions_tests::each_named_directory_is_asked_about_on_its_own`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_to_a_directory_removed_since_it_was_asked_about_opens_nothing`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_to_a_directory_swapped_for_a_link_opens_nothing`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_resumed_session_asks_nothing`
 `verified-by: bravebot_tui::app::an_accepted_directory_is_opened_and_trusted_like_one_typed`
 `verified-by: bravebot_tui::app::clearing_closes_the_directories_a_file_named_and_opens_none`
 
@@ -1134,11 +1147,16 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 `verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
 `verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
-`verified-by: bravebot_tui::app::a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed`
-`verified-by: bravebot_tui::app::a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again`
-`verified-by: bravebot_tui::app::one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in`
-`verified-by: bravebot_tui::app::bypassing_grants_the_rules_a_checkout_proposed_without_asking`
-`verified-by: bravebot_tui::app::a_resume_grants_only_the_rules_the_record_already_held`
+`verified-by: bravebot_agent::opening::a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed`
+`verified-by: bravebot_agent::opening::a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again`
+`verified-by: bravebot_agent::opening::one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in`
+`verified-by: bravebot_agent::opening::bypassing_grants_the_rules_a_checkout_proposed_without_asking`
+`verified-by: bravebot_agent::opening::a_resume_grants_only_the_rules_the_record_already_held`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_grants_every_rule_listed_and_is_not_asked_for_again`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_no_grants_none_and_the_session_still_opens`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_the_record_cannot_take_holds_for_the_session_and_says_so`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_grant_names_the_session_before_it_has_a_record`
+`verified-by: bravebot_agent::opening::a_yes_that_cannot_be_written_holds_for_the_session_and_says_so`
 `verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
 `verified-by: bravebot_tui::app::moving_to_a_checkout_puts_its_own_deny_rules_in_force`
 `verified-by: bravebot_tui::app::a_rule_the_checkout_moved_to_proposes_is_asked_about_and_granted_there`
@@ -1447,13 +1465,14 @@ against them whole. A wrapper added to the table is a decision about both questi
   ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.
   Both fail closed, and putting the question on a surface is what would fix it rather than reading the
   record on one that cannot ask.
-- **The desktop application grants no rule a checkout proposes, and opens no directory a file
-  names.** It has neither the question [PERM-15](#PERM-15) puts nor the one
-  [PERM-10](#PERM-10) puts, so it reads no grant recorded at the terminal and opens nothing
-  `additionalDirectories` names. Both fail closed. Each rule and each directory passed over is
-  named as the session opens, with the file that wrote the rule, so a prompt the rule was written
-  to answer does not read as a second fault. `deny` and `ask` rules from every layer, and `allow`
-  rules from the person's own file, hold there as they do in the terminal.
+- **The desktop application asks both questions after its trust question, as a panel of its own
+  each.** It puts the question [PERM-15](#PERM-15) puts about the rules a checkout proposed, reading
+  and writing the grant record the terminal keeps, and then one question per directory
+  `additionalDirectories` names ([PERM-10](#PERM-10)), opened on a yes as a folder the person picked
+  is. No turn starts while either is out. A yes the record could not take holds for that chat only,
+  and the window says so. What it shares with the terminal is the decision, made once in the agent
+  crate; the panels are its own, so the wording and the scroll-to-read gate are pinned by the
+  window's tests rather than by the terminal's.
 - **A manifest run reads no rule but the ones about a server's tool.** The runner builds its policy
   without the rules the session holds, so a `deny` rule does not refuse a step of a plan and an
   `ask` rule puts no question about one. The `Mcp` rules are kept, since a plan's call to a
