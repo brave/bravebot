@@ -452,33 +452,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(home);
     }
 
-    /// MEMORY-5 for a rewind on a volume that folds case. Old bytes put back into a memory under
-    /// another spelling are recorded as a session asks about that memory.
+    /// MEMORY-5 for a rewind on a volume that folds case, or one that cannot be asked, which is
+    /// read as one that might fold. Old bytes put back into a memory under another spelling are
+    /// recorded as a session asks about that memory. A volume known to keep case holds the other
+    /// spelling apart, so nothing is recorded for it.
     #[test]
     fn a_rewind_into_a_memory_in_another_case_is_recorded_as_a_session_asks_about_it() {
-        let home = crate::testutil::scratch_dir("rewind-memory-folded-home");
-        let _ = std::fs::remove_dir_all(&home);
-        let mut trusting = TrustStore::new("/work").folding_case(true);
-        trusting.trust(".");
-        let mut current = trusting.clone();
-        let refused = restore_with(
-            vec![Backup {
-                kept: false,
-                path: "/work/.Bravebot/memory/NOTES.md".into(),
-                was: Before::Bytes(b"old notes".to_vec()),
-                captured_trust: Integrity::Untrusted,
-            }],
-            &mut current,
-            &trusting,
-            Some(&home),
-            |_, _| Ok(()),
-        );
-        assert!(refused.is_empty());
-        assert_eq!(
-            crate::memory::Record::new(&home, "/work").paths(),
-            ["/work/.bravebot/memory/notes.md"]
-        );
-        let _ = std::fs::remove_dir_all(home);
+        use bravebot_core::CaseFolding;
+        for (case, recorded) in [
+            (CaseFolding::Folds, true),
+            (CaseFolding::Unknown, true),
+            (CaseFolding::Keeps, false),
+        ] {
+            let home = crate::testutil::scratch_dir("rewind-memory-folded-home");
+            let _ = std::fs::remove_dir_all(&home);
+            let mut trusting = TrustStore::new("/work").with_case_folding(case);
+            trusting.trust(".");
+            let mut current = trusting.clone();
+            let refused = restore_with(
+                vec![Backup {
+                    kept: false,
+                    path: "/work/.Bravebot/memory/NOTES.md".into(),
+                    was: Before::Bytes(b"old notes".to_vec()),
+                    captured_trust: Integrity::Untrusted,
+                }],
+                &mut current,
+                &trusting,
+                Some(&home),
+                |_, _| Ok(()),
+            );
+            assert!(refused.is_empty(), "{case:?}");
+            assert_eq!(
+                crate::memory::Record::new(&home, "/work").paths(),
+                if recorded {
+                    vec!["/work/.bravebot/memory/notes.md".to_string()]
+                } else {
+                    Vec::new()
+                },
+                "{case:?}"
+            );
+            let _ = std::fs::remove_dir_all(home);
+        }
     }
 
     /// Unwinding from an entered effect cannot leave the earlier grant over changed bytes.
