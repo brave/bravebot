@@ -681,10 +681,9 @@ Questions slice 3a raised for the owner:
 - `make check-ui-walkthrough` already fails on the unchanged base `16171073`, in a build with the
   builder's service credentials and in a build without them, and slice 3a neither causes nor fixes it,
   so the check is not a gate for this slice and whether to fix it is not decided.
-- `chooseModel` and `saveBot` do not clear an error toast already on screen. A model refusal from the
-  details pane can stay up after a successful header model change or a successful form save. The toast
-  does not block input. Both handlers already left their own errors up, and this slice does not change
-  them. To be filed, not fixed here.
+- `saveBot` does not clear an error toast already on screen. A model refusal from the details pane
+  can stay up after a successful form save. The toast does not block input. `chooseModel` on a bot
+  session clears the toast through `settleBotModelWrite`. The form save is left unfixed (#4352).
 
 What slices 3b and 3c inherit from the GUI run. A failed write is drawn in a toast that truncates the
 path with an ellipsis on screen, and the full text is in the page. The toast text starts with Electron's
