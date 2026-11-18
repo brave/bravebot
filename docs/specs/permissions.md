@@ -779,6 +779,14 @@ whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2))
 name of a file with a hard link (PERM-7). A file with several links whose other names could not all
 be found is protected, since one of them may be a protected path.
 
+The file `--settings` named is a protected path as well, wherever it sits and whatever it is called,
+because the next launch that names it reads its `allow` rules, `sandbox.mode` and `run.network` as
+the person's own ([PERM-14](#PERM-14)). It is compared as typed made absolute, as it lands after
+links are followed, and under each other name of a file with a hard link, and a write that would
+create it where it does not exist yet asks as well. The path is the one the session read the layer
+from, so a launch that names no file has no such path, and a session of the desktop or the agent
+client holds the file it was started on.
+
 Putting old bytes back is a write to that destination. A rewind and `/hunks` put the path to the
 confirmer as a write is, with the same match on the named path, the path it lands on and each other
 name of a hard link, before any byte goes back. Where nobody can be asked the path is refused,
@@ -788,16 +796,17 @@ that lands on a protected name is put back through the confirmer the same way
 question carries no body: the
 bytes are the backup's and the driver does not read them.
 
-A `run` whose line redirects output into such a path (`>` or `>>`) is a write to it and asks the same
-way: whatever a rule, the trust map, a remembered or vouched line or the trust of the directory says
+A `run` whose line redirects output into such a path (`>` or `>>`), the file `--settings` named
+included, is a write to it and asks the same way: whatever a rule, the trust map, a remembered or vouched line or the trust of the directory says
 ([RUN-5](tools/run.md#RUN-5)), and whatever the mode says short of bypassing. Every destination of
 the line is read as the write is, and the question draws where a link lands and marks the protected
 path. The path is read again when the redirection is opened, so a link an earlier part of the line
 made is caught there. The answer cannot be remembered, and a client that approves lines for a person
 (`--approve-input-lines`, an editor over the agent client protocol) is not offered the question as
 one it may answer for good. The decision reads the plan's destinations and the file system, never a
-byte a stage wrote or printed. A stage's own write into a protected name is not decided here
-([SANDBOX-14](sandboxing.md#SANDBOX-14)), and neither is a read of one.
+byte a stage wrote or printed. A stage's own write into a protected name, the file `--settings`
+named among them, is not decided here ([SANDBOX-14](sandboxing.md#SANDBOX-14)), and neither is a
+read of one.
 
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
@@ -810,7 +819,9 @@ distinguishes them. An assignment decides what a program loads before its argume
 ([tools/run.md](tools/run.md)), so allowing the one is not allowing the other. The fifth is about
 what a write is: a file under `.git/hooks` or `.git/config` runs with the person's rights the next
 time git runs, so an allow rule for a tree is not consent to plant one, and the decision reads only
-the planner's routing path, as a deny rule does.
+the planner's routing path, as a deny rule does. The file `--settings` named is in the list for the
+same reason: a `run` stage that rewrote it could add an `allow` rule or set `sandbox.mode` to `off`,
+and the next launch with the same flag would then run unasked and unconfined.
 
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_reference_named_write_asks_whatever_a_rule_says`
@@ -828,6 +839,15 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_to_a_protected_file_is_refused_when_opened`
 `verified-by: bravebot_agent::turn::a_redirection_into_an_ordinary_file_is_not_marked_protected_and_auto_still_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
+`verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_to_the_named_settings_file`
+`verified-by: bravebot_agent::tools::tests::named_settings::a_write_to_the_named_settings_file_asks_and_is_protected_as_a_write_to_bravebot_does`
+`verified-by: bravebot_agent::tools::tests::named_settings::a_named_settings_file_that_does_not_exist_yet_is_protected`
+`verified-by: bravebot_agent::tools::tests::named_settings::a_link_to_the_named_settings_file_is_protected`
+`verified-by: bravebot_agent::tools::tests::named_settings::a_redirection_into_the_named_settings_file_is_protected`
+`verified-by: bravebot_agent::tools::tests::named_settings::the_named_settings_paths_are_what_the_tools_hold`
+`verified-by: bravebot_agent::protected_names::a_named_settings_file_is_in_the_one_list_both_roads_read`
+`verified-by: bravebot_agent::protected_names::a_named_settings_file_is_held_under_the_path_it_lands_on`
+`verified-by: bravebot_ui_bridge::workspace::a_turn_workspace_holds_the_settings_file_the_session_was_started_on`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::tools::tests::confinement::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
@@ -998,6 +1018,23 @@ effect on being read by nothing: it answers no prompt and permits no fetch. Ever
 with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
 granted where the person granted it at the question [PERM-15](#PERM-15) puts.
 
+The named file is the person's own only while no stage can rewrite it, because the next launch that
+names it reads the rewrite as the person's. Two rules keep that so. The file is a protected path for
+the write tools and for a `run` redirection ([PERM-9](#PERM-9)), and on macOS the sandbox profile
+refuses a stage every write to it ([SANDBOX-14](sandboxing.md#SANDBOX-14)), so there the file keeps
+granting wherever it sits. On Linux and Windows the sandbox grants a directory with everything in it
+and cannot hold one file back ([#2599](https://github.com/brave/bravebot/issues/2599)), so a named
+file that lies inside a directory a stage may write, the working directory or one `--add-dir`,
+`/add-dir` or `--sandbox-allow-write` opened, is read as a checkout's file is. It grants no `allow`
+rule, no `sandbox.mode` and no `run.network`, which are the keys that matter most, and every other
+key a checkout's file may not set is ignored too (environment values, host lists, filesystem lists,
+git identities and the keys only the home file may set). Its `deny` and `ask` rules, which only
+narrow, still apply. The file is judged by where it sits as typed and as it lands after links are
+followed. The home file and a file outside every such directory grant as before. `doctor`, the plain
+opening and the terminal interface's opening note each name the file and say that it is read as a
+checkout's file. The temporary, scratch, state and cache directories are not counted as directories
+a stage may write here ([SANDBOX-14](sandboxing.md#SANDBOX-14)).
+
 `deny` and `ask` are read from every layer and are unaffected. So are the names in
 `additionalDirectories`, which [PERM-10](#PERM-10) already puts to the person one question at a
 time. An entry that is not a rule at all is reported under [PERM-11](#PERM-11) whatever layer wrote
@@ -1017,7 +1054,11 @@ the file sits, as [BACKEND-24](backends.md#BACKEND-24) and [CLI-13](cli.md#CLI-1
 for the backend. A README that gets somebody to type `bravebot --settings <file in the clone>` could
 as well get them to type `bravebot --sandbox off` or to run any program, so refusing a named file by
 where it sits takes nothing from an attacker and takes the flag from a person who keeps their own
-file in their repository ([#3509](https://github.com/brave/bravebot/issues/3509)). The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
+file in their repository ([#3509](https://github.com/brave/bravebot/issues/3509)). Where the file
+sits does decide whether a stage could have written it: a stage that reached it could grant itself a
+rule for the launch after, so the file grants only where the profile holds it back or no stage may
+write where it lies ([#4319](https://github.com/brave/bravebot/issues/4319)). The decision reads
+the path the person typed and the file system, never a byte of the file or of what a stage wrote. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
 silence reads to whoever wrote it as one in force.
 
 `verified-by: bravebot_config::settings::a_project_layer_allow_rule_is_not_granted`
@@ -1028,6 +1069,23 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::a_project_layer_may_still_name_a_directory_to_ask_about`
 `verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`
 `verified-by: bravebot_config::settings::a_named_layer_inside_the_checkout_may_write_an_allow_rule`
+`verified-by: bravebot_config::settings::a_named_file_inside_a_writable_root_grants_nothing_where_one_file_cannot_be_held_back`
+`verified-by: bravebot_config::settings::a_named_file_inside_an_added_directory_grants_nothing_where_one_file_cannot_be_held_back`
+`verified-by: bravebot_config::settings::a_named_file_inside_a_writable_root_keeps_granting_where_one_file_can_be_held_back`
+`verified-by: bravebot_config::settings::the_home_file_named_by_the_flag_is_never_withheld`
+`verified-by: bravebot_config::settings::the_project_file_named_by_the_flag_follows_the_platform_answer`
+`verified-by: bravebot_config::settings::the_managed_file_is_handled_as_before_beside_a_withheld_named_file`
+`verified-by: bravebot_config::settings::layered_asks_the_sandbox_whether_it_can_hold_one_file_back`
+`verified-by: bravebot_config::settings::a_found_layer_is_never_reported_as_a_withheld_named_file`
+`verified-by: bravebot_config::settings::the_settings_report_the_named_file_as_an_absolute_path`
+`verified-by: bravebot_config::named_reach::a_file_in_a_root_is_withheld_only_where_one_file_cannot_be_held_back`
+`verified-by: bravebot_config::named_reach::dot_dot_spellings_are_read_by_where_they_land`
+`verified-by: bravebot_config::named_reach::a_link_to_a_file_inside_a_root_lies_inside_it`
+`verified-by: bravebot_cli::doctor::doctor_says_why_a_named_file_in_a_writable_directory_grants_nothing`
+`verified-by: bravebot_cli::plain::the_opening_says_why_a_named_file_in_a_writable_directory_grants_nothing`
+`verified-by: bravebot_tui::app::the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing`
+`verified-by: bravebot_cli::workspace::the_directories_a_command_line_names_are_counted_as_written_roots`
+`verified-by: bravebot_cli::running::a_stage_cannot_rewrite_the_settings_file_named_by_the_flag`
 `verified-by: bravebot_tui::app::a_named_file_inside_the_directory_left_behind_still_grants_after_moving`
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`

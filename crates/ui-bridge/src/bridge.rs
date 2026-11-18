@@ -1066,6 +1066,12 @@ impl Bridge {
                     .map_err(|error| Failure::bad_request(error.to_string()))?;
                 additional.push(canonical);
             }
+            // Counted for the settings layered from here on, which decide whether the file the
+            // process was started on may grant where the sandbox cannot hold it back (#2599). Kept
+            // for the life of the process, so a closed session leaves a root that only withholds.
+            for added in &additional {
+                bravebot_config::add_writable_directory(added.clone());
+            }
         }
 
         let branch = bravebot_session::sessions::branch_of(&directory);
@@ -2249,6 +2255,7 @@ impl Bridge {
         // Opened as a turn opens them, so a path a rewound turn wrote in one goes back there.
         for directory in &state.directories {
             let _ = workspace.add_directory(&directory.display().to_string());
+            bravebot_config::add_writable_directory(directory.clone());
         }
 
         state.rewind.bind_coverage(&workspace);
@@ -2950,6 +2957,7 @@ impl Bridge {
             if let Some((directories, _)) = &held {
                 for directory in directories {
                     let _ = workspace.add_directory(&directory.display().to_string());
+                    bravebot_config::add_writable_directory(directory.clone());
                 }
             }
             let mode = open.permission_mode.clone();
@@ -3355,7 +3363,8 @@ pub fn turn_workspace(
         .with_search_caps(caps.files, caps.time)
         .with_reads_kept_inside(reads_stay_in_workspace)
         .with_references(settings.references(), settings.references_unread())
-        .with_shared_skill_directories(settings.shared_skill_directories()))
+        .with_shared_skill_directories(settings.shared_skill_directories())
+        .with_named_settings_file(settings.named_settings_file()))
 }
 
 /// The workspace a turn in this session reads through, as the session stands now.
@@ -3436,6 +3445,7 @@ fn workspace_of(
     workspace.open_scratch(scratch);
     for directory in &directories {
         let _ = workspace.add_directory(&directory.display().to_string());
+        bravebot_config::add_writable_directory(directory.clone());
     }
     Ok(workspace)
 }

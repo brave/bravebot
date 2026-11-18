@@ -445,7 +445,7 @@ fn with_no_rule_a_fetch_is_put_to_the_window() {
         json!({"deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [],
             "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null,
             "shownGrantedRecord": null, "directories": [], "shownDirectories": [],
-            "filesystem": [], "filesystemIgnored": []})
+            "filesystem": [], "filesystemIgnored": [], "namedWithheld": null})
     );
 
     let question = run.front.ask(&session);

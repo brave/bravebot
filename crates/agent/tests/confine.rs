@@ -2430,3 +2430,227 @@ fn a_confined_stage_stopped_at_the_limit_is_asked_to_end_and_what_it_started_end
         "a program the confined stage started was left running when the stage was stopped"
     );
 }
+
+/// The settings file the person named on the command line, inside the session directory the way
+/// `--settings ./tooling/grant.json` is, written fresh with a file beside it.
+#[cfg(target_os = "macos")]
+fn named_settings_file(places: &Places) -> PathBuf {
+    let _ = std::fs::remove_dir_all(places.session.join("tooling"));
+    let _ = std::fs::remove_dir_all(places.session.join("tooling2"));
+    for stray in ["moved", "linked", "made.txt"] {
+        let _ = std::fs::remove_file(places.session.join(stray));
+    }
+    let named = places.session.join("tooling/grant.json");
+    std::fs::create_dir_all(named.parent().expect("a parent")).expect("a directory");
+    std::fs::write(&named, "{\"allow\":[]}\n").expect("the settings file");
+    named
+}
+
+/// SANDBOX-14, #4319, on macOS: a stage the session directory grants cannot write the settings file
+/// the command line named, change which file its name leads to, or link to it, and still writes
+/// beside it. The unconfined run of each line is the control that the line works, and the
+/// confinement without the file is the control that the row grants it. The regression it
+/// rejects: a row for the directory holding the file that grants the file as well, so the next
+/// launch reads allow rules a stage wrote.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_cannot_change_the_named_settings_file_the_session_row_would_grant() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("named-settings");
+    let named = named_settings_file(&places);
+    let held = named.display().to_string();
+    let open = places.confinement();
+    let confinement = open
+        .clone()
+        .with_named_settings(std::slice::from_ref(&named));
+    let ways = [
+        ("append", format!("sh -c 'echo x >> {held}'")),
+        ("truncate", format!("sh -c ': > {held}'")),
+        (
+            "replace",
+            format!("sh -c 'echo x > moved && mv moved {held}'"),
+        ),
+        ("move away", format!("mv {held} moved")),
+        ("remove", format!("rm {held}")),
+        ("link to", format!("ln {held} linked")),
+        ("rename the directory", "mv tooling tooling2".to_string()),
+        ("remove the directory", "rm -r tooling".to_string()),
+    ];
+    let mut got_through = Vec::new();
+    for (way, line) in &ways {
+        named_settings_file(&places);
+        let control = places.run(line, Some(&open));
+        assert!(
+            control.ended_well,
+            "{way}: the row did not grant it: {control:?}"
+        );
+        named_settings_file(&places);
+        if places.run(line, Some(&confinement)).ended_well {
+            got_through.push(*way);
+        }
+        assert_eq!(
+            std::fs::read_to_string(&named).unwrap_or_default(),
+            "{\"allow\":[]}\n",
+            "{way} changed the file"
+        );
+    }
+    assert!(got_through.is_empty(), "got through: {got_through:?}");
+    let beside = places.run(
+        &touch(places.session.join("tooling/beside").display()),
+        Some(&confinement),
+    );
+    assert!(
+        beside.ended_well,
+        "a file beside it was refused: {beside:?}"
+    );
+}
+
+/// The file is kept where `--add-dir` added the directory holding it, and under `bypass`, which
+/// adds the places a stage may write. The regression it rejects: the refusal made for the row the
+/// session opened on and not for a root the person added, or one skipped when the stage is not
+/// asked about.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_named_settings_file_is_kept_in_an_added_directory_and_under_bypass() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("named-settings-added");
+    let named = places.beside.join("grant.json");
+    std::fs::write(&named, "{\"allow\":[]}\n").expect("the settings file");
+    let added = Confinement::here(
+        vec![places.session.clone(), places.beside.clone()],
+        None,
+        Some(&places.home),
+    )
+    .expect("a platform with a base");
+    let line = format!("sh -c 'echo x >> {}'", named.display());
+    let control = places.run(&line, Some(&added));
+    assert!(
+        control.ended_well,
+        "the added directory was not writable: {control:?}"
+    );
+    std::fs::write(&named, "{\"allow\":[]}\n").expect("the file again");
+
+    let paths = [named.clone()];
+    let kept = added.with_named_settings(&paths);
+    for confinement in [kept.clone(), kept.with_unasked_writes(true)] {
+        let ran = places.run(&line, Some(&confinement));
+        assert!(!ran.ended_well, "written: {ran:?}");
+        let sibling = places.beside.join("sibling");
+        let made = places.run(&touch(sibling.display()), Some(&confinement));
+        assert!(made.ended_well, "a sibling was refused: {made:?}");
+        let _ = std::fs::remove_file(sibling);
+    }
+    assert_eq!(
+        std::fs::read_to_string(&named).expect("still there"),
+        "{\"allow\":[]}\n"
+    );
+}
+
+/// A stage whose program is git lifts the `.git` hold-back (SANDBOX-14), and that lift does not
+/// reach the settings file. `git config --file` writes the file it is given, so it is the stage
+/// that would write it. The unconfined run is the control that git writes it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_git_stage_cannot_write_the_named_settings_file() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("named-settings-git");
+    let named = named_settings_file(&places);
+    let held_content = "[bravebot]\n\tprobe = no\n";
+    std::fs::write(&named, held_content).expect("a file git can read");
+    let line = format!("git config --file {} bravebot.probe yes", named.display());
+    let control = places.run(&line, None);
+    assert!(
+        control.ended_well,
+        "git cannot write it unconfined: {control:?}"
+    );
+    let control_wrote = std::fs::read_to_string(&named).unwrap_or_default();
+    assert!(
+        control_wrote.contains("yes"),
+        "git did not write it: {control:?}"
+    );
+    std::fs::write(&named, held_content).expect("the file again");
+    let row_alone = places.run(&line, Some(&places.confinement()));
+    assert!(
+        row_alone.ended_well,
+        "git cannot write the file under the session row, so a refusal below means nothing: {row_alone:?}"
+    );
+    std::fs::write(&named, held_content).expect("the file again");
+    let confinement = places
+        .confinement()
+        .with_named_settings(std::slice::from_ref(&named));
+
+    let ran = places.run(&line, Some(&confinement));
+    assert!(!ran.ended_well, "git wrote it: {ran:?}");
+    assert_eq!(
+        std::fs::read_to_string(&named).expect("still there"),
+        held_content
+    );
+}
+
+/// A file that is not there when the session opens cannot be created by a stage either, nor can
+/// a directory be made where it would sit. The regression it rejects: the refusal written only
+/// for a file found on disk.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_cannot_create_a_named_settings_file_that_is_not_there_yet() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("named-settings-absent");
+    let named = places.session.join("fresh/grant.json");
+    let line = format!(
+        "sh -c 'mkdir -p {} && echo x > {}'",
+        named.parent().expect("a parent").display(),
+        named.display()
+    );
+    let control = places.run(&line, Some(&places.confinement()));
+    assert!(
+        control.ended_well && named.exists(),
+        "the row does not grant it: {control:?}"
+    );
+    let _ = std::fs::remove_dir_all(places.session.join("fresh"));
+
+    let confinement = places
+        .confinement()
+        .with_named_settings(std::slice::from_ref(&named));
+    let ran = places.run(&line, Some(&confinement));
+    assert!(!ran.ended_well && !named.exists(), "made: {ran:?}");
+}
+
+/// A second hard link to the file, made before the session, is written through whatever the path
+/// is refused, so a stage is refused to start while one exists and starts when the file has
+/// none. The regression it rejects: starting the stage and leaving the file writable through the
+/// other name.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_does_not_start_while_the_named_settings_file_has_another_hard_link() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("named-settings-linked");
+    let named = named_settings_file(&places);
+    let confinement = places
+        .confinement()
+        .with_named_settings(std::slice::from_ref(&named));
+    let started = places.try_run_given(&touch("made.txt"), Some(&confinement), None);
+    assert!(
+        started.is_ok_and(|ran| ran.ended_well),
+        "refused with one name"
+    );
+
+    std::fs::hard_link(&named, places.beside.join("other-name")).expect("a hard link");
+    let refused = places.try_run_given(&touch("made-too.txt"), Some(&confinement), None);
+    let told = refused.err().map(|error| error.to_string());
+    assert!(
+        told.as_deref()
+            .is_some_and(|told| told.contains("hard link")),
+        "started with a second name: {told:?}"
+    );
+    assert!(!places.session.join("made-too.txt").exists());
+}

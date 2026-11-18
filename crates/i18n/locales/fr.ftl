@@ -3152,6 +3152,8 @@ session-model-pick-set-aside = { $model }, choisi avec /model, est ignoré car a
 session-permission-allow-ignored =
     la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une invite,
     le fichier d'un projet la propose donc et c'est vous qui l'accordez
+session-settings-named-withheld =
+    { $path } est nommé par --settings et se trouve dans un répertoire où une étape peut écrire, ce que cette plateforme ne peut pas lui interdire : il est donc lu comme le fichier d'une copie de travail : ses règles allow, son mode sandbox et run.network, ainsi que toute autre clé qu'un tel fichier ne peut pas définir, sont ignorés (nommez un fichier hors des répertoires de travail et ajoutés pour accorder)
 session-permission-allow-granted-before =
     la règle allow { $rule } de { $path } est accordée : vous l'avez accordée à ce projet
     auparavant ; cette réponse est conservée dans { $record }

@@ -51,6 +51,9 @@ pub struct SettingsRules {
     pub filesystem: Vec<FilesystemEntry>,
     /// `allowRead` and `allowWrite` a checkout wrote, which are not in force, as `(key, file)`.
     pub filesystem_ignored: Vec<(String, PathBuf)>,
+    /// The agent's sentence for the file `--settings` named where it is read as a checkout's file
+    /// because this platform cannot hold it back from a directory a stage may write (#2599).
+    pub named_withheld: Option<String>,
     /// Whether the file tools are held to the project (PERM-16), as the files said when the
     /// session opened. A file edited afterwards changes nothing about this session (PERM-12).
     pub reads_stay_in_workspace: bool,
@@ -214,6 +217,7 @@ impl SettingsRules {
                 .sandbox_filesystem_ignored()
                 .map(|(file, key)| (key.to_string(), file.to_path_buf()))
                 .collect(),
+            named_withheld: bravebot_agent::permissions::named_withheld_said(settings),
             reads_stay_in_workspace: reads_stay_in_workspace(settings, &Managed::load()),
         }
     }
@@ -287,6 +291,7 @@ impl SettingsRules {
                     "shownFile": bravebot_agent::confirm::shown_path(file),
                 }))
                 .collect::<Vec<_>>(),
+            "namedWithheld": self.named_withheld,
         })
     }
 }
@@ -382,8 +387,43 @@ mod tests {
         assert!(rules.permissions.is_empty());
         assert_eq!(
             rules.json(),
-            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null, "shownGrantedRecord": null, "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [] })
+            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null, "shownGrantedRecord": null, "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [], "namedWithheld": null })
         );
+    }
+
+    /// #2599: a file `--settings` named inside a directory a stage may write is read as a
+    /// checkout's file where the platform cannot hold it back, and the report the front end draws
+    /// says so. Where the platform holds it back the report carries no such sentence.
+    #[test]
+    fn a_withheld_named_file_is_reported_to_the_front_end() {
+        let (dir, _) = layers(None, None);
+        let project = std::fs::canonicalize(dir.path().join("project")).unwrap();
+        let file = project.join("override.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"allow": ["WebFetch(domain:example.com)"]}}"#,
+        )
+        .unwrap();
+        let reported = |can_hold_one_file_back: bool| {
+            let settings = Settings::layered_reaching(
+                None,
+                Some(&project),
+                Some(&file),
+                std::slice::from_ref(&project),
+                can_hold_one_file_back,
+            );
+            SettingsRules::read(&settings, &project)
+        };
+        let withheld = reported(false);
+        let said = withheld.named_withheld.as_deref().expect("a sentence");
+        assert!(said.contains("override.json"), "{said}");
+        assert_eq!(withheld.json()["namedWithheld"], json!(said));
+        assert_eq!(fetching(&withheld, "example.com"), None);
+
+        let held_back = reported(true);
+        assert_eq!(held_back.named_withheld, None);
+        assert_eq!(held_back.json()["namedWithheld"], json!(null));
+        assert_eq!(fetching(&held_back, "example.com"), Some(Ruling::Allow));
     }
 
     /// An `allow` rule in the person's own file holds, since there is a person at this front end.
@@ -679,11 +719,31 @@ mod tests {
         let inside = project.join("override.json");
         std::fs::write(&inside, text).unwrap();
         let rules = SettingsRules::read(
-            &Settings::layered(Some(home), Some(&project), Some(&inside)),
+            &Settings::layered_reaching(
+                Some(home.clone()),
+                Some(&project),
+                Some(&inside),
+                std::slice::from_ref(&project),
+                true,
+            ),
             &project,
         );
         assert_eq!(fetching(&rules, "example.com"), Some(Ruling::Allow));
         assert!(rules.proposed.is_empty(), "{:?}", rules.proposed);
+
+        // Where the sandbox cannot hold one file back, the same file inside a root a stage may
+        // write grants nothing (#2599).
+        let rules = SettingsRules::read(
+            &Settings::layered_reaching(
+                Some(home),
+                Some(&project),
+                Some(&inside),
+                std::slice::from_ref(&project),
+                false,
+            ),
+            &project,
+        );
+        assert_eq!(fetching(&rules, "example.com"), None);
     }
 
     /// PERM-10: a directory a file named is reported and is not something this module opens.

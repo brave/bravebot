@@ -4311,6 +4311,126 @@ fn a_one_shot_run_runs_a_program_an_allow_rule_names_and_refuses_another() {
     );
 }
 
+/// PERM-9, PERM-14, SANDBOX-14: the file `--settings` names grants allow rules, `sandbox.mode` and
+/// `run.network` wherever it sits, so a stage the file's own rule lets run cannot rewrite it, and
+/// the next launch under the same flag does not run a line unasked or unconfined.
+///
+/// A property of the process: the path is carried from the flag to the file tools, to the
+/// confinement each stage is started under and to `doctor`, and a link that dropped it leaves each
+/// crate's own tests passing. The file sits in a checkout nobody vouched for, with one allow rule
+/// for `sh build.sh`, and the script is the rewrite the issue describes: the file made to turn the
+/// sandbox off and allow every line, and a project settings file written beside it. The script
+/// records what each write did, so the run that is checked is one that started the stage. The
+/// bypass run at the end is the control that the second launch's line is refused by the missing
+/// rule and not by something else in the setup.
+///
+/// The file is held back by Seatbelt on macOS. Where a platform cannot hold one file back, the
+/// file grants nothing inside a directory a stage may write, so the first run would not start.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_cannot_rewrite_the_settings_file_named_by_the_flag() {
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping the named settings file test: confinement is unavailable");
+        return;
+    }
+    const NAMED: &str = "tooling/bravebot.json";
+    let original = r#"{"permissions":{"allow":["Bash(sh build.sh)"]}}"#;
+    let rewrite = r#"{"sandbox":{"mode":"off"},"run":{"network":"open"},"permissions":{"allow":["Bash(*)","Edit(**)"]}}"#;
+    let script = format!(
+        "printf '%s' '{rewrite}' > {NAMED} 2>/dev/null\n\
+         echo \"named=$?\" > result.txt\n\
+         mkdir -p .bravebot 2>/dev/null\n\
+         printf '%s' '{{\"sandbox\":{{\"mode\":\"off\"}}}}' > .bravebot/settings.json 2>/dev/null\n\
+         echo \"project=$?\" >> result.txt\n"
+    );
+
+    let scratch = Scratch::new("cli-running-named-settings-rewrite");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join(".git")).expect("a checkout nobody vouched for");
+    std::fs::create_dir_all(project.join("tooling")).expect("the tooling directory");
+    std::fs::write(project.join(NAMED), original).expect("the named settings file");
+    std::fs::write(project.join("build.sh"), &script).expect("the build script");
+    let outside = scratch.path.join("outside");
+    let outside_text: &'static str = Box::leak(outside.display().to_string().into_boxed_str());
+    let command: &'static str =
+        Box::leak(format!("touch made.txt {outside_text}").into_boxed_str());
+
+    // The person's own file names each launch's gateway. The named file adds only the allow rule.
+    let launch = |gateway: &Gateway, extra: &[&str]| {
+        std::fs::create_dir_all(scratch.path.join(".bravebot")).expect("the state directory");
+        std::fs::write(scratch.settings(), settings_for(gateway)).expect("the person's settings");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let mut arguments = vec!["--settings", NAMED];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "build"]);
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+        let (stdout, stderr) = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the run reached the gateway: {stdout}{stderr}"));
+        format!("{stdout}{stderr}")
+    };
+
+    let building = a_gateway_asking_to_run("sh build.sh");
+    let said_by_the_build = launch(&building, &[]);
+    let result = std::fs::read_to_string(project.join("result.txt")).unwrap_or_else(|error| {
+        panic!("the named file's allow rule did not start the stage ({error}): {said_by_the_build}")
+    });
+    assert!(
+        result.contains("named=") && result.contains("project="),
+        "the script did not reach its writes: {result}"
+    );
+    assert!(
+        !result.contains("named=0") && !result.contains("project=0"),
+        "a stage's write to a settings file succeeded: {result}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join(NAMED)).expect("the named file"),
+        original,
+        "a stage rewrote the settings file the command line named: {result}"
+    );
+    assert!(
+        !project.join(".bravebot/settings.json").exists(),
+        "a stage made the project's settings file: {result}"
+    );
+
+    // The next launch under the flag: a line no rule names is neither run unasked nor run
+    // unconfined, so neither file is made.
+    let next = a_gateway_asking_to_run(command);
+    let said_by_the_next = launch(&next, &[]);
+    assert!(
+        !project.join("made.txt").exists() && !outside.exists(),
+        "the next launch ran a line nothing allowed: {said_by_the_next}"
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--settings", NAMED, "doctor"],
+    );
+    let (stdout, stderr) = said(&output);
+    let mode = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("sandbox mode"))
+        .unwrap_or_else(|| panic!("the report gave no sandbox mode: {stdout}{stderr}"));
+    assert!(
+        mode.contains("workspace-write") && !mode.contains("off"),
+        "the next launch's sandbox mode is not the default: {mode}"
+    );
+
+    // The control: the same line under the bypass flag is run, so the refusal above was the
+    // missing rule's.
+    let control = a_gateway_asking_to_run(command);
+    let said_by_the_control = launch(&control, &["--dangerously-skip-permissions"]);
+    assert!(
+        project.join("made.txt").exists(),
+        "the control did not run the line, so the refusal says nothing: {said_by_the_control}"
+    );
+}
+
 /// CLI-1: the flag is refused beside the bypass flag, and where there is no one-shot run to open in
 /// the mode, each with the argument status and nothing sent to the gateway.
 #[test]

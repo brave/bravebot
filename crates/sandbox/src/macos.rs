@@ -102,6 +102,80 @@ fn regex_literal(text: &str) -> String {
     out
 }
 
+/// The refusals a policy holds for the files it keeps in place ([`SandboxPolicy::kept_in_place`]).
+///
+/// A file is refused every write at the path, which also covers making a link to it, renaming it
+/// and renaming another file over it. Seatbelt does not carry that refusal up to the directories
+/// holding the file, so each of them is refused removal, which is also what renaming it away is,
+/// or an empty one replaced by another directory. A path that is not on disk is refused at its
+/// topmost missing name, so a directory or link made there is not the way to a file that later
+/// leads elsewhere. Each path is written where it is named and where its links lead
+/// (SANDBOX-12). A file made beside the held one, or removed from beside it, is not refused.
+///
+/// A second hard link to the file that exists before the stage starts is not covered: the refusal
+/// is by path and does not follow the inode, so the caller refuses a stage in that case.
+fn kept_in_place_rules(policy: &SandboxPolicy) -> String {
+    let mut refused: Vec<PathBuf> = Vec::new();
+    let mut unlinked: Vec<PathBuf> = Vec::new();
+    for kept in &policy.kept_in_place {
+        for path in [kept.clone(), landed(kept)] {
+            let mut missing: Option<&Path> = None;
+            for above in path.ancestors().skip(1) {
+                if above.as_os_str().is_empty() || above == Path::new("/") {
+                    break;
+                }
+                if std::fs::symlink_metadata(above).is_ok() {
+                    unlinked.push(above.to_path_buf());
+                } else {
+                    missing = Some(above);
+                }
+            }
+            refused.push(missing.unwrap_or(&path).to_path_buf());
+            refused.push(path.clone());
+        }
+    }
+    refused.sort();
+    refused.dedup();
+    unlinked.sort();
+    unlinked.dedup();
+    let mut out = String::new();
+    for path in refused {
+        out.push_str(&format!(
+            "(deny file-write* (subpath {}))\n",
+            quote(&path.to_string_lossy())
+        ));
+    }
+    for path in unlinked {
+        out.push_str(&format!(
+            "(deny file-write-unlink (literal {}))\n",
+            quote(&path.to_string_lossy())
+        ));
+    }
+    out
+}
+
+/// Where `path` leads: its longest prefix that is on disk with every link followed, then the rest
+/// as written.
+fn landed(path: &Path) -> PathBuf {
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut head = path;
+    loop {
+        if let Ok(real) = head.canonicalize() {
+            return rest
+                .iter()
+                .rev()
+                .fold(real, |landed, part| landed.join(part));
+        }
+        match (head.file_name(), head.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                head = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// The refusals of [`PROTECTED_DIRECTORIES`] and [`PROTECTED_FILES`] a policy that writes carries.
 ///
 /// A name other than `.git` is refused at any path, and a row that is itself inside such a
@@ -341,6 +415,13 @@ impl SeatbeltSandbox {
         if !policy.writable.is_empty() && !policy.git_directories_writable {
             out.push_str(&protected_name_rules(policy));
         }
+
+        // A file held in place is refused its write above, and a write is also how a directory
+        // above it is renamed away or replaced, which Seatbelt does not count as a write beneath
+        // that directory. Removing a name is refused at every directory above the file, where it
+        // stands and where it leads. These follow the protected-name rules and sit outside the
+        // condition above, so a stage that lifts the `.git` hold-back keeps them.
+        out.push_str(&kept_in_place_rules(policy));
 
         // Looking at a path answers what it is and not what it holds: this allows stat and
         // readlink, and neither a file's contents nor a directory's entries. Without it every path
@@ -2803,6 +2884,230 @@ int main(int argc, char **argv) {
             assert!(allowed.exists(), "{} was not written", allowed.display());
         }
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `line` run by `/bin/sh` under `policy`, from `directory`: its exit status.
+    fn sh_under(policy: &SandboxPolicy, directory: &Path, line: &str) -> Option<i32> {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = policy.clone().starting_in(directory);
+        sandbox
+            .spawn(
+                OsStr::new("/bin/sh"),
+                &["-c".into(), line.into()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait")
+            .code()
+    }
+
+    /// A policy writing under `dir` that keeps `held` in place the way the named settings file is.
+    fn keeping(dir: &Path, held: &Path) -> SandboxPolicy {
+        SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(dir)
+            .allow_write(dir)
+            .allow_subprocesses()
+            .deny_write(held)
+            .keep_in_place(held)
+    }
+
+    /// A file kept in place is not changed by any way a stage has of changing what a later launch
+    /// reads at its path: writing it, truncating it, moving another file over it, moving it away,
+    /// removing it, linking to it, renaming a directory above it, removing the directory above it
+    /// and putting another directory in the place of an empty one. A file or directory beside it
+    /// stays writable, so a row for the directory is not given up. Every attempt runs before any
+    /// is asserted, so a failure lists each one that got through. The regression it rejects: the
+    /// file refused only at its own path, which leaves the ancestor renames and the `mv` of a
+    /// second directory over an empty one.
+    #[test]
+    fn a_file_kept_in_place_is_not_changed_by_any_stage_write() {
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-kept-in-place");
+        let _ = std::fs::remove_dir_all(&dir);
+        let held = dir.join("tooling").join("settings.json");
+        std::fs::create_dir_all(held.parent().unwrap()).expect("creatable");
+        std::fs::create_dir_all(dir.join("evil")).expect("creatable");
+        std::fs::create_dir_all(dir.join("hollow")).expect("creatable");
+        std::fs::write(&held, "original").expect("creatable");
+        std::fs::write(dir.join("evil").join("settings.json"), "planted").expect("creatable");
+        std::fs::write(dir.join("elsewhere"), "other").expect("creatable");
+        let held_text = held.display().to_string();
+
+        let kept = keeping(&dir, &held);
+        let control = sh_under(
+            &SandboxPolicy::strict()
+                .allow_read("/usr")
+                .allow_read("/bin")
+                .allow_read(&dir)
+                .allow_write(&dir)
+                .allow_subprocesses(),
+            &dir,
+            &format!("echo x >> {held_text}"),
+        );
+        assert_eq!(control, Some(0), "the row alone did not grant the file");
+        std::fs::write(&held, "original").expect("restorable");
+
+        let attempts = [
+            ("append", format!("echo x >> {held_text}")),
+            ("truncate", format!(": > {held_text}")),
+            (
+                "move another file over it",
+                format!("mv elsewhere {held_text}"),
+            ),
+            ("move it away", format!("mv {held_text} moved")),
+            ("remove it", format!("rm -f {held_text}")),
+            ("hard link to it", format!("ln {held_text} linked")),
+            (
+                "rename the directory above it",
+                "mv tooling tooling2".to_string(),
+            ),
+            (
+                "remove the directory above it",
+                "rm -rf tooling".to_string(),
+            ),
+            (
+                "rename the row's directory",
+                format!("mv {} {}-aside", dir.display(), dir.display()),
+            ),
+        ];
+        let got_through: Vec<_> = attempts
+            .iter()
+            .filter(|(_, line)| sh_under(&kept, &dir, line) == Some(0))
+            .map(|(what, _)| *what)
+            .collect();
+        assert!(got_through.is_empty(), "got through: {got_through:?}");
+        assert_eq!(
+            std::fs::read_to_string(&held).expect("still there"),
+            "original"
+        );
+        assert!(!dir.join("moved").exists() && !dir.join("linked").exists());
+
+        for beside in [
+            "echo y > tooling/beside",
+            "echo y > elsewhere",
+            "mkdir made && rm -r made",
+            "mv elsewhere tooling/also_beside",
+            "rm -f tooling/beside",
+        ] {
+            assert_eq!(
+                sh_under(&kept, &dir, beside),
+                Some(0),
+                "`{beside}` was refused"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same file spelled through a link to its directory, and a link standing for the
+    /// directory, are kept where the link leads and where it stands, so the file is not written
+    /// by the spelling the policy was not given. The regression it rejects: holding the typed
+    /// spelling only.
+    #[test]
+    fn a_file_kept_in_place_is_kept_through_a_link_to_its_directory() {
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-kept-link");
+        let _ = std::fs::remove_dir_all(&dir);
+        let real = dir.join("real");
+        std::fs::create_dir_all(&real).expect("creatable");
+        std::fs::write(real.join("settings.json"), "original").expect("creatable");
+        std::os::unix::fs::symlink("real", dir.join("via")).expect("creatable");
+        let typed = dir.join("via").join("settings.json");
+
+        let kept = keeping(&dir, &typed);
+        let got_through: Vec<_> = [
+            ("through the link", "echo x >> via/settings.json"),
+            ("where it leads", "echo x >> real/settings.json"),
+            ("remove the link", "rm via"),
+            ("rename the link", "mv via via2"),
+            ("rename where it leads", "mv real real2"),
+        ]
+        .into_iter()
+        .filter(|(_, line)| sh_under(&kept, &dir, line) == Some(0))
+        .map(|(what, _)| what)
+        .collect();
+        assert!(got_through.is_empty(), "got through: {got_through:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file that is not there when the session opens is held at its path, and a name above it
+    /// that is not there is held too, so a directory or link made there is refused and cannot
+    /// lead a later launch to a file the stage wrote, and an empty directory above it cannot be
+    /// replaced by another one holding a file of that name. The regression it rejects: the refusal
+    /// written only for a file found on disk.
+    #[test]
+    fn a_file_kept_in_place_that_does_not_exist_yet_cannot_be_made_or_reached() {
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-kept-absent");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("present")).expect("creatable");
+        std::fs::create_dir_all(dir.join("evil")).expect("creatable");
+        std::fs::write(dir.join("evil").join("settings.json"), "planted").expect("creatable");
+        let beside_absent_file = dir.join("present").join("settings.json");
+        let beside_absent_directory = dir.join("fresh").join("inner").join("settings.json");
+
+        let got_through: Vec<_> = [
+            (&beside_absent_file, "echo x > present/settings.json"),
+            (
+                &beside_absent_file,
+                "ln -s ../evil/settings.json present/settings.json",
+            ),
+            (&beside_absent_directory, "mkdir fresh"),
+            (&beside_absent_directory, "ln -s evil fresh"),
+            (
+                &beside_absent_file,
+                "/usr/bin/perl -e 'rename q(evil), q(present) or die'",
+            ),
+        ]
+        .into_iter()
+        .filter(|(held, line)| sh_under(&keeping(&dir, held), &dir, line) == Some(0))
+        .map(|(_, line)| line)
+        .collect();
+        assert!(got_through.is_empty(), "got through: {got_through:?}");
+        assert!(!beside_absent_file.exists() && !dir.join("fresh").exists());
+        assert_eq!(
+            sh_under(
+                &keeping(&dir, &beside_absent_file),
+                &dir,
+                "echo y > present/other"
+            ),
+            Some(0),
+            "a file beside the absent one was refused"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stage that lifts the `.git` hold-back keeps the file in place: the refusal is not one of
+    /// the protected names, which that lift skips. The regression it rejects: the rows emitted
+    /// inside the block the lift skips.
+    #[test]
+    fn a_file_kept_in_place_stays_kept_for_a_stage_that_may_write_git_directories() {
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-kept-git");
+        let _ = std::fs::remove_dir_all(&dir);
+        let held = dir.join("tooling").join("settings.json");
+        std::fs::create_dir_all(held.parent().unwrap()).expect("creatable");
+        std::fs::create_dir_all(dir.join(".git")).expect("creatable");
+        std::fs::write(&held, "original").expect("creatable");
+
+        let kept = keeping(&dir, &held).allow_git_directory_writes();
+        assert_eq!(
+            sh_under(&kept, &dir, "echo hook > .git/hook"),
+            Some(0),
+            "the lift did not apply"
+        );
+        for line in [
+            "echo x >> tooling/settings.json",
+            "mv tooling tooling2",
+            "rm -rf tooling",
+        ] {
+            assert_ne!(
+                sh_under(&kept, &dir, line),
+                Some(0),
+                "`{line}` went through"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

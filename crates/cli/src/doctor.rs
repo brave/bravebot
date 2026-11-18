@@ -688,6 +688,15 @@ fn report_managed_server_entries(managed: &Managed) {
     );
 }
 
+/// The line for the file `--settings` named where it grants nothing because it lies in a directory
+/// a stage may write and this platform's sandbox cannot hold it back from one (#2599).
+fn named_withheld_lines(settings: &bravebot_config::Settings) -> Vec<String> {
+    bravebot_agent::permissions::named_withheld_said(settings)
+        .map(|said| aligned(t!(doctor_settings_ignored), said, FACT))
+        .into_iter()
+        .collect()
+}
+
 /// The line for a key nothing reads, naming the file and not the value.
 ///
 /// Claude Code's key for the bypass switch is the one unread key whose writer believes a
@@ -765,6 +774,9 @@ fn report_run_network(
                 source = bravebot_tui::status::run_network_source(&network.decided)
             ),
         );
+    }
+    for line in named_withheld_lines(settings) {
+        println!("{line}");
     }
     ignored(settings.run_network_ignored(), |path| {
         t!(doctor_settings_network_ignored, path = path)
@@ -4987,6 +4999,49 @@ mod tests {
             premium.as_deref(),
             Some("https://premium.invalid/v1/chat/completions")
         );
+    }
+
+    /// #2599: a file `--settings` named inside a directory a stage may write grants nothing where
+    /// the platform cannot hold it back, and `doctor` says so, naming the file. Where it can, the
+    /// file grants and nothing is said. The regression it rejects: a withheld file reported as
+    /// nothing, or the line also said where the file grants.
+    #[test]
+    fn doctor_says_why_a_named_file_in_a_writable_directory_grants_nothing() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/doctor-named-withheld");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create the scratch directory");
+        let project = base.canonicalize().expect("canonical directory");
+        let file = project.join("override.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"allow": ["WebFetch(domain:example.com)"]}}"#,
+        )
+        .expect("write the named file");
+        let roots = [project.clone()];
+
+        let withheld = bravebot_config::Settings::layered_reaching(
+            None,
+            Some(&project),
+            Some(&file),
+            &roots,
+            false,
+        );
+        let lines = named_withheld_lines(&withheld);
+        let held_back = bravebot_config::Settings::layered_reaching(
+            None,
+            Some(&project),
+            Some(&file),
+            &roots,
+            true,
+        );
+        let silent = named_withheld_lines(&held_back);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("override.json"), "{lines:?}");
+        assert!(lines[0].contains("--settings"), "{lines:?}");
+        assert!(silent.is_empty(), "{silent:?}");
     }
 
     /// SANDBOX-22: a `--sandbox` flag is the choice in force and is named as the source. The

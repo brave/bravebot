@@ -391,7 +391,7 @@ export const narrowing = (rules: SettingsRules | null | undefined): string[] => 
  * `foldersRefused`).
  */
 export const notInForce = (rules: SettingsRules | null | undefined, refused: readonly unknown[] = []): boolean =>
-  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refused.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0)
+  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refused.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0 || !!rules.namedWithheld)
 
 /** Whether a yes to the rules question granted checkout rules this conversation holds, which the person is also told. */
 export const grantedRules = (rules: SettingsRules | null | undefined): boolean => (rules?.granted?.length ?? 0) > 0

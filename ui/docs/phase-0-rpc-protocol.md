@@ -1840,7 +1840,7 @@ Still open:
   own. A `remember: true` sent where `mayStand` is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork`, `trust.reply`, `rules.reply` and
   `permissions.list` carry `settingsRules`:
-  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored }`. The first three are the rules in
+  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored, namedWithheld }`. The first three are the rules in
   force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
   lists spelled as text. `unreadable` holds `{ rule, shownRule, said }` for each entry that is
   not a rule, where `shownRule` is `rule` spelled as text and `said` is the agent's sentence about
@@ -1855,7 +1855,9 @@ Still open:
   in `additionalDirectories` that are not open: ones not answered yet, said no to, or refused
   (§9.1). A name the person opened leaves the list, and the directory is in the session's open
   folders instead. `shownDirectories` holds the same names spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
-  each entry of `filesystemIgnored` carries `shownFile`, spelled the same way.
+  each entry of `filesystemIgnored` carries `shownFile`, spelled the same way. `namedWithheld` is
+  the agent's sentence for the file `--settings` named where it is read as a checkout's file (PERM-14),
+  or null.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules. The agent's runner reads the `Mcp` rules and no

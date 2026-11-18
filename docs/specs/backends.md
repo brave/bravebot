@@ -1333,7 +1333,11 @@ leaves everything else in force.
 
 A file the command line named is read after all three, by these same rules, so what it sets beats
 every file that was found. The flag that names one, and the path it refuses, are in
-[cli.md](cli.md).
+[cli.md](cli.md). That file is protected like a `.bravebot` directory: a write to it through a tool
+asks, a stage cannot rewrite it on macOS, and on Linux and Windows a file inside a directory a stage
+may write grants no `allow` rule, `sandbox.mode` or `run.network` ([PERM-9](permissions.md#PERM-9),
+[PERM-14](permissions.md#PERM-14), [SANDBOX-14](sandboxing.md#SANDBOX-14)). Its other keys are
+read as the table says.
 
 | What | How layers combine |
 |---|---|
