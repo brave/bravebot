@@ -17672,11 +17672,12 @@ mod tests {
         }
     }
 
-    /// CMD-23, LABEL-8: a draft about a path nobody vouched for is not put in the box. Enter would
-    /// send it to the planner as the person's own typed line, and only a draft the planner could
-    /// have held may go there.
+    /// CMD-23, LABEL-8: where the diff named a path nobody vouched for, the draft step answers with
+    /// no message, since the diff was never sent to a model. The box is left as it was and a note
+    /// says no draft was written, because Enter would send a model's words about that path to the
+    /// planner as the person's own typed line.
     #[test]
-    fn a_draft_that_met_something_untrusted_is_held_back_with_a_note() {
+    fn an_answer_with_no_message_leaves_the_box_alone_and_says_no_draft_was_written() {
         let mut session = Session::new("none");
         for c in "typing".chars() {
             handle_key(&mut session, key(KeyCode::Char(c)));

@@ -1164,8 +1164,9 @@ Nothing is committed by the command itself.
 
 Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
 that holds what looks like a credential, and the line says which. Where a changed path is one nobody
-has vouched for, the message is still written but the box is left as it was and a note says the draft
-was not offered, since Enter would send a model's words about that path as a line you wrote. The
+has vouched for, nothing is sent to a model and no draft is written, the box is left as it was and a
+note says so, so no usage is charged. Enter on such a draft would have sent a model's words about that
+path as a line you wrote. The
 [trust](../security/trust.md) page says how to vouch for a path. A diff longer than one read takes is
 drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
 or the session's. Typed while a turn runs it waits for the turn to end.
