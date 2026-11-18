@@ -8,6 +8,8 @@ description: Slash commands for configuration, permissions, sessions, files view
 
 A line beginning with `/` is acted on by the interface itself, in place of being sent anywhere.
 
+## Every command
+
 | Command | Argument | What it does |
 |---|---|---|
 | `/status` | | Report this session, what it may touch, and what it has spent |
