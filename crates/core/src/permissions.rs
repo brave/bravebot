@@ -555,6 +555,30 @@ impl Rule {
         }
     }
 
+    /// Add the relative spelling of what this rule covers of the workspace, for a rule about a
+    /// full path that names a place above the workspace (PERM-7).
+    ///
+    /// `workspace` is the segments of the workspace's full path, keyed as the rules are. The file
+    /// tools ask about a project file by its workspace-relative name, so a rule on an ancestor of
+    /// the workspace refuses nothing there unless it also holds the name the tools ask by. The
+    /// copy is part of this rule and never floats.
+    fn cover_workspace(&mut self, workspace: &[String], folds_case: bool) {
+        let copies: Vec<Pattern> = std::iter::once(&self.pattern)
+            .chain(&self.landed)
+            .filter_map(|pattern| match pattern {
+                Pattern::Absolute(pattern) => Some(pattern),
+                _ => None,
+            })
+            .flat_map(|pattern| pattern.within_workspace(workspace, folds_case))
+            .map(Pattern::Relative)
+            .collect();
+        for copy in copies {
+            if !self.landed.contains(&copy) {
+                self.landed.push(copy);
+            }
+        }
+    }
+
     /// Whether this rule covers reading or editing `path`.
     ///
     /// `path` is workspace-relative or absolute, as the gates hold it. `restricting` selects the
@@ -972,6 +996,25 @@ impl Permissions {
         let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.follow_links(&land, backslash_separates, folds_case);
+        }
+    }
+
+    /// Have every `deny` and `ask` path rule written about a place above the workspace cover what
+    /// it covers of the workspace under the workspace-relative name as well (PERM-7).
+    ///
+    /// `workspace` is the workspace's full path as the host spells it. A rule that restricts covers
+    /// what is under the place it names, so `Read(~/**)` in a session opened in `~/proj` covers
+    /// every file of the workspace, which the file tools ask about by its relative name. A rule
+    /// about the workspace itself or a place inside it is spelled relative by [`Self::follow_links`],
+    /// and an `allow` rule is left as written, since a grant covers only the spelling approved.
+    ///
+    /// A name of the workspace that is not UTF-8 reaches here as its lossy rendering, which can
+    /// only make a rule cover one more name, never fewer.
+    pub fn cover_workspace(&mut self, workspace: &str) {
+        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let segments = split(&key_of(workspace, backslash_separates, folds_case));
+        for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
+            rule.cover_workspace(&segments, folds_case);
         }
     }
 
@@ -1437,6 +1480,101 @@ impl PathPattern {
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
         self.names(path, restricting)
             || (restricting && (0..path.len()).any(|end| self.names(&path[..end], restricting)))
+    }
+
+    /// The patterns, spelled relative to the workspace, that cover the part of the workspace this
+    /// absolute pattern covers, for a pattern whose literal prefix is shorter than the workspace's
+    /// path (PERM-7).
+    ///
+    /// `workspace` is the segments of the workspace's full path, keyed as a path is matched. Each
+    /// is taken against the pattern as a path's segments are, with `**` free to take any number of
+    /// them. `~/**` in `~/proj` gives `**`, and `~/*/secrets/**` gives `secrets/**`. A pattern
+    /// that restricts covers what is under the place it names, so one that has taken every segment
+    /// it has while the workspace has segments left covers the whole workspace and gives `**`. A
+    /// pattern the workspace's segments do not fit gives nothing. A pattern whose literal prefix
+    /// reaches the workspace or goes below it gives nothing here: that is the place
+    /// [`Rule::follow_links`] already spells relative to the workspace.
+    fn within_workspace(&self, workspace: &[String], folds_case: bool) -> Vec<PathPattern> {
+        let wild = |segment: &str| !self.literal && segment == "**";
+        let literal_prefix = self
+            .segments
+            .iter()
+            .take_while(|segment| self.literal || !segment.contains('*'))
+            .count();
+        if literal_prefix >= workspace.len() {
+            return Vec::new();
+        }
+        // Names are compared as written and in the one form every canonically equivalent
+        // spelling shares, since a rule that restricts is matched both ways.
+        let fits = |segment: &str, name: &str| {
+            let equal = |segment: &str, name: &str| match self.literal {
+                true => segment == name,
+                false => wildcard_matches(segment, name),
+            };
+            equal(segment, name)
+                || equal(
+                    &crate::trust::canonical_form(segment, folds_case),
+                    &crate::trust::canonical_form(name, folds_case),
+                )
+        };
+        // Positions in the segments, each the pattern left once the names so far are taken.
+        let settled = |states: &[usize]| {
+            let mut all = states.to_vec();
+            let mut at = 0;
+            while at < all.len() {
+                let next = all[at] + 1;
+                if self.segments.get(all[at]).is_some_and(|s| wild(s)) && !all.contains(&next) {
+                    all.push(next);
+                }
+                at += 1;
+            }
+            all
+        };
+        let covers_everything = |states: &[usize]| settled(states).contains(&self.segments.len());
+        let everything = || {
+            vec![PathPattern {
+                segments: vec!["**".to_string()],
+                floats_when_restricting: false,
+                literal: false,
+                anywhere: false,
+            }]
+        };
+        let mut states = vec![0];
+        for name in workspace {
+            if covers_everything(&states) {
+                return everything();
+            }
+            let mut next = Vec::new();
+            for position in settled(&states) {
+                let Some(segment) = self.segments.get(position) else {
+                    continue;
+                };
+                let after = match wild(segment) {
+                    true => position,
+                    false if fits(segment, name) => position + 1,
+                    false => continue,
+                };
+                if !next.contains(&after) {
+                    next.push(after);
+                }
+            }
+            if next.is_empty() {
+                return Vec::new();
+            }
+            states = next;
+        }
+        if covers_everything(&states) {
+            return everything();
+        }
+        states
+            .into_iter()
+            .map(|position| PathPattern {
+                segments: self.segments[position..].to_vec(),
+                floats_when_restricting: false,
+                literal: self.literal,
+                anywhere: false,
+            })
+            .collect()
     }
 
     /// Whether this pattern names `path` itself.
@@ -3802,6 +3940,141 @@ mod tests {
                 "a/b.md"
             ],
             "a rule was followed from the wrong segments, or one with nothing to follow was asked about"
+        );
+    }
+
+    /// PERM-7. A `deny` or `ask` rule about a place above the workspace covers the workspace under
+    /// the relative name the file tools ask by, in the shapes that name an ancestor: `~/**`, `~/`,
+    /// `~/*/` and `//` with the workspace at `/home/someone/proj`. A rule about the workspace's
+    /// own place is not changed by this pass (it is spelled relative by the caller that follows
+    /// links), so only the rule on an ancestor gains a spelling.
+    #[test]
+    fn a_rule_on_an_ancestor_of_the_workspace_covers_the_workspace_by_its_relative_name() {
+        for rule in [
+            "Read(~/**)",
+            "Read(~/)",
+            "Read(~)",
+            "Read(~/*/**)",
+            "Read(~/*)",
+            "Read(//home/**)",
+            "Read(//home/someone/**)",
+            "Read(//**)",
+            "Read(//)",
+            "Read(**/proj/**)",
+        ] {
+            for (list, subject, ruling) in [
+                (0, Subject::Read, Ruling::Deny),
+                (1, Subject::Read, Ruling::Ask),
+            ] {
+                let written = [rule];
+                let mut permissions = match list {
+                    0 => rules(&written, &[], &[]),
+                    _ => rules(&[], &written, &[]),
+                };
+                permissions.cover_workspace("/home/someone/proj");
+                for path in ["secrets/canary.txt", "a", ".env"] {
+                    let covered = permissions.for_path(subject, path) == Decision::Ruled(ruling);
+                    // `Read(~)` is a file named `~` and `Read(**/proj/**)` is about a directory of
+                    // that name inside the workspace, so neither is a rule about an ancestor.
+                    let about_an_ancestor = !matches!(rule, "Read(~)" | "Read(**/proj/**)");
+                    assert_eq!(
+                        covered, about_an_ancestor,
+                        "{rule} as {ruling} on {path} in a workspace below the home directory"
+                    );
+                }
+            }
+        }
+    }
+
+    /// PERM-7. A rule about a place that is not an ancestor of the workspace, a sibling, a
+    /// descendant of it or a place whose name only starts as an ancestor's does, gains no relative
+    /// spelling, and an `allow` rule on an ancestor is matched as written.
+    #[test]
+    fn a_rule_that_is_not_on_an_ancestor_of_the_workspace_gains_no_relative_name() {
+        let mut permissions = rules(
+            &[
+                "Read(~/sibling/**)",
+                "Read(~/pro/**)",
+                "Read(~/proj-two/**)",
+                "Read(~/proj/deeper/**)",
+                "Read(//home/someone-else/**)",
+            ],
+            &["Edit(~/sibling/**)"],
+            &["Read(~/**)"],
+        );
+        permissions.cover_workspace("/home/someone/proj");
+        for path in ["secrets/canary.txt", "deeper/a", "sibling/a", "pro/a"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                Decision::Unmatched,
+                "{path} was covered by a rule that is not on an ancestor, or by the allow rule `~/**`"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "sibling/a"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-7. A `Read` rule on an ancestor stays one rule, and the relative name it adds is not a
+    /// rule that floats: `Read(~/*/secrets/**)` in `~/proj` covers `secrets` at the top of the
+    /// workspace and not a `secrets` nested in another directory.
+    #[test]
+    fn the_relative_name_of_a_rule_on_an_ancestor_is_covered_at_that_place_only() {
+        let mut permissions = rules(&["Read(~/*/secrets/**)"], &[], &[]);
+        permissions.cover_workspace("/home/someone/proj");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "secrets/canary.txt"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "vendor/secrets/canary.txt"),
+            Decision::Unmatched,
+            "the relative spelling floated to every directory of that name"
+        );
+        assert_eq!(
+            permissions.len(),
+            1,
+            "the added spelling was counted as a rule"
+        );
+    }
+
+    /// PERM-7. Where the volume folds case, a rule on an ancestor written in another case still
+    /// covers the workspace, and where it does not, the spelling is compared as written.
+    #[test]
+    fn a_rule_on_an_ancestor_is_matched_in_the_case_the_volume_folds() {
+        for (folds_case, covered) in [(true, true), (false, false)] {
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                folds_case,
+                &["Read(//HOME/someone/**)"],
+                &[],
+                &[],
+            );
+            permissions.cover_workspace("/home/someone/proj");
+            assert_eq!(
+                permissions.for_path(Subject::Read, "a.txt") == Decision::Ruled(Ruling::Deny),
+                covered,
+                "folds_case {folds_case}"
+            );
+        }
+    }
+
+    /// PERM-7. A rule on an ancestor written in one Unicode form of a directory's name covers a
+    /// workspace stored under another, as a rule about a file is.
+    #[test]
+    fn a_rule_on_an_ancestor_is_matched_by_canonical_equivalence() {
+        let mut permissions = rules(&["Read(//home/caf\u{e9}/**)"], &[], &[]);
+        permissions.cover_workspace("/home/cafe\u{301}/proj");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "a.txt"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let mut other = rules(&["Read(//home/caf\u{e9}/**)"], &[], &[]);
+        other.cover_workspace("/home/cafe/proj");
+        assert_eq!(
+            other.for_path(Subject::Read, "a.txt"),
+            Decision::Unmatched,
+            "a different name was read as the same directory"
         );
     }
 

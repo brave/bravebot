@@ -596,10 +596,16 @@ name a gate holds that place by ([PERM-3](#PERM-3)): with `linked` a link to `re
 at the top of the workspace too, so with `.env` a link, `Read(.env)` covers the file it reaches. A
 `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the workspace also
 covers the place under the workspace-relative name the file tools ask by, so with a session opened
-in the home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`; a rule about a place outside the
-workspace is left as written. The workspace is found in the rule's path in whichever Unicode form
-each is spelled in, so a rule spelled `caf\u{e9}-proj/**` covers `secret/key` in a workspace stored as
-`cafe\u{301}-proj`, whether or not the volume folds case. The rule stays one rule, and the name it
+in the home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. The workspace is found in the
+rule's path in whichever Unicode form each is spelled in, so a rule spelled `caf\u{e9}-proj/**`
+covers `secret/key` in a workspace stored as `cafe\u{301}-proj`, whether or not the volume folds
+case. A rule on an ancestor of the
+workspace covers the workspace under its relative names too: with a session opened in `~/proj`,
+`Read(~/**)`, `Read(~/)` and `Read(~/proj/)` refuse `secrets/canary.txt` as they refuse the full
+path of the file, and `Read(~/*/secrets/**)` refuses `secrets/canary.txt` and not a `secrets`
+nested under another directory. An ancestor's name is compared as written and in the canonical form
+of [PERM-7](#PERM-7)'s other names, and in the case the volume folds. A rule about a place that is
+neither the workspace, inside it nor above it is left as written. The rule stays one rule, and the name it
 reaches is covered at that place only, not wherever it appears as the written pattern may be
 ([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
 the spelling the person approved.
@@ -723,6 +729,14 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::permissions::a_full_path_rule_with_no_link_in_it_covers_a_project_file_by_its_relative_name`
 `verified-by: bravebot_agent::permissions::a_home_rule_covers_the_relative_name_in_a_session_opened_in_the_home_directory`
 `verified-by: bravebot_agent::tools::tests::confinement::a_home_rule_refuses_the_relative_name_in_a_session_opened_in_the_home_directory`
+`verified-by: bravebot_agent::tools::tests::confinement::a_rule_on_an_ancestor_of_the_workspace_refuses_the_relative_name_of_a_file_in_it`
+`verified-by: bravebot_agent::permissions::a_rule_on_an_ancestor_of_the_workspace_covers_the_workspace_by_its_relative_name`
+`verified-by: bravebot_agent::permissions::a_rule_on_an_ancestor_gives_no_relative_name_to_what_it_does_not_cover`
+`verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_of_the_workspace_covers_the_workspace_by_its_relative_name`
+`verified-by: bravebot_core::permissions::a_rule_that_is_not_on_an_ancestor_of_the_workspace_gains_no_relative_name`
+`verified-by: bravebot_core::permissions::the_relative_name_of_a_rule_on_an_ancestor_is_covered_at_that_place_only`
+`verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_is_matched_in_the_case_the_volume_folds`
+`verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_is_matched_by_canonical_equivalence`
 `verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
 `verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`

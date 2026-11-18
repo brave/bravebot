@@ -322,6 +322,11 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
         };
         Some(held.to_string_lossy().into_owned())
     });
+    // A rule about a place above the workspace, such as `~/**` in a session opened in `~/proj`,
+    // covers the workspace's files, which the file tools ask about by their relative names.
+    if let Some(root) = &root {
+        permissions.cover_workspace(&root.to_string_lossy());
+    }
 }
 
 /// `path` relative to `root` where it lies at or under it, with the names after the root spelled as
@@ -1830,6 +1835,90 @@ mod tests {
         assert_eq!(
             permissions.for_path(Subject::Read, "notes.md"),
             Decision::Unmatched
+        );
+    }
+
+    /// PERM-7: a rule on an ancestor of the workspace, such as `~/**` in a session opened in
+    /// `~/proj`, covers the workspace's files by the relative name the file tools ask by, for
+    /// `Read` and `Edit` and for `deny` and `ask`. `~/proj/` names the workspace itself and covers
+    /// it the same way.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_on_an_ancestor_of_the_workspace_covers_the_workspace_by_its_relative_name() {
+        let scratch = crate::testutil::scratch_dir("permissions-ancestor-of-the-workspace");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = home.join("proj");
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        for tree in ["~/**", "~/", "~/proj/**", "~/proj/"] {
+            for (subject, family) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+                for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+                    let settings = Settings::parse(&format!(
+                        r#"{{"permissions": {{"{list}": ["{family}({tree})"]}}}}"#
+                    ));
+                    let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+                    assert!(rejected.is_empty(), "{rejected:?}");
+                    for name in ["secrets/canary.txt", "notes.md"] {
+                        assert_eq!(
+                            permissions.for_path(subject, name),
+                            Decision::Ruled(ruling),
+                            "{family}({tree}) in {list} did not cover {name}, which the file tools ask by"
+                        );
+                    }
+                    let absolute = root.join("secrets").join("canary.txt");
+                    assert_eq!(
+                        permissions.for_path(subject, &absolute.display().to_string()),
+                        Decision::Ruled(ruling),
+                        "{family}({tree}) in {list} stopped covering the absolute name"
+                    );
+                    assert_eq!(
+                        permissions.len(),
+                        1,
+                        "a spelling was counted as a rule of its own"
+                    );
+                }
+            }
+        }
+    }
+
+    /// PERM-7: a rule on an ancestor covers the workspace and nothing beside it. A sibling of the
+    /// workspace under the same ancestor is not named by a relative path, an `allow` rule on the
+    /// ancestor grants no relative name, and a rule about a place inside the workspace is not
+    /// widened to the rest of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_on_an_ancestor_gives_no_relative_name_to_what_it_does_not_cover() {
+        let scratch = crate::testutil::scratch_dir("permissions-ancestor-limits");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = home.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(~/sibling/**)", "Read(~/proj/secrets/**)"], "allow": ["Edit(~/**)"]}}"#,
+        );
+        let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "secrets/canary.txt"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched,
+            "a rule about a place inside the workspace covered the rest of it"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "sibling/a"),
+            Decision::Unmatched,
+            "a rule about a sibling of the workspace covered a project name"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "notes.md"),
+            Decision::Unmatched,
+            "an allow rule on an ancestor granted a relative name"
         );
     }
 
