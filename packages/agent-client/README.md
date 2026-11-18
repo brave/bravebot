@@ -80,10 +80,12 @@ Before you use it:
 The relay lets an app on a phone or emulator drive `bravebot-host` for the stage-3d experiment. It is a development transport for synthetic data. It does not resolve U1 or authorize control of a real session.
 
 ```sh
-bravebot-host --sessions-root <root> --workspace <dir> -- "$(command -v node)" dist/scripts/dev-relay.js --workspace <dir>
+bravebot-host --sessions-root <root> --workspace <dir> \
+  --client relay --answers confirm,run,fetch,ask,trust --program "$(command -v node)" \
+  --arg dist/scripts/dev-relay.js --arg --workspace --arg <dir>
 ```
 
-The host runs `dist/scripts/dev-relay.js` as its client. The relay listens on 127.0.0.1 on a port the system picks and prints the port and a six-digit code for this launch on standard error. Nothing else records the code, and it is not part of the address. It takes one WebSocket connection, and the first message must be the code. A wrong code, or none within a minute, ends the relay. After the code it sends the host's workspaces and then passes the channel through unchanged. When either end closes the relay exits, and typing `launch` to the host starts a new one with a new port and code. Any program on the computer that can reach 127.0.0.1 can reach the port, and only the code keeps it out.
+The host runs `dist/scripts/dev-relay.js` as its client. The relay listens on 127.0.0.1 on a port the system picks and prints the port and a six-digit code for this launch on standard error. Nothing else records the code, and it is not part of the address. It takes one WebSocket connection, and the first message must be the code. A wrong code, or none within a minute, ends the relay. After the code it sends the host's workspaces and then passes the channel through unchanged. `--answers` lists the questions the phone may answer. With `trust` the phone answers the folder's trust question, so any program that has the port and code can answer it, and a kept yes covers later sessions in that folder. Use a scratch folder. When either end closes the relay exits, and typing `launch relay` to the host starts a new one with a new port and code. Any program on the computer that can reach 127.0.0.1 can reach the port, and only the code keeps it out.
 
 `@brave/agent-client/dev-relay` is the app's end. `connectDevRelay({ port, code, open })` takes the WebSocket constructor from the caller and resolves with a client and an `ended` promise. It is a separate export so a release build need not import it.
 

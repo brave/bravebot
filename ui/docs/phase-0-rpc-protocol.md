@@ -1941,13 +1941,13 @@ block. The stdio TypeScript client for it is `packages/agent-client`, which answ
 
 | Method | Parameters | Result |
 |---|---|---|
-| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
+| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }], "answers": [kind] }` |
 | `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
 | `session.close` | `session` | `{ "state": "closing" }` |
 | `session.attach` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 | `session.view.resync` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 
-`instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
+`instance` names the run of the host and changes when the host restarts. `answers` lists the kinds of answer the person allowed this connection to give on the host's command line, some of `confirm`, `run`, `fetch`, `ask` and `trust`, and grants nothing. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
 
 A session has one controller, the connection that opened it or took it over, and `controlled` says whether that connection is the one being served. Another connection is refused with `not_allowed`, except that once the controller's connection has ended any later connection may close the session or take it over with `session.attach`. A connection that controls a session is refused `session.attach` for it with `bad_request`, as is a session that started no view; a closing, closed or unknown session is `no_such_session`.
 

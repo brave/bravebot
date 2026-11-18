@@ -26,6 +26,8 @@ interface Host {
   stderr(): string
   /** The port and code of the next relay the host starts, in the order they start. */
   launch(): Promise<Launch>
+  /** Type `launch relay` once the host says the last relay ended, which is when it accepts one. */
+  relaunch(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -34,6 +36,7 @@ after(async () => {
   for (const made of hosts) await made.stop()
 })
 
+const ENDED = 'bravebot-host: client relay ended'
 const LISTENING = /dev-relay: listening on 127\.0\.0\.1 port (\d+); the code for this launch is (\d{6})\n/g
 
 async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
@@ -45,7 +48,12 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
   const stub = await ModelStub.start(plans)
   const child = spawn(
     hostBinary(),
-    ['--sessions-root', join(scratch, 'sessions'), '--workspace', project, '--', process.execPath, relay, '--workspace', project],
+    [
+      '--sessions-root', join(scratch, 'sessions'), '--workspace', project,
+      // The relay answers trust in this scratch workspace until a host test client can.
+      '--client', 'relay', '--answers', 'confirm,run,fetch,ask,trust', '--program', process.execPath,
+      '--arg', relay, '--arg', '--workspace', '--arg', project,
+    ],
     { env: isolatedEnvironment(home, stub.endpoint), cwd: scratch },
   )
   let text = ''
@@ -76,6 +84,18 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
           look()
         }),
         'a relay to start listening',
+      ),
+    relaunch: () =>
+      within(
+        new Promise<void>((resolve) => {
+          const look = () => {
+            if (text.split(ENDED).length - 1 < taken) return void waiters.push(look)
+            child.stdin.write('launch relay\n')
+            resolve()
+          }
+          look()
+        }),
+        'the host to say the relay ended',
       ),
     async stop() {
       if (child.exitCode === null) {
@@ -192,10 +212,11 @@ test('an app whose connection ended takes its session over through the next rela
   await within(first.ended, 'the client to see its connection end')
   assert.equal(session.view.ended?.reason, 'connection_lost')
 
-  host.child.stdin.write('launch\n')
+  await host.relaunch()
   const second = await connect(await host.launch(), made.open)
   const after = await second.client.instance()
   assert.equal(after.instance, before.instance, 'the host did not restart')
+  assert.deepEqual(after.answers, ['confirm', 'run', 'fetch', 'ask', 'trust'], 'the answers the command line gave the relay')
   assert.deepEqual(after.sessions, [{ session: session.id, state: 'open', working: false, controlled: false }])
 
   const taken = await second.client.attach(session.id)
@@ -230,7 +251,7 @@ test('a send whose answer was lost with the connection is looked up after taking
   assert.ok(lost instanceof UnknownSendError, `the cut-off send failed with ${String(lost)}`)
   await within(first.ended, 'the client to see its connection end')
 
-  host.child.stdin.write('launch\n')
+  await host.relaunch()
   const second = await connect(await host.launch(), made.open)
   const listed = await second.client.instance()
   assert.equal(listed.instance, instance, 'the host did not restart, so the session handle is the same session')
@@ -257,7 +278,7 @@ test('a wrong code ends that relay and leaves the host running, and the next lau
   await assert.rejects(connect(first, made.open, otherThan(first.code)), (error: unknown) => error instanceof RelayRefusedError && error.wrongCode)
   await within(
     new Promise<void>((resolve) => {
-      const look = () => (host.stderr().includes('client ended') ? resolve() : setTimeout(look, 20))
+      const look = () => (host.stderr().includes(ENDED) ? resolve() : setTimeout(look, 20))
       look()
     }),
     'the host to see the relay end',
@@ -265,7 +286,7 @@ test('a wrong code ends that relay and leaves the host running, and the next lau
   assert.equal(host.child.exitCode, null, 'the host is still running')
   await assert.rejects(connect(first, made.open), (error: unknown) => error instanceof RelayRefusedError && !error.wrongCode, 'the ended relay takes no second try')
 
-  host.child.stdin.write('launch\n')
+  await host.relaunch()
   const second = await host.launch()
   assert.notEqual(second.port, first.port)
   // One chance in a million that two launches draw the same code.
@@ -289,7 +310,7 @@ test('the app closing its connection ends the relay and not the host, and the ho
   const first = await connect(await host.launch(), made.open)
   made.opened[0]!.close(1000, 'done')
   assert.match(await within(first.ended, 'the client to see its connection end'), /relay/)
-  host.child.stdin.write('launch\n')
+  await host.relaunch()
   const second = await connect(await host.launch(), made.open)
   assert.equal(host.child.exitCode, null)
 
