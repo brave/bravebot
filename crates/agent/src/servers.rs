@@ -8315,6 +8315,7 @@ for line in sys.stdin:
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
