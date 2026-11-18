@@ -590,7 +590,8 @@ pub(super) fn run_turn_animated(
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
     // sent and the files that came with it cannot disagree.
-    for file in files_named_in(
+    for file in files_named_by_the_person(
+        session,
         prompt,
         wrote,
         workspace.root(),
@@ -1373,6 +1374,20 @@ pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> bool {
         && session.looping().is_none()
         && session.goal().is_none()
         && session.watches().is_empty()
+}
+
+/// The files a prompt vouches for, read with each folded paste put back behind its marker.
+///
+/// The words a person pasted are sent as text and name no file (NAME-12), so an `@` in them does
+/// not vouch for a path nobody typed. [`Session::folded`] puts the marker back where the words are.
+pub(super) fn files_named_by_the_person(
+    session: &Session,
+    prompt: &str,
+    wrote: Wrote,
+    root: &std::path::Path,
+    sources: &bravebot_mentions::Sources,
+) -> Vec<String> {
+    files_named_in(&session.folded(prompt), wrote, root, sources)
 }
 
 /// The files a prompt vouches for by naming them with `@`.

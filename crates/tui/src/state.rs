@@ -2531,6 +2531,10 @@ impl Session {
     /// Returns whether the key was spent here. A shell line, a line with a row of the list
     /// highlighted, and one naming only files the turn can read are left for the arms that follow.
     /// Asked of the line the person wrote, which is the only kind that names files (NAME-1).
+    ///
+    /// Asked of the line as the box holds it, with each folded paste still a marker. The words
+    /// behind a marker are sent as text and name no file (NAME-12), and a person cannot see or edit
+    /// them to remove an `@` from them.
     pub fn refuse_unsendable_names(&mut self) -> bool {
         if self.shell || self.completion != 0 {
             return false;
@@ -2538,7 +2542,7 @@ impl Session {
         let Some(workspace) = self.named_in.clone() else {
             return false;
         };
-        let line = self.unfolded(self.input.trim());
+        let line = self.input.trim().to_string();
         let refused: Vec<String> = bravebot_agent::named::surveyed(
             &workspace,
             bravebot_mentions::referenced(&line),

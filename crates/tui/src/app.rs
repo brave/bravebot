@@ -21506,6 +21506,32 @@ mod tests {
         );
     }
 
+    /// NAME-12: a name inside a folded paste vouches for no file, and a name the person typed in the
+    /// same line still does. The turn reads names from the prompt with each paste folded back to its
+    /// marker. Rejects reading them from the unfolded words, which opens a file the person never
+    /// typed the name of.
+    #[test]
+    fn a_name_inside_a_folded_paste_names_no_file() {
+        let mut session = Session::new("none");
+        for c in "read @src/lib.rs and ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "one\ncc @secrets.txt\nthree\nfour\n");
+        let prompt = session.unfolded(session.input());
+        assert!(prompt.contains("@secrets.txt"), "{prompt}");
+
+        assert_eq!(
+            files_named_by_the_person(
+                &session,
+                &prompt,
+                Wrote::ThePerson,
+                std::path::Path::new("."),
+                &[]
+            ),
+            vec!["src/lib.rs".to_string()]
+        );
+    }
+
     /// Leaving ends a goal, so a person who asked to leave during a turn does not wait on a check
     /// of it, or have the work carried on, before the session closes.
     #[test]
