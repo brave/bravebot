@@ -1545,7 +1545,8 @@ mod tests {
     }
 
     /// A checked start removes the generic names of `CODE_SELECTORS` in the sandbox crate as well
-    /// as the CLI's own, so `PYTHONPATH` and a `GIT_CONFIG_` name a stage may write do not reach it.
+    /// as the CLI's own, so `PYTHONPATH`, `PYTHONEXECUTABLE` and a `GIT_CONFIG_` name a stage may
+    /// write do not reach it.
     #[test]
     fn an_aws_start_has_the_generic_code_selectors_removed_as_well() {
         let (session, planted, genuine, _safe) = planted_and_genuine("credentials-generic");
@@ -1553,6 +1554,8 @@ mod tests {
         assert!(withheld("PYTHONPATH", &planted, &session));
         assert!(!withheld("PYTHONPATH", &genuine, &session));
         assert!(withheld("GIT_CONFIG_GLOBAL", &genuine, &session));
+        assert!(withheld("PYTHONEXECUTABLE", &planted, &session));
+        assert!(!withheld("PYTHONEXECUTABLE", &genuine, &session));
     }
 
     /// The whole path from the process environment to the program started: the real
