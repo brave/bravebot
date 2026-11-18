@@ -770,7 +770,15 @@ the mode `workspace-write` reads these on purpose:
 
 A path is refused by where it leads, so a link from a readable directory
 to a refused one reaches nothing. On macOS the profile states the refusals after the grants they
-narrow and the lifts after the refusals, since the last matching rule wins. On Linux, where a
+narrow and the lifts after the refusals, since the last matching rule wins. Seatbelt does not carry a
+refusal up to the directories holding the refused path, so a directory that lies between a write row
+and a refused path beneath it, the row's own directory included, is also refused removal, which is
+what renaming it away is, and the refused path is not reached under a new name. The paths are the
+refusals of a read and of a write, each judged where it stands and where its links lead. A directory
+that is not on disk has nothing to rename away, but a tree built elsewhere in the row could be
+moved to its name, so the topmost missing name between the row and the refused path is refused
+creation, whether by a directory, a link or a rename. A file made or removed beside the
+refused path or beside the missing name is not refused. On Linux, where a
 directory is granted with everything beneath it and no subdirectory can be held back, the
 directories above each refused location are listed when the stage starts and granted entry by
 entry, with the refused one left out, a link in a listing is not followed, and what is compared is
@@ -917,6 +925,14 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_sandbox::macos::a_program_linked_against_the_platforms_tls_library_starts_under_the_base`
 `verified-by: bravebot_sandbox::macos::a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refused_path_is_not_renamed_away`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refusal_spelled_as_a_link_is_not_renamed_away`
+`verified-by: bravebot_sandbox::macos::the_profile_refuses_removal_of_each_directory_between_a_write_row_and_a_refusal`
+`verified-by: bravebot_sandbox::macos::a_tree_built_elsewhere_is_not_moved_to_a_missing_directory_above_a_refusal`
+`verified-by: bravebot_agent::confine::a_stage_cannot_move_a_tree_to_a_missing_directory_above_a_persistence_location`
+`verified-by: bravebot_agent::confine::a_stage_cannot_rename_the_directory_above_a_credential_or_a_persistence_location`
+`verified-by: bravebot_agent::confine::a_bypass_stage_cannot_rename_the_directory_above_a_listed_refusal`
+`verified-by: bravebot_agent::confine::a_bypass_stage_in_a_session_on_the_home_cannot_rename_the_directory_above_a_refusal`
 
 <a id="SANDBOX-13"></a>
 ### SANDBOX-13: a confined process can look at any path, and reads and lists only its grants
@@ -1803,7 +1819,12 @@ because an allow follows a deny at the same depth, so the directory `~/.ssh` as 
 would let every program the stage starts read and write the keys. The refusal on those platforms
 covers the table of [SANDBOX-12](#SANDBOX-12) and, on macOS, `/Library/Keychains`. Names are
 compared without regard to case on macOS and exactly on Linux. A directory above a location, the
-home directory among them, is granted and the location inside it stays refused. On macOS Seatbelt's
+home directory among them, is granted and the location inside it stays refused. On macOS a stage
+cannot rename or remove a directory that lies between a row of its own and a location, the row's
+directory included, and it cannot make the topmost directory that is missing between them, so the
+location is not read or written under a new name: in a session opened on the home directory,
+`~/.config` and `~/Library` stay where they are, and a tree built elsewhere cannot be moved to
+`~/.config/systemd`. On macOS Seatbelt's
 refusal of a read is not a refusal of a write, so each location the stage is refused reading that
 lies inside a directory it may write is refused writing too. On Linux and on macOS each place under the home
 directory where a write becomes code that runs later outside the profile is refused writing as well, where a
@@ -1904,7 +1925,9 @@ write there reaches past the stage that made it. The scratch directory is held t
 made, and not to the credential table alone, because every stage writes the temporary directory and
 so the name can be made to lead to any directory the account can reach, most of which are no
 credential location. The cost is that a stage of a session opened on the
-home directory cannot run `git config --global`.
+home directory cannot run `git config --global`. On macOS a stage also cannot rename or remove a
+directory above a refused path, so a stage of that session cannot rename `~/.config` or
+`~/Library`.
 
 Every cache is written by every stage on Linux and macOS in the mode `workspace-write` because a stage is as often a script or a
 wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
@@ -2044,6 +2067,10 @@ and Windows `rundll32` were not checked either ([SANDBOX-30](#SANDBOX-30)).
 `verified-by: bravebot_sandbox::policy::a_judged_row_above_a_refusal_that_became_a_link_is_an_error_and_one_not_judged_is_listed`
 `verified-by: bravebot_sandbox::linux::a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed`
 `verified-by: bravebot_sandbox::linux::a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refused_path_is_not_renamed_away`
+`verified-by: bravebot_agent::confine::a_bypass_stage_in_a_session_on_the_home_cannot_rename_the_directory_above_a_refusal`
+`verified-by: bravebot_sandbox::macos::a_tree_built_elsewhere_is_not_moved_to_a_missing_directory_above_a_refusal`
+`verified-by: bravebot_agent::confine::a_stage_cannot_move_a_tree_to_a_missing_directory_above_a_persistence_location`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -3570,7 +3597,10 @@ held back. Where it
 grants a directory with everything beneath it (Landlock) a directory above a refused write is listed
 and granted entry by entry as [SANDBOX-12](#SANDBOX-12) does for a read, which leaves that directory
 without the right to make an entry directly in it: a program cannot create a new file beside a file
-the person denied it writing.
+the person denied it writing. On macOS a directory between a write row and a path the person
+refused, two or more levels below the row among them, is refused removal and renaming, and the
+topmost directory missing between them is refused creation, so the path is not read or written
+under a new name, and a file made beside it is still written.
 
 Every stage of every line a turn starts is built by one function and so holds the lists, a stage
 of a pipeline, of a line left running and of a delegate's turn alike, in the terminal and in a
@@ -3680,6 +3710,10 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_an_editor_runs`
 `verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refused_path_is_not_renamed_away`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refusal_spelled_as_a_link_is_not_renamed_away`
+`verified-by: bravebot_agent::confine::a_stage_cannot_rename_the_directory_above_a_credential_or_a_persistence_location`
+`verified-by: bravebot_agent::confine::a_bypass_stage_cannot_rename_the_directory_above_a_listed_refusal`
 
 <a id="SANDBOX-26"></a>
 ### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
