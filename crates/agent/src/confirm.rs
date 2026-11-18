@@ -777,19 +777,19 @@ impl RunRequest {
             .collect()
     }
 
-    /// Whether an entry could record this line at all, which is what `a` would make.
-    ///
-    /// One question rather than a list of reasons repeated at each place that asks, so a reason
-    /// added later cannot reach the drawing and miss the layer that acts on the answer.
-    ///
-    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
-    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
-    /// neither ([PERM-9]).
+    /// Whether an entry could record this line at all, which is what `a` would make, as
+    /// [`bravebot_core::command::Plan::can_be_remembered_as`] answers it.
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered()
-            && !self.asks_for_scopes()
-            && !self.unconfined
-            && !self.protected
+        self.plan.can_be_remembered_as(self.asked())
+    }
+
+    /// What this request adds to its plan that no entry holds.
+    pub fn asked(&self) -> bravebot_core::command::Asked {
+        bravebot_core::command::Asked {
+            scopes: self.asks_for_scopes(),
+            unconfined: self.unconfined,
+            protected: self.protected,
+        }
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -933,17 +933,10 @@ impl RunRequest {
     /// [`RunRequest::carries_an_assignment`] is asked separately rather than answered from this
     /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
-        let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
         if self.asks_for_scopes() || self.unconfined {
-            return named;
+            return Vec::new();
         }
-        for step in self.plan.steps() {
-            let command = step.command(&self.plan.directory);
-            if !named.contains(&command) {
-                named.push(command);
-            }
-        }
-        named
+        self.plan.entries()
     }
 }
 

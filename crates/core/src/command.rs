@@ -909,6 +909,18 @@ fn every_step_is_its_entry(steps: &[Step]) -> bool {
     true
 }
 
+/// What a run's request adds to its plan that no entry holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Asked {
+    /// The planner asked the line to carry a credential scope, a toolchain list, loopback or an
+    /// ssh key (SANDBOX-26).
+    pub scopes: bool,
+    /// The planner asked the line to start with no profile (SANDBOX-29).
+    pub unconfined: bool,
+    /// A file the line redirects into is a protected path (PERM-9).
+    pub protected: bool,
+}
+
 /// A command line, compiled.
 ///
 /// This is the routing field a raw string does not have: what will run, with which binary and
@@ -1016,6 +1028,33 @@ impl Plan {
             && self.writes.is_empty()
             && self.reads.is_empty()
             && self.stdin.is_none()
+    }
+
+    /// Whether an entry could record this line as it was asked for: the plan can be remembered,
+    /// and the request adds nothing an entry cannot hold.
+    ///
+    /// One question rather than a list of reasons repeated at each place that asks, so a reason
+    /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    ///
+    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
+    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
+    /// neither ([PERM-9]).
+    ///
+    /// [PERM-9]: ../../../docs/specs/permissions.md
+    pub fn can_be_remembered_as(&self, asked: Asked) -> bool {
+        self.can_be_remembered() && !asked.scopes && !asked.unconfined && !asked.protected
+    }
+
+    /// The entries vouching for this plan would add, without repeats and in stage order.
+    pub fn entries(&self) -> Vec<crate::programs::Command> {
+        let mut named: Vec<crate::programs::Command> = Vec::new();
+        for step in self.steps() {
+            let command = step.command(&self.directory);
+            if !named.contains(&command) {
+                named.push(command);
+            }
+        }
+        named
     }
 
     /// The plan as a person should read it, in a prompt, in a result and in a job's line.
