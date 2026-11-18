@@ -4509,6 +4509,14 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "a landing on a volume that folds case missed another case of the name it reaches"
         );
+
+        let mut unasked = rules_where_the_volume_could_not_be_asked(&["Read(linked/**)"], &[], &[]);
+        unasked.follow_links(|_| Some("Real".to_string()));
+        assert_eq!(
+            unasked.for_path(Subject::Read, "REAL/secret"),
+            Decision::Ruled(Ruling::Deny),
+            "a landing where the volume could not be asked missed another case of the name it reaches"
+        );
     }
 
     /// `*` stays inside a segment and `**` crosses them. Without that a rule about one directory
