@@ -5370,12 +5370,16 @@ mod tests {
             std::fs::create_dir_all(&home).unwrap();
             let key = format!("{WORKSPACE}/.Bravebot/memory/NOTES.md");
             crate::memory::record_before_write(Some(&home), &key, folds).unwrap();
-            let recorded = crate::memory::Record::new(&home, WORKSPACE).paths();
+            // The record is kept under the directory as the volume spells it through every link,
+            // which differs from the literal path where a parent is a link, as `/home` is on macOS.
+            let spelled =
+                crate::workspace::on_disk(WORKSPACE).unwrap_or_else(|| WORKSPACE.to_string());
+            let recorded = crate::memory::Record::new(&home, &spelled).paths();
             let _ = std::fs::remove_dir_all(&home);
             assert_eq!(
                 recorded,
                 if folds {
-                    vec![format!("{WORKSPACE}/.bravebot/memory/notes.md")]
+                    vec![format!("{spelled}/.bravebot/memory/notes.md")]
                 } else {
                     Vec::new()
                 },
