@@ -1259,7 +1259,8 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 
 `"permissions": { "readsStayInWorkspace": true }` refuses every path outside the working directory,
 in every mode. No directory may be opened beside the workspace, whatever a rule, a mode, or an answer
-given during the session would otherwise open: `/add-dir` and `--add-dir` are refused, a name in
+given during the session would otherwise open: `/add-dir`, `--add-dir` and a directory a front end
+names when it opens a session ([ACP-9](acp.md#ACP-9)) are refused, a name in
 `additionalDirectories` is refused rather than put to anybody, and a directory that was already open
 when the key was read is not reachable either, which is what a resume reopening the directories its
 own record holds arrives as ([PERM-10](#PERM-10)).
@@ -1277,8 +1278,9 @@ among them, is refused as a move outward.
 **Where the refusal is made.** In the workspace, at the two places the reach exists: the one function
 every door onto a directory by name resolves through, and the test of where a path lands that every
 read, write, listing and search already goes through ([TRUST-10](trust-map.md#TRUST-10)). Not in the
-command that typed the path, because `/add-dir`, `--add-dir` and a name a settings file asked about
-are three doors onto one thing and a refusal written at one of them is two doors left open. Not in
+command that typed the path, because `/add-dir`, `--add-dir`, a directory named when a session
+opens and a name a settings file asked about all open the same reach, and a refusal written in one of
+them leaves the others open. Not in
 the kernel either: it does no I/O ([layering.md](layering.md#LAYER-1)), and where a path lands is a
 question only something that can resolve a name can answer, which is why the confinement this
 tightens is already there rather than in a policy gate. The value reaching the workspace is a boolean
@@ -1320,6 +1322,7 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::add_dir_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_ui_bridge::workspace::a_turn_is_held_inside_the_project_where_its_settings_ask_for_it`
+`verified-by: bravebot_ui_bridge::bridge::session_new_refuses_a_directory_while_reads_stay_in_the_workspace`
 `verified-by: bravebot_cli::running::add_dir_is_refused_where_a_layer_keeps_reads_in_the_workspace`
 
 <a id="PERM-17"></a>

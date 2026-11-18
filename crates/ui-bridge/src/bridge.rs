@@ -1055,11 +1055,18 @@ impl Bridge {
 
         // Opened as `--add-dir` opens one: reachable, and vouched for by nobody. An entry that is
         // not an absolute path to an existing directory refuses the whole request before anything
-        // is minted, rather than opening the session with some of the list silently missing.
+        // is minted, rather than opening the session with some of the list silently missing. The
+        // probe holds the key every turn's workspace holds, read from the same layers, so a name
+        // no turn could reach is refused here with the key named (PERM-16).
         let mut additional = Vec::new();
         if !request.param("directories").is_null() {
+            let reads_stay_inside = crate::rules::reads_stay_in_workspace(
+                &crate::settings::layers(Some(&directory), self.settings.as_deref()),
+                &bravebot_config::Managed::load(),
+            );
             let mut probe = Workspace::new(&directory)
-                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
+                .with_reads_kept_inside(reads_stay_inside);
             for path in strings(request, "directories")? {
                 let canonical = probe
                     .add_directory(&path)
@@ -5477,6 +5484,39 @@ mod additional_directories_tests {
         .unwrap();
         let refused = bridge.dispatch(&request).unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest);
+        assert!(bridge.open.is_empty(), "a refused session.new minted one");
+    }
+
+    /// PERM-16. While `permissions.readsStayInWorkspace` holds, every turn's workspace refuses a
+    /// directory beside the project, so `session.new` refuses one before a session is minted, and
+    /// says which key refused it. The failure this rejects is a session opened with the directory
+    /// that no turn can reach.
+    #[test]
+    fn session_new_refuses_a_directory_while_reads_stay_in_the_workspace() {
+        let project = tempfile::tempdir().unwrap();
+        let beside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join(".bravebot")).unwrap();
+        std::fs::write(
+            project.path().join(".bravebot/settings.json"),
+            r#"{"permissions": {"readsStayInWorkspace": true}}"#,
+        )
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.new", "params": {
+                "directory": project.path(),
+                "directories": [beside.path()],
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let refused = bridge.dispatch(&request).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
+        assert!(
+            refused.message.contains("permissions.readsStayInWorkspace"),
+            "the refusal does not name the key: {}",
+            refused.message
+        );
         assert!(bridge.open.is_empty(), "a refused session.new minted one");
     }
 }
