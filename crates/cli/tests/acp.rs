@@ -40,8 +40,13 @@ fn scratch(name: &str) -> (PathBuf, PathBuf) {
 /// `bravebot` with `arguments`, in `project`, with `home` as the person's.
 fn bravebot(home: &Path, project: &Path, arguments: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+    command.args(arguments);
+    in_home(command, home, project)
+}
+
+/// `command` run in `project`, with `home` as the person's and its standard streams piped.
+fn in_home(mut command: Command, home: &Path, project: &Path) -> Command {
     command
-        .args(arguments)
         .current_dir(project)
         .env("HOME", home)
         .env_remove("BRAVEBOT_HOME")
@@ -351,6 +356,52 @@ fn acp_waits_for_the_end_of_an_open_session_before_it_exits() {
         "session-started\nsession-ended\n",
         "the program was gone before the end of the session had run"
     );
+}
+
+/// CLI-39 with RPCVIEW-8: a descriptor the program was started with, other than standard input,
+/// output and error, reaches none of the programs it starts. A shell opens a file at descriptor 200
+/// and starts `bravebot acp` with it open, and a `session-started` hook reports whether it has
+/// descriptor 200 and writes to it if so. A program that left the descriptor open would let the
+/// hook write into the file.
+#[cfg(unix)]
+#[test]
+fn acp_gives_a_descriptor_it_was_started_with_to_none_of_the_programs_it_starts() {
+    let (home, project) = scratch("descriptors");
+    let leaked = home.join("leaked.txt");
+    let seen = home.join("seen.txt");
+    std::fs::write(&leaked, "").unwrap();
+    let check = format!(
+        "if [ -e /dev/fd/200 ]; then echo held; echo hook > /dev/fd/200; else echo absent; fi > '{}'",
+        seen.display()
+    );
+    std::fs::write(
+        bravebot_config::hooks::hooks_file(&home.join(".bravebot")),
+        json!({"hooks": [{"on": "session-started", "run": ["/bin/sh", "-c", check]}]}).to_string(),
+    )
+    .unwrap();
+    let (config, _requests, _server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let settings = settings_for(&home, &config.endpoint);
+    let mut shell = Command::new("/bin/sh");
+    shell.args([
+        "-c",
+        r#"exec "$0" acp --settings "$1" 200>>"$2""#,
+        env!("CARGO_BIN_EXE_bravebot"),
+        settings.to_str().unwrap(),
+        leaked.to_str().unwrap(),
+    ]);
+    let mut editor = Editor::start(in_home(shell, &home, &project));
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, "hello");
+    editor.answer_next("allow-once");
+    editor.response(prompt);
+    let (status, _, stderr) = editor.finish();
+    assert!(status.success(), "{status}: {stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap(),
+        "absent\n",
+        "the hook was given the descriptor the program was started with"
+    );
+    assert_eq!(std::fs::read_to_string(&leaked).unwrap(), "");
 }
 
 /// CLI-39: an input that ends while a write waits on the editor leaves the write unwritten, the

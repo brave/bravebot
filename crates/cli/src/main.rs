@@ -527,6 +527,15 @@ fn main() -> ExitCode {
     // unusable. See CRED-23.
     let _ = bravebot_sandbox::crash::disable_core_dumps();
 
+    // Before any thread exists: a descriptor whoever started this process left open would reach
+    // every hook, tool and command it starts, so each one other than standard input, output and
+    // error is marked close-on-exec. A failure is said and the run goes on. See RPCVIEW-8.
+    if let Err(error) = bravebot_sandbox::process::withhold_inherited_descriptors() {
+        eprintln!(
+            "bravebot: the descriptors this process was started with could not be kept from the programs it starts: {error}"
+        );
+    }
+
     // Before any program is looked up, and so before the language is loaded and the command line is
     // read, and for every command: a command that opens no session has no `Workspace::new` to
     // record its directory, and a `bin` of the directory it ran in or of the checkout holding it,
