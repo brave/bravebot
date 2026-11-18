@@ -39532,11 +39532,17 @@ mod tests {
             );
         } else {
             // Linux and Windows cannot hold the file back from a stage that may write `a`, so it
-            // is read as a checkout's file there and its allow rule is only proposed (#2599).
-            assert_ne!(
-                first,
-                Decision::Ruled(Ruling::Allow),
-                "a named file inside the working directory granted where it cannot be held back"
+            // is read as a checkout's file there and its allow rule is only proposed (#2599). The
+            // helper answers yes to a proposal, so the decision is `Allow` here too and the
+            // withholding is read from the settings.
+            assert!(
+                answers
+                    .rules
+                    .sources
+                    .settings(workspace.root())
+                    .named_withheld()
+                    .is_some(),
+                "a named file inside the working directory was not withheld where it cannot be held back"
             );
         }
         let mut offered = Vec::new();
