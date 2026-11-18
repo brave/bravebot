@@ -2134,7 +2134,9 @@ Where screening is asked for ([CHECK-11](../vetting.md#CHECK-11)), in any mode a
 released in the result when its word is `safe`. The release is `read_output`'s: the value is
 `(T,priv)`, the trail credits the check ([CHECK-8](../vetting.md#CHECK-8)), nobody is asked and
 nobody is shown anything. The check is a model call like the one `read_output` makes, so its tokens
-and the time spent waiting on it are the turn's, and it is announced in the same way. Any other word,
+and the time spent waiting on it are the turn's, and it is announced in the same way. In a
+delegate the tokens are the turn's spend but are not counted against the delegate's budget
+([DELEGATE-29](../delegation.md#DELEGATE-29)). Any other word,
 and a check that could not be made, leaves the output behind its reference with nobody asked, in a
 mode that asks as in one that does not: the person is asked when the planner calls `read_output`, as
 it would have been without `read`. The result then says that `read: true` did not return the output
@@ -2238,6 +2240,7 @@ decide it.
 `verified-by: bravebot_agent::turn::an_ended_job_whose_last_look_asked_to_read_stays_a_reference_where_a_check_objects`
 `verified-by: bravebot_agent::turn::a_stop_during_the_check_on_an_ended_jobs_account_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::a_look_after_a_released_account_of_an_ended_job_lists_its_reference`
+`verified-by: bravebot_agent::turn::a_checks_tokens_do_not_warn_a_delegate_whose_run_read_its_own_output`
 `verified-by: bravebot_agent::tools::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`

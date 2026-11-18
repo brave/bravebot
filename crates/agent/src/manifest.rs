@@ -787,7 +787,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         cancel,
     ) {
         Ok(settling) => {
-            accounting.spent.add_usage(settling.usage);
+            accounting.spent.add_unbudgeted(settling.usage);
             accounting.elapsed.stalled += settling.waited;
             accounting.publish(reporter);
         }
@@ -1595,6 +1595,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         asked_about,
         exposed,
         tokens: accounting.spent.tokens,
+        budgeted_tokens: accounting.spent.budgeted_tokens,
         output_tokens: accounting.spent.output_tokens,
         cached: accounting.spent.cached,
         context_tokens: 0,
