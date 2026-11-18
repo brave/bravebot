@@ -1240,7 +1240,9 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 The user's own directory is read as trusted by provenance rather than by any rule here. A
 project's own files are **not** covered by that and are read through this spec, whatever their
 names. What is kept in that directory and how it is found is
-[instructions.md](instructions.md); what it is trusted for is [skills.md](skills.md).
+[instructions.md](instructions.md); what it is trusted for is [skills.md](skills.md). That includes
+`~/.bravebot/plugins`: an installed plugin's skills and definitions are read from provenance as the
+user's own are ([PLUGIN-5](plugins.md#PLUGIN-5)), and the map has no rule for any path there.
 [CHECKOUT-6](checkouts.md#CHECKOUT-6) puts the checkouts delegates are given under that directory. They hold a project's files, so they are read through this spec
 ([CHECKOUT-8](checkouts.md#CHECKOUT-8)).
 

@@ -66,6 +66,7 @@ pub mod opener;
 pub mod panel;
 pub mod peek_mode;
 pub mod picking;
+pub mod plugin_command;
 mod pointer;
 mod powershell;
 pub mod preview;

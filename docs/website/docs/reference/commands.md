@@ -70,6 +70,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias> \| remove <alias>]` | List the MCP servers, start one that is not running, turn one off for the session, or remove one for good |
+| `/plugin` | `[add <path> \| list \| remove <name> \| enable <name> \| disable <name>]` | Install a plugin from a folder on this machine after you confirm it, list the installed ones, or remove, enable or disable one |
 | `/lsp` | | Say which language servers this session has started |
 | `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
@@ -957,6 +958,17 @@ others. A pattern that names no server changes nothing and says so.
 Typed while a turn runs, the bare word and `list` are carried out as you type them, and every other
 form waits for the turn to end. See
 [starting or stopping one during a session](../customize/mcp-servers.md#starting-or-stopping-one-during-a-session).
+
+## `/plugin`
+
+Typed by you, and by nothing else: no tool the model is offered installs or changes a plugin, and a
+line that arrives in pasted text is not this command. `add <path>` reads the folder at `<path>` on
+this machine and installs it into the plugins directory under `~/.bravebot`, after you confirm what it
+holds. Where nobody can be asked, such as a one-shot run, nothing is installed. `list` prints each
+installed plugin's name, version, source, digest and whether it is enabled. `remove` deletes the
+plugin's folder and its record, `disable` keeps it installed and offers nothing from it, and
+`enable` turns it back on without asking again. All three take the plugin's name. `update` is not
+built. Every form waits for a running turn to end. See [Plugins](../customize/plugins.md).
 
 ## `/caffeinate`
 

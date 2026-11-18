@@ -41,6 +41,7 @@ mod managed;
 pub mod mcp;
 mod named_reach;
 mod obfuscate;
+pub mod plugin;
 mod run_network;
 pub mod sandbox;
 mod sandbox_filesystem;

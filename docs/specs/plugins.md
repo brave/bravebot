@@ -5,8 +5,12 @@ status: proposed
 governs:
   - crates/config/src/hooks.rs
   - crates/config/src/mcp.rs
+  - crates/config/src/plugin.rs
+  - crates/agent/src/plugins.rs
+  - crates/tui/src/plugin_command.rs
+  - crates/tui/src/confirm/plugin.rs
 documented-by:
-  - none (gap: a page on installing a plugin, owed until the design is built)
+  - docs/website/docs/customize/plugins.md
 ---
 
 ## Scope
@@ -15,10 +19,16 @@ One person-run command that installs a bundle of skills, delegate definitions, h
 declarations from one source, what the person is shown before it does, where each part lands, what a
 plugin can never carry, and how an installed plugin is updated, turned off and removed.
 
-Nothing here is built. A clause in this spec reads `verified-by: none` until the work it describes
-lands. The points where it changes a built spec are named in
-[What this changes elsewhere](#what-this-changes-elsewhere), and none of those specs is edited until
-the work lands.
+What is built is the install of a plugin from a local path with `/plugin add`, and `/plugin list`,
+`/plugin remove`, `/plugin enable` and `/plugin disable`, for the skills and definitions a plugin
+carries. Not built are cloning a git source and a ref ([PLUGIN-3](#PLUGIN-3),
+[PLUGIN-14](#PLUGIN-14)), `/plugin update` ([PLUGIN-9](#PLUGIN-9)), the hooks and servers parts and
+their first-use questions ([PLUGIN-7](#PLUGIN-7)), and `${PLUGIN_ROOT}` ([PLUGIN-13](#PLUGIN-13)). A
+clause reads `verified-by: none` where none of it is built, and a clause only partly built has a
+**Not built** paragraph naming what is missing. The specs this one changes are named in
+[What this changes elsewhere](#what-this-changes-elsewhere). The skills, definitions, instructions
+and trust-map specs were edited when the install landed, and the hooks, MCP servers, programs and
+import specs are not edited until the work they describe lands.
 
 A **plugin** is a directory with a `plugin.toml` at its root. A **source** is a git URL or a local path
 that holds one. The **install** is `/plugin add`, which a person types. There is no marketplace, no
@@ -53,7 +63,13 @@ the typed command even where it reads as one.
 provenance. Whether that happens is a decision about where bytes land and what runs afterwards, and
 only a person's own keystrokes are a source for it that no content can author.
 
-`verified-by: none`
+**Not built:** `/plugin update`. The typed `/plugin update` is refused with a notice that says it is
+not built.
+
+`verified-by: bravebot_agent::tools::no_tool_offered_installs_or_changes_a_plugin`
+`verified-by: bravebot_tui::app::the_plugin_command_carries_its_words_unparsed`
+`verified-by: bravebot_tui::app::a_pasted_plugin_line_is_text_in_the_box_and_not_the_command`
+`verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_add_installs_nothing`
 
 <a id="PLUGIN-2"></a>
 ### PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
@@ -77,7 +93,21 @@ checkout. A part the person was shown has to be one the manifest named. A second
 need a translation from another tool's hook moments and server fields into this one's, and the person
 would be shown the translation rather than the file.
 
-`verified-by: none`
+**Not built:** a `hooks` or `servers` file is read as data and listed, and nothing installs it.
+
+`verified-by: bravebot_config::plugin::a_manifest_gives_its_name_version_description_and_parts`
+`verified-by: bravebot_config::plugin::a_part_the_manifest_does_not_name_is_none`
+`verified-by: bravebot_config::plugin::hooks_and_servers_are_read_and_not_installed`
+`verified-by: bravebot_config::plugin::an_absolute_part_path_is_refused_naming_the_key`
+`verified-by: bravebot_config::plugin::a_parent_part_path_is_refused_naming_the_key`
+`verified-by: bravebot_config::plugin::a_part_path_naming_nothing_below_the_root_is_refused`
+`verified-by: bravebot_config::plugin::a_name_is_letters_digits_and_hyphens_only`
+`verified-by: bravebot_config::plugin::a_key_this_build_does_not_read_is_reported_and_ignored`
+`verified-by: bravebot_config::plugin::another_tools_manifest_alone_is_refused_naming_plugin_toml`
+`verified-by: bravebot_config::plugin::read_opens_plugin_toml_alone_and_names_nothing_else`
+`verified-by: bravebot_config::plugin::a_decision_key_refuses_the_manifest_whole_however_it_is_written`
+`verified-by: bravebot_config::plugin::a_part_that_is_a_link_leaving_the_root_is_refused_naming_the_key`
+`verified-by: bravebot_agent::plugins::a_link_leaving_the_plugin_is_refused_before_anything_is_copied`
 
 <a id="PLUGIN-3"></a>
 ### PLUGIN-3: fetching a source is a network effect, and the host is put to the person before it happens
@@ -90,7 +120,8 @@ is not followed. A source that is an archive, an npm package or a plain URL is r
 The clone is made by the `git` program, started the way [SANDBOX-30](sandboxing.md#SANDBOX-30)
 requires, with the variables that select code removed from its environment, no submodule fetched and no
 hook from the cloned repository run. A local path is read in place, copied into staging and never
-executed there.
+executed there. As built, the staging directory for a local path is a `.plugin-staging-*` directory
+inside `~/.bravebot`, removed when the install ends, is refused or is declined.
 
 The staged bytes are untrusted content. Nothing in them is read by the driver or the planner before the
 person has seen what [PLUGIN-4](#PLUGIN-4) lists, and the listing is built by a reader that parses the
@@ -100,6 +131,9 @@ is listed.
 **Why.** The download is the first moment untrusted bytes exist, and the person's yes to the host is
 the same decision a fetch of a page asks. A staged tree that something already ran would have decided
 for the person.
+
+**Not built:** the clone of a git URL, the host question, the redirect rule and the environment of the
+`git` program. A local path is the only source, and it is copied into staging without being executed.
 
 `verified-by: none`
 
@@ -126,7 +160,19 @@ nobody can be asked, such as a one-shot run, nothing is installed.
 summary of itself would let the plugin choose what the person reads. The prompt is built from the
 parts, not from a field the manifest wrote.
 
-`verified-by: none`
+**Not built:** the hook and server rows, since neither is installed, the host, command and path rows
+that only a hook or a server reaches, and the resolved commit, which a local path has none of.
+
+`verified-by: bravebot_tui::confirm::plugin::the_prompt_lists_every_part_and_says_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::plugin::text_from_the_plugin_is_drawn_as_untrusted_content`
+`verified-by: bravebot_tui::confirm::plugin::a_long_description_is_cut_and_shown_on_request_and_a_yes_waits_for_it`
+`verified-by: bravebot_tui::confirm::plugin::a_shadowed_skill_and_definition_are_marked`
+`verified-by: bravebot_tui::confirm::plugin::only_a_y_installs`
+`verified-by: bravebot_tui::plugin_command::every_permission_mode_still_puts_the_prompt_to_the_person`
+`verified-by: bravebot_tui::plugin_command::add_where_nobody_can_be_asked_installs_nothing_and_says_so`
+`verified-by: bravebot_agent::plugins::where_nobody_can_be_asked_nothing_is_installed`
+`verified-by: bravebot_agent::plugins::only_a_yes_installs_and_the_question_is_put_once`
+`verified-by: bravebot_agent::plugin_sources::a_staged_plugin_is_marked_with_the_sources_that_shadow_its_names`
 
 <a id="PLUGIN-5"></a>
 ### PLUGIN-5: a plugin installs at user scope, into one directory the person's own, and a workspace plugin is inert
@@ -147,7 +193,17 @@ There is no project scope and no setting that makes a plugin required for a team
 single-file spec of the declarations depends on. A project scope would put plugin parts where a checkout
 authors them.
 
-`verified-by: none`
+**Not built:** the resolved ref, which only a git source has ([PLUGIN-14](#PLUGIN-14)), and the update
+that an install of the same source would be. Adding the same source again is refused and says update
+is not built.
+
+`verified-by: bravebot_agent::plugins::an_install_puts_the_tree_and_a_record_under_the_plugins_directory`
+`verified-by: bravebot_agent::plugins::a_name_installed_from_another_source_is_refused_naming_both_and_changes_nothing`
+`verified-by: bravebot_agent::plugins::adding_the_same_source_again_is_refused_because_update_is_not_built`
+`verified-by: bravebot_agent::plugins::a_name_that_could_leave_the_plugins_directory_is_refused_before_a_path_is_made`
+`verified-by: bravebot_agent::plugins::an_install_leaves_the_rules_the_trust_map_and_the_state_beside_it_untouched`
+`verified-by: bravebot_agent::plugin_sources::an_enabled_plugin_offers_its_skill_and_definition_and_a_disabled_one_offers_nothing`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_directory_in_a_workspace_offers_nothing`
 
 <a id="PLUGIN-6"></a>
 ### PLUGIN-6: a plugin carries no decision
@@ -170,7 +226,14 @@ A permission rule is a decision taken from something a person wrote, and a plugi
 A model decides which service receives the conversation ([BACKEND-24](backends.md#BACKEND-24)), so a
 plugin may name one only where the listing the person answered showed it.
 
-`verified-by: none`
+**Not built:** a hook is not installed, so what it may say is not yet in question.
+
+`verified-by: bravebot_config::plugin::a_manifest_with_a_decision_key_is_refused_by_read_and_nothing_is_made`
+`verified-by: bravebot_config::plugin::a_key_that_only_resembles_a_decision_key_is_not_one`
+`verified-by: bravebot_config::plugin::the_decision_list_and_the_keys_read_do_not_overlap`
+`verified-by: bravebot_config::plugin::the_manifest_has_no_field_that_can_carry_a_decision`
+`verified-by: bravebot_config::plugin::a_decision_key_refuses_the_manifest_whole_however_it_is_written`
+`verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`
 
 <a id="PLUGIN-7"></a>
 ### PLUGIN-7: installing a part does not approve it
@@ -196,6 +259,10 @@ again after an update the person accepted.
 program, and it is asked about where it runs, in a session the person is watching. A hook is usually an
 argv that starts a script in the plugin, so an approval bound to the argv alone would still hold after
 the script changed.
+
+**Not built:** the hook and server parts of this clause. Nothing installs a hook or a server, so there is
+no first-use question, no `hooks-approved` record and no digest check before one runs. The skill and
+definition sentences hold, as [PLUGIN-12](#PLUGIN-12) says.
 
 `verified-by: none`
 
@@ -224,6 +291,14 @@ recorded digest and whether it is enabled, reads nothing but that record and sta
 **Why.** An update that applied itself would be a fetch nobody asked for followed by changed programs
 nobody saw.
 
+**Not built:** `/plugin update`, so the fetch again, the difference put to the person and the withdrawal of
+an answer are not built. `/plugin remove` and `/plugin list` are built. Nothing is recorded for a hook or
+a server, so remove has nothing of those to withdraw.
+
+`verified-by: bravebot_agent::plugins::list_shows_what_was_installed_from_the_records_alone`
+`verified-by: bravebot_agent::plugins::remove_deletes_the_directory_and_the_record_and_nothing_else`
+`verified-by: bravebot_tui::plugin_command::list_prints_name_version_source_digest_and_enabled`
+`verified-by: bravebot_tui::plugin_command::remove_enable_and_disable_act_without_a_question_and_miss_in_words`
 `verified-by: none`
 
 <a id="PLUGIN-10"></a>
@@ -237,7 +312,8 @@ instructions.
 **Why.** A plugin directory holds files that are not parts, and a reader that put them in a context
 would be a second way for the plugin to speak that no prompt showed.
 
-`verified-by: none`
+`verified-by: bravebot_agent::plugin_sources::nothing_but_the_parts_reaches_a_turn`
+`verified-by: bravebot_agent::plugin_sources::an_enabled_plugin_offers_its_skill_and_definition_and_a_disabled_one_offers_nothing`
 
 <a id="PLUGIN-11"></a>
 ### PLUGIN-11: a plugin can be turned off and kept
@@ -252,7 +328,12 @@ installed plugin is enabled.
 **Why.** A person who wants a plugin out of the way for a while should not have to remove it and answer
 every question again.
 
-`verified-by: none`
+**Not built:** a hook or a server is not installed, so there is no answer recorded for one to keep.
+
+`verified-by: bravebot_agent::plugins::disable_then_enable_rewrites_only_the_recorded_state`
+`verified-by: bravebot_agent::plugins::a_disabled_plugin_is_listed_and_offers_nothing_until_enabled`
+`verified-by: bravebot_agent::plugin_sources::an_enabled_plugin_offers_its_skill_and_definition_and_a_disabled_one_offers_nothing`
+`verified-by: bravebot_tui::plugin_command::remove_enable_and_disable_act_without_a_question_and_miss_in_words`
 
 <a id="PLUGIN-12"></a>
 ### PLUGIN-12: a plugin's skills and definitions rank last, and two plugins never offer the same name
@@ -267,7 +348,14 @@ and a person removes or disables one first. A plugin's skills are not given a pr
 name, and a rule that picks between two plugins would make which one answers depend on the order they
 were installed in.
 
-`verified-by: none`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_skill_is_shadowed_by_every_other_source_of_its_name`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_definition_is_shadowed_by_every_other_source_of_its_name`
+`verified-by: bravebot_agent::plugins::a_second_plugin_offering_an_offered_name_is_refused_naming_both_and_changes_nothing`
+`verified-by: bravebot_agent::plugins::two_plugins_offering_one_definition_name_conflict`
+`verified-by: bravebot_tui::plugin_command::a_plugin_skill_named_like_a_home_skill_is_marked_and_the_home_one_is_offered`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_skill_is_held_and_listed_as_a_home_skill_is`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_definition_is_listed_as_a_home_definition_is`
+`verified-by: bravebot_tui::render::a_plugin_skill_row_says_it_came_from_a_plugin`
 
 <a id="PLUGIN-13"></a>
 ### PLUGIN-13: a part may name its own directory with one variable
@@ -281,6 +369,8 @@ directory for data of its own.
 
 **Why.** A hook that runs a script the plugin carries cannot be written without a path to the plugin.
 Expanding it in the listing keeps what the person approved identical to what runs.
+
+**Not built:** the clause. No part with an argv is installed, so nothing replaces `${PLUGIN_ROOT}`.
 
 `verified-by: none`
 
@@ -296,6 +386,9 @@ recorded with its digest.
 **Why.** Without an index to pin a source, the commit the person was shown is the pin, and an update is
 a different commit the person is shown again.
 
+**Not built:** a git source, a ref, the resolved commit and the update. A local path is recorded with
+its digest ([PLUGIN-5](#PLUGIN-5)).
+
 `verified-by: none`
 
 ## What this changes elsewhere
@@ -308,11 +401,14 @@ work lands, in the same commit as the code.
   fire only after the question in [PLUGIN-7](#PLUGIN-7), recorded in `~/.bravebot/hooks-approved`. The
   hooks spec needs a clause for that question, since today it has none.
 - **Skills and definitions.** Each source list gains `~/.bravebot/plugins/<name>/...` as its least
-  specific entry ([PLUGIN-12](#PLUGIN-12)), with the trust of the sibling `~/.bravebot` source.
+  specific entry ([PLUGIN-12](#PLUGIN-12)), with the trust of the sibling `~/.bravebot` source. Done:
+  [INSTR-1](instructions.md#INSTR-1), [INSTR-4](instructions.md#INSTR-4),
+  [INSTR-17](instructions.md#INSTR-17), [SKILL-3](skills.md#SKILL-3) and
+  [DELEGATE-20](delegation.md#DELEGATE-20) say so.
 - **MCP servers.** The declaration file is `~/.bravebot/mcp.json` and no other, and a plugin's server
   list is read alongside it with the same digest and first-use question.
 - **The trust map.** It does not govern the plugin directory, for the reason it does not govern the rest
-  of `~/.bravebot`.
+  of `~/.bravebot`. Done: [TRUST-11](trust-map.md#TRUST-11) says so.
 - **Programs bravebot starts.** The `git` that clones a source is added to the programs
   [SANDBOX-30](sandboxing.md#SANDBOX-30) lists.
 - **Import.** A conversion of another tool's plugin layout would belong to [import.md](import.md). Nothing
@@ -330,3 +426,10 @@ work lands, in the same commit as the code.
   the ones shown, not that they are good.
 - A plugin's own programs have no directory for data and no per-plugin settings.
 - A plugin written for another tool does not install here, because only `plugin.toml` is read.
+- The install decides from a plugin's bytes in three places, and each only refuses or marks: the manifest
+  reader refuses a decision key, a part path that leaves the root and a bad name; the shadow marking
+  compares a skill or definition name with the session's own list and marks the row; the two-plugin
+  comparison refuses an install whose name another plugin offers. Each result is a sentence of the
+  program's own wording drawn to the person, and the plugin's text is not in it unmarked. None runs in a
+  turn or reaches the planner's context, so none is one of the places [labels.md](labels.md) lists
+  under Known costs, which decide from untrusted bytes inside a turn.

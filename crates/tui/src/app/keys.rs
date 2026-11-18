@@ -169,6 +169,10 @@ pub enum Action {
     /// Carries the argument unparsed, since what it says back goes in the transcript, and needs the
     /// servers the session holds and the terminal to ask on, which the loop owns.
     Mcp(String),
+    /// Install a plugin from a local path, list the installed plugins, or remove, enable or disable
+    /// one. Carries the argument unparsed, since what it says back goes in the transcript, and needs
+    /// the terminal to ask on, which the loop owns. Only a typed line makes it (PLUGIN-1).
+    Plugin(String),
     /// Report the sandbox mode, or move it. Carries the word unparsed, since the answer depends on
     /// the managed file.
     Sandbox(String),
