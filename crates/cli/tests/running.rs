@@ -5383,6 +5383,51 @@ fn doctor_names_a_restriction_that_names_nothing() {
     );
 }
 
+/// BACKEND-36 for a repeated key, from the process that reads the file: a key one settings file
+/// writes twice is named with its file and key path, the values are not printed, a deny written
+/// first still applies, and the run passes.
+///
+/// Running the binary because the report is the whole of the behaviour: the repeat is collected in
+/// `bravebot-config`, worded in `bravebot-i18n` and printed here. The rule text is a string nothing
+/// else in the report could print, which is what makes the second assertion say the line carries a
+/// key path and not a value.
+#[test]
+fn doctor_names_a_key_written_twice_in_a_settings_file() {
+    let scratch = Scratch::new("cli-running-repeated-key").with_settings(
+        r#"{"permissions": {"deny": ["Read(a-rule-nothing-prints)"], "deny": []},
+            "env": {"AWS_REGION": "us-west-2"}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    let file = scratch.path.join(".bravebot").join("settings.json");
+    assert!(
+        stdout.contains(&format!(
+            "permissions.deny is written more than once in {}",
+            file.display()
+        )),
+        "a repeated key was read with nothing said: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a-rule-nothing-prints"),
+        "the report printed a value: {stdout}"
+    );
+    assert!(
+        stdout.contains("AWS_REGION"),
+        "the file stopped applying where one of its keys was repeated: {stdout}"
+    );
+}
+
 /// PERM-14's exclusion, from the same process: a checkout's `allow` entry that is not a rule is
 /// named for what is wrong with it, under PERM-11, and not as a grant that was withheld.
 ///

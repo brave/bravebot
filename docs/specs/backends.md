@@ -2468,6 +2468,24 @@ what makes the file safe to read. A block that could switch off credential scrub
 block that hands this agent's secrets to every command it runs, decided by whatever last edited a
 file in a checkout.
 
+A key written twice in one object of one file, at any depth, is a mistake of the same kind and is
+read and reported the same way. A parser that keeps the last value says nothing, and would let a
+second snippet pasted below the first erase the first one's `deny` without a word. Two blocks
+written under one key are combined name by name, so a later `{}` erases nothing. A repeated list
+that only refuses keeps the entries of both, earlier first: `permissions.deny` and
+`permissions.ask`, `models.deny`, `mcp.deny`,
+`sandbox.filesystem.denyRead` and `denyWrite`, `sandbox.network.deniedHosts` and `run.scrubEnv`. A
+repeated `models.allow` or `mcp.allow` keeps the entries both lists name, since it bounds what may be
+requested or started and the second list must not widen what the first allowed. Any other repeated
+key, `allow` lists that grant reach and scalars among them, is read as the later value, and a list
+that only refuses or bounds beside a value that is not a list is kept. A repeat is named by `doctor`
+with the file and the key path, as `permissions.deny` or `hooks[0].command` for an element of an
+array, for the managed file and for every settings file, and what the keys were set to is not
+printed. A key written once in each of two files is the layering and is not a repeat. Every value
+the combining sets aside is held by the parsed document and cleared with it.
+
+The settings are still read whole: a repeat is a note and not a failure, on the reasoning above.
+
 `verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
 `verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
 `verified-by: bravebot_config::settings::the_names_are_reportable_and_the_values_are_not`
@@ -2478,6 +2496,25 @@ file in a checkout.
 `verified-by: bravebot_config::settings::a_variable_nothing_consults_is_named_among_the_names_and_not_as_an_unread_key`
 `verified-by: bravebot_cli::running::doctor_names_a_top_level_key_it_does_not_read`
 `verified-by: bravebot_cli::running::doctor_names_a_restriction_that_names_nothing`
+`verified-by: bravebot_config::managed::a_models_block_written_twice_keeps_the_deny_of_either_and_is_reported`
+`verified-by: bravebot_config::managed::a_deny_list_written_twice_keeps_every_entry_of_both`
+`verified-by: bravebot_config::managed::a_permissions_deny_list_written_twice_keeps_the_rule_pinned`
+`verified-by: bravebot_config::managed::a_model_allow_list_written_twice_allows_only_what_both_name`
+`verified-by: bravebot_config::managed::a_server_allow_list_written_twice_allows_only_what_both_name`
+`verified-by: bravebot_config::managed::a_server_deny_list_written_twice_refuses_what_either_names`
+`verified-by: bravebot_config::managed::a_deny_list_repeated_as_something_else_is_not_lost`
+`verified-by: bravebot_config::managed::a_file_that_writes_each_key_once_reports_no_repeat`
+`verified-by: bravebot_config::settings::a_key_a_file_writes_twice_is_named_with_the_file_and_the_key_path`
+`verified-by: bravebot_config::settings::a_key_in_two_layers_or_once_in_a_file_is_not_a_repeat`
+`verified-by: bravebot_config::settings::a_file_whose_only_fault_is_a_repeat_is_not_read_as_no_settings`
+`verified-by: bravebot_config::settings::a_rule_list_written_twice_in_one_file_keeps_every_rule`
+`verified-by: bravebot_config::settings::a_key_that_does_not_only_refuse_keeps_the_later_value_and_is_reported`
+`verified-by: bravebot_config::settings::every_list_a_repeat_unions_still_refuses_what_either_write_names`
+`verified-by: bravebot_config::settings::a_value_a_repeat_sets_aside_stays_in_the_document_to_be_cleared`
+`verified-by: bravebot_config::settings::a_deeply_nested_file_is_refused_and_an_ordinary_one_reads_as_before`
+`verified-by: bravebot_cli::running::doctor_names_a_key_written_twice_in_a_settings_file`
+`verified-by: bravebot_cli::doctor::doctor_names_a_key_a_settings_file_and_the_managed_file_wrote_twice`
+`verified-by: bravebot_cli::doctor::doctor_names_no_repeated_key_for_files_that_write_each_key_once`
 
 <a id="BACKEND-37"></a>
 ### BACKEND-37: failures carry safe reasons and measured request counts

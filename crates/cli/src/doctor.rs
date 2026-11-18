@@ -642,6 +642,12 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         |(path, key)| unread_key_line(path, key),
     );
 
+    // The same, for a key a file wrote twice in one block. Read so that nothing a first block
+    // refused is erased by a second, and said here because the file otherwise reads as having been
+    // taken whole. A note rather than a failure, on BACKEND-36's reasoning. The key path and the
+    // file, never a value.
+    report_repeated_keys(settings, managed, &managed_file);
+
     // The same, for a key that only refuses and was spelled as something other than a boolean: it
     // is read as absence (PERM-16, PERM-17), so somebody who quoted `"true"` has a session as
     // permissive as one that named nothing, and nothing else would say so. The managed file among
@@ -703,6 +709,44 @@ fn unread_key_line(path: &Path, key: &str) -> String {
             path = progress::printable_path(path)
         ),
     }
+}
+
+/// Says each line [`repeated_key_lines`] gives, under the heading of the report.
+fn report_repeated_keys(
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+    managed_file: &str,
+) {
+    for line in repeated_key_lines(settings, managed, managed_file) {
+        fact(t!(doctor_settings_repeated), line);
+    }
+}
+
+/// One line for each key a settings file, or the managed file, wrote twice in one object: the key's
+/// path and the file, never a value (BACKEND-36). The managed file is named by `managed_file`, the
+/// path as the report spells it, so a test can hold the line without a file under `/etc`.
+fn repeated_key_lines(
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+    managed_file: &str,
+) -> Vec<String> {
+    settings
+        .repeated_keys()
+        .map(|(path, key)| {
+            t!(
+                doctor_settings_repeated_key,
+                key = progress::printable(key),
+                path = progress::printable_path(path)
+            )
+        })
+        .chain(managed.repeated_keys().map(|key| {
+            t!(
+                doctor_settings_repeated_key,
+                key = progress::printable(key),
+                path = managed_file
+            )
+        }))
+        .collect()
 }
 
 /// The network for the programs `run` starts, named only where it is not open, with who decided
@@ -3652,6 +3696,69 @@ mod tests {
             Ending::Configuration
         );
         assert_eq!(ends_on(Ending::Done, Ending::Done), Ending::Done);
+    }
+
+    /// A key written twice is named with its file and key path wherever it was written, the managed
+    /// file included, and no value is printed. An administrator who pasted two snippets into a file
+    /// nobody at the machine can change is the person least likely to find the repeat otherwise
+    /// (BACKEND-36). The values are strings nothing else in the report could print, so a line that
+    /// carried one would show it.
+    #[test]
+    fn doctor_names_a_key_a_settings_file_and_the_managed_file_wrote_twice() {
+        let scratch = Scratch::new("doctor-repeated-keys");
+        let managed_path = scratch.path.join("managed.json");
+        std::fs::write(
+            &managed_path,
+            r#"{"models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("a managed file");
+        let settings_path = scratch.path.join("settings.json");
+        std::fs::write(
+            &settings_path,
+            r#"{"permissions": {"deny": ["Read(a-rule-nobody-prints)"], "deny": []}}"#,
+        )
+        .expect("a settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_path));
+        let managed = Managed::at(&managed_path);
+        let managed_spelled = progress::printable_path(&managed_path);
+
+        let lines = repeated_key_lines(&settings, &managed, &managed_spelled);
+
+        assert_eq!(lines.len(), 2, "one line for each repeat: {lines:?}");
+        assert!(
+            lines[0].contains("permissions.deny")
+                && lines[0].contains(&progress::printable_path(&settings_path)),
+            "the settings file's repeat is not named with its key path and file: {lines:?}"
+        );
+        assert!(
+            lines[1].contains("models") && lines[1].contains(&managed_spelled),
+            "the managed file's repeat is not named with its key path and file: {lines:?}"
+        );
+        let said = lines.join("\n");
+        assert!(
+            !said.contains("a-model-nobody-prints") && !said.contains("a-rule-nobody-prints"),
+            "a value is printed: {said}"
+        );
+    }
+
+    /// A file that writes every key once is not reported, so the line means a repeat and not the
+    /// presence of a file.
+    #[test]
+    fn doctor_names_no_repeated_key_for_files_that_write_each_key_once() {
+        let scratch = Scratch::new("doctor-repeated-none");
+        let managed_path = scratch.path.join("managed.json");
+        std::fs::write(&managed_path, r#"{"models": {"deny": ["x"]}}"#).expect("a managed file");
+        let settings_path = scratch.path.join("settings.json");
+        std::fs::write(
+            &settings_path,
+            r#"{"permissions": {"deny": ["Read(.env)"]}}"#,
+        )
+        .expect("a settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_path));
+
+        let lines = repeated_key_lines(&settings, &Managed::at(&managed_path), "managed");
+
+        assert!(lines.is_empty(), "{lines:?}");
     }
 
     /// A managed layer somebody cannot change has to say so somewhere, or "why is the variable I

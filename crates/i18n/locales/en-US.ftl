@@ -938,6 +938,11 @@ doctor-settings-unread-key =
 doctor-settings-unread-bypass =
     { $key } in { $path } is not read by this build, so the bypass mode stays reachable: the key that
     makes it unreachable is permissions.bypassUnreachable
+# A key one settings file wrote twice in the same block. Named by key path and file only, never the
+# value. The repeats are combined, not refused, so a file pasted from two snippets still applies.
+doctor-settings-repeated = repeated key
+doctor-settings-repeated-key =
+    { $key } is written more than once in { $path }: lists that only refuse keep every entry, blocks are combined, and anything else is read as the last one written
 # A settings layer that tried to declare an MCP server. Named by key and file only, since the entry
 # may hold an argv and the values of variables.
 doctor-settings-mcp-declared =
