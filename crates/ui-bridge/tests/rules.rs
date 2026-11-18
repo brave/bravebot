@@ -945,13 +945,32 @@ impl Scratch {
 impl ReadingBeside {
     /// Open a session in the project with the directory beside it named, and trust it.
     fn session(&mut self) -> String {
+        let opened = self.front.call("session.new", self.naming_beside());
+        self.trusted(&opened)
+    }
+
+    /// Open a session in the project without naming the directory beside it, and trust it.
+    ///
+    /// Where `readsStayInWorkspace` holds, naming the directory refuses the session (PERM-16), so
+    /// a session held to the project is opened this way and reaches the file by its absolute path.
+    fn session_held_inside(&mut self) -> String {
         let opened = self.front.call(
             "session.new",
-            json!({
-                "directory": self.scratch.project().display().to_string(),
-                "directories": [self.scratch.beside().display().to_string()],
-            }),
+            json!({"directory": self.scratch.project().display().to_string()}),
         );
+        self.trusted(&opened)
+    }
+
+    /// The `session.new` parameters that open the project with the directory beside it named.
+    fn naming_beside(&self) -> Value {
+        json!({
+            "directory": self.scratch.project().display().to_string(),
+            "directories": [self.scratch.beside().display().to_string()],
+        })
+    }
+
+    /// The handle of the session `opened` answered, trusted if no kept answer trusted it.
+    fn trusted(&mut self, opened: &Value) -> String {
         let session = opened["session"].as_str().expect("a handle").to_string();
         if opened["remembered"].is_null() {
             self.front
@@ -995,7 +1014,7 @@ fn removing_reads_stay_in_workspace_does_not_widen_an_open_session() {
     let mut run = reading_beside("bridge-rules-reads-inside-removed", |scratch| {
         scratch.the_checkout_writes(json!({"readsStayInWorkspace": true}));
     });
-    let session = run.session();
+    let session = run.session_held_inside();
     run.scratch.the_checkout_writes(json!({}));
 
     let (told, _) = run.read(&session);
@@ -1013,7 +1032,8 @@ fn removing_reads_stay_in_workspace_does_not_widen_an_open_session() {
 }
 
 /// PERM-12: adding `readsStayInWorkspace` while a session is open does not narrow its next turn.
-/// The session after the edit is the first one confined.
+/// The session after the edit is the first one confined, and naming the directory beside the
+/// project refuses it (PERM-16).
 #[test]
 fn adding_reads_stay_in_workspace_confines_the_next_session_and_not_an_open_one() {
     let mut run = reading_beside("bridge-rules-reads-inside-added", |_| {});
@@ -1027,7 +1047,16 @@ fn adding_reads_stay_in_workspace_confines_the_next_session_and_not_an_open_one(
         "a session opened unconfined was confined by a key written after it opened: {told}"
     );
 
-    let opened_after = run.session();
+    let refused = run.front.answered("session.new", run.naming_beside());
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("readsStayInWorkspace")),
+        "a session opened after the key was written opened the directory beside the project: \
+         {refused}"
+    );
+
+    let opened_after = run.session_held_inside();
     let (told, _) = run.read(&opened_after);
     assert!(
         confined(&told),
@@ -1043,7 +1072,7 @@ fn a_fork_is_held_to_the_project_where_its_parent_opened_held_to_it() {
     let mut run = reading_beside("bridge-rules-reads-inside-fork", |scratch| {
         scratch.the_checkout_writes(json!({"readsStayInWorkspace": true}));
     });
-    let parent = run.session();
+    let parent = run.session_held_inside();
     let (told, prompt) = run.read(&parent);
     assert!(
         confined(&told),
