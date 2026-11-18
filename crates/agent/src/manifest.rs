@@ -351,12 +351,12 @@ const REGISTRY: &[Advertised] = &[
                   with apply: an isolated processor proposes the calls, and the person approves the \
                   whole list before any is made, or, where every tool of the step is marked \
                   plan-covered, approving the plan covers them",
-        args: "server*, tools* (comma-separated tool names of that server), lists* (the slots \
-               SERVER_READ steps filled, the first being the main one), entries (where each list \
-               is in its reply, as a JSON pointer such as /items, or an object of pointers by \
-               list, where a reply is not the list itself), instruction* (what to do with the \
-               items, for the processor), arguments* (a JSON object: for each tool, each \
-               argument with its kind), max_rows, max_new",
+        args: "server*, tools* (comma-separated tool names of that server), lists* (a list of \
+               slot names: the slots SERVER_READ steps filled, the first being the main one), \
+               entries (where each list is in its reply, as a JSON pointer such as /items, or an \
+               object of pointers by list, where a reply is not the list itself), instruction* \
+               (what to do with the items, for the processor), arguments* (a JSON object: for \
+               each tool, each argument with its kind), max_rows, max_new",
     },
     Advertised {
         capability: "ANSWER",
