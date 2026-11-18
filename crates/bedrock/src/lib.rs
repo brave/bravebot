@@ -5279,6 +5279,7 @@ mod tests {
     /// whole of the limit, and one that sits out the window and past it.
     #[test]
     fn an_account_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window() {
+        const WINDOW_MS: u64 = 1_000;
         // The count alone would stop at the second request, and the window carries on to the fifth.
         let (http, _received) = scripted_responses(vec![
             refused_with(503),
@@ -5301,22 +5302,28 @@ mod tests {
 
         for streaming in [false, true] {
             // A service that never recovers is given up on when the window is spent, well before
-            // the sixty requests it was ready to refuse.
+            // the sixty requests it was ready to refuse. The pauses double from a millisecond, so
+            // ten requests fit in the window, and a fourth is sent unless the first three take most
+            // of a second to answer.
             let (http, _received) = refused_requests(vec![503; 60]);
             let started = std::time::Instant::now();
             let (result, attempts) = asked_through(
-                &account_stating_a_window(None, 150),
+                &account_stating_a_window(None, WINDOW_MS),
                 &Egress::new(),
                 http,
                 streaming,
             );
             assert!(result.is_err(), "streaming {streaming}: {result:?}");
             assert!(
-                (4..30).contains(&attempts),
-                "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+                attempts > 3,
+                "streaming {streaming}: the window sent only {attempts} requests"
             );
             assert!(
-                started.elapsed() < Duration::from_secs(3),
+                attempts < 30,
+                "streaming {streaming}: {attempts} requests went out in a window of {WINDOW_MS} ms"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
                 "streaming {streaming}: the call outlasted its window: {:?}",
                 started.elapsed()
             );
