@@ -143,7 +143,9 @@ pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
-pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
+pub use volume::{
+    BACKSLASH_SEPARATES, key_of, trust_store, volume_case_folding, volume_folds_case,
+};
 pub(crate) use volume::{on_disk, one_file};
 
 pub use bypass::{BypassReach, Reached};
@@ -1983,7 +1985,7 @@ impl Workspace {
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let written = policy.file_authority().key(&self.trust_key(&relative));
-        let folds = volume_folds_case(&self.root);
+        let folds = volume_case_folding(&self.root).restricts();
         // Every other name of the file is recorded and reserved with this one (TRUST-4). The walk
         // for them runs before the boundary is taken, since it reads directories.
         let others = self.other_trust_keys(&relative);
@@ -5461,6 +5463,139 @@ mod tests {
                 "a memory is recorded under another case only where they are one file: {layout}"
             );
         }
+    }
+
+    /// TRUST-2: where the filesystem cannot be asked, the trust map, the writer reservation and the
+    /// memory record read the workspace as one that might fold. A file untrusted as `.env` is then
+    /// untrusted as `.ENV`, a second writer under the other case is refused, and a memory written
+    /// under one case is recorded under the other, while a trust of `Docs` stays about `Docs`. The
+    /// expected values are written from what a refusal may cost and a grant may widen, and not read
+    /// from the code under test.
+    #[test]
+    fn a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CaseFolding, Integrity};
+
+        let nothing =
+            |_: &Path| -> io::Result<FileId> { Err(io::ErrorKind::PermissionDenied.into()) };
+        let answer = folds_case_by(Path::new(WORKSPACE), &nothing, &no_flags);
+        assert_eq!(answer, None);
+        let case = CaseFolding::from_answer(answer);
+        assert_eq!(case, CaseFolding::Unknown);
+
+        let mut store =
+            bravebot_core::TrustStore::new(key_of(Path::new(WORKSPACE))).with_case_folding(case);
+        store.distrust(".env");
+        store.trust("Docs");
+        assert_eq!(
+            store.integrity_of(".ENV"),
+            Some(Integrity::Untrusted),
+            "a file untrusted as .env was read as trusted as .ENV"
+        );
+        assert_eq!(
+            store.integrity_of("docs"),
+            None,
+            "a trust of Docs reached docs where the volume could not be asked"
+        );
+
+        let authority = FileAuthority::new(store);
+        let capture = authority.capture();
+        let first = capture.begin(".env");
+        assert!(first.is_some());
+        assert!(
+            capture.begin(".ENV").is_none(),
+            "a second writer under the other case entered"
+        );
+        drop(first);
+        drop(capture);
+
+        let home = crate::testutil::scratch_dir("trust-case-unaskable-memory");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let key = format!("{WORKSPACE}/.Bravebot/memory/NOTES.md");
+        crate::memory::record_before_write(Some(&home), &key, case.restricts()).unwrap();
+        let spelled = crate::workspace::on_disk(WORKSPACE).unwrap_or_else(|| WORKSPACE.to_string());
+        let recorded = crate::memory::Record::new(&home, &spelled).paths();
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(
+            recorded,
+            vec![format!("{spelled}/.bravebot/memory/notes.md")],
+            "a memory written under one case was not recorded under the other"
+        );
+    }
+
+    /// A directory that does not exist cannot be asked, and the map made for it says so.
+    #[test]
+    fn a_trust_store_for_a_directory_that_cannot_be_asked_says_so() {
+        let root = crate::testutil::scratch_dir("Volume-Case-Unaskable");
+        let _ = std::fs::remove_dir_all(&root);
+        let missing = root.join("does-not-exist");
+        assert_eq!(
+            volume_case_folding(&missing),
+            bravebot_core::CaseFolding::Unknown
+        );
+        let store = trust_store(&missing);
+        assert!(!store.folds_case());
+        assert!(store.case_folding().restricts());
+    }
+
+    /// A real directory carrying the casefold flag inside an ordinary parent, which no stand-in for
+    /// the filesystem replaces: `.env` and `.ENV` are one file there, and the map, the writer
+    /// reservation and the answer all say so. The directory is the test's own, and the test returns
+    /// where the host cannot set the flag (it needs ext4 or f2fs with casefold, an empty directory
+    /// and the privilege `chattr +F` takes), as no host is assumed to have it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_directory_with_the_casefold_flag_folds_case_for_the_map() {
+        use bravebot_core::Integrity;
+        use bravebot_core::file_authority::FileAuthority;
+        use rustix::fs::{IFlags, Mode, OFlags};
+
+        let parent = crate::testutil::scratch_dir("casefold-parent");
+        let _ = std::fs::remove_dir_all(&parent);
+        let workspace = parent.join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let held = rustix::fs::open(
+            &workspace,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        // FS_CASEFOLD_FL, which `IFlags` has no name for.
+        let flags = IFlags::from_bits_retain(0x4000_0000);
+        if rustix::fs::ioctl_setflags(&held, flags).is_err() {
+            eprintln!("skipped: this filesystem cannot set the casefold flag on a directory");
+            let _ = std::fs::remove_dir_all(&parent);
+            return;
+        }
+        drop(held);
+        let root = workspace.canonicalize().unwrap();
+
+        // The oracle is the filesystem, asked with a file of the test's own.
+        std::fs::write(root.join(".env"), b"").unwrap();
+        assert!(
+            root.join(".ENV").exists(),
+            "the directory carries the flag and does not fold"
+        );
+        // The parent is ordinary, so its answer for the name of the workspace is the opposite one.
+        assert!(!root.parent().unwrap().join("wORKSPACE").exists());
+
+        assert_eq!(
+            volume_case_folding(&root),
+            bravebot_core::CaseFolding::Folds
+        );
+        let mut store = trust_store(&root);
+        store.distrust(".env");
+        assert_eq!(store.integrity_of(".ENV"), Some(Integrity::Untrusted));
+
+        let authority = FileAuthority::new(store);
+        let capture = authority.capture();
+        let first = capture.begin(".env");
+        assert!(first.is_some());
+        assert!(capture.begin(".ENV").is_none());
+        drop(first);
+        drop(capture);
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     /// A volume answering to either spelling of `Proj` is one whose rules have to fold.

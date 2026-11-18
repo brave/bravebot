@@ -88,5 +88,5 @@ pub use reference::{Presentation, Reference};
 pub use remembered::{Remembered, RememberedLine};
 pub use slot::{Fill, Measured, SlotError, SlotId, SlotStore, SlotWriter};
 pub use todo::{Item as TodoItem, List as TodoList, Status as TodoStatus};
-pub use trust::TrustStore;
+pub use trust::{CaseFolding, TrustStore};
 pub use value::Labelled;

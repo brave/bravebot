@@ -3,6 +3,7 @@
 //! The probes ask the file system about names and read no file's bytes.
 
 use super::destination;
+use bravebot_core::CaseFolding;
 use bravebot_core::spelling::to_key;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -68,7 +69,7 @@ pub(crate) fn one_file(one: &str, other: &str) -> bool {
 /// [`key_of`] separately: the map cannot ask the volume, since `bravebot-core` performs no I/O.
 #[must_use]
 pub fn trust_store(root: &Path) -> bravebot_core::TrustStore {
-    bravebot_core::TrustStore::new(key_of(root)).folding_case(volume_folds_case(root))
+    bravebot_core::TrustStore::new(key_of(root)).with_case_folding(volume_case_folding(root))
 }
 
 /// Whether the names looked up directly inside `root` are held two spellings differing only in
@@ -82,28 +83,42 @@ pub fn trust_store(root: &Path) -> bravebot_core::TrustStore {
 /// belongs to that directory and `root` does not fold. In every other case the name of `root` is
 /// looked up in the other case, which is how a volume that folds as a whole answers.
 ///
-/// `false` whenever that cannot be told, because the answer only widens what a rule reaches: a
-/// rule about `Docs` covers `docs` where they are one file and would cover a different file where
-/// they are two. A volume that folds and is read as one that does not costs a missed distrust
-/// rule, which is why the answer is asked of the volume instead of being read from the platform.
+/// `false` whenever that cannot be told, which is right for what a rule grants: a rule about `Docs`
+/// covers `docs` where they are one file and would cover a different file where they are two. A rule
+/// that withholds trust, a reservation of a path for a writer and a record of an untrusted file
+/// are not served by that answer, since a volume that folds and is read as one that does not costs
+/// a refused file read as trusted under another case. They ask [`volume_case_folding`], which says
+/// when the volume could not be asked.
 ///
 /// The question is put with the working directory's own name, a path the person chose, and only
 /// the answer of the filesystem is used. No file is created and no name in the tree is read.
 #[must_use]
 pub fn volume_folds_case(root: &Path) -> bool {
+    volume_case_folding(root).folds()
+}
+
+/// What the volume under `root` says about case folding: that it holds two spellings differing only
+/// in case as one file, that it holds them apart, or that it could not be asked (TRUST-2).
+///
+/// [`volume_folds_case`] with the failure kept. The trust map, the writer reservation and the memory
+/// record read it, so a volume that cannot be asked is compared as one that might fold wherever
+/// that only refuses, and as one that does not wherever it would grant. A failed probe is not
+/// remembered, so the next call asks again.
+#[must_use]
+pub fn volume_case_folding(root: &Path) -> CaseFolding {
     static ANSWERS: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> =
         std::sync::OnceLock::new();
     let answers = ANSWERS.get_or_init(Default::default);
     if let Some(known) = answers.lock().ok().and_then(|held| held.get(root).copied()) {
-        return known;
+        return known.into();
     }
     let Some(answer) = folds_case_by(root, &file_id, &casefold_flag) else {
-        return false;
+        return CaseFolding::Unknown;
     };
     if let Ok(mut held) = answers.lock() {
         held.insert(root.to_path_buf(), answer);
     }
-    answer
+    answer.into()
 }
 
 /// What the filesystem says a path is: the volume it is on and which file it names there.
