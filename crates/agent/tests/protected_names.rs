@@ -4,7 +4,7 @@
 use bravebot_agent::Workspace;
 use bravebot_core::protected::{DIRECTORIES, FILES, is_protected};
 use bravebot_sandbox::policy::{PROTECTED_DIRECTORIES, PROTECTED_FILES};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A name added to one list and not the other leaves a write the file tools ask about, or the
 /// sandbox refuses, on one road only.
@@ -82,7 +82,7 @@ fn a_named_settings_file_is_held_under_the_path_it_lands_on() {
     let held = named_settings_paths_held_back(&workspace);
     assert!(held.contains(&root.join("linked/grant.json")), "{held:?}");
     assert!(held.contains(&root.join("real/grant.json")), "{held:?}");
-    assert!(held.iter().all(|path| Path::new(path).is_absolute()));
+    assert!(held.iter().all(|path| path.is_absolute()));
     let _ = std::fs::remove_dir_all(&root);
 }
 
