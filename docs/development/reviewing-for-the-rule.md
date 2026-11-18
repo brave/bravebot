@@ -33,7 +33,10 @@ a message to the model *is* the planner's context.
 records that bytes moved somewhere they were already allowed to go: a filesystem write, an HTTP
 body, or a person's screen. Each of those has a gate of its own, `Policy::present`,
 `Policy::render_in_place` and `Policy::read_trusted_content`, and the planner's own arguments
-have `Policy::read_planner_argument`. A processor's answer that a crate outside the driver reads for
+have `Policy::read_planner_argument`. The planner's own path for a read has
+`Policy::promote_confined_read` and the reference name it types has `Policy::accept_reference`:
+each assumes the argument it is handed is the planner's own and cannot tell it from bytes a server
+sent. A processor's answer that a crate outside the driver reads for
 one number has `Policy::read_a_number`. A reshape that reads two pieces of content at once, which
 a diff is, goes through `Policy::render_pair_in_place`: the same gate, taking the taint of both
 rather than one side's label. The planner's own strings that go to a model or a check have
@@ -46,12 +49,17 @@ that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md
 `make check-spec` fails on a new one until somebody records it there, which is where a reviewer
 is asked whether it belongs. The gates themselves are pinned the same way, because a reshape
 releases content to a closure the driver wrote and hands back a value that is still labelled, so
-a new call site needs no `declassify` of its own and would otherwise move nothing. The eight
+a new call site needs no `declassify` of its own and would otherwise move nothing. The ten
 functions that lower confidentiality for a write into the workspace or give bytes a trusted label
 (`declassify_into_workspace`, `declassify_written_into_workspace`,
 `declassify_checkout_into_workspace`, `promote_a_tool_list`, `promote_a_server_move`,
-`adopt_edited_body`, `promote_vetted` and `promote_vetted_picture`) are counted per file in
+`adopt_edited_body`, `promote_vetted`, `promote_vetted_picture`, `promote_confined_read` and
+`promote_reference_for_read`) are counted per file in
 [specs/labels.md](../specs/labels.md) as well, so a new caller of one fails `make check-spec`.
+`accept_reference` builds no label and is counted the same way, because it turns the planner's
+argument into a slot name. A new caller of any of them is read for what it passes in: an
+argument the planner wrote is the only thing that may reach `promote_confined_read` or
+`accept_reference`.
 Nothing checks the destination or the grant a caller passes, so a reviewer reads the new caller.
 `note_for` in `crates/agent/src/tools.rs` is pinned the same way. It is the one function that takes
 a closure from its caller and forwards it to a gate: a new caller of it writes such a closure

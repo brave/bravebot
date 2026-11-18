@@ -241,6 +241,16 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
+  - symbol: Policy::promote_confined_read
+    sites:
+      - crates/agent/src/lsp.rs: 1
+      - crates/agent/src/tools.rs: 20
+      - crates/agent/src/workspace.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::accept_reference
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
   - symbol: Policy::decode_transport
     sites:
       - crates/agent/src/images.rs: 1
@@ -570,6 +580,16 @@ the driver and a new caller of the wrapper adds one without moving the gate's ow
 `Policy::read_trusted_content` is named and not counted, in [skills.md](skills.md), because it
 refuses anything untrusted before it releases a byte: there is no content its callers' closures
 could read that the driver may not read for itself.
+
+`Policy::promote_confined_read` and `Policy::accept_reference` take no closure and are counted for
+another reason. Each is handed an argument the planner wrote, wrapped `(U,pub)`, and returns it as
+a `(T,pub)` path or as a slot id. What they refuse is a private value and a context that has met
+something untrusted. They do not refuse a public value because of where its bytes came from, so a
+caller that passed them a fetched page or a redirect target would get it back as trusted text or as
+a slot name, and the label would not show it. A caller's argument is the only thing that makes
+the result the planner's own, so each is counted per file in `guards` like
+`Policy::read_planner_argument`, which makes the same two refusals, and a spec that only names
+either one does not account for a new caller of it.
 
 `verified-by: bravebot_agent::tools::tests::activity::a_call_line_names_its_reference_inside_the_kernel`
 `verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`

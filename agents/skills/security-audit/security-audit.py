@@ -189,7 +189,9 @@ ALLOWED_DERIVES = {"Clone"}
 # names and takes one byte back, so it is counted like the gates that release to a closure.
 # `Policy::before_advice`, `Policy::before_processor`, `Policy::before_chooser` and
 # `Policy::before_vetting` release a planner-supplied string of any label as a bare `String` and
-# refuse nothing about the label, so each is counted per file.
+# refuse nothing about the label, so each is counted per file. `Policy::promote_confined_read` gives
+# a public planner argument the trusted label and `Policy::accept_reference` turns one into a slot
+# id. Both refuse by label and context, never by what the bytes say, so each is counted per file.
 GATES = (
     "Policy::present",
     "Policy::render_in_place",
@@ -201,6 +203,8 @@ GATES = (
     "Policy::before_processor",
     "Policy::before_chooser",
     "Policy::before_vetting",
+    "Policy::promote_confined_read",
+    "Policy::accept_reference",
 )
 WITNESS = "Declassification::authorise"
 
@@ -2170,7 +2174,7 @@ def check_gates_pinned(specs, sources):
 
 POLICY_SOURCE = Path("crates/core/src/policy.rs")
 FUNCTION_START = re.compile(r"^([ \t]*)(pub(?:\([^)]*\))?[ \t]+)?(?:(?:const|async|unsafe)[ \t]+)*fn[ \t]+(\w+)", re.M)
-TRUSTED_LABEL = re.compile(r"Label::(?:trusted_public|trusted_private)\(\)")
+TRUSTED_LABEL = re.compile(r"Label::(?:trusted_public|trusted_private)\(\)|Labelled::trusted\(")
 LABEL_NEW = re.compile(r"Label::new\(")
 # Functions that build a trusted or a public label and that no spec counts the calls of, each with
 # the reason it is not a way for bytes to improve their label. Every other function that builds one
@@ -2184,6 +2188,14 @@ LABEL_BUILDERS_NOT_GATES = {
     "the release goes only to a destination the plan named",
     "declassify": "returns a witness and records the label the release would have; "
     "only a slot the plan precommitted is released",
+    "record_answers": "refuses a series that is not trusted, and labels the reply from what the "
+    "person typed in answer to it",
+    "label_user_command_output": "labels what a command printed from a line a person typed, "
+    "and takes no value that already had a label",
+    "label_user_configuration": "labels the text of a file in the person's own configuration "
+    "directory, and takes no value that already had a label",
+    "read_output": "takes a slot that holds what a program printed and only on a single-use "
+    "endorsement for that slot, which an approval mints",
 }
 
 
@@ -2192,9 +2204,10 @@ def label_builders(sources):
     trusted or no more private than public, as `{name: line}`.
 
     A function that lowers a label's confidentiality or gives bytes a trusted one writes
-    `Label::trusted_public()`, `Label::trusted_private()` or a `Label::new(..)` naming
-    `Integrity::Trusted` or `Confidentiality::Public`. A comparison against one of the named
-    constructors is not building a label and is left out, and so are the lines under `#[cfg(test)]`.
+    `Label::trusted_public()`, `Label::trusted_private()`, `Labelled::trusted(..)` or a
+    `Label::new(..)` naming `Integrity::Trusted` or `Confidentiality::Public`. A comparison against
+    one of the named constructors is not building a label and is left out, and so are the lines
+    under `#[cfg(test)]`.
     The extent of a function is from its `fn` to the next one at the same indentation or less, so a
     nested function belongs to its parent.
     """
@@ -2240,15 +2253,15 @@ def check_label_builders_accounted(specs, sources):
     """A function in the policy layer that builds a trusted or public label and that nothing counts.
 
     `labels.md` pins the gates that lower confidentiality or promote bytes to a trusted label by
-    call site, and the self-test of `check-spec` lists the eight by hand. A ninth function written
+    call site, and the self-test of `check-spec` lists them by hand. A ninth function written
     the same way is in neither, so no count moves and no finding appears. This finds the functions
-    from the code and requires each to be counted by some spec's `guards` or to be named in
-    `LABEL_BUILDERS_NOT_GATES` with a reason.
+    from the code and requires each to have a `sites:` count in some spec's `guards` or to be named
+    in `LABEL_BUILDERS_NOT_GATES` with a reason. A `guards` entry with no `sites:` is not a count:
+    it passes while a new caller of the function lands anywhere, so it does not account for one.
     """
     counted = set()
     for spec in specs:
         counted.update(symbol.rpartition("::")[2] for symbol in spec.allowlists)
-        counted.update(symbol.rpartition("::")[2] for symbol in spec.guards)
     for name, line in sorted(label_builders(sources).items(), key=lambda item: item[1]):
         if name in counted or name in LABEL_BUILDERS_NOT_GATES:
             continue

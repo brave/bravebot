@@ -2096,6 +2096,52 @@ def test_the_gate_that_reads_a_number_is_counted():
     )
 
 
+def test_the_gates_that_trust_a_planner_argument_are_counted():
+    """`promote_confined_read` and `accept_reference` refuse by label and context and never by what
+    the bytes say, so a spec naming one is not enough and a caller outside the kernel is a count.
+    """
+    for gate in ("Policy::promote_confined_read", "Policy::accept_reference"):
+        bare = gate.rpartition("::")[2]
+        kernel = [
+            "impl Policy {",
+            f"    pub fn {bare}(&mut self, tool: &str, field: &str, value: &Labelled<String>) {{",
+            '        if !value.label().is_public() { return Err(self.deny("promote", tool)); }',
+            '        let proof = Declassification::authorise("a public path the planner proposed");',
+            "        Ok(Labelled::trusted(value.clone().declassify(&proof)))",
+            "    }",
+            "}",
+        ]
+        sources = {
+            Path("crates/core/src/policy.rs"): kernel,
+            Path("crates/agent/src/probe.rs"): [
+                "fn show(policy: &mut Policy, fetched: &Labelled<String>) {",
+                f'    policy.{bare}("fetch_url", "body", fetched)',
+                "}",
+            ],
+        }
+        check(
+            f"{gate} is one of the gates",
+            gate in audit.GATES,
+        )
+        found = list(audit.check_gates_pinned([FakeSpec([])], sources))
+        check(
+            f"a caller of {gate} is an error until a spec counts it",
+            kinds(found) == ["gate-unpinned"] and any(gate in one["title"] for one in found),
+            str([one["title"] for one in found]),
+        )
+        named = FakeSpec([], named=[gate])
+        found = list(audit.check_gates_pinned([named], sources))
+        check(
+            f"naming {gate} without a count does not clear it, as it refuses by label and not by content",
+            kinds(found) == ["gate-unpinned"] and any(gate in one["title"] for one in found),
+            str([one["title"] for one in found]),
+        )
+        check(
+            f"a counted {gate} is clean",
+            list(audit.check_gates_pinned([FakeSpec([gate])], sources)) == [],
+        )
+
+
 def test_label_builders_are_accounted():
     def policy(*functions):
         body = ["impl Policy {"]
@@ -2132,11 +2178,36 @@ def test_label_builders_are_accounted():
         )
 
     other = FakeSpec(["Policy::promote_known"], named=["Policy::promote_known", "Policy::ninth_gate"])
+    found = list(
+        audit.check_label_builders_accounted(
+            [other], policy(known, promote("ninth_gate", "Labelled::new(t, Label::trusted_public())"))
+        )
+    )
     check(
-        "a ninth function a spec guards without counting is accounted for",
+        "a ninth function a spec guards without counting is reported",
+        kinds(found) == ["label-builder-unaccounted"] and "ninth_gate" in found[0]["title"],
+        str([f["title"] for f in found]),
+    )
+    found = list(
+        audit.check_label_builders_accounted(
+            [counted],
+            policy(known, promote("ninth_gate", "Labelled::trusted(value.declassify(&proof))")),
+        )
+    )
+    check(
+        "a promotion written as Labelled::trusted is one error at its line",
+        kinds(found) == ["label-builder-unaccounted"]
+        and "ninth_gate" in found[0]["title"]
+        and found[0]["evidence"][0].startswith("crates/core/src/policy.rs:5 "),
+        str([f["evidence"] for f in found]),
+    )
+    both = FakeSpec(["Policy::promote_known", "Policy::ninth_gate"])
+    check(
+        "a Labelled::trusted promotion a spec counts is clean",
         list(
             audit.check_label_builders_accounted(
-                [other], policy(known, promote("ninth_gate", "Labelled::new(t, Label::trusted_public())"))
+                [both],
+                policy(known, promote("ninth_gate", "Labelled::trusted(value.declassify(&proof))")),
             )
         )
         == [],
@@ -2172,6 +2243,31 @@ def test_label_builders_are_accounted():
             '        "Label::trusted_public()"',
             "    }",
         ],
+        "a comparison against Labelled::trusted": [
+            "    pub fn is_known(&self, l: Labelled<String>) -> bool {",
+            "        l == Labelled::trusted(String::new())",
+            "    }",
+        ],
+        "an assert against Labelled::trusted": [
+            "    pub fn check(&self, l: Labelled<String>) {",
+            "        assert_eq!(l, Labelled::trusted(String::new()));",
+            "    }",
+        ],
+        "Labelled::trusted named in a comment": [
+            "    pub fn quiet(&self) {",
+            "        // Labelled::trusted(value) is what promote_known returns",
+            "    }",
+        ],
+        "Labelled::trusted named in a string": [
+            "    pub fn quiet(&self) -> &str {",
+            '        "Labelled::trusted(value)"',
+            "    }",
+        ],
+        "Labelled::trusted in a private function": [
+            "    fn build(&self, v: String) -> Labelled<String> {",
+            "        Labelled::trusted(v)",
+            "    }",
+        ],
         "an untrusted label": [
             "    pub fn hop(&self) -> Label {",
             "        Label::untrusted_public()",
@@ -2197,6 +2293,7 @@ def test_label_builders_are_accounted():
         "#[cfg(test)]",
         "mod tests {",
         "    pub fn ninth_gate() -> Label { Label::trusted_public() }",
+        "    pub fn tenth_gate(v: String) -> Labelled<String> { Labelled::trusted(v) }",
         "}",
     ]
     check(
@@ -2229,9 +2326,26 @@ def test_label_builders_are_accounted():
         str(sorted(found)),
     )
     check(
+        "the real policy layer's label builders include the gates that write Labelled::trusted",
+        all(name in found for name in ("promote_confined_read", "promote_reference_for_read")),
+        str(sorted(found)),
+    )
+    check(
         "every name LABEL_BUILDERS_NOT_GATES lists is still a label builder",
         set(audit.LABEL_BUILDERS_NOT_GATES) <= set(found),
         str(sorted(set(audit.LABEL_BUILDERS_NOT_GATES) - set(found))),
+    )
+    check(
+        "every label builder of the real policy layer has a sites count or a reason",
+        with_cwd(
+            ROOT,
+            lambda: list(
+                audit.check_label_builders_accounted(
+                    audit.load_specs(), audit.mechanics.load_sources()
+                )
+            ),
+        )
+        == [],
     )
 
 
@@ -6388,6 +6502,7 @@ TESTS = (
     test_run_files_have_owners,
     test_construction_pinned,
     test_the_gate_that_reads_a_number_is_counted,
+    test_the_gates_that_trust_a_planner_argument_are_counted,
     test_gates_pinned,
     test_key_sites_exhaustive,
     test_one_answer_to_which_lines_are_test_code,
