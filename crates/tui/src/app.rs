@@ -40448,6 +40448,15 @@ mod tests {
             vec![extra.canonicalize().expect("canonical")],
             "the directory `/add-dir` opened was not opened again"
         );
+        let canonical_extra = extra.canonicalize().expect("canonical");
+        // The reopened directory counts toward withholding the file `--settings` named (PERM-14),
+        // which the registry the layering reads records.
+        let counted = bravebot_config::added_writable_directories();
+        bravebot_config::close_writable_directory(&canonical_extra);
+        assert!(
+            counted.contains(&canonical_extra),
+            "the resumed session did not count its reopened directory as writable: {counted:?}"
+        );
         let said = said_in_the_transcript(&session).join("\n");
         assert!(
             said.contains("resumed session: an earlier session"),

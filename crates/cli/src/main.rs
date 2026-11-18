@@ -308,6 +308,10 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             .collect::<Vec<_>>(),
         true,
     );
+    // The same for `--add-dir`, which is read here without taking it out of `args`, since the
+    // invocation parses it again. Counted before the load below because the host list, the git
+    // identities and the proxy are settled from it once and keep that answer.
+    crate::workspace::count_written_roots(&crate::workspace::add_dir_values(args), false);
     bravebot_config::settle_sandbox_filesystem(&sandbox_lists);
 
     // The host list a stage is held to and the key each owner's repositories are pushed with,

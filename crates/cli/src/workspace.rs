@@ -200,6 +200,16 @@ pub(crate) fn open_directories(
     })
 }
 
+/// The paths `--add-dir` names in `args`, read as the invocation reads them and left in place.
+pub(crate) fn add_dir_values(args: &[String]) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == "--add-dir")
+        .map(|pair| pair[1].trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Record the directories the command line names as ones a stage may write, before the settings
 /// are layered: on a platform that cannot hold one file back, whether the file `--settings` named
 /// may grant depends on them (#2599), and [`open_directories`] runs after the settings load.
@@ -373,5 +383,25 @@ mod tests {
         assert!(counted.contains(&real), "{counted:?}");
         assert!(!counted.contains(&spelled), "{counted:?}");
         assert!(!counted.contains(&missing), "{counted:?}");
+    }
+
+    /// `--add-dir` values are read from the line without taking them out of it, so the roots can
+    /// be counted before the first settings load and the invocation still parses them.
+    #[test]
+    fn add_dir_values_are_read_from_the_line_and_left_in_it() {
+        let line: Vec<String> = [
+            "--add-dir",
+            "/one",
+            "do it",
+            "--add-dir",
+            " /two ",
+            "--add-dir",
+            "  ",
+        ]
+        .iter()
+        .map(|word| word.to_string())
+        .collect();
+        assert_eq!(add_dir_values(&line), vec!["/one", "/two"]);
+        assert_eq!(line.len(), 7);
     }
 }
