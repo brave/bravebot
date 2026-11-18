@@ -8097,6 +8097,70 @@ fn a_deny_rule_holds_when_a_listing_walks_the_directory_above_the_file() {
     );
 }
 
+/// PERM-3, PERM-7: a `Read(./)` deny rule in the managed file fences every file in the workspace,
+/// not only the root. A read of a file by name is refused and its contents do not reach the
+/// planner, and a listing, a search and a repository map return no file. The same files are
+/// returned when no rule is in force, so the empty results are the rule's.
+#[test]
+fn a_managed_rule_naming_the_workspace_root_refuses_a_read_and_hides_every_file_from_a_walk() {
+    let scratch = Scratch::new("permissions-managed-root-deny");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("marker.txt"), "CANARY_CONTENTS_ONE").unwrap();
+    std::fs::write(
+        scratch.path.join("sub/walked_only.rs"),
+        "pub fn canary_declaration() {} // CANARY_CONTENTS_TWO\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let elsewhere = Scratch::new("permissions-managed-root-deny-home");
+    let home = elsewhere.path.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let managed = elsewhere.path.join("managed.json");
+    std::fs::write(&managed, r#"{"permissions": {"deny": ["Read(./)"]}}"#).unwrap();
+    let settings = bravebot_config::Settings::layered(Some(home), Some(workspace.root()), None)
+        .under(&bravebot_config::Managed::at(&managed));
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+
+    let calls = [
+        ("read_file", r#"{"path":"marker.txt"}"#),
+        ("list_files", r#"{"directory":"."}"#),
+        (
+            "search",
+            r#"{"pattern":"CANARY_CONT.NTS","directory":".","output":"lines"}"#,
+        ),
+        ("repo_map", r#"{"directory":"."}"#),
+    ];
+    let bodies =
+        run_calls_under(&workspace, permissions, trusting_the_workspace(), &calls).join("\n");
+    for leaked in ["CANARY_CONTENTS", "canary_declaration", "walked_only"] {
+        assert!(
+            !bodies.contains(leaked),
+            "{leaked} reached the planner under a managed Read(./) rule: {bodies}"
+        );
+    }
+    assert!(
+        bodies.contains("deny rule"),
+        "the planner was not told a rule refused: {bodies}"
+    );
+
+    // Without the rule the same calls return the files, so the results above are not empty for
+    // another reason.
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trusting_the_workspace(),
+        &calls,
+    )
+    .join("\n");
+    assert!(
+        bodies.contains("CANARY_CONTENTS_ONE") && bodies.contains("canary_declaration"),
+        "the control run returned neither file: {bodies}"
+    );
+}
+
 /// One turn in `scratch` under `deny`, with the workspace vouched for and every write approved, so
 /// that a rule is the only thing that can refuse a call. Returns the body of every request the
 /// planner was sent; each call's result is in the request after it.
@@ -22366,7 +22430,7 @@ fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_b
             )],
         ),
     );
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -43160,7 +43224,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
         ),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut shown = ShownAfterAVet::new(true);
@@ -44343,7 +44407,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
@@ -44583,7 +44647,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
     let shown = confirmer.shown.clone();
@@ -73679,7 +73743,8 @@ fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpo
     let mut c = bravebot_agent::Conversation::new();
     let mut r = bravebot_agent::report::RecordingReporter::default();
     let _ = take_a_turn_reporting(
-        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET")),
+        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET"))
+            .with_patience(three_requests_and_no_more()),
         &workspace,
         &mut c,
         Task::new("REVIEW-PARENT-LEAK"),
@@ -99127,7 +99192,7 @@ fn fetch_script_turn(
         Some(checks) => serve_sequence_answering_checks_with(checks, script),
         None => serve_sequence_losing_every_check(script),
     };
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut inner = ApprovesFetchesAndWrites::default();

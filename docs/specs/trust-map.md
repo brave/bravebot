@@ -128,7 +128,11 @@ trusted directory afterwards is therefore read as trusted, whoever put it there.
 the working directory is on, so it is asked of the volume and not read from the operating system.
 The front end that makes the map asks by looking the working directory's own name up in the other
 case (the nearest directory above it with a letter in its name, on the same volume) and comparing
-which file each spelling names. No file is created and no name inside the tree is read. Where they
+which file each spelling names. On Linux it first reads the casefold flag of the working directory
+itself, because ext4 and f2fs fold case per directory: a working directory with the flag set folds
+the names inside it whatever its parent does, and a working directory without it does not fold them
+even where the directory its own name is looked up in does. No file is created and no name inside
+the tree is read. Where they
 name one file, `src/fetched.json` and `SRC/fetched.json` are one path and a rule about either
 decides both, in both polarities. Where they name different files, or the lookup misses, the map
 compares bytes, and a rule about `Docs` decides nothing about `docs`. Where the volume cannot be
@@ -378,6 +382,10 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_volume_answering_to_either_spelling_folds_case`
 `verified-by: bravebot_agent::workspace::a_volume_holding_the_spellings_apart_does_not_fold_case`
 `verified-by: bravebot_agent::workspace::a_probe_that_cannot_tell_does_not_fold_case`
+`verified-by: bravebot_agent::workspace::a_workspace_that_folds_inside_a_parent_that_does_not_folds_case`
+`verified-by: bravebot_agent::workspace::a_workspace_that_does_not_fold_inside_a_parent_that_does_does_not_fold_case`
+`verified-by: bravebot_agent::workspace::the_other_layouts_of_the_casefold_flag_keep_their_answers`
+`verified-by: bravebot_agent::workspace::a_filesystem_with_no_flags_is_read_by_the_lookup_of_the_name`
 `verified-by: bravebot_agent::workspace::a_name_without_a_letter_is_asked_of_the_directory_above`
 `verified-by: bravebot_agent::workspace::a_trust_store_takes_the_answer_of_the_volume_it_is_on`
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`

@@ -3510,6 +3510,16 @@ need a file made in the tree and a refusal that names a file the volume holds ap
 back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
 person did not write.
 
+An entry of `denyRead` or `denyWrite` that names a path that is not on disk keeps the spelling it
+was written in beneath the part that is. A volume that opens a name under every canonically
+equivalent form (APFS) opens a file made there later under either form, so the path of a request and
+an allowance at the path a refusal names are compared with the refusal one name at a time, as
+written or in canonical decomposition, whichever form the entry and the file are in. A name that is not
+text is compared as the bytes it is. Case is not folded, since the entry names one path and not a
+pattern, and a volume that holds the two forms apart is refused more than the entry spells and never
+less. A recorded writable directory and a `PATH` entry that do not exist, spelled in different
+forms, are compared by name only ([SANDBOX-30](#SANDBOX-30)).
+
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
 is, and the result names the key and the entry. Where the backend cannot subtract from a grant
@@ -3572,6 +3582,11 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_deny_glob_still_meets_every_name_it_met_as_written`
 `verified-by: bravebot_sandbox::rules::an_allow_glob_meets_names_exactly`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
+`verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
+`verified-by: bravebot_sandbox::rules::a_denial_of_a_missing_path_refuses_the_file_made_later_in_either_unicode_form`
+`verified-by: bravebot_sandbox::rules::an_allowance_is_overridden_by_a_refusal_spelled_in_the_other_unicode_form`
+`verified-by: bravebot_sandbox::rules::a_denied_path_is_met_in_either_unicode_form_and_no_other_name_is`
+`verified-by: bravebot_sandbox::rules::a_denied_name_that_is_not_text_is_not_met_by_its_lossy_lookalike`
 `verified-by: bravebot_sandbox::rules::a_denial_decides_the_path_it_names_and_a_pinned_one_what_is_beneath`
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
 `verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
@@ -4409,7 +4424,7 @@ file. A new spawn that looks a name up through
   the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `XDG_CACHE_HOME` (the
   directory `kde-open` reads its service cache from when `KDESYCOCA` is not set),
   `GIO_LAUNCH_DESKTOP`, `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
-  and the GIO, Qt, KDE and Windows names in its table below, 29 names in `CODE_SELECTORS` in
+  and the GIO, Qt, KDE and Windows names in its table below, 30 names in `CODE_SELECTORS` in
   `crates/tui/src/opener.rs`. `GIO_LAUNCH_DESKTOP` is one file
   (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
@@ -4451,8 +4466,8 @@ file. A new spawn that looks a name up through
   its generic path, so under GNOME with `gio` installed it is not read. The desktop application
   deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories, `XDG_CACHE_HOME` and the GIO,
   Qt and KDE names of the opener's table below from its own environment (`OPENER_SELECTORS`, 16
-  names: the opener's 29 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
-  application leaves set, and without the ten Windows names, as `APPLICATION_EXCEPTIONS` in
+  names: the opener's 30 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
+  application leaves set, and without the eleven Windows names, as `APPLICATION_EXCEPTIONS` in
   `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
   `XDG_MENU_PREFIX` when the value contains a `/` (`FILE_NAME_PREFIXES` in
   `ui/src/main/external-open.ts`, tested by `a file-name prefix is deleted only when it has a slash,
@@ -4849,11 +4864,12 @@ file. A new spawn that looks a name up through
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
   | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
+  | `PSModulePath` | a list of directories | with the name left set, a handler whose command is `%PSModulePath%\helper.cmd`, as a `REG_EXPAND_SZ` value, runs the helper in the directory the name is set to through the opener's start, which is why the opener removes it (the run under "What a checked start does not cover"). No source read shows this start reading it, and the opener does not start PowerShell |
   | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds. The Windows CI runs removed it and `rundll32` exited with status 0; whether a page opened was not observed |
 
-  That is 29 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
+  That is 30 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
   application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
-  `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the ten Windows names, 16, and
+  `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the eleven Windows names, 16, and
   `make check-code-selectors` fails when the two differ in anything else.
 
   What was run and what was read for these names is in "What a checked start does not cover".
@@ -5540,7 +5556,7 @@ shown by running the program, or not entirely:
   of the 13 names that are not options (`BROWSER`, `HOME`, the five `XDG_` directories,
   `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `GIO_LAUNCH_DESKTOP`, `QT_PLUGIN_PATH`,
   `QT_QPA_PLATFORM_PLUGIN_PATH`, `KDESYCOCA`) fails both tests with `<NAME> was not kept`, so a safe
-  value of each reaches the program `xdg-open` starts. The ten Windows names were in neither run.
+  value of each reaches the program `xdg-open` starts. The eleven Windows names were in neither run.
   This is what the opener hands on, not a trace
   of the real programs. `strace -f -e trace=execve,openat` of the real `gio open` and `kde-open` was
   not made: this host has no `strace` and no Linux VM or container runtime, `dtruss` refuses to run
@@ -5736,7 +5752,8 @@ shown by running the program, or not entirely:
   `XDG_CONFIG_DIRS` rests on the source (`xdg-mime` `defapp_generic`, which reads the variable
   without checking it) and on the stubbed run, and was not run on Linux. The removal of the other
   three names has the same standing in generic mode, except for the `BROWSER` test and the GNOME
-  `gio open` cells marked run above. The Windows `rundll32` start was read and not run.
+  `gio open` cells marked run above. The Windows `rundll32` start is recorded under "What a checked
+  start does not cover".
   Not read: `G_RESOURCE_OVERLAYS` is read and judged unreachable, the `QT_*` names not listed, and `LD_*` variables.
   These are unobserved.
   `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` prints
@@ -5779,45 +5796,57 @@ shown by running the program, or not entirely:
   pages name no variable; Microsoft's `rundll32` page and the rest of the ReactOS tree were not
   read, and no source read shows `PATHEXT` being read by this start. No Wine or ReactOS
   version is recorded for the source named. The `sandbox-windows` job ran the start on
-  `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in two
-  runs of `ci.yml` on main, 43115512926 and 43116736884. In both, the opener's start removed the
-  ten names listed below, the batch file did not run, and `rundll32` exited with status 0. A start
-  with only one of the ten names, or only `PSModulePath`, put back on the command did not run the
-  batch file either. That shows that setting a name to a directory a stage may write does not by
-  itself make this start run a file in it on that image. It does not show which names select the
-  program: the test registers no handler whose command expands a listed name, and sets `COMSPEC`
-  without starting a batch file. An exit status of 0 from `rundll32` does not show that a page
-  opened, so it does not show that the start works without `PATHEXT` and the other nine names. The opener
+  `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in
+  three runs of `ci.yml` on main, 43115512926, 43116736884 and 44007981464. In the first two, the
+  opener's start removed the ten names other than `PSModulePath`, the batch file did not run, and
+  `rundll32` exited with status 0. A start with only one of the ten names, or only `PSModulePath`, put back
+  on the command did not run the batch file either, with the address of an `https` page and no
+  handler that expands a name. That shows that setting a name to a directory a stage may write
+  does not by itself make this start run a file in it on that image. An exit status of 0 from
+  `rundll32` does not show that a page opened. The opener
   removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
-  `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
+  `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` and `PSModulePath`, pinned on hosts
+  with Unix paths by
   `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
   `comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`, and on
   Windows by `a_windows_name_is_removed_in_whatever_case_it_is_set`. The `sandbox-windows` job in
   `.github/workflows/ci.yml` runs
   `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`, which sets
-  the ten names in a child run of the test binary, asserts that the opener's start removes all
-  ten and that a stage-written batch file does not run, and prints for each name, and for
-  `PSModulePath`, whether a start with only that name put back ran the batch file. The child
+  the eleven names in a child run of the test binary, asserts that the opener's start removes all
+  eleven and that a stage-written batch file does not run, and prints for each name whether a
+  start with only that name put back ran the batch file. The child
   begins with a newline and prefixes each record it prints with `windows-start-record: `, and the
   test reads the records from the lines that begin with that prefix, so the check does not depend
   on where the test harness's own output on the same stream ends; it also asserts that every
   child printed its `start ended` record. The printed
-  record is not asserted. Which names select the program on Windows is still unobserved.
-  `a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper` is the
-  test that observes it. It registers a handler for the current user
+  record is not asserted.
+  `a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper` observes
+  which names select the program. It registers a handler for the current user
   for a scheme of its own, as a `REG_EXPAND_SZ` and as a `REG_SZ` value, whose command expands one
   name (`%COMSPEC%` for `COMSPEC`, `%<name>%\helper.cmd` for each directory name, and the helper's
   path without an extension for `PATHEXT`) and so reaches a batch file that only creates a marker,
   in a directory a stage may write. It starts the opener's `rundll32` through the address of that
   scheme in a child run of the test binary, with the name set to that directory. It asserts that a
   handler written with the helper's own path runs it through the opener's start, and that the
-  start with each of the nine names other than `PATHEXT` set does not run the helper. The
+  start with each of the ten names other than `PATHEXT` set does not run the helper. The
   `PATHEXT` handler names the helper by a path in the stage's directory, and on the Windows
   Server 2025 runner `rundll32` ran it with `PATHEXT` removed and with it put back, so the
-  test prints that case and does not assert it. It prints, for each of the ten
-  names and `PSModulePath`, whether the helper ran with the name removed and with it put back on
+  test prints that case and does not assert it. It prints, for each of the eleven
+  names, whether the helper ran with the name removed and with it put back on
   the command, and whether it ran when the handler is written with the helper's own path and the
-  name is removed. The put-back result says which names select the program. #3822 owns the rest of the opener list.
+  name is removed. Run 44007981464 (merge commit 5e1a8908a, Windows Server 2025 10.0.26100, runner
+  image 20261103.298.1) printed, with the name put back on the command of a `REG_EXPAND_SZ`
+  handler, that the helper ran for `windir`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`,
+  `APPDATA`, `USERPROFILE` and `PSModulePath`, and did not run for `COMSPEC`, `SystemRoot` or
+  `ProgramFiles`. With a `REG_SZ` handler the helper ran for no name, so `ShellExecute` expanded
+  `%name%` only in the expandable type. With `PSModulePath` left set, the start runs the helper
+  through a `REG_EXPAND_SZ` handler that expands `%PSModulePath%`, which is why the opener removes
+  it. With the name removed and the handler written with the helper's
+  own path the helper ran for every name but `SystemRoot`, so the start still opens a handler
+  without ten of the eleven names, and does not without `SystemRoot`. The three names that did not
+  select the program stay in the list, since the run tried one command form on one image.
+  A variable outside the list and these eleven was not tried, and #3822 owns the rest of the
+  opener list.
   These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is

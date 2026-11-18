@@ -125,7 +125,10 @@ MECHANICAL_FOUND_BY = (
     "is triaged and no `importance`, `urgency` or `size` has been judged."
 )
 
-AREAS = ("trust", "tools", "turns", "interface", "cli", "delegation", "backends", "skus", "i18n")
+AREAS = (
+    "trust", "sandbox", "tools", "mcp", "browser", "connectors", "turns", "background", "delegation",
+    "plugins", "backends", "skus", "interface", "desktop", "acp", "remote", "cli", "release", "i18n",
+)
 
 # The build and the tracker rather than the product. There is no `area/` for it, and a finding about a
 # workflow belongs to whoever owns the pipeline.

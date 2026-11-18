@@ -56,8 +56,9 @@ other tool does and what bravebot would do instead, there is no gap.
   whole of the work (`Add session forking`). A `beyond` gap states the change and what it buys. No
   prefix a label already says, and no backticks.
 - `key`: the one distinctive word in the title that an issue about the same thing would also carry.
-- `area`: one of `trust`, `tools`, `turns`, `interface`, `cli`, `delegation`, `backends`, `skus`,
-  `i18n`, `infrastructure`, or empty where it is not clear.
+- `area`: one of `trust`, `sandbox`, `tools`, `mcp`, `browser`, `connectors`, `turns`,
+  `background`, `delegation`, `plugins`, `backends`, `skus`, `interface`, `desktop`, `acp`,
+  `remote`, `cli`, `release`, `i18n`, `infrastructure`, or empty where it is not clear.
 - `summary`: two or three sentences for a person who has not read the rest. What is missing or could
   be better, and what it costs a person using bravebot.
 - `peer`: the tool that does it best, by name. Several tools may do it; name the one whose behaviour

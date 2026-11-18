@@ -889,6 +889,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_caffeinate();
         return Action::Redraw;
     }
+    // For a terminal that was reset or cleared from outside, which no event reports.
+    if line.trim() == REDRAW_COMMAND {
+        session.retake_terminal = true;
+        return Action::Redraw;
+    }
     if let Some(argument) = argument_to(line, CHECKOUTS_COMMAND) {
         return match crate::checkouts_command::parse(argument) {
             crate::checkouts_command::Asked::List => Action::ListCheckouts,
@@ -1455,6 +1460,20 @@ fn redraw(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) -> io::Result<()> {
+    // `/redraw`: the terminal may have been reset or cleared from outside, so its modes are given
+    // back and asked for again, and the screen is cleared so the draw below sends every cell
+    // instead of the difference from a screen that is no longer there (CMD-33).
+    if std::mem::take(&mut session.retake_terminal) {
+        // Only writes: nothing is read back, so this is safe while the terminal's reader runs.
+        // Given back first so the keyboard flags are popped before they are pushed again.
+        give_back_modes(terminal.backend_mut(), enhanced_keys())?;
+        ask_for_modes(
+            terminal.backend_mut(),
+            enhanced_keys(),
+            session.mouse_captured(),
+        )?;
+        terminal.clear()?;
+    }
     let mut laid = crate::state::Laid::default();
     terminal
         .draw(|frame| laid = render::draw(frame, session))
@@ -17326,6 +17345,24 @@ mod tests {
         );
     }
 
+    /// CMD-2: `/redraw` is a command only as the whole line, so a question about it, a longer word
+    /// that starts with it, and the word followed by others are each a prompt.
+    #[test]
+    fn redraw_is_a_command_only_as_the_whole_line() {
+        for line in ["what does /redraw do", "/redrawn", "/redraw now"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+            assert!(!session.retake_terminal, "{line} retook the terminal");
+        }
+    }
+
     /// CMD-2: `/caffeinate` is a command only as the whole line, so a question about it is a prompt.
     #[test]
     fn a_prompt_containing_the_caffeinate_command_is_still_a_prompt() {
@@ -26580,6 +26617,7 @@ mod tests {
                 PANEL_COMMAND,
                 PR_COMMAND,
                 PRS_COMMAND,
+                REDRAW_COMMAND,
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 SANDBOX_COMMAND,
@@ -26594,6 +26632,29 @@ mod tests {
                 VARIANT_COMMAND,
                 WATCH_COMMAND,
             ]
+        );
+    }
+
+    /// `/redraw` asks for the terminal's modes again and a full frame, and changes nothing else, so
+    /// it is carried out as typed, mid-turn included (CMD-33).
+    #[test]
+    fn the_redraw_command_retakes_the_terminal_and_runs_mid_turn() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            commands()
+                .into_iter()
+                .find(|command| command.name == REDRAW_COMMAND)
+                .map(|command| command.mid_turn),
+            Some(MidTurn::Runs)
+        );
+        assert!(!session.retake_terminal);
+        assert_eq!(
+            dispatch_command(&mut session, commanded(REDRAW_COMMAND)),
+            Action::Redraw
+        );
+        assert!(
+            session.retake_terminal,
+            "/redraw did not ask for the modes again"
         );
     }
 
@@ -31195,10 +31256,11 @@ mod tests {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,
                 // The bare word opens a picker or the Sessions screen, which are modes of the session and
-                // say nothing.
+                // say nothing. `/redraw` answers by drawing the screen again, so it says nothing either.
                 _ if [
                     CONFIG_COMMAND,
                     MODEL_COMMAND,
+                    REDRAW_COMMAND,
                     SESSIONS_COMMAND,
                     SIDEBAR_COMMAND,
                 ]
@@ -36040,67 +36102,14 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// The person who was asked about the working directory is asked about each directory a file
-    /// named too, because a name in a file is a request for reach and trust rather than a grant of
-    /// either, and the file is the easiest thing in a checkout to write to.
-    #[test]
-    fn a_person_asked_about_the_workspace_is_asked_about_each_named_directory() {
-        let named = vec!["/home/me/notes".to_string(), "/home/me/.ssh".to_string()];
-
-        assert_eq!(
-            named_directories(Whence::Asked, &named),
-            Named::Asking(named)
-        );
-    }
-
-    /// The mode that answers every permission question answers these as well. It approves every
-    /// write, every run and vouching for every file the planner reads, so stopping at a modal box
-    /// about a directory would be the one thing it did not answer.
-    #[test]
-    fn bypassing_opens_the_directories_a_file_named_without_asking() {
-        let named = vec!["/home/me/notes".to_string()];
-
-        assert_eq!(
-            named_directories(Whence::Unasked, &named),
-            Named::Opening(named)
-        );
-    }
-
-    /// A session resumed with the map its own user left puts no question, and the directories it
-    /// has open are the ones its own record reopened. Taking a name from the file as well would
-    /// open a directory on behalf of somebody who was never asked, out of a file that may have
-    /// been edited since they answered.
-    #[test]
-    fn a_resume_that_brought_its_own_map_opens_no_directory_a_file_named() {
-        let named = vec!["/home/me/notes".to_string()];
-
-        assert_eq!(
-            named_directories(Whence::Resumed, &named),
-            Named::Opening(Vec::new())
-        );
-    }
-
-    /// The rules a checkout proposes in the tests below.
-    fn proposed(rules: &[&str]) -> Vec<bravebot_agent::granted::Proposed> {
-        rules
-            .iter()
-            .map(|rule| {
-                bravebot_agent::granted::Proposed::new(
-                    std::path::Path::new("/work/.bravebot/settings.json"),
-                    rule,
-                )
-            })
-            .collect()
-    }
-
     /// PERM-11, PERM-15: the list this interface builds holds the entries that are rules and not
     /// the ones that are not. A line nothing can act on is reported for what is wrong with it, so
     /// offering it in the box would ask somebody to grant a rule that would still decide nothing
     /// once they had, and telling them it was withheld sends them to the wrong fix.
     ///
     /// From files rather than from [`bravebot_config::Settings::parse`], because which layer wrote
-    /// an entry is what puts it in this list at all. The tests below start from a list already
-    /// built, so this is the one that pins where the interface's own comes from.
+    /// an entry is what puts it in this list at all. The tests in `bravebot_agent::opening` start
+    /// from a list already built, so this is the one that pins where the interface's own comes from.
     #[test]
     fn a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule() {
         let root = crate::testutil::scratch_dir("bravebot-app-proposed-rules");
@@ -36124,97 +36133,6 @@ mod tests {
             offered,
             ["Bash(bash scripts/check.sh)"],
             "the entries this session offers are not the ones that are rules"
-        );
-    }
-
-    /// PERM-15: the person who was asked about the working directory is asked about the `allow` rules
-    /// a checkout proposed too, because each answers an approval prompt they would otherwise see and
-    /// the file is the easiest thing in a checkout to write to.
-    #[test]
-    fn a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Asked, &rules, &[]),
-            Granting::Asking {
-                already: Vec::new(),
-                asking: rules,
-            }
-        );
-    }
-
-    /// PERM-15: and not twice about the same rule. A rule this workspace's record already holds was
-    /// answered in an earlier session here, so it is in force without a box: a question already
-    /// answered trains the habit of answering without reading, which is the whole of what asking is
-    /// worth.
-    #[test]
-    fn a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
-        let already = proposed(&["Bash(bash scripts/check.sh)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Asked, &rules, &already),
-            Granting::Asking {
-                already,
-                asking: proposed(&["Edit(src/**)"]),
-            }
-        );
-    }
-
-    /// PERM-15: two layers may write one rule, and a grant is for the file that proposed it, so the
-    /// one that was granted is in force and the other is still asked about.
-    ///
-    /// The case that decides how a dropped rule is reported. What is in force and what was proposed
-    /// are compared to work out which entries to name, and comparing the two on the rule text alone
-    /// would find this rule in both lists and report the ungranted copy as neither granted nor
-    /// dropped: an entry that answers no prompt, with nothing said about it.
-    #[test]
-    fn one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in() {
-        let project = bravebot_agent::granted::Proposed::new(
-            std::path::Path::new("/work/.bravebot/settings.json"),
-            "Bash(bash scripts/check.sh)",
-        );
-        let local = bravebot_agent::granted::Proposed::new(
-            std::path::Path::new("/work/.bravebot/settings.local.json"),
-            "Bash(bash scripts/check.sh)",
-        );
-        let proposed = vec![project.clone(), local.clone()];
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Asked, &proposed, std::slice::from_ref(&project)),
-            Granting::Asking {
-                already: vec![project],
-                asking: vec![local],
-            }
-        );
-    }
-
-    /// PERM-15: the mode that answers every permission question answers this one too, on the terms it
-    /// answers the workspace's. It approves every write, every run and vouching for every file the
-    /// planner reads, so stopping at a modal box about a rule that suppresses one of those prompts
-    /// would be the one thing it did not answer.
-    #[test]
-    fn bypassing_grants_the_rules_a_checkout_proposed_without_asking() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Unasked, &rules, &[]),
-            Granting::Granting(rules)
-        );
-    }
-
-    /// PERM-15: a session resumed with the map its own user left puts no question, and what holds is
-    /// what that workspace's record already says. A rule the checkout has added since is one nobody
-    /// granted, so granting it here would answer an approval prompt on behalf of somebody who was
-    /// never asked, out of a file that may have been edited since they answered.
-    #[test]
-    fn a_resume_grants_only_the_rules_the_record_already_held() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
-        let already = proposed(&["Bash(bash scripts/check.sh)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Resumed, &rules, &already),
-            Granting::Granting(already)
         );
     }
 

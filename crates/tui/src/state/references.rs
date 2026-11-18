@@ -1,11 +1,10 @@
 //! The issues and pull requests the session has met, which `/issues` and `/prs` print and the info
 //! panel lists (PANEL-16).
 //!
-//! The list holds only values [`Reference::new`] built, from three sources: the lines the person
-//! typed, which [`Session::remember`] reads, and the planner's own tool-call arguments and the
-//! results labelled trusted, which the turn reads in `bravebot-agent` and hands over one call at a
-//! time. Nothing here reads a reply or a tool result, and no code here branches on what a
-//! reference says beyond the kind it names.
+//! The list holds only values [`Reference::new`] built, from two sources: the lines the person
+//! typed, which [`Session::remember`] reads, and the planner's own tool-call arguments, which the
+//! turn reads in `bravebot-agent` and hands over one call at a time. Nothing here reads a reply or
+//! a tool result, and no code here branches on what a reference says beyond the kind it names.
 
 #[cfg_attr(
     not(test),

@@ -193,6 +193,9 @@ For the full run on macOS, start Docker Desktop and run `make check-all` from th
 you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
 neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
 default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+`make test` and `make check` run the tests with `cargo nextest` when `cargo-nextest` is installed,
+as CI does (`cargo install cargo-nextest --locked`), and with `cargo test` otherwise. nextest runs
+the test binaries side by side, where `cargo test` runs them one after another.
 The test binaries that start a mock server per test (`browser_group_servers` and `mcp` in
 `crates/agent/tests`, and `running` in `crates/cli/tests`) raise their own soft open-file limit to
 8192, or to the hard limit where that is lower, through `crates/agent/test-support/open_files.rs`,
@@ -431,8 +434,8 @@ opener's, the `powershell` starts' or the usability suite's file has no `CODE_SE
 as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
 `ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
 does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
-read them and Electron reaches the session bus through the last two, and the ten Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
-`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
+read them and Electron reaches the session bus through the last two, and the eleven Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
+`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, `PSModulePath`),
 which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). Without `HOME`, `gio` reads the account's
 passwd home, which is a further reason for `HOME`
 ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)). An options variable needs only the second. `make check` runs it and so does CI. It

@@ -145,9 +145,22 @@ hooks:
 build:
 	cargo build
 
+# The workspace tests. nextest runs every test as a process of its own across all the test binaries
+# at once, where `cargo test` runs the binaries one after another and waits on each one's slowest
+# test, which is how CI runs them. Where cargo-nextest is not installed this runs `cargo test`, so
+# a checkout without it still passes. nextest does not run doctests, so those run after it.
+# RUST_TEST_THREADS is the number of tests running at once in either case.
+RUST_TEST_THREADS ?= 4
+NEXTEST := $(shell command -v cargo-nextest >/dev/null 2>&1 && echo yes)
 .PHONY: test
 test:
-	cargo test --all
+ifeq ($(NEXTEST),yes)
+	cargo nextest run --workspace --locked --no-fail-fast --test-threads "$(RUST_TEST_THREADS)"
+	cargo test --workspace --doc --locked
+else
+	@echo "cargo-nextest is not installed, so the tests run one binary at a time (cargo install cargo-nextest --locked)"
+	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
+endif
 
 .PHONY: fmt
 fmt:
@@ -168,12 +181,11 @@ aws-logout:
 # Host formatting, Clippy, tests and toolchain age. Platform and UI checks are separate.
 # Report an old toolchain after the test results, since CI may use newer lints.
 .PHONY: check
-RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
 	@python3 contrib/check-lint-increase.py
-	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
+	@$(MAKE) --no-print-directory test
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-code-selectors.py --selftest
 	@python3 contrib/check-code-selectors.py

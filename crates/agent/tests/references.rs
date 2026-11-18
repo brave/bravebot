@@ -194,10 +194,15 @@ fn a_turn_whose_front_end_keeps_no_links_reports_nothing() {
     assert!(turned.references.is_empty(), "{:?}", turned.references);
 }
 
-/// R5. A read of a file the person vouched for is a trusted result, and what it names is listed.
-/// The regression it rejects: results never read, which leaves the third source of the clause unbuilt.
+/// PANEL-16. A read of a file the person vouched for is a trusted result, and what the file names
+/// is not listed. A skill, a spec or a test fixture holds example addresses, and the session is not
+/// about them.
+///
+/// The regression it rejects: reading trusted results for addresses, which lists the addresses in a
+/// file the planner only read. The command in the same turn names one item, so a reader that
+/// dropped everything also fails the first assertion.
 #[test]
-fn what_a_vouched_file_names_is_listed() {
+fn what_a_vouched_file_names_is_not_listed() {
     let scratch = Scratch::new("references-vouched-file");
     std::fs::write(
         scratch.path.join("notes.txt"),
@@ -210,6 +215,7 @@ fn what_a_vouched_file_names_is_listed() {
         &Task::new("read the notes").keeping_links(true),
         mock_model::trust_of(&workspace, false),
         vec![
+            naming("gh pr view 123 --repo brave/bravebot"),
             tool_request("read_file", &json!({"path": "notes.txt"}).to_string()),
             reply_with("done"),
         ],
@@ -218,7 +224,16 @@ fn what_a_vouched_file_names_is_listed() {
     assert!(!turned.failed);
     assert_eq!(
         shorthands(&turned.references),
-        ["brave/brave-core#42", "brave/bravebot#7"]
+        ["brave/bravebot#123"],
+        "the file's own addresses were listed, or the command's item was not"
+    );
+    assert!(
+        !turned.bodies.is_empty()
+            && turned
+                .bodies
+                .last()
+                .is_some_and(|body| body.contains("brave-core/issues/42")),
+        "the planner was not shown the file, so the fixture proves nothing"
     );
 }
 

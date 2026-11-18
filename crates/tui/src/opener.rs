@@ -70,11 +70,19 @@ use std::process::Stdio;
 /// `unix:runtime=yes`. A path is judged where it leads on the disk, a path that does not exist is
 /// removed, and the file at it is not required to be a socket.
 ///
-/// The last ten names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
-/// (brave/bravebot#3860). The sources are Wine's and ReactOS's source and Microsoft's
-/// `ShellExecute` page. The `sandbox-windows` job ran the start on a Windows Server 2025 runner
-/// (10.0.26100) and it did not show that a name chooses the program, because the test registers no
-/// handler whose command expands one of the names ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). Wine's
+/// The last eleven names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
+/// (brave/bravebot#3860). Ten were taken from Wine's and ReactOS's source and Microsoft's
+/// `ShellExecute` page, and `PSModulePath` from a run. The `sandbox-windows` job registered a handler
+/// for the current user whose command expands one name, as a `REG_EXPAND_SZ` and as a `REG_SZ` value,
+/// and started the start through it on a Windows Server 2025 runner (10.0.26100) with the helper
+/// reachable only through that name. With the name put back on the command the helper ran for
+/// `PSModulePath`, `windir`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and
+/// `USERPROFILE` in the `REG_EXPAND_SZ` handler, and for no name in the `REG_SZ` handler. While
+/// `PSModulePath` was not listed, the opener's own start ran the helper through it. It did not
+/// run for `COMSPEC`, `SystemRoot` or `ProgramFiles` in either form. Those three stay listed: the run
+/// tried one command form on one image, and a value outside every directory a stage may write is
+/// kept for them as for the others. A name outside the eleven and `PATHEXT` was not tried
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). Wine's
 /// `url.dll` passes the address to `ShellExecuteA` with no verb, and its `shlexec.c` reads
 /// `%name%` in the command template of the handler it runs from the process's environment
 /// (`GetEnvironmentVariableW`), so a handler whose command is written with `%ProgramFiles%` or
@@ -85,11 +93,11 @@ use std::process::Stdio;
 /// `COMSPEC` names, so it is one file ([`Names::File`]). `PATHEXT` is the list of extensions a
 /// command processor tries for a bare name; none of those sources reads it for this start, and it
 /// is removed whatever it holds ([`Names::Options`]). The Windows runs removed it and `rundll32`
-/// exited with status 0; whether a page opened without it was not observed.
-/// `PSModulePath` is not listed: nothing read shows `rundll32` or `ShellExecute` reading it, and the
-/// opener does not start PowerShell. The Windows run test sets it on a control start and records
-/// whether it reaches the helper.
-const CODE_SELECTORS: [(&str, Names); 29] = [
+/// exited with status 0; whether a page opened without it was not observed, and the handler run
+/// shows nothing about it, since its handler names the helper by a path and the helper ran with
+/// and no source read shows this start reading it, but `ShellExecute` expanded it in a handler's
+/// command in the run above. The opener does not start PowerShell.
+const CODE_SELECTORS: [(&str, Names); 30] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
@@ -119,6 +127,7 @@ const CODE_SELECTORS: [(&str, Names); 29] = [
     ("LOCALAPPDATA", Names::Directory),
     ("APPDATA", Names::Directory),
     ("USERPROFILE", Names::Directory),
+    ("PSModulePath", Names::Directories),
 ];
 
 /// The names `xdg-mime` 1.2.1 joins to a directory it has already judged, as the start of a file
@@ -2368,14 +2377,16 @@ mod tests {
 
     /// SANDBOX-30, the Windows start (#3860): each directory name the start's list holds is removed
     /// when it names a directory a stage may write and kept when it names one outside them, and
-    /// `PATHEXT` is removed whatever it holds. The regression it rejects: a name left out of the
-    /// list, so a handler command written with `%LOCALAPPDATA%` or `%ProgramFiles%` that
+    /// `PATHEXT` is removed whatever it holds. `PSModulePath` is a list of directories, removed when
+    /// any entry may be written by a stage. The regression it rejects: a name left out of the
+    /// list, so a handler command written with `%LOCALAPPDATA%` or `%PSModulePath%` that
     /// `ShellExecute` expands from the environment runs what a stage wrote; a name judged as an
-    /// option, which removes a safe value; and `PATHEXT` kept or judged as a path. Checked on the
+    /// option, which removes a safe value; `PSModulePath` judged as one directory, so a list whose
+    /// second entry a stage may write is kept; and `PATHEXT` kept or judged as a path. Checked on the
     /// hosts with Unix paths, since the values are `/stage/dir` and `/safe/dir`, which are not
     /// absolute paths on Windows; the case rule is checked on Windows by
-    /// `a_windows_name_is_removed_in_whatever_case_it_is_set`. That the names choose the program
-    /// was read in Wine and ReactOS source and not run; see [`CODE_SELECTORS`].
+    /// `a_windows_name_is_removed_in_whatever_case_it_is_set`. Which names choose the program is
+    /// recorded in [`CODE_SELECTORS`].
     #[cfg(unix)]
     #[test]
     fn the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write() {
@@ -2403,6 +2414,15 @@ mod tests {
         assert!(withheld("USERPROFILE", "/stage/dir"));
         assert!(withheld("USERPROFILE", "relative"));
         assert!(!withheld("USERPROFILE", "/safe/dir"));
+        // A list of directories: one entry a stage may write removes the whole value, wherever
+        // in the list it is, and an empty entry is the current directory.
+        assert!(withheld("PSModulePath", "/stage/dir"));
+        assert!(withheld("PSModulePath", "relative"));
+        assert!(withheld("PSModulePath", "/safe/dir:/stage/dir"));
+        assert!(withheld("PSModulePath", "/stage/dir:/safe/dir"));
+        assert!(withheld("PSModulePath", "/safe/dir:"));
+        assert!(!withheld("PSModulePath", "/safe/dir"));
+        assert!(!withheld("PSModulePath", "/safe/one:/safe/two"));
 
         assert!(withheld("PATHEXT", ".COM;.EXE;.BAT;.CMD"));
         assert!(withheld("PATHEXT", ".CMD"));
@@ -2481,6 +2501,8 @@ mod tests {
         assert!(withheld("ProgramFiles(x86)", r"C:\stage\dir"));
         assert!(withheld("ComSpec", r"C:\stage\cmd.exe"));
         assert!(withheld("PathExt", ".CMD"));
+        assert!(withheld("PSModulePath", r"C:\safe;C:\stage\dir"));
+        assert!(withheld("PsModulePath", r"C:\stage\dir"));
         assert!(!withheld("Windir", r"C:\safe\dir"));
     }
 
@@ -2632,24 +2654,24 @@ mod tests {
     }
 
     /// SANDBOX-30, the Windows start (#3860), run on Windows. `rundll32 url.dll,FileProtocolHandler`
-    /// is started through the opener with each of the ten names of the Windows list set to a path
+    /// is started through the opener with each of the eleven names of the Windows list set to a path
     /// in a directory a stage may write, `COMSPEC` to a batch file that only creates a marker file
     /// and `PATHEXT` to `.CMD`. The start is made in a child run of this test binary, because the
     /// command takes its environment from the process and a test cannot set one: the parent gives
     /// the child those names with `Command::env`, and the child calls the opener's start against
     /// its own environment, prints the names the command takes off and runs it. The test asserts
-    /// that the child printed a record for every one of the ten and for how the start ended, each
+    /// that the child printed a record for every one of the eleven and for how the start ended, each
     /// on a line of its own, and that the marker was not created. The
     /// helper is shown to create the marker when run directly through `cmd`, so an absent marker
     /// is not a helper that cannot run.
     ///
-    /// For each of the ten names and for `PSModulePath`, which the list leaves out, the test then
-    /// makes the same start with only that name set, and the child sets it on the command again
+    /// For each of the eleven names the test then makes the same start with only that name set,
+    /// and the child sets it on the command again
     /// after the opener took it off. It prints whether the marker appeared and how the start
     /// ended. That record is printed and not asserted: a start that does not run the helper is
     /// the result for a name `rundll32` does not read, and it ending badly with `SystemRoot` put
     /// back at a stage's directory says nothing about the opener. A green run therefore shows
-    /// that the opener removes the ten names from the real start and that the marker did not
+    /// that the opener removes the eleven names from the real start and that the marker did not
     /// appear, and shows nothing about which names select code; the printed record does.
     ///
     /// The regression it rejects: a name of the list that the command does not take off, such as
@@ -2703,9 +2725,8 @@ mod tests {
             ("LOCALAPPDATA", directory.clone()),
             ("APPDATA", directory.clone()),
             ("USERPROFILE", directory.clone()),
+            ("PSModulePath", directory),
         ];
-        // Not in the list, so only the control sets it.
-        let not_listed = [("PSModulePath", directory)];
 
         // The helper creates the marker when it is run, and the wait sees it.
         let environment: Vec<(OsString, OsString)> = std::env::vars_os().collect();
@@ -2744,7 +2765,7 @@ mod tests {
             "the helper was run by the checked start"
         );
 
-        for (name, value) in listed.iter().chain(&not_listed) {
+        for (name, value) in &listed {
             let one = [(*name, value.clone())];
             let printed = made(&one, Some(name));
             let ended = records_of_the_windows_start(&printed)
@@ -2834,17 +2855,17 @@ mod tests {
     /// stage may write, and nowhere else. The opener's `rundll32 url.dll,FileProtocolHandler` is
     /// then started with that scheme's address, in a child run of this test binary as
     /// [`the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`] does,
-    /// with the name set to that directory. The names are the ten of [`CODE_SELECTORS`] and
-    /// `PSModulePath`, which the list leaves out. Each handler is written as a `REG_EXPAND_SZ` and
+    /// with the name set to that directory. The names are the eleven Windows names of
+    /// [`CODE_SELECTORS`]. Each handler is written as a `REG_EXPAND_SZ` and
     /// as a `REG_SZ` value. `COMSPEC` is the helper itself and the command is `%COMSPEC%`;
     /// `PATHEXT` is `.CMD` and the command names `helper` without an extension.
     ///
     /// Asserted: a handler written with the helper's own path runs it through the opener's start,
     /// so a helper that does not run under a name is not a registration that cannot run; and for
-    /// each of the nine names other than `PATHEXT` the opener's start with that name set to the
+    /// each of the ten names other than `PATHEXT` the opener's start with that name set to the
     /// stage's directory does not run the helper.
     ///
-    /// Printed and not asserted: `PATHEXT` and `PSModulePath`. The `PATHEXT` handler names the
+    /// Printed and not asserted: `PATHEXT`. The `PATHEXT` handler names the
     /// helper by a path in the stage's directory, and `rundll32` reaches that helper with `PATHEXT`
     /// removed and with it put back, so no start that removes `PATHEXT` keeps it from running.
     /// For every name the printed lines are the answer to what `rundll32` does, which the opener
@@ -2963,7 +2984,7 @@ mod tests {
                 println!(
                     "{kind} handler expanding {name}: the opener's start ran the helper {ran_checked}, with {name} put back it ran the helper {ran_put_back}"
                 );
-                if *name != "PSModulePath" && *name != "PATHEXT" {
+                if *name != "PATHEXT" {
                     assert!(
                         !ran_checked,
                         "the opener's start ran a helper a {kind} handler reached through {name}: {checked}"
