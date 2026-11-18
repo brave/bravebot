@@ -1922,6 +1922,64 @@ mod tests {
         );
     }
 
+    /// PERM-7: a rule on an ancestor of a workspace whose name is not UTF-8 covers the workspace
+    /// by its relative names, and a rule naming the workspace's lossy lookalike covers nothing of
+    /// it, since that is another directory (PATH-003). Linux only: other volumes refuse a name that
+    /// is not UTF-8.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_rule_on_an_ancestor_of_a_workspace_that_is_not_utf8_covers_it_by_its_relative_name() {
+        use std::os::unix::ffi::OsStrExt;
+        let scratch = crate::testutil::scratch_dir("permissions-ancestor-not-utf8");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = home.join(std::ffi::OsStr::from_bytes(b"proj-\xff"));
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        assert!(root.to_str().is_none(), "the workspace name is UTF-8");
+
+        for tree in ["~/**", "~/*/secrets/**"] {
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"deny": ["Read({tree})"]}}}}"#
+            ));
+            let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            let names: &[&str] = match tree {
+                "~/**" => &["secrets/canary.txt", "notes.md"],
+                _ => &["secrets/canary.txt"],
+            };
+            for name in names {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, name),
+                    Decision::Ruled(Ruling::Deny),
+                    "Read({tree}) did not cover {name} in a workspace whose name is not UTF-8"
+                );
+            }
+        }
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(~/*/secrets/**)"]}}"#);
+        let (permissions, _) = from_settings(&settings, Some(&home), &root);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched,
+            "a rule about secrets covered a file outside it"
+        );
+
+        // A rule that names the lossy lookalike names another directory: it ends at the workspace,
+        // so `cover_workspace` leaves it to `follow_links`, and `beneath` does not read the
+        // lookalike as the root.
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(~/proj-{}/**)"]}}}}"#,
+            '\u{FFFD}'
+        ));
+        let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched,
+            "a rule naming the lossy lookalike covered the directory whose name is not UTF-8"
+        );
+    }
+
     /// PERM-7: a root that is not UTF-8 is not the directory whose name is its lossy lookalike
     /// (PATH-003).
     #[cfg(unix)]
