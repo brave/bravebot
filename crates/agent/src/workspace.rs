@@ -5378,6 +5378,91 @@ mod tests {
         );
     }
 
+    /// TRUST-2 and TRUST-4: the trust map, the writer reservation and the memory record all take
+    /// the one answer for the workspace, so on each layout of the casefold flag a file untrusted as
+    /// `.env` is untrusted as `.ENV` exactly where the workspace opens them as one file. The
+    /// expected answer is written from the layout (does the workspace carry the flag), and not read
+    /// from the code under test. A workspace without the flag inside a parent with it is the
+    /// layout where folding would widen a trust of `Docs` to a different file called `docs`.
+    #[test]
+    fn the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag()
+     {
+        use bravebot_core::Integrity;
+        use bravebot_core::file_authority::FileAuthority;
+
+        let layouts: [(&str, &'static [&'static str], bool); 4] = [
+            (
+                "ordinary parent, workspace with the flag",
+                &[WORKSPACE],
+                true,
+            ),
+            (
+                "parent and workspace with the flag",
+                &["/home/me", WORKSPACE],
+                true,
+            ),
+            (
+                "parent with the flag, ordinary workspace",
+                &["/home/me"],
+                false,
+            ),
+            ("ordinary parent, ordinary workspace", &[], false),
+        ];
+        for (number, (layout, folding, folds)) in layouts.into_iter().enumerate() {
+            let (id, flag) = per_directory(MIXED, folding);
+            let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
+            assert_eq!(answer, Some(folds), "{layout}");
+
+            let mut store = bravebot_core::TrustStore::new(key_of(Path::new(WORKSPACE)))
+                .folding_case(folds_case_by(Path::new(WORKSPACE), &id, &flag).unwrap_or(false));
+            store.distrust(".env");
+            store.trust("Docs");
+            assert_eq!(
+                store.integrity_of(".ENV"),
+                folds.then_some(Integrity::Untrusted),
+                "the map reads .ENV as the file distrusted as .env: {layout}"
+            );
+            assert_eq!(
+                store.integrity_of("docs"),
+                folds.then_some(Integrity::Trusted),
+                "the map trusts docs on the strength of Docs only where they are one file: {layout}"
+            );
+
+            let authority = FileAuthority::new(store);
+            let capture = authority.capture();
+            let first = capture.begin(".env");
+            assert!(first.is_some(), "{layout}");
+            assert_eq!(
+                capture.begin(".ENV").is_none(),
+                folds,
+                "a second writer under the other spelling is refused only where they are one file: {layout}"
+            );
+            drop(first);
+            drop(capture);
+
+            let home = crate::testutil::scratch_dir(&format!("trust-case-answer-memory-{number}"));
+            let _ = std::fs::remove_dir_all(&home);
+            std::fs::create_dir_all(&home).unwrap();
+            let key = format!("{WORKSPACE}/.Bravebot/memory/NOTES.md");
+            crate::memory::record_before_write(Some(&home), &key, folds).unwrap();
+            // The record is kept under the directory as the volume spells it through every link,
+            // which differs from the literal path where a parent is a link, as `/home` is on macOS.
+            let spelled =
+                crate::workspace::on_disk(WORKSPACE).unwrap_or_else(|| WORKSPACE.to_string());
+            let recorded = crate::memory::Record::new(&home, &spelled).paths();
+            let _ = std::fs::remove_dir_all(&home);
+            assert_eq!(
+                recorded,
+                if folds {
+                    vec![format!("{spelled}/.bravebot/memory/notes.md")]
+                } else {
+                    Vec::new()
+                },
+                "a memory is recorded under another case only where they are one file: {layout}"
+            );
+        }
+    }
+
     /// A volume answering to either spelling of `Proj` is one whose rules have to fold.
     #[test]
     fn a_volume_answering_to_either_spelling_folds_case() {

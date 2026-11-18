@@ -386,6 +386,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_workspace_that_does_not_fold_inside_a_parent_that_does_does_not_fold_case`
 `verified-by: bravebot_agent::workspace::the_other_layouts_of_the_casefold_flag_keep_their_answers`
 `verified-by: bravebot_agent::workspace::a_filesystem_with_no_flags_is_read_by_the_lookup_of_the_name`
+`verified-by: bravebot_agent::workspace::the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag`
 `verified-by: bravebot_agent::workspace::a_name_without_a_letter_is_asked_of_the_directory_above`
 `verified-by: bravebot_agent::workspace::a_trust_store_takes_the_answer_of_the_volume_it_is_on`
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
