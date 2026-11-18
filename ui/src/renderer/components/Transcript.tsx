@@ -3072,6 +3072,7 @@ function Card({
             well as this one. Only do it for content you know the origin of.</span>
           </p>
 
+          <HiddenCharacters note={request.hiddenNote} />
           <pre className="preview" data-deciding="first">{request.preview}</pre>
           {request.truncated && (
             <div className="quarantine-foot">

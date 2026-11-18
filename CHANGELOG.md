@@ -6,6 +6,8 @@
 
  - Fixed a model that searches the web over chat completions, such as `gpt-5-search-api`, being requested with the pages it fetched inside a reply labelled as a trusted conversation. Bravebot now refuses it with "it searches the web before it replies, so its reply cannot be labelled from what was sent to it" wherever it would request the model: `--model`, the `model` key, a recorded pick, `summaryModel` (compaction and the goal check), `advisorModel`, `/advisor` and a definition's `model`. The chat completions listing leaves these ids out, and naming one under `models` does not allow it. The Responses protocol keeps them. The list is compiled into the release, so a model that searches and is not on it is not detected. ([#4100](https://github.com/brave/bravebot/issues/4100))
 
+ - Fixed a vouch question showing the head of a file with tag characters, bidirectional controls and zero width characters drawn as nothing. The preview now writes each one out and says above it how many there were, in the terminal client, the plain line interface, the editor bridge and the window. Only the lines shown are written out and counted, and the planner still gets the file's own bytes. ([#4101](https://github.com/brave/bravebot/issues/4101))
+
 ## [0.23.0](https://github.com/brave/bravebot/releases/tag/v0.23.0)
 
  - Added `/issues` and `/prs`, and Pull requests and Issues sections in the info panel, which list the issues and pull requests the session has met in text you typed, in the agent's own fetches and in trusted tool results. They cost no tokens and answer at once while a turn runs. ([#4223](https://github.com/brave/bravebot/issues/4223))

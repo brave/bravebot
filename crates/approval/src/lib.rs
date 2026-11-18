@@ -406,7 +406,16 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
 }
 
 /// The lines a quarantined file is read before it is vouched for.
-pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<String> {
+///
+/// `hidden` is how many characters of `preview` drew as nothing before the agent wrote them out,
+/// and the sentence saying so goes above the preview, as it does over a command's output.
+pub fn vouch_lines(
+    path: &str,
+    rule: &str,
+    check: Check,
+    preview: &str,
+    hidden: usize,
+) -> Vec<String> {
     let mut lines = vec![
         bravebot_agent::confirm::shown_name(path),
         t!(
@@ -418,7 +427,10 @@ pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<S
     ];
     match preview.is_empty() {
         true => lines.push(t!(vouch_nothing).to_string()),
-        false => lines.extend(quarantined(preview)),
+        false => {
+            lines.extend(hidden_note(hidden));
+            lines.extend(quarantined(preview));
+        }
     }
     lines
 }
@@ -767,8 +779,14 @@ mod tests {
     /// the rule a yes writes, which the file's own name does not.
     #[test]
     fn the_vouch_lines_mark_a_blank_name_and_say_the_rule() {
-        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text");
-        let plain = vouch_lines("note.md", "/work/note.md", Check::from_word("safe"), "text");
+        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text", 0);
+        let plain = vouch_lines(
+            "note.md",
+            "/work/note.md",
+            Check::from_word("safe"),
+            "text",
+            0,
+        );
         assert_ne!(blank[0], " ");
         assert!(blank[0].contains('\u{2423}'), "{:?}", blank[0]);
         assert_eq!(plain[0], "note.md");
@@ -819,6 +837,32 @@ mod tests {
                 "{what}: a text with nothing hidden in it said something was: {lines:?}"
             );
         }
+    }
+
+    /// PROMPT-13: a file preview holding characters that draw as nothing says how many above the
+    /// preview, and one with none says nothing of the kind. An empty preview says it is empty and
+    /// not how many characters were hidden. The fault it rejects: `vouch_lines` that takes the count
+    /// and drops it, so the plain and editor prompts show the spelled tokens with no sentence.
+    #[test]
+    fn the_vouch_lines_say_how_many_characters_draw_as_nothing_above_the_preview() {
+        let text = "plain \u{2039}U+E0064 d\u{203A}\u{2039}U+200B\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        let lines = vouch_lines("note.md", "/work", Check::from_word("safe"), text, 2);
+        let saying = lines.iter().position(|line| *line == said);
+        let shown = lines
+            .iter()
+            .position(|line| *line == format!("{QUARANTINE_BAR} {text}"));
+        assert!(
+            saying.is_some() && saying < shown,
+            "the sentence is not above the preview: {lines:?}"
+        );
+        let plain = vouch_lines("note.md", "/work", Check::from_word("safe"), "plain", 0);
+        assert!(
+            plain.iter().all(|line| !line.contains("U+XXXX")),
+            "a preview with nothing hidden in it said something was: {plain:?}"
+        );
+        let empty = vouch_lines("note.md", "/work", Check::from_word("safe"), "", 0);
+        assert_eq!(empty.last(), Some(&t!(vouch_nothing).to_string()));
     }
 
     /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as

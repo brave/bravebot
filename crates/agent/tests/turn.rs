@@ -45888,6 +45888,78 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
     );
 }
 
+/// PROMPT-13: a quarantined file whose text holds characters that draw as nothing is offered with
+/// each one written out and counted, in a file short enough that the cut says nothing, and the
+/// planner is handed the bytes the file holds once the person says yes.
+///
+/// A file of 20 lines or fewer is not cut, so before the head was written out a person reading
+/// `here.` had no sign that a message followed it. The count is taken in the reshape the head is
+/// cut in, so the test holds that the planner's copy is the file's own bytes: spelling it would
+/// hand the model a different text from the one the person agreed to.
+#[test]
+fn a_vouch_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes() {
+    let scratch = Scratch::new("vouch-hidden-characters");
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "# Notes\nNothing to see here.\u{E0064}\u{E006F}\u{202E}\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"notes.md"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = VouchesForFiles::new(true);
+    let offered = confirmer.offered.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the notes"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = offered.lock().unwrap();
+    let request = asked.first().expect("the user was offered the file");
+    assert!(!request.truncated, "a file of two lines was said to be cut");
+    assert_eq!(
+        request.preview,
+        "# Notes\nNothing to see here.\u{2039}U+E0064 d\u{203A}\u{2039}U+E006F o\u{203A}\u{2039}U+202E\u{203A}",
+        "a character the person cannot see was drawn as nothing, or the preview was changed otherwise"
+    );
+    assert_eq!(
+        request.hidden, 3,
+        "the prompt would say the wrong number of characters draw as nothing"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("first request");
+    let _check = received.recv().expect("the check before the question");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("here.\u{E0064}\u{E006F}\u{202E}"),
+        "the planner was not handed the bytes the file holds: {second}"
+    );
+    assert!(
+        !second.contains("U+E0064"),
+        "the planner was handed the person's spelling of the bytes instead of the bytes: {second}"
+    );
+}
+
 /// The defect this branch was reported for. A session offered to promote a file whose whole point
 /// was a line addressed to whoever read it, and the offer said nothing about that: the check only
 /// ran when the planner reached for the content a second way. Somebody answering yes here is

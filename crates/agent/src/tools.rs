@@ -2736,6 +2736,9 @@ const DIFF_CONTEXT: usize = 3;
 ///
 /// Enough to tell what the file is, not so much that the prompt becomes a document nobody reads.
 /// The decision being asked for is about the path, not about these lines.
+///
+/// The cut is made before the characters that draw as nothing are written out and counted, so the
+/// count covers these lines and no others (PROMPT-13).
 const VOUCH_PREVIEW: usize = 20;
 
 /// What a write would do, told three ways, all of them built in one place.
@@ -4351,9 +4354,15 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 policy.file_authority().stamp_of(&keyed),
             )
         });
+        // The characters that draw as nothing in the head are written out in the same reshape and
+        // counted there, so the driver reads the text for neither. The cut is made first and the
+        // spelling keeps the lines the head had, so `truncated` still says whether the file has
+        // more lines than the head shows.
         let shaped = policy.render_in_place("read_file", &body, |text| {
             let head: Vec<&str> = text.lines().take(VOUCH_PREVIEW).collect();
-            (head.join("\n"), text.lines().nth(VOUCH_PREVIEW).is_some())
+            let truncated = text.lines().nth(VOUCH_PREVIEW).is_some();
+            let spelled = bravebot_core::invisible::spelled(head.join("\n"));
+            (spelled.text, truncated, spelled.hidden)
         });
         let label = shaped.label().to_string();
 
@@ -4367,8 +4376,8 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // in place of the preview. If it changes to bypass, the preview was released and the check
         // ran, and the answer is recorded as the mode's.
         let bypassing = tools.permission_mode.get() == crate::PermissionMode::Bypass;
-        let (preview, truncated) = if bypassing {
-            (String::new(), false)
+        let (preview, truncated, hidden) = if bypassing {
+            (String::new(), false, 0)
         } else {
             let proof = policy.authorise_display_release("the head of a quarantined file");
             shaped.declassify(&proof)
@@ -4423,6 +4432,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             preview,
             label,
             truncated,
+            hidden,
             verdict,
             reason,
             reason_label,

@@ -1187,6 +1187,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 text("rule"),
                 check_of(data),
                 text("preview"),
+                hidden_of(data),
             )
             .join("\n"),
         ),
@@ -2068,6 +2069,7 @@ mod tests {
                     preview: "a".into(),
                     label: "(U,priv)".into(),
                     truncated: false,
+                    hidden: 0,
                     verdict: bravebot_core::vetting::Verdict::Safe,
                     reason: None,
                     reason_label: None,
@@ -2376,9 +2378,21 @@ mod tests {
                 label: None,
                 reason_label: None,
             };
+            let vouch = bravebot_agent::confirm::VouchRequest {
+                path: "notes.md".to_string(),
+                rule: "/work/notes.md".to_string(),
+                preview: text.to_string(),
+                label: String::new(),
+                truncated: false,
+                hidden,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                reason_label: None,
+            };
             for (stem, wire) in [
                 ("output", crate::wire::output_request(4, &output)),
                 ("vet", crate::wire::vet_request(5, &vet)),
+                ("vouch", crate::wire::vouch_request(6, &vouch)),
             ] {
                 let (_, _, shown) = shown(stem, wire);
                 let rows: Vec<&str> = shown.lines().collect();
