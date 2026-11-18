@@ -359,10 +359,11 @@ fn acp_waits_for_the_end_of_an_open_session_before_it_exits() {
 }
 
 /// CLI-39 with RPCVIEW-8: a descriptor the program was started with, other than standard input,
-/// output and error, reaches none of the programs it starts. A shell opens a file at descriptor 200
+/// output and error, reaches none of the programs it starts. A shell opens a file at descriptor 9
 /// and starts `bravebot acp` with it open, and a `session-started` hook reports whether it has
-/// descriptor 200 and writes to it if so. A program that left the descriptor open would let the
-/// hook write into the file.
+/// descriptor 9 and writes to it if so. A program that left the descriptor open would let the
+/// hook write into the file. The descriptor has one digit because dash, the `/bin/sh` on Debian
+/// and Ubuntu, reads `200>>file` as the argument `200` and a redirection of standard output.
 #[cfg(unix)]
 #[test]
 fn acp_gives_a_descriptor_it_was_started_with_to_none_of_the_programs_it_starts() {
@@ -371,7 +372,7 @@ fn acp_gives_a_descriptor_it_was_started_with_to_none_of_the_programs_it_starts(
     let seen = home.join("seen.txt");
     std::fs::write(&leaked, "").unwrap();
     let check = format!(
-        "if [ -e /dev/fd/200 ]; then echo held; echo hook > /dev/fd/200; else echo absent; fi > '{}'",
+        "if [ -e /dev/fd/9 ]; then echo held; echo hook > /dev/fd/9; else echo absent; fi > '{}'",
         seen.display()
     );
     std::fs::write(
@@ -384,7 +385,7 @@ fn acp_gives_a_descriptor_it_was_started_with_to_none_of_the_programs_it_starts(
     let mut shell = Command::new("/bin/sh");
     shell.args([
         "-c",
-        r#"exec "$0" acp --settings "$1" 200>>"$2""#,
+        r#"exec "$0" acp --settings "$1" 9>>"$2""#,
         env!("CARGO_BIN_EXE_bravebot"),
         settings.to_str().unwrap(),
         leaked.to_str().unwrap(),
